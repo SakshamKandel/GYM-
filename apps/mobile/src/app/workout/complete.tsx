@@ -1,0 +1,126 @@
+import { useEffect, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { useLocalSearchParams } from 'expo-router';
+import type { SetLog, WorkoutLog } from '@gym/shared';
+import { displayWeight } from '@gym/shared';
+import { colors, radius, spacing, type } from '@gym/ui-tokens';
+import {
+  AnimatedNumber,
+  AppText,
+  Button,
+  enterDown,
+  enterUp,
+  Screen,
+  SectionLabel,
+  StatBlock,
+} from '../../components/ui';
+import { formatClock, formatWeightNumber, totalVolumeKg } from '../../features/training/logic';
+import { replacePath } from '../../features/training/nav';
+import { getRepo } from '../../lib/repo';
+import { useProfile } from '../../state/profile';
+
+/** Editorial recap: duration · volume · sets, plus the PR ledger. */
+
+const styles = StyleSheet.create({
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    padding: spacing.lg,
+    marginTop: spacing.xl,
+  },
+  prRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accent,
+    paddingLeft: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+    gap: spacing.md,
+  },
+  prNumbers: { fontFamily: type.display, fontSize: 24, color: colors.text },
+  prName: { flex: 1 },
+  done: { marginTop: spacing.xxl },
+  statValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+});
+
+export default function WorkoutCompleteScreen() {
+  const { id } = useLocalSearchParams<{ id?: string }>();
+  const unitPref = useProfile((s) => s.unitPref);
+  const [workout, setWorkout] = useState<WorkoutLog | null>(null);
+  const [sets, setSets] = useState<SetLog[]>([]);
+
+  useEffect(() => {
+    if (typeof id !== 'string' || id.length === 0) return;
+    let mounted = true;
+    void (async () => {
+      const repo = await getRepo();
+      const [w, s] = await Promise.all([repo.getWorkout(id), repo.getSetsForWorkout(id)]);
+      if (mounted) {
+        setWorkout(w);
+        setSets(s);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [id]);
+
+  const volume = Math.round(displayWeight(totalVolumeKg(sets), unitPref));
+  const prSets = sets.filter((s) => s.isPr);
+
+  return (
+    <Screen scroll>
+      <Animated.View entering={enterDown(0)}>
+        <AppText variant="label" color={colors.textDim}>
+          {workout?.name ?? ''}
+        </AppText>
+        <AppText variant="heading">Workout complete</AppText>
+      </Animated.View>
+
+      <View style={styles.statsRow}>
+        <Animated.View entering={enterUp(0)}>
+          <StatBlock label="time" value={formatClock(workout?.durationSec ?? 0)} />
+        </Animated.View>
+        <Animated.View entering={enterUp(1)}>
+          <AppText variant="label">volume</AppText>
+          <View style={styles.statValueRow}>
+            <AnimatedNumber value={volume} grouped variant="display" />
+            <AppText variant="caption" color={colors.textDim}>
+              {unitPref}
+            </AppText>
+          </View>
+        </Animated.View>
+        <Animated.View entering={enterUp(2)}>
+          <StatBlock label="sets" value={sets.length} />
+        </Animated.View>
+      </View>
+
+      {prSets.length > 0 ? (
+        <>
+          <Animated.View entering={enterUp(3)}>
+            <SectionLabel>New records</SectionLabel>
+          </Animated.View>
+          {prSets.map((s, i) => (
+            <Animated.View key={s.id} entering={enterUp(Math.min(4 + i, 8))} style={styles.prRow}>
+              <AppText variant="bodyBold" numberOfLines={1} style={styles.prName}>
+                {s.exerciseName}
+              </AppText>
+              <AppText style={styles.prNumbers} tabular>
+                {`${formatWeightNumber(displayWeight(s.weightKg, unitPref))} ${unitPref} × ${s.reps}`}
+              </AppText>
+            </Animated.View>
+          ))}
+        </>
+      ) : null}
+
+      <Animated.View entering={enterUp(4)}>
+        <Button label="Done" onPress={() => replacePath('/(tabs)')} style={styles.done} />
+      </Animated.View>
+    </Screen>
+  );
+}

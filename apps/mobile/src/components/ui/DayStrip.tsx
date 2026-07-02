@@ -1,0 +1,98 @@
+import { useEffect, useRef } from 'react';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { colors, radius, spacing } from '@gym/ui-tokens';
+import { addDays, dayLabel, todayIso } from '../../lib/dates';
+import { AppText } from './AppText';
+import { PressableScale } from './PressableScale';
+
+/**
+ * Horizontal day selector (reference: 21 Mon · 22 Tue · [23 Wed] · …).
+ * Selected day = raised block. A red dot marks days with activity.
+ */
+interface Props {
+  selected: string; // ISO date
+  onSelect: (date: string) => void;
+  /** ISO dates that get the activity dot. */
+  markedDates?: Set<string>;
+  daysBack?: number;
+  daysForward?: number;
+}
+
+const styles = StyleSheet.create({
+  row: { gap: spacing.sm, paddingVertical: spacing.xs },
+  cell: {
+    width: 64,
+    height: 84,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  cellSelected: { backgroundColor: colors.surfaceRaised },
+  dotSlot: { height: 8, justifyContent: 'center' },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.accent,
+  },
+});
+
+export function DayStrip({
+  selected,
+  onSelect,
+  markedDates,
+  daysBack = 14,
+  daysForward = 3,
+}: Props) {
+  const today = todayIso();
+  const dates: string[] = [];
+  for (let i = -daysBack; i <= daysForward; i++) dates.push(addDays(today, i));
+
+  // contentOffset is a no-op on react-native-web — scroll to today via ref.
+  const scrollRef = useRef<ScrollView>(null);
+  useEffect(() => {
+    const t = setTimeout(
+      () => scrollRef.current?.scrollToEnd({ animated: false }),
+      0,
+    );
+    return () => clearTimeout(t);
+  }, []);
+
+  return (
+    <ScrollView
+      ref={scrollRef}
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.row}
+    >
+      {dates.map((date) => {
+        const isSelected = date === selected;
+        const isToday = date === today;
+        return (
+          <PressableScale
+            key={date}
+            accessibilityRole="button"
+            accessibilityLabel={`${dayLabel(date)} ${date}${isToday ? ', today' : ''}`}
+            accessibilityState={{ selected: isSelected }}
+            onPress={() => onSelect(date)}
+            style={[styles.cell, isSelected && styles.cellSelected]}
+          >
+            <View style={styles.dotSlot}>
+              {markedDates?.has(date) ? <View style={styles.dot} /> : null}
+            </View>
+            <AppText variant="display" style={{ fontSize: 26, lineHeight: 32 }} tabular>
+              {date.slice(8)}
+            </AppText>
+            <AppText
+              variant="caption"
+              color={isToday ? colors.accent : isSelected ? colors.text : colors.textFaint}
+            >
+              {dayLabel(date).charAt(0) + dayLabel(date).slice(1).toLowerCase()}
+            </AppText>
+          </PressableScale>
+        );
+      })}
+    </ScrollView>
+  );
+}

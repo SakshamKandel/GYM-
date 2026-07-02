@@ -11,6 +11,16 @@ out/
 .nuxt/
 coverage/
 
+# Expo / React Native
+.expo/
+.expo-shared/
+expo-env.d.ts
+*.orig.*
+web-build/
+# Generated native projects (continuous native generation — `npx expo run:android` recreates them)
+apps/mobile/android/
+apps/mobile/ios/
+
 # Environment & secrets — never commit these
 .env
 .env.*

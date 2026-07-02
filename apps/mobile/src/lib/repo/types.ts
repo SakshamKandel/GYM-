@@ -1,0 +1,74 @@
+import type {
+  FoodItem,
+  FoodLog,
+  Meal,
+  Measurement,
+  PrRecord,
+  SetLog,
+  Streak,
+  WeightLog,
+  WorkoutLog,
+} from '@gym/shared';
+
+/**
+ * Local persistence contract. All feature code talks to THIS interface —
+ * native uses SQLite, web QA uses the AsyncStorage-backed memory impl.
+ * Everything is async and must resolve fast (<100ms perceived).
+ */
+export interface Repo {
+  // ── Workouts ────────────────────────────────────────────────
+  startWorkout(w: Omit<WorkoutLog, 'finishedAt' | 'durationSec'>): Promise<void>;
+  finishWorkout(id: string, finishedAt: string, durationSec: number): Promise<void>;
+  /** Delete a workout and its sets (e.g. discarded empty session). */
+  deleteWorkout(id: string): Promise<void>;
+  getWorkout(id: string): Promise<WorkoutLog | null>;
+  getActiveWorkout(): Promise<WorkoutLog | null>;
+  getWorkoutsBetween(fromDate: string, toDate: string): Promise<WorkoutLog[]>;
+  getRecentWorkouts(limit: number): Promise<WorkoutLog[]>;
+
+  // ── Sets ────────────────────────────────────────────────────
+  logSet(s: SetLog): Promise<void>;
+  updateSet(s: SetLog): Promise<void>;
+  deleteSet(id: string): Promise<void>;
+  getSetsForWorkout(workoutLogId: string): Promise<SetLog[]>;
+  /** Sets from the most recent workout (before `excludeWorkoutId`) that included this exercise. */
+  getLastSetsForExercise(exerciseId: string, excludeWorkoutId: string): Promise<SetLog[]>;
+  /** Best-ever estimated 1RM for the exercise, excluding a given workout. */
+  getBestE1Rm(exerciseId: string, excludeWorkoutId: string): Promise<number | null>;
+  /** Heaviest weight ever lifted for the exercise, excluding a given workout. */
+  getBestWeight(exerciseId: string, excludeWorkoutId: string): Promise<number | null>;
+  getPrRecords(limit: number): Promise<PrRecord[]>;
+  /** Total volume (kg × reps) for workouts within a date range. */
+  getVolumeBetween(fromDate: string, toDate: string): Promise<number>;
+  /** e1RM history (best per workout) for one exercise, oldest first. */
+  getE1RmHistory(exerciseId: string, limit: number): Promise<{ date: string; e1rm: number }[]>;
+  /** Exercise ids the user has logged, most recently used first. */
+  getRecentExerciseIds(limit: number): Promise<string[]>;
+
+  // ── Body ────────────────────────────────────────────────────
+  upsertWeight(w: WeightLog): Promise<void>;
+  getWeights(limitDays: number): Promise<WeightLog[]>;
+  addMeasurement(m: Measurement): Promise<void>;
+  getMeasurements(limit: number): Promise<Measurement[]>;
+
+  // ── Food ────────────────────────────────────────────────────
+  logFood(f: FoodLog): Promise<void>;
+  deleteFoodLog(id: string): Promise<void>;
+  getFoodLogs(date: string): Promise<FoodLog[]>;
+  /** kcal totals for each of the given dates (missing dates → 0). */
+  getKcalByDate(dates: string[]): Promise<Record<string, number>>;
+  saveFood(item: FoodItem): Promise<void>;
+  getFoodByBarcode(barcode: string): Promise<FoodItem | null>;
+  getFood(id: string): Promise<FoodItem | null>;
+  searchLocalFoods(query: string, limit: number): Promise<FoodItem[]>;
+  /** Most recently logged distinct foods. */
+  getRecentFoods(limit: number): Promise<FoodItem[]>;
+
+  // ── Water ───────────────────────────────────────────────────
+  getWaterMl(date: string): Promise<number>;
+  addWater(date: string, deltaMl: number): Promise<number>;
+
+  // ── Streak ──────────────────────────────────────────────────
+  getStreak(): Promise<Streak>;
+  setStreak(s: Streak): Promise<void>;
+}
