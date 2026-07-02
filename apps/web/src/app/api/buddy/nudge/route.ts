@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { sendPushToAccount } from '@/lib/push';
 
 export const runtime = 'nodejs';
 
@@ -67,6 +68,14 @@ export async function POST(req: Request) {
     type: 'nudge',
     targetId: buddyId,
     payload: {},
+  });
+
+  // Notify the nudged buddy — fire-and-forget; never blocks the response.
+  const actorName = me.displayName || me.email;
+  void sendPushToAccount(buddyId, {
+    title: `${actorName} nudged you`,
+    body: "Don't let the streak die — get to the gym 👊",
+    data: { type: 'buddy_nudge', from: me.id },
   });
 
   return json({ ok: true }, 201);

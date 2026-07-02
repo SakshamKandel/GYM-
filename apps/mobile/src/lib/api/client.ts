@@ -531,3 +531,25 @@ export async function putProfileData(
 ): Promise<void> {
   await request({ method: 'PUT', path: '/api/profile', token, body: { profile } });
 }
+
+// ── Push token registration ───────────────────────────────────
+
+/**
+ * Register this device's Expo push token so the server can deliver buddy
+ * pushes (channelId 'default'). Fire-and-forget from the caller's side:
+ * the 200 `{ok:true}` body isn't consumed, so only auth failures propagate
+ * (the caller in notifications.ts swallows them). Throws ApiError on a
+ * non-2xx / network failure, matching the rest of this client.
+ */
+export async function registerPushToken(
+  token: string,
+  platform: 'ios' | 'android',
+  authToken: string,
+): Promise<void> {
+  await request({
+    method: 'POST',
+    path: '/api/push/register',
+    body: { token, platform },
+    token: authToken,
+  });
+}

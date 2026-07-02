@@ -5,7 +5,15 @@ import { addDays, todayIso } from '../../lib/dates';
 import { getRepo } from '../../lib/repo';
 import { getNextPlanWorkout } from '../../lib/planProgress';
 import { getPlan } from '../../lib/seed/plans';
-import { countFinished, prCountSince, volumeOfSets, weekStartIso } from './logic';
+import { useQuest } from '../../state/quest';
+import {
+  countFinished,
+  prCountSince,
+  questProgress,
+  volumeOfSets,
+  weekStartIso,
+  type QuestProgress,
+} from './logic';
 
 /** Everything the home dashboard needs, refreshed every time the tab focuses. */
 
@@ -98,4 +106,42 @@ export function useHomeData(planId: string | null): HomeData | null {
   );
 
   return data;
+}
+
+/**
+ * First-3-workouts activation quest. On focus it counts finished workouts since
+ * the quest start day and returns pure `questProgress`. Returns null until the
+ * count is loaded (and the start day has been anchored). Independent of
+ * `useHomeData` so neither can break the other.
+ */
+export function useQuestProgress(): QuestProgress | null {
+  const questStartIso = useQuest((s) => s.questStartIso);
+  const ensureStarted = useQuest((s) => s.ensureStarted);
+  const [progress, setProgress] = useState<QuestProgress | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      // Anchor the window the first time the quest is ever observed.
+      ensureStarted();
+      const startIso = useQuest.getState().questStartIso;
+      if (startIso === null) return;
+
+      let mounted = true;
+      void (async () => {
+        const repo = await getRepo();
+        // The window is 14 days; a generous pull covers every finished session.
+        const recents = await repo.getRecentWorkouts(50);
+        const finished = recents.filter(
+          (w) => w.finishedAt !== null && w.date >= startIso,
+        ).length;
+        if (!mounted) return;
+        setProgress(questProgress(finished, startIso, todayIso()));
+      })();
+      return () => {
+        mounted = false;
+      };
+    }, [ensureStarted, questStartIso]),
+  );
+
+  return progress;
 }

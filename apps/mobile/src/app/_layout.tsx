@@ -14,6 +14,10 @@ import { AppState, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { colors } from '@gym/ui-tokens';
 import { AppLock } from '../features/security/AppLock';
+import {
+  registerForPushNotificationsAsync,
+  setupNotifications,
+} from '../lib/notifications';
 import { startProfileSync } from '../lib/profileSync';
 import { useAuth } from '../state/auth';
 
@@ -45,6 +49,20 @@ export default function RootLayout() {
   useEffect(() => {
     startProfileSync();
   }, []);
+
+  // Notification foundation: install the foreground handler + Android
+  // 'default' channel once on mount (the push server targets that channel).
+  useEffect(() => {
+    void setupNotifications();
+  }, []);
+
+  // Register the device's Expo push token whenever we're signed in — this
+  // effect re-runs on the signedOut→signedIn transition, so a fresh sign-in
+  // registers too. Fire-and-forget: it never throws and no-ops when signed out.
+  const authStatus = useAuth((s) => s.status);
+  useEffect(() => {
+    if (authStatus === 'signedIn') void registerForPushNotificationsAsync();
+  }, [authStatus]);
 
   if (!fontsLoaded && !fontsError) {
     return <View style={{ flex: 1, backgroundColor: colors.bg }} />;

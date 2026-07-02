@@ -28,10 +28,16 @@ import {
   enterUp,
 } from '../components/ui';
 import { successHaptic, tapHaptic, warnHaptic } from '../lib/haptics';
+import {
+  scheduleCheckInReminder,
+  scheduleMorningNudge,
+  scheduleWorkoutReminders,
+} from '../lib/notifications';
 import { getRepo } from '../lib/repo';
 import { SEED_PLANS } from '../lib/seed/plans';
 import { useAuth } from '../state/auth';
 import { useProfile } from '../state/profile';
+import { useReminders } from '../state/reminders';
 import { useSecurity } from '../state/security';
 import { pushPath } from '../features/auth/nav';
 import { biometricsAvailable } from '../features/security/AppLock';
@@ -61,6 +67,20 @@ const TIER_LABEL: Record<Tier, string> = {
   elite: 'Elite',
 };
 
+/**
+ * Day picker order, Monday-first for a natural reading order. Each entry maps a
+ * single-letter chip to the expo-notifications weekday number (1=Sun … 7=Sat).
+ */
+const WEEKDAY_CHIPS: { weekday: number; letter: string; name: string }[] = [
+  { weekday: 2, letter: 'M', name: 'Monday' },
+  { weekday: 3, letter: 'T', name: 'Tuesday' },
+  { weekday: 4, letter: 'W', name: 'Wednesday' },
+  { weekday: 5, letter: 'T', name: 'Thursday' },
+  { weekday: 6, letter: 'F', name: 'Friday' },
+  { weekday: 7, letter: 'S', name: 'Saturday' },
+  { weekday: 1, letter: 'S', name: 'Sunday' },
+];
+
 /** Compact pill chip — same language as ui/Chip, sized for inline row controls. */
 function MiniChip({
   label,
@@ -86,6 +106,38 @@ function MiniChip({
         tabular={false}
       >
         {label}
+      </AppText>
+    </PressableScale>
+  );
+}
+
+/** Small round day toggle for the workout-reminder picker (M T W T F S S). */
+function DayChip({
+  letter,
+  name,
+  selected,
+  onPress,
+}: {
+  letter: string;
+  name: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      accessibilityLabel={name}
+      onPress={onPress}
+      hitSlop={4}
+      style={[styles.dayChip, selected && styles.dayChipSelected]}
+    >
+      <AppText
+        style={styles.dayChipText}
+        color={selected ? colors.text : colors.textDim}
+        tabular={false}
+      >
+        {letter}
       </AppText>
     </PressableScale>
   );
@@ -216,6 +268,57 @@ export default function SettingsScreen() {
   const [confirmingBioOff, setConfirmingBioOff] = useState(false);
   const [bioInfo, setBioInfo] = useState<string | null>(null);
   const [bioBusy, setBioBusy] = useState(false);
+
+  // ── Reminders (all local, recurring) ─────────────────────────
+  const workoutRemindersOn = useReminders((s) => s.workoutRemindersOn);
+  const reminderWeekdays = useReminders((s) => s.weekdays);
+  const reminderHour = useReminders((s) => s.hour);
+  const reminderMinute = useReminders((s) => s.minute);
+  const morningNudgeOn = useReminders((s) => s.morningNudgeOn);
+  const checkInReminderOn = useReminders((s) => s.checkInReminderOn);
+  const setWorkoutRemindersOn = useReminders((s) => s.setWorkoutRemindersOn);
+  const toggleWeekday = useReminders((s) => s.toggleWeekday);
+  const setReminderTime = useReminders((s) => s.setTime);
+  const setMorningNudgeOn = useReminders((s) => s.setMorningNudgeOn);
+  const setCheckInReminderOn = useReminders((s) => s.setCheckInReminderOn);
+
+  /** Toggle the whole workout-reminder schedule on/off. */
+  function onWorkoutRemindersToggle(next: boolean): void {
+    setWorkoutRemindersOn(next);
+    // Scheduler asks for permission on first enable and clears on disable.
+    void scheduleWorkoutReminders(next ? reminderWeekdays : [], reminderHour, reminderMinute);
+  }
+
+  /** Add/remove a training day, then re-sync the schedule (if enabled). */
+  function onToggleWeekday(weekday: number): void {
+    const next = reminderWeekdays.includes(weekday)
+      ? reminderWeekdays.filter((d) => d !== weekday)
+      : [...reminderWeekdays, weekday].sort((a, b) => a - b);
+    toggleWeekday(weekday);
+    if (workoutRemindersOn) {
+      void scheduleWorkoutReminders(next, reminderHour, reminderMinute);
+    }
+  }
+
+  /** Change the reminder time, then re-sync the schedule (if enabled). */
+  function onReminderTimeChange(hour: number, minute: number): void {
+    setReminderTime(hour, minute);
+    if (workoutRemindersOn) {
+      void scheduleWorkoutReminders(reminderWeekdays, hour, minute);
+    }
+  }
+
+  /** Toggle the daily morning nudge (fixed 8:00). */
+  function onMorningNudgeToggle(next: boolean): void {
+    setMorningNudgeOn(next);
+    void scheduleMorningNudge(next, 8, 0);
+  }
+
+  /** Toggle the weekly Sunday check-in reminder. */
+  function onCheckInToggle(next: boolean): void {
+    setCheckInReminderOn(next);
+    void scheduleCheckInReminder(next);
+  }
 
   /** Toggle the fingerprint lock — verify once before enabling. */
   async function onBiometricToggle(next: boolean): Promise<void> {
@@ -590,9 +693,99 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
+      {/* ── Reminders (local, recurring) ────────────────────── */}
+      <Animated.View entering={enterUp(5)}>
+        <AppText variant="label" style={styles.sectionLabel}>
+          Reminders
+        </AppText>
+        <View style={styles.group}>
+          {/* Row 1 — workout reminders + inline day/time controls. */}
+          <View style={styles.reminderHeader}>
+            <IconChip icon="alarm" size={36} />
+            <AppText variant="bodyBold" style={styles.rowLabel}>
+              Workout reminders
+            </AppText>
+            <Switch
+              value={workoutRemindersOn}
+              onValueChange={onWorkoutRemindersToggle}
+              trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
+              thumbColor={workoutRemindersOn ? colors.accent : colors.textDim}
+              accessibilityLabel="Workout reminders"
+            />
+          </View>
+          {workoutRemindersOn ? (
+            <Animated.View entering={enterFade()} style={styles.reminderDetail}>
+              <View style={styles.dayRow}>
+                {WEEKDAY_CHIPS.map((d) => (
+                  <DayChip
+                    key={d.weekday}
+                    letter={d.letter}
+                    name={d.name}
+                    selected={reminderWeekdays.includes(d.weekday)}
+                    onPress={() => onToggleWeekday(d.weekday)}
+                  />
+                ))}
+              </View>
+              <View style={styles.timeRow}>
+                <AppText color={colors.textDim}>Time</AppText>
+                <View style={styles.timeControls}>
+                  <MiniStepper
+                    value={reminderHour}
+                    display={String(reminderHour).padStart(2, '0')}
+                    onChange={(v) => onReminderTimeChange(v, reminderMinute)}
+                    step={1}
+                    min={0}
+                    max={23}
+                    label="hour"
+                  />
+                  <AppText style={styles.timeColon} tabular>
+                    :
+                  </AppText>
+                  <MiniStepper
+                    value={reminderMinute}
+                    display={String(reminderMinute).padStart(2, '0')}
+                    onChange={(v) => onReminderTimeChange(reminderHour, v)}
+                    step={5}
+                    min={0}
+                    max={55}
+                    label="minute"
+                  />
+                </View>
+              </View>
+            </Animated.View>
+          ) : null}
+          <Divider />
+          {/* Row 2 — daily morning nudge. */}
+          <View style={styles.row}>
+            <IconChip icon="sunny" size={36} />
+            <AppText style={styles.rowLabel}>Morning nudge</AppText>
+            <Switch
+              value={morningNudgeOn}
+              onValueChange={onMorningNudgeToggle}
+              trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
+              thumbColor={morningNudgeOn ? colors.accent : colors.textDim}
+              accessibilityLabel="Morning nudge"
+            />
+          </View>
+          <Divider />
+          {/* Row 3 — weekly Sunday check-in. */}
+          <View style={styles.row}>
+            <IconChip icon="calendar-clear" size={36} />
+            <AppText style={styles.rowLabel}>Sunday check-in reminder</AppText>
+            <Switch
+              value={checkInReminderOn}
+              onValueChange={onCheckInToggle}
+              trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
+              thumbColor={checkInReminderOn ? colors.accent : colors.textDim}
+              accessibilityLabel="Sunday check-in reminder"
+            />
+          </View>
+        </View>
+      </Animated.View>
+
       {/* ── Security ────────────────────────────────────────── */}
       {Platform.OS !== 'web' ? (
-        <Animated.View entering={enterUp(5)}>
+        <Animated.View entering={enterUp(6)}>
           <AppText variant="label" style={styles.sectionLabel}>
             Security
           </AppText>
@@ -634,7 +827,7 @@ export default function SettingsScreen() {
 
       {/* ── Sign out (destructive actions live last) ────────── */}
       {signedIn ? (
-        <Animated.View entering={enterUp(6)} style={styles.signOutBlock}>
+        <Animated.View entering={enterUp(7)} style={styles.signOutBlock}>
           <Button
             label="Sign out"
             variant="ghost"
@@ -793,6 +986,43 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
+
+  // Reminders — header row, revealed detail, day picker, time control
+  reminderHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: 54,
+    paddingVertical: spacing.sm,
+  },
+  reminderDetail: { paddingBottom: spacing.md, gap: spacing.md },
+  dayRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+  },
+  dayChip: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.full,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayChipSelected: { borderColor: colors.accent, backgroundColor: colors.accentDim },
+  dayChipText: {
+    fontFamily: type.bodyMedium,
+    fontSize: 13,
+    letterSpacing: 0.5,
+  },
+  timeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  timeControls: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  timeColon: { fontFamily: type.display, fontSize: 18, color: colors.textDim },
 
   // Mini stepper (row-scale variant of ui/Stepper)
   miniStepper: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },

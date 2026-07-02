@@ -74,7 +74,13 @@ export function Button({
       style={[styles.base, styles[variant], (disabled || loading) && styles.disabled, style]}
     >
       {loading ? <ActivityIndicator color={textColor} /> : null}
-      <AppText style={[styles.labelText, { color: textColor }]} tabular={false}>
+      <AppText
+        style={[styles.labelText, { color: textColor }]}
+        tabular={false}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.85}
+      >
         {label}
       </AppText>
     </PressableScale>

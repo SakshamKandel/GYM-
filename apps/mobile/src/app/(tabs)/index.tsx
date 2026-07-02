@@ -11,6 +11,7 @@ import {
   CategoryTile,
   Divider,
   enterDown,
+  enterFade,
   enterUp,
   FLOATING_TAB_SPACE,
   HeroCard,
@@ -22,10 +23,12 @@ import {
 } from '../../components/ui';
 import { posterDate } from '../../lib/dates';
 import { useProfile } from '../../state/profile';
+import { FirstWorkoutsQuest } from '../../features/engagement/components/FirstWorkoutsQuest';
 import { StreakChip } from '../../features/engagement/components/StreakChip';
 import { WeeklyCheckIn } from '../../features/engagement/components/WeeklyCheckIn';
-import { useHomeData, type DoneToday } from '../../features/engagement/hooks';
+import { useHomeData, useQuestProgress, type DoneToday } from '../../features/engagement/hooks';
 import { avatarLetter, formatCompact, greetingForHour, toHref } from '../../features/engagement/logic';
+import { useQuest } from '../../state/quest';
 
 /** Home — answers "what's today?" in one glance. */
 
@@ -54,6 +57,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headingWrap: { marginBottom: spacing.lg },
+  questWrap: { marginBottom: spacing.lg },
   heroCard: { marginBottom: spacing.lg },
   /** The one big moment: workout name in huge condensed caps. */
   heroName: { fontSize: 48, lineHeight: 56, marginTop: -4 },
@@ -150,9 +154,14 @@ export default function HomeScreen() {
   const targets = useProfile((s) => s.targets);
   const unitPref = useProfile((s) => s.unitPref);
   const data = useHomeData(planId);
+  const quest = useQuestProgress();
+  const questDismissed = useQuest((s) => s.dismissed);
 
   const unit = unitLabel(unitPref);
   const last = data?.lastSession ?? null;
+  // Show the activation card only while the quest is live: loaded, not expired,
+  // and not dismissed after completion.
+  const showQuest = quest !== null && !quest.expired && !questDismissed;
 
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
@@ -181,6 +190,12 @@ export default function HomeScreen() {
         <AppText variant="label">{posterDate()}</AppText>
         <AppText variant="heading">Today</AppText>
       </Animated.View>
+
+      {showQuest ? (
+        <Animated.View entering={enterFade(0)} style={styles.questWrap}>
+          <FirstWorkoutsQuest progress={quest} />
+        </Animated.View>
+      ) : null}
 
       {data !== null ? (
         <>

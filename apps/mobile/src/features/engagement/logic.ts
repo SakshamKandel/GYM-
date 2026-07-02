@@ -54,3 +54,46 @@ export function countFinished(workouts: WorkoutLog[]): number {
 export function volumeOfSets(sets: SetLog[]): number {
   return Math.round(sets.reduce((sum, s) => sum + s.weightKg * s.reps, 0));
 }
+
+/** Goal for the first-workouts activation quest: three finished workouts. */
+export const QUEST_GOAL = 3 as const;
+/** Activation window length in days from the quest start. */
+export const QUEST_WINDOW_DAYS = 14;
+
+export interface QuestProgress {
+  /** Finished workouts so far, capped at the goal. */
+  done: number;
+  goal: typeof QUEST_GOAL;
+  /** Whole days left in the 14-day window (0 on/after the last day). */
+  daysLeft: number;
+  /** Reached the goal. */
+  complete: boolean;
+  /** Window elapsed without completing — card should disappear. */
+  expired: boolean;
+}
+
+/**
+ * Pure progress for the first-3-workouts quest. `finishedCount` is the number
+ * of finished workouts since `startIso`; the window is 14 days from `startIso`.
+ * `expired` only when the window has run out AND the goal wasn't met.
+ */
+export function questProgress(
+  finishedCount: number,
+  startIso: string,
+  todayIsoStr: string,
+): QuestProgress {
+  const done = Math.min(Math.max(finishedCount, 0), QUEST_GOAL);
+  const complete = done >= QUEST_GOAL;
+  const endIso = addDays(startIso, QUEST_WINDOW_DAYS);
+  // Whole days remaining, clamped to the window; last day still shows 1.
+  const daysLeft = Math.max(0, daysBetween(todayIsoStr, endIso));
+  const expired = !complete && todayIsoStr >= endIso;
+  return { done, goal: QUEST_GOAL, daysLeft, complete, expired };
+}
+
+/** Whole calendar days from `fromIso` to `toIso` (negative if `toIso` is past). */
+function daysBetween(fromIso: string, toIso: string): number {
+  const from = new Date(`${fromIso}T12:00:00`).getTime();
+  const to = new Date(`${toIso}T12:00:00`).getTime();
+  return Math.round((to - from) / (1000 * 60 * 60 * 24));
+}

@@ -19,6 +19,11 @@ import { formatClock } from '../../features/training/logic';
 import { pushPath, replacePath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
 import { nowIso, secondsBetween } from '../../lib/dates';
+import {
+  clearActiveWorkout,
+  showActiveWorkout,
+  updateRest,
+} from '../../lib/workoutNotification';
 import { useProfile } from '../../state/profile';
 
 /**
@@ -97,6 +102,39 @@ export default function WorkoutScreen() {
     return () => clearInterval(t);
   }, [startedAt]);
 
+  // Ongoing status-bar notification mirroring the live workout (Android only;
+  // no-op elsewhere). Present once when the workout becomes active…
+  const isActive = ready && session.status === 'active';
+  const workoutName = session.workoutName;
+  useEffect(() => {
+    if (!isActive) return;
+    void showActiveWorkout({ workoutName, elapsedLabel: formatClock(elapsed) });
+    // Only re-fire the initial show when the session flips to active. `elapsed`
+    // is intentionally read fresh here but excluded from deps — the tick effect
+    // below keeps the body current (updateRest throttles the spam).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive, workoutName]);
+
+  // …then keep it current on every tick / rest change. updateRest throttles to
+  // ~once per 3s internally, so driving it from the 1s tick is safe.
+  const restRemainingSec = session.rest ? session.rest.remainingSec : null;
+  useEffect(() => {
+    if (!isActive) return;
+    void updateRest({
+      workoutName,
+      restRemainingLabel: restRemainingSec === null ? null : formatClock(restRemainingSec),
+      elapsedLabel: formatClock(elapsed),
+    });
+  }, [isActive, workoutName, restRemainingSec, elapsed]);
+
+  // Clear on unmount — covers navigation away / screen teardown so no stale
+  // "workout in progress" lingers (finish/discard also clear explicitly below).
+  useEffect(() => {
+    return () => {
+      void clearActiveWorkout();
+    };
+  }, []);
+
   if (!ready || session.status !== 'active') {
     return <View style={styles.root} />;
   }
@@ -105,11 +143,13 @@ export default function WorkoutScreen() {
   const currentExercise = session.exercises[session.currentIdx] ?? null;
 
   const doFinish = async (): Promise<void> => {
+    void clearActiveWorkout();
     const id = await useSession.getState().finish();
     if (id) replacePath(`/workout/complete?id=${id}`);
   };
 
   const doDiscard = async (): Promise<void> => {
+    void clearActiveWorkout();
     await useSession.getState().discard();
     replacePath('/(tabs)/train');
   };

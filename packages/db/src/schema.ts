@@ -427,3 +427,25 @@ export const accountProfiles = pgTable('account_profiles', {
   data: jsonb('data').$type<Record<string, unknown>>().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Expo push tokens — one row per registered device. A single token maps to
+ * exactly one account, so re-registering the same token upserts (a device that
+ * signs into a different account moves the token). Buddy events (invite,
+ * accept, nudge) fan out to these so a user is notified even with the app closed.
+ */
+export const devicePushTokens = pgTable(
+  'device_push_tokens',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(), // "ExponentPushToken[...]"
+    platform: text('platform', { enum: ['ios', 'android'] }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('device_push_tokens_token').on(t.token)],
+);

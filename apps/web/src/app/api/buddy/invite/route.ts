@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { acceptedBuddyCount, authedUser, BUDDY_LIMIT } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { sendPushToAccount } from '@/lib/push';
 
 export const runtime = 'nodejs';
 
@@ -68,6 +69,14 @@ export async function POST(req: Request) {
 
   const link = created[0];
   if (!link) return json({ error: 'invalid' }, 400);
+
+  // Notify the addressee — fire-and-forget; never blocks or breaks the response.
+  const requesterName = me.displayName || me.email;
+  void sendPushToAccount(target.id, {
+    title: 'New gym buddy request',
+    body: `${requesterName} wants to train with you`,
+    data: { type: 'buddy_invite', linkId: link.id },
+  });
 
   return json({ link }, 201);
 }

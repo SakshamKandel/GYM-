@@ -33,6 +33,12 @@ export interface ProfileState {
   /** Last GM weekly check-in date (ISO yyyy-mm-dd). null = never run. */
   lastCheckInDate: string | null;
   /**
+   * The three Sunday taps from the last check-in (energy/soreness/weekFeel,
+   * each 1–3). null = never run. Kept so the reply can reflect the user's
+   * self-report and the check-in step can prefill.
+   */
+  lastCheckInSignals: { energy: number; soreness: number; weekFeel: number } | null;
+  /**
    * Anchor kcal for the adaptive engine's drift limit. Set on the first
    * check-in run; while null, readers fall back to targets.kcal.
    */
@@ -72,6 +78,7 @@ export const useProfile = create<ProfileState>()(
       fontScale: 'normal',
       targets: DEFAULT_TARGETS,
       lastCheckInDate: null,
+      lastCheckInSignals: null,
       baseKcal: null,
 
       update: (patch) => set(patch),

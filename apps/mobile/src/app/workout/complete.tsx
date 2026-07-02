@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useLocalSearchParams } from 'expo-router';
 import type { SetLog, WorkoutLog } from '@gym/shared';
-import { displayWeight } from '@gym/shared';
+import { displayWeight, epley1Rm, hasEntitlement } from '@gym/shared';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import {
   AnimatedNumber,
@@ -17,6 +17,7 @@ import {
 } from '../../components/ui';
 import { formatClock, formatWeightNumber, totalVolumeKg } from '../../features/training/logic';
 import { replacePath } from '../../features/training/nav';
+import { PrUpgradeCard } from '../../features/subscription/PrUpgradeCard';
 import { getRepo } from '../../lib/repo';
 import { useProfile } from '../../state/profile';
 
@@ -51,6 +52,7 @@ const styles = StyleSheet.create({
 export default function WorkoutCompleteScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const unitPref = useProfile((s) => s.unitPref);
+  const tier = useProfile((s) => s.tier);
   const [workout, setWorkout] = useState<WorkoutLog | null>(null);
   const [sets, setSets] = useState<SetLog[]>([]);
 
@@ -72,6 +74,19 @@ export default function WorkoutCompleteScreen() {
 
   const volume = Math.round(displayWeight(totalVolumeKg(sets), unitPref));
   const prSets = sets.filter((s) => s.isPr);
+
+  // Below Gold + a fresh PR = the honest conversion moment. Quote their
+  // strongest lift back to them (highest e1RM, heavier weight breaks ties).
+  const showUpgrade = prSets.length > 0 && !hasEntitlement({ tier }, 'signature_plans');
+  const topPrSet = showUpgrade
+    ? prSets.reduce((best, s) => {
+        const bestE1rm = epley1Rm(best.weightKg, best.reps);
+        const e1rm = epley1Rm(s.weightKg, s.reps);
+        if (e1rm > bestE1rm) return s;
+        if (e1rm === bestE1rm && s.weightKg > best.weightKg) return s;
+        return best;
+      })
+    : null;
 
   return (
     <Screen scroll>
@@ -118,8 +133,25 @@ export default function WorkoutCompleteScreen() {
         </>
       ) : null}
 
+      {topPrSet ? (
+        <PrUpgradeCard
+          topPr={{
+            exerciseName: topPrSet.exerciseName,
+            weightKg: topPrSet.weightKg,
+            reps: topPrSet.reps,
+            e1rm: epley1Rm(topPrSet.weightKg, topPrSet.reps),
+          }}
+          unit={unitPref}
+        />
+      ) : null}
+
       <Animated.View entering={enterUp(4)}>
-        <Button label="Done" onPress={() => replacePath('/(tabs)')} style={styles.done} />
+        <Button
+          label="Done"
+          variant={showUpgrade ? 'secondary' : 'primary'}
+          onPress={() => replacePath('/(tabs)')}
+          style={styles.done}
+        />
       </Animated.View>
     </Screen>
   );

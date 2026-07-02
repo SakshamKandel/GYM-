@@ -30,6 +30,9 @@ interface Props {
   center?: boolean;
   style?: StyleProp<TextStyle>;
   numberOfLines?: number;
+  /** Shrink text to fit one line instead of wrapping (button labels, chips). */
+  adjustsFontSizeToFit?: boolean;
+  minimumFontScale?: number;
   children: ReactNode;
 }
 
@@ -81,6 +84,8 @@ export function AppText({
   center,
   style,
   numberOfLines,
+  adjustsFontSizeToFit,
+  minimumFontScale,
   children,
 }: Props) {
   const fontScale = useProfile((s) => s.fontScale);
@@ -92,6 +97,8 @@ export function AppText({
   return (
     <Text
       numberOfLines={numberOfLines}
+      adjustsFontSizeToFit={adjustsFontSizeToFit}
+      minimumFontScale={minimumFontScale}
       style={[
         base,
         scaled,
