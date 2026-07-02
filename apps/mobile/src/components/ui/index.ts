@@ -5,6 +5,7 @@ export { Button } from './Button';
 export { enterDown, enterFade, enterUp, layoutSpring } from './motion';
 export { CategoryTile } from './CategoryTile';
 export { Chip } from './Chip';
+export { ConfirmDialog } from './ConfirmDialog';
 export { DayStrip } from './DayStrip';
 export { Divider } from './Divider';
 export { Fab } from './Fab';

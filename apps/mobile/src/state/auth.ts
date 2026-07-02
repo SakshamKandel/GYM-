@@ -4,10 +4,12 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import type { Tier } from '@gym/shared';
 import {
   ApiError,
+  getProfileData,
   login,
   loginWithGoogle,
   logout as apiLogout,
   me,
+  putProfileData,
   register,
   type AuthUser,
 } from '../lib/api/client';
@@ -50,6 +52,33 @@ function adoptServerUser(user: AuthUser): void {
   }
 }
 
+/**
+ * Cloud profile restore — the fix for "signed in but sent back to setup".
+ * If the account has a saved profile, hydrate the local store from it
+ * (onboarded included) so returning users land straight in the app.
+ * If the server has nothing but this device finished onboarding, back the
+ * local profile up instead. Best-effort: network failure keeps local state.
+ */
+async function restoreOrBackupProfile(token: string): Promise<void> {
+  try {
+    const remote = await getProfileData(token);
+    const local = useProfile.getState();
+    if (remote && remote['onboarded'] === true) {
+      // Server wins for setup/preferences; local tier keeps its upgrade rule.
+      const tier = local.tier;
+      useProfile.setState((s) => ({ ...s, ...remote }) as typeof s);
+      if (TIER_RANK[tier] > TIER_RANK[useProfile.getState().tier]) {
+        useProfile.getState().update({ tier });
+      }
+    } else if (local.onboarded) {
+      const { update: _u, completeOnboarding: _c, ...data } = local;
+      await putProfileData(token, data as unknown as Record<string, unknown>);
+    }
+  } catch {
+    // Offline or server hiccup — the local profile stays authoritative.
+  }
+}
+
 export const useAuth = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -61,12 +90,15 @@ export const useAuth = create<AuthState>()(
         const session = await login({ email: email.trim().toLowerCase(), password });
         set({ status: 'signedIn', token: session.token, user: session.user });
         adoptServerUser(session.user);
+        // Awaited: 'onboarded' must be restored BEFORE navigation gates run.
+        await restoreOrBackupProfile(session.token);
       },
 
       signInWithGoogle: async (idToken) => {
         const session = await loginWithGoogle(idToken);
         set({ status: 'signedIn', token: session.token, user: session.user });
         adoptServerUser(session.user);
+        await restoreOrBackupProfile(session.token);
       },
 
       signUp: async (email, password, displayName) => {
@@ -77,6 +109,7 @@ export const useAuth = create<AuthState>()(
         });
         set({ status: 'signedIn', token: session.token, user: session.user });
         adoptServerUser(session.user);
+        await restoreOrBackupProfile(session.token);
       },
 
       signOut: async () => {

@@ -1,0 +1,17 @@
+diff --git a/android/build.gradle b/android/build.gradle
+index 6348d17da8169193477781fd65a4b4532d3f8798..6f9c9faceb83a9868c9d9e3c16c018d9df5d5592 100644
+--- a/android/build.gradle
++++ b/android/build.gradle	
+@@ -94,7 +94,11 @@ def shouldUseCommonInterfaceFromReanimated() {
+ }
+ 
+ def shouldUseCommonInterfaceFromRNSVG() {
+-    // common interface compatible with react-native-svg >= 15.11.2
++    // Patched: force the nosvg source set. The svg integration only adds
++    // gesture hit-testing INSIDE react-native-svg elements (unused in this
++    // app - our SVGs are non-interactive charts) and its VirtualView
++    // reference fails to compile against react-native-svg 15.15.x releases.
++    return false
+     def rnsvg = rootProject.subprojects.find { it.name == 'react-native-svg' }
+ 
+     if (rnsvg == null) {

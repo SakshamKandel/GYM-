@@ -1,5 +1,5 @@
-import { buddySessions, buddySessionParticipants } from '@gym/db';
-import { and, eq } from 'drizzle-orm';
+import { buddySessions } from '@gym/db';
+import { eq } from 'drizzle-orm';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';

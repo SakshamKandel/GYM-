@@ -1,24 +1,60 @@
-import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import Animated, {
+  cancelAnimation,
+  Easing,
   useAnimatedStyle,
   useSharedValue,
+  withDelay,
+  withRepeat,
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
 import { colors, radius, spacing } from '@gym/ui-tokens';
-import { AppText } from '../../../components/ui';
+import { AppText, enterFade } from '../../../components/ui';
 
 /**
- * Newie's speech bubble — deliberately simple. The bubble types its line
- * out (tap it to finish instantly); NOTHING else is ever hidden or gated,
- * so inputs and buttons are always on screen.
+ * Newie's speech bubble — chat-app pattern. Per new line: a short typing
+ * indicator (three dots), then the FULL text lands at once as one plain,
+ * always-visible AppText. No typewriter, no transparent-text tricks.
+ * NOTHING else is ever hidden or gated; inputs and buttons stay on screen.
  */
 
 const NEWIE = require('../../../../assets/images/newie.png');
 
-/** Typewriter text. Reserves full height up front so layout never jumps. */
+/** How long Newie "types" before his line lands. */
+const TYPING_MS = 650;
+
+/**
+ * One dot of the typing indicator — a gentle opacity wave, 400ms cycle.
+ * This transient indicator is the app's one allowed repeating animation;
+ * it unmounts (and is cancelled) the moment the text shows.
+ */
+function TypingDot({ index }: { index: number }) {
+  const pulse = useSharedValue(0.35);
+  useEffect(() => {
+    pulse.value = withDelay(
+      index * 130,
+      withRepeat(
+        withSequence(
+          withTiming(1, { duration: 200, easing: Easing.inOut(Easing.quad) }),
+          withTiming(0.35, { duration: 200, easing: Easing.inOut(Easing.quad) }),
+        ),
+        -1,
+      ),
+    );
+    return () => cancelAnimation(pulse);
+  }, [index, pulse]);
+  const style = useAnimatedStyle(() => ({ opacity: pulse.value }));
+  return <Animated.View style={[styles.dot, style]} />;
+}
+
+/**
+ * Chat bubble: typing dots for ~650ms, then the whole message. `instant`
+ * (reactions) skips the indicator. minHeight keeps the dots→text swap from
+ * jumping; the enterFade on the text covers any growth for longer lines.
+ */
 export function Bubble({
   text,
   caption,
@@ -28,52 +64,48 @@ export function Bubble({
   caption?: string;
   instant?: boolean;
 }) {
-  const [chars, setChars] = useState(instant ? text.length : 0);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Which line is currently shown (null = typing dots). Adjusted during
+  // render so a new line never flashes stale text for a frame.
+  const [shownText, setShownText] = useState<string | null>(instant ? text : null);
+  if (instant) {
+    if (shownText !== text) setShownText(text);
+  } else if (shownText !== null && shownText !== text) {
+    setShownText(null);
+  }
 
   useEffect(() => {
-    if (timer.current) clearInterval(timer.current);
-    if (instant) {
-      setChars(text.length);
-      return;
-    }
-    setChars(0);
-    timer.current = setInterval(() => {
-      setChars((c) => {
-        if (c >= text.length) {
-          if (timer.current) clearInterval(timer.current);
-          return c;
-        }
-        return c + 1;
-      });
-    }, 28);
-    return () => {
-      if (timer.current) clearInterval(timer.current);
-    };
+    if (instant) return undefined;
+    const t = setTimeout(() => setShownText(text), TYPING_MS);
+    return () => clearTimeout(t);
   }, [text, instant]);
 
+  const shown = shownText === text;
+
   return (
-    <Pressable
-      accessibilityRole="text"
-      accessibilityLabel={text}
-      onPress={() => setChars(text.length)}
+    <View
       style={styles.bubble}
+      accessible
+      accessibilityLabel={caption ? `${text} ${caption}` : text}
     >
-      {/* Invisible copy fixes the final size; the typed copy paints over it. */}
-      <View>
-        <AppText variant="bodyBold" style={[styles.line, styles.ghost]} tabular={false}>
-          {text}
-        </AppText>
-        <AppText variant="bodyBold" style={[styles.line, styles.typed]} tabular={false}>
-          {text.slice(0, chars)}
-        </AppText>
-      </View>
-      {caption ? (
-        <AppText variant="caption" style={styles.caption}>
-          {caption}
-        </AppText>
-      ) : null}
-    </Pressable>
+      {shown ? (
+        <Animated.View entering={enterFade()}>
+          <AppText variant="bodyBold" style={styles.line} tabular={false}>
+            {text}
+          </AppText>
+          {caption ? (
+            <AppText variant="caption" style={styles.caption}>
+              {caption}
+            </AppText>
+          ) : null}
+        </Animated.View>
+      ) : (
+        <View style={styles.dots}>
+          <TypingDot index={0} />
+          <TypingDot index={1} />
+          <TypingDot index={2} />
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -115,7 +147,9 @@ export function NewieStage({
           />
         </Animated.View>
         <View style={styles.tail} />
-        <Bubble text={text} caption={caption} instant={mood === 'react'} />
+        <View style={styles.bubbleSlot}>
+          <Bubble text={text} caption={caption} instant={mood === 'react'} />
+        </View>
       </View>
       {children ? <View style={styles.answers}>{children}</View> : null}
     </View>
@@ -142,8 +176,12 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '45deg' }],
     zIndex: 1,
   },
+  // The row gives the bubble its width; the bubble itself never uses flex,
+  // so it also lays out correctly in column containers (welcome screen).
+  bubbleSlot: { flex: 1 },
   bubble: {
-    flex: 1,
+    minHeight: 72,
+    justifyContent: 'center',
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
@@ -152,8 +190,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.lg,
   },
   line: { fontSize: 17, lineHeight: 24 },
-  ghost: { opacity: 0 },
-  typed: { position: 'absolute', top: 0, left: 0, right: 0 },
   caption: { marginTop: spacing.sm },
+  dots: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  dot: {
+    width: 7,
+    height: 7,
+    borderRadius: radius.full,
+    backgroundColor: colors.textDim,
+  },
   answers: {},
 });

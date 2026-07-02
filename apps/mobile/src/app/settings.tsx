@@ -1,14 +1,23 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Switch,
+  View,
+} from 'react-native';
 import Animated from 'react-native-reanimated';
+import * as LocalAuthentication from 'expo-local-authentication';
 import type { FontScale, Tier } from '@gym/shared';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
   AppTextInput,
   Button,
+  ConfirmDialog,
   Divider,
   IconChip,
   PressableScale,
@@ -23,7 +32,9 @@ import { getRepo } from '../lib/repo';
 import { SEED_PLANS } from '../lib/seed/plans';
 import { useAuth } from '../state/auth';
 import { useProfile } from '../state/profile';
+import { useSecurity } from '../state/security';
 import { pushPath } from '../features/auth/nav';
+import { biometricsAvailable } from '../features/security/AppLock';
 import {
   BIRTH_YEAR,
   HEIGHT_CM,
@@ -108,7 +119,6 @@ function MiniStepper({
     if (next < min) next = min;
     if (next > max) next = max;
     if (next !== liveValue.current) {
-      tapHaptic();
       onChange(next);
       liveValue.current = next;
     }
@@ -200,6 +210,46 @@ export default function SettingsScreen() {
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+
+  const biometricLock = useSecurity((s) => s.biometricLock);
+  const setBiometricLock = useSecurity((s) => s.setBiometricLock);
+  const [confirmingBioOff, setConfirmingBioOff] = useState(false);
+  const [bioInfo, setBioInfo] = useState<string | null>(null);
+  const [bioBusy, setBioBusy] = useState(false);
+
+  /** Toggle the fingerprint lock — verify once before enabling. */
+  async function onBiometricToggle(next: boolean): Promise<void> {
+    if (bioBusy) return;
+    if (!next) {
+      setConfirmingBioOff(true); // custom yes/no popup
+      return;
+    }
+    setBioBusy(true);
+    try {
+      const availability = await biometricsAvailable();
+      if (availability === 'no_hardware') {
+        setBioInfo("This phone doesn't support fingerprint or face unlock.");
+        return;
+      }
+      if (availability === 'not_enrolled') {
+        setBioInfo(
+          'No fingerprint is set up on this phone yet. Add one in your phone settings first, then come back.',
+        );
+        return;
+      }
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Confirm fingerprint to enable app lock',
+      });
+      if (result.success) {
+        setBiometricLock(true);
+        successHaptic();
+      } else {
+        warnHaptic();
+      }
+    } finally {
+      setBioBusy(false);
+    }
+  }
 
   // Latest logged body weight (refreshes on focus so a new weigh-in counts).
   useFocusEffect(
@@ -540,39 +590,93 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
-      {/* ── Sign out (destructive actions live last) ────────── */}
-      {signedIn ? (
-        <Animated.View entering={enterUp(5)} style={styles.signOutBlock}>
-          {confirmingSignOut ? (
-            <Animated.View entering={enterFade()} style={styles.signOutConfirm}>
-              <AppText variant="caption" center>
-                Sign out of this device? Your logs stay on this phone.
+      {/* ── Security ────────────────────────────────────────── */}
+      {Platform.OS !== 'web' ? (
+        <Animated.View entering={enterUp(5)}>
+          <AppText variant="label" style={styles.sectionLabel}>
+            Security
+          </AppText>
+          <View style={[styles.group, styles.securityCard]}>
+            <View style={styles.securityHeader}>
+              <IconChip
+                icon="finger-print"
+                size={36}
+                color={colors.accentFaint}
+                iconColor={colors.accent}
+              />
+              <AppText variant="bodyBold" style={styles.securityTitle}>
+                App lock
               </AppText>
-              <View style={styles.signOutButtons}>
-                <Button
-                  label="Yes, sign out"
-                  variant="danger"
-                  loading={signingOut}
-                  onPress={() => void onSignOut()}
-                  style={styles.signOutButton}
-                />
-                <Button
-                  label="Cancel"
-                  variant="ghost"
-                  onPress={() => setConfirmingSignOut(false)}
-                  style={styles.signOutButton}
-                />
-              </View>
-            </Animated.View>
-          ) : (
-            <Button
-              label="Sign out"
-              variant="ghost"
-              onPress={() => setConfirmingSignOut(true)}
-            />
-          )}
+              {bioBusy ? (
+                <ActivityIndicator size="small" color={colors.textDim} />
+              ) : null}
+              <Switch
+                value={biometricLock}
+                disabled={bioBusy}
+                onValueChange={(v) => void onBiometricToggle(v)}
+                trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
+                thumbColor={biometricLock ? colors.accent : colors.textDim}
+                accessibilityLabel="App lock"
+              />
+            </View>
+            <AppText
+              variant="caption"
+              color={biometricLock ? colors.textDim : colors.textFaint}
+              style={styles.securityStatus}
+            >
+              {biometricLock
+                ? 'Locked with your fingerprint when you leave the app'
+                : 'Anyone with your phone can open the app'}
+            </AppText>
+          </View>
         </Animated.View>
       ) : null}
+
+      {/* ── Sign out (destructive actions live last) ────────── */}
+      {signedIn ? (
+        <Animated.View entering={enterUp(6)} style={styles.signOutBlock}>
+          <Button
+            label="Sign out"
+            variant="ghost"
+            onPress={() => setConfirmingSignOut(true)}
+          />
+        </Animated.View>
+      ) : null}
+
+      {/* ── Custom yes/no popups ────────────────────────────── */}
+      <ConfirmDialog
+        visible={confirmingSignOut}
+        title="Sign out?"
+        message="Your logs stay safe on this phone — signing out only disconnects your account."
+        confirmLabel={signingOut ? 'Signing out…' : 'Yes, sign out'}
+        cancelLabel="No, stay"
+        danger
+        onConfirm={() => void onSignOut()}
+        onCancel={() => setConfirmingSignOut(false)}
+      />
+      <ConfirmDialog
+        visible={confirmingBioOff}
+        title="Turn off fingerprint lock?"
+        message="Anyone with your phone will be able to open the app."
+        confirmLabel="Yes, turn off"
+        cancelLabel="No, keep it"
+        danger
+        onConfirm={() => {
+          setBiometricLock(false);
+          setConfirmingBioOff(false);
+          tapHaptic();
+        }}
+        onCancel={() => setConfirmingBioOff(false)}
+      />
+      <ConfirmDialog
+        visible={bioInfo !== null}
+        title="Fingerprint unavailable"
+        message={bioInfo ?? ''}
+        confirmLabel="OK"
+        hideCancel
+        onConfirm={() => setBioInfo(null)}
+        onCancel={() => setBioInfo(null)}
+      />
 
       {/* ── About ───────────────────────────────────────────── */}
       <AppText variant="caption" color={colors.textFaint} center style={styles.about}>
@@ -748,6 +852,12 @@ const styles = StyleSheet.create({
   planInfo: { flex: 1, gap: 2 },
 
   subscriptionBlock: { marginTop: spacing.xl },
+
+  // Security card
+  securityCard: { paddingVertical: spacing.lg, gap: spacing.sm },
+  securityHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  securityTitle: { flex: 1 },
+  securityStatus: { lineHeight: 18 },
 
   // Sign out + about footer
   signOutBlock: { marginTop: spacing.xxl },

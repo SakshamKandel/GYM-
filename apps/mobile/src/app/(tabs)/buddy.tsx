@@ -120,9 +120,14 @@ function BuddyContent({
   reload,
 }: ContentProps) {
   const tier = useProfile((s) => s.tier);
+  const myId = useAuth((s) => s.user?.id ?? null);
   const accepted = list?.accepted ?? [];
   const pendingIn = list?.pendingIn ?? [];
   const pendingOut = list?.pendingOut ?? [];
+  // The server list includes my own active session — split it out so the
+  // join list only ever shows buddies' sessions.
+  const mySession = sessions.find((s) => s.host.id === myId) ?? null;
+  const buddySessions = sessions.filter((s) => s.host.id !== myId);
 
   return (
     <Screen scroll keyboardAware bottomInset={FLOATING_TAB_SPACE}>
@@ -221,7 +226,7 @@ function BuddyContent({
       <View>
         <SectionLabel>Live sessions</SectionLabel>
         <LiveSessionSection
-          sessions={sessions}
+          sessions={buddySessions}
           tier={tier}
           onJoin={async (sessionId) => {
             return joinLiveSession(sessionId);
@@ -238,7 +243,7 @@ function BuddyContent({
             await endLiveSession(sessionId);
             reload();
           }}
-          sessions={sessions}
+          mySession={mySession}
         />
       </View>
 
@@ -574,16 +579,15 @@ function LiveSessionSection({
 function StartSessionForm({
   onStart,
   onEnd,
-  sessions,
+  mySession,
 }: {
   onStart: (workoutName: string) => Promise<boolean>;
   onEnd: (sessionId: string) => Promise<void>;
-  sessions: BuddySession[];
+  mySession: BuddySession | null;
 }) {
   const [workoutName, setWorkoutName] = useState('');
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState(false);
-  const mySession = sessions.find((s) => s.host.id === useAuth.getState().user?.id);
 
   async function handleStart() {
     if (!workoutName.trim() || starting) return;

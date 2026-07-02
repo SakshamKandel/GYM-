@@ -10,7 +10,6 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, type } from '@gym/ui-tokens';
-import { tapHaptic } from '../../lib/haptics';
 
 /**
  * Floating tab bar. ONE tinted pill glides between tabs (240ms ease-out
@@ -149,7 +148,6 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
                 accessibilityLabel={label}
                 accessibilityState={{ selected: focused }}
                 onPress={() => {
-                  tapHaptic();
                   const event = navigation.emit({
                     type: 'tabPress',
                     target: route.key,

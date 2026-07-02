@@ -7,9 +7,10 @@ import { AppText, Button, enterDown, enterUp, Screen } from '../components/ui';
 import { Bubble } from '../features/onboarding/components/NewieStage';
 
 /**
- * Welcome — the front door. Newie greets you with a typewriter speech bubble;
- * "Get started" hands you to his onboarding conversation. No forced login —
- * sign-in is one tap for returning users.
+ * Welcome — the front door. Newie greets you chat-style: typing dots for a
+ * beat, then his full line as plain visible text. "Get started" hands you to
+ * his onboarding conversation. No forced login — sign-in is one tap for
+ * returning users.
  */
 
 const NEWIE = require('../../assets/images/newie.png');
@@ -35,7 +36,7 @@ export default function WelcomeScreen() {
         <View style={styles.tail} />
       </Animated.View>
 
-      {/* Hero: Newie fills remaining space, bottom bleeds behind actions */}
+      {/* Hero: Newie fills the remaining space, clear of the actions */}
       <Animated.View entering={enterUp(1)} style={styles.stage}>
         <Image
           source={NEWIE}
@@ -45,7 +46,6 @@ export default function WelcomeScreen() {
         />
       </Animated.View>
 
-      {/* Actions — solid bg covers the bottom of Newie */}
       <Animated.View entering={enterUp(2)} style={styles.actions}>
         <Button label="Get started" onPress={() => router.push('/onboarding')} />
         <Button
@@ -100,9 +100,6 @@ const styles = StyleSheet.create({
   actions: {
     gap: spacing.sm,
     paddingBottom: spacing.lg,
-    paddingTop: spacing.xs,
-    marginTop: -56,
-    backgroundColor: colors.bg,
-    zIndex: 3,
+    paddingTop: spacing.sm,
   },
 });

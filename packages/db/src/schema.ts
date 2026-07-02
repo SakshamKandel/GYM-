@@ -414,3 +414,16 @@ export const trialUsage = pgTable(
   },
   (t) => [uniqueIndex('trial_usage_account_tier').on(t.accountId, t.tier)],
 );
+
+/**
+ * Cloud profile backup — the mobile app's profile store (onboarding answers,
+ * targets, preferences) as one JSON blob per account. Restored on sign-in so
+ * a returning user never re-runs setup; pushed on every profile change.
+ */
+export const accountProfiles = pgTable('account_profiles', {
+  accountId: text('account_id')
+    .primaryKey()
+    .references(() => accounts.id, { onDelete: 'cascade' }),
+  data: jsonb('data').$type<Record<string, unknown>>().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});

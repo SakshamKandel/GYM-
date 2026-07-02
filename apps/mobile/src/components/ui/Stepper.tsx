@@ -1,7 +1,7 @@
-import { useRef, useState } from 'react';
-import { PanResponder, Pressable, StyleSheet, View } from 'react-native';
+import { useMemo, useRef, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { colors, radius, touch, type } from '@gym/ui-tokens';
-import { tapHaptic } from '../../lib/haptics';
 import { AppText } from './AppText';
 
 /**
@@ -73,7 +73,6 @@ export function Stepper({ value, onChange, step, min = 0, max, format, label, bi
     if (next < min) next = min;
     if (max !== undefined && next > max) next = max;
     if (next !== liveValue.current) {
-      tapHaptic();
       onChange(next);
       liveValue.current = next;
     }
@@ -91,31 +90,34 @@ export function Stepper({ value, onChange, step, min = 0, max, format, label, bi
     }
   }
 
-  // ── PanResponder for drag-to-change ──────────────────────────
-  // Accumulates horizontal drag distance; every PX_PER_STEP pixels
-  // crossed fires one step. Clamps to min/max via apply().
+  // ── Drag-to-change via react-native-gesture-handler ──────────
+  // PanResponder loses the responder war against ScrollViews on Android;
+  // a RNGH Pan with activeOffsetX/failOffsetY negotiates correctly:
+  // horizontal drags claim the gesture, vertical drags stay with the scroll.
   const dragAccum = useRef(0);
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponderCapture: (_e, g) =>
-        Math.abs(g.dx) > 4 && Math.abs(g.dx) > Math.abs(g.dy) * 2,
-      onPanResponderGrant: () => {
-        dragAccum.current = 0;
-        setDragging(true);
-      },
-      onPanResponderMove: (_e, g) => {
-        const delta = g.dx - dragAccum.current;
-        const steps = Math.trunc(delta / PX_PER_STEP);
-        if (steps !== 0) {
-          dragAccum.current += steps * PX_PER_STEP;
-          apply(steps * step);
-        }
-      },
-      onPanResponderRelease: () => setDragging(false),
-      onPanResponderTerminate: () => setDragging(false),
-    }),
-  ).current;
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        .activeOffsetX([-12, 12])
+        .failOffsetY([-10, 10])
+        .runOnJS(true)
+        .onStart(() => {
+          dragAccum.current = 0;
+          setDragging(true);
+        })
+        .onUpdate((e) => {
+          const delta = e.translationX - dragAccum.current;
+          const steps = Math.trunc(delta / PX_PER_STEP);
+          if (steps !== 0) {
+            dragAccum.current += steps * PX_PER_STEP;
+            apply(steps * step);
+          }
+        })
+        .onEnd(() => setDragging(false))
+        .onFinalize(() => setDragging(false)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [step, min, max],
+  );
 
   const display = format ? format(value) : String(round(value));
 
@@ -133,17 +135,18 @@ export function Stepper({ value, onChange, step, min = 0, max, format, label, bi
         >
           <AppText style={styles.btnText} tabular={false}>−</AppText>
         </Pressable>
-        <View
-          style={[styles.valueBox, dragging && styles.valueBoxDragging]}
-          accessibilityRole="adjustable"
-          accessibilityLabel={`${label ?? 'value'} is ${display}. Drag left or right to adjust.`}
-          {...panResponder.panHandlers}
-        >
-          <AppText variant={big ? 'stat' : 'display'} tabular>
-            {display}
-          </AppText>
-          {big ? <AppText style={styles.dragHint}>← drag →</AppText> : null}
-        </View>
+        <GestureDetector gesture={pan}>
+          <View
+            style={[styles.valueBox, dragging && styles.valueBoxDragging]}
+            accessibilityRole="adjustable"
+            accessibilityLabel={`${label ?? 'value'} is ${display}. Drag left or right to adjust.`}
+          >
+            <AppText variant={big ? 'stat' : 'display'} tabular>
+              {display}
+            </AppText>
+            {big ? <AppText style={styles.dragHint}>← drag →</AppText> : null}
+          </View>
+        </GestureDetector>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Increase ${label ?? 'value'} by ${step}`}

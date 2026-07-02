@@ -10,7 +10,7 @@ import {
   startTrial,
   toBuddyError,
   type BuddyErrorCode,
-  type BuddySession,
+  type StartedBuddySession,
   type TrialTier,
 } from '../../lib/api/client';
 import { todayIso } from '../../lib/dates';
@@ -89,7 +89,9 @@ export async function sendNudge(linkId: string): Promise<boolean> {
 // ── Live Sessions ──────────────────────────────────────────────
 
 /** Start a live workout session. Returns the session or null on failure. */
-export async function startLiveSession(workoutName: string): Promise<BuddySession | null> {
+export async function startLiveSession(
+  workoutName: string,
+): Promise<StartedBuddySession | null> {
   const token = currentToken();
   if (token === null) return null;
   try {

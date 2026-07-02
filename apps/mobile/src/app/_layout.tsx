@@ -11,7 +11,10 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { AppState, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { colors } from '@gym/ui-tokens';
+import { AppLock } from '../features/security/AppLock';
+import { startProfileSync } from '../lib/profileSync';
 import { useAuth } from '../state/auth';
 
 void SplashScreen.preventAutoHideAsync();
@@ -38,13 +41,20 @@ export default function RootLayout() {
     return () => sub.remove();
   }, []);
 
+  // Keep the cloud profile backup current while signed in.
+  useEffect(() => {
+    startProfileSync();
+  }, []);
+
   if (!fontsLoaded && !fontsError) {
     return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+    // Required for GestureDetector-based gestures (Stepper drag) app-wide.
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
       <StatusBar style="light" />
+      <AppLock>
       <Stack
         screenOptions={{
           headerShown: false,
@@ -57,6 +67,7 @@ export default function RootLayout() {
         <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
         <Stack.Screen name="workout" options={{ gestureEnabled: false }} />
       </Stack>
-    </View>
+      </AppLock>
+    </GestureHandlerRootView>
   );
 }

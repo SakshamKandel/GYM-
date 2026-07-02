@@ -1,9 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Alert, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing } from '@gym/ui-tokens';
-import { AppText, Button, enterDown, enterFade, enterUp, layoutSpring } from '../../components/ui';
+import {
+  AppText,
+  Button,
+  ConfirmDialog,
+  enterDown,
+  enterFade,
+  enterUp,
+  layoutSpring,
+} from '../../components/ui';
 import { LogEditor } from '../../features/training/components/LogEditor';
 import { RestTimerPanel } from '../../features/training/components/RestTimerPanel';
 import { ExerciseSection } from '../../features/training/components/ExerciseSection';
@@ -53,37 +61,6 @@ const styles = StyleSheet.create({
   addBtn: { alignSelf: 'center', marginTop: spacing.sm },
 });
 
-/** Three-way finish confirm; native Alert, plain confirms on web QA. */
-function confirmSmallFinish(
-  setCount: number,
-  onDiscard: () => void,
-  onFinish: () => void,
-): void {
-  if (Platform.OS === 'web') {
-    const g = globalThis as { confirm?: (msg: string) => boolean };
-    if (setCount === 0) {
-      if (g.confirm?.('Discard this empty workout?') ?? true) onDiscard();
-    } else if (g.confirm?.('Only 1 set logged. Finish and save this workout?') ?? true) {
-      onFinish();
-    }
-    return;
-  }
-  Alert.alert(
-    'Finish workout?',
-    setCount === 0 ? 'Nothing logged yet.' : 'Fewer than 2 sets logged.',
-    setCount === 0
-      ? [
-          { text: 'Keep training', style: 'cancel' },
-          { text: 'Discard workout', style: 'destructive', onPress: onDiscard },
-        ]
-      : [
-          { text: 'Keep training', style: 'cancel' },
-          { text: 'Discard workout', style: 'destructive', onPress: onDiscard },
-          { text: 'Finish', onPress: onFinish },
-        ],
-  );
-}
-
 export default function WorkoutScreen() {
   const insets = useSafeAreaInsets();
   const unitPref = useProfile((s) => s.unitPref);
@@ -91,6 +68,8 @@ export default function WorkoutScreen() {
   const [ready, setReady] = useState(session.status === 'active');
   const [elapsed, setElapsed] = useState(0);
   const [logging, setLogging] = useState(false);
+  /** Branded finish confirmation: 'finish' saves, 'discard' throws away an empty session. */
+  const [finishPrompt, setFinishPrompt] = useState<null | 'finish' | 'discard'>(null);
 
   // Resume from the repo if the store is cold (app restart, deep link).
   useEffect(() => {
@@ -136,15 +115,7 @@ export default function WorkoutScreen() {
   };
 
   const handleFinish = (): void => {
-    if (totalSets >= 2) {
-      void doFinish();
-      return;
-    }
-    confirmSmallFinish(
-      totalSets,
-      () => void doDiscard(),
-      () => void doFinish(),
-    );
+    setFinishPrompt(totalSets === 0 ? 'discard' : 'finish');
   };
 
   const handleLog = (weightKg: number, reps: number): void => {
@@ -240,6 +211,37 @@ export default function WorkoutScreen() {
           </View>
         )}
       </Animated.View>
+
+      {/* Branded finish confirmations — no system alerts. */}
+      <ConfirmDialog
+        visible={finishPrompt === 'finish'}
+        title="Finish workout?"
+        message={
+          totalSets === 1
+            ? 'Only 1 set logged — save it and see your recap?'
+            : 'Save this session and see your recap.'
+        }
+        confirmLabel="Finish"
+        cancelLabel="Keep training"
+        onConfirm={() => {
+          setFinishPrompt(null);
+          void doFinish();
+        }}
+        onCancel={() => setFinishPrompt(null)}
+      />
+      <ConfirmDialog
+        visible={finishPrompt === 'discard'}
+        title="Discard workout?"
+        message="Nothing logged yet — this session won't be saved."
+        confirmLabel="Discard"
+        cancelLabel="Keep training"
+        danger
+        onConfirm={() => {
+          setFinishPrompt(null);
+          void doDiscard();
+        }}
+        onCancel={() => setFinishPrompt(null)}
+      />
     </View>
   );
 }

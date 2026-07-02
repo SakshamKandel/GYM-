@@ -15,14 +15,19 @@ export function OPTIONS() {
   return preflight();
 }
 
-/** GET — active live sessions from accepted buddies. */
+/**
+ * GET — active live sessions from accepted buddies PLUS the caller's own
+ * active session (the host must see "your session is live" and be able to
+ * end it — without their own session in the list the client can't render
+ * either).
+ */
 export async function GET(req: Request) {
   const me = await authedUser(req);
   if (!me) return json({ error: 'unauthorized' }, 401);
 
   const db = getDb();
   const buddyIds = await acceptedBuddyIds(db, me.id);
-  if (buddyIds.length === 0) return json({ sessions: [] }, 200);
+  const hostIds = [...buddyIds, me.id];
 
   const rows = await db
     .select({
@@ -38,7 +43,7 @@ export async function GET(req: Request) {
     .innerJoin(accounts, eq(buddySessions.hostId, accounts.id))
     .where(
       and(
-        inArray(buddySessions.hostId, buddyIds),
+        inArray(buddySessions.hostId, hostIds),
         eq(buddySessions.status, 'active'),
       ),
     )
@@ -77,11 +82,21 @@ export async function POST(req: Request) {
     .returning({
       id: buddySessions.id,
       workoutName: buddySessions.workoutName,
+      status: buddySessions.status,
       startedAt: buddySessions.startedAt,
     });
 
-  const session = created[0];
-  if (!session) return json({ error: 'invalid' }, 400);
+  const row = created[0];
+  if (!row) return json({ error: 'invalid' }, 400);
+
+  // Same shape as the GET list items so clients need only one schema.
+  const session = {
+    id: row.id,
+    host: { id: me.id, displayName: me.displayName, tier: me.tier },
+    workoutName: row.workoutName,
+    status: row.status,
+    startedAt: row.startedAt,
+  };
 
   // Auto-join the host as a participant.
   await db

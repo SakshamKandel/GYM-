@@ -20,6 +20,8 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
  */
 interface Props extends Omit<PressableProps, 'style'> {
   style?: StyleProp<ViewStyle>;
+  /** Opt-in — vibration is reserved for meaningful moments (logging, PRs,
+   * destructive confirms), not every tap. */
   haptic?: boolean;
   /** How far the element shrinks while pressed. */
   pressScale?: number;
@@ -28,7 +30,7 @@ interface Props extends Omit<PressableProps, 'style'> {
 
 export function PressableScale({
   style,
-  haptic = true,
+  haptic = false,
   pressScale = 0.96,
   onPress,
   onPressIn,

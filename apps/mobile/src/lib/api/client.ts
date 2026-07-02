@@ -59,7 +59,7 @@ const errorBodySchema = z.object({ error: z.string() });
 // ── Fetch plumbing ────────────────────────────────────────────
 
 interface RequestOptions {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT';
   path: string;
   body?: Record<string, unknown>;
   token?: string;
@@ -216,6 +216,8 @@ const buddyEventPayloadSchema = z.object({
   durationSec: z.number().optional(),
   volumeKg: z.number().optional(),
   prCount: z.number().optional(),
+  /** live_session events carry the workout name here. */
+  sessionName: z.string().optional(),
 });
 
 export type BuddyEventPayload = z.infer<typeof buddyEventPayloadSchema>;
@@ -223,7 +225,7 @@ export type BuddyEventPayload = z.infer<typeof buddyEventPayloadSchema>;
 const buddyEventSchema = z.object({
   id: z.string(),
   actor: z.object({ id: z.string(), displayName: z.string() }),
-  type: z.enum(['workout_completed', 'pr', 'nudge']),
+  type: z.enum(['workout_completed', 'pr', 'nudge', 'live_session']),
   // Lenient: nudge events may ship a null/absent payload.
   payload: buddyEventPayloadSchema.nullish(),
   createdAt: z.string(),
@@ -231,7 +233,20 @@ const buddyEventSchema = z.object({
 
 export type BuddyEvent = z.infer<typeof buddyEventSchema>;
 
-const buddyFeedSchema = z.object({ events: z.array(buddyEventSchema) });
+/**
+ * Resilient feed: the server appends new activity types over time (a
+ * 'live_session' row once broke EVERY feed fetch and with it the whole
+ * Buddy tab). Unknown/malformed events are dropped instead of failing
+ * the entire response.
+ */
+const buddyFeedSchema = z.object({
+  events: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): BuddyEvent[] => {
+      const parsed = buddyEventSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
 
 // ── Buddy fetch plumbing ──────────────────────────────────────
 
@@ -384,21 +399,39 @@ export type BuddySession = z.infer<typeof buddySessionSchema>;
 
 const buddySessionListSchema = z.object({ sessions: z.array(buddySessionSchema) });
 
-/** Get active live sessions from accepted buddies. */
+/**
+ * POST /api/buddy/sessions responds `{ session }`. Older deploys omit
+ * `host`/`status`, so only the always-present fields are required — the
+ * screen reloads the full list right after anyway.
+ */
+const startedSessionSchema = z.object({
+  session: z.object({
+    id: z.string(),
+    workoutName: z.string(),
+    startedAt: z.string(),
+  }),
+});
+
+export type StartedBuddySession = z.infer<typeof startedSessionSchema>['session'];
+
+/** Get active live sessions: accepted buddies' plus your own. */
 export async function getBuddySessions(token: string): Promise<BuddySession[]> {
   const data = await buddyRequest({ method: 'GET', path: '/api/buddy/sessions', token });
   return parseBuddy(buddySessionListSchema, data).sessions;
 }
 
 /** Start a live workout session. */
-export async function startBuddySession(token: string, workoutName: string): Promise<BuddySession> {
+export async function startBuddySession(
+  token: string,
+  workoutName: string,
+): Promise<StartedBuddySession> {
   const data = await buddyRequest({
     method: 'POST',
     path: '/api/buddy/sessions',
     token,
     body: { workoutName },
   });
-  return parseBuddy(buddySessionSchema, data);
+  return parseBuddy(startedSessionSchema, data).session;
 }
 
 /** End a live session (host only). */
@@ -475,4 +508,26 @@ export async function getTrialStatus(token: string): Promise<TrialStatus> {
 /** Start a 2-day trial for a tier (one-time per tier). */
 export async function startTrial(token: string, tier: TrialTier): Promise<void> {
   await buddyRequest({ method: 'POST', path: '/api/buddy/trial', token, body: { tier } });
+}
+
+// ── Cloud profile backup ──────────────────────────────────────
+
+const profileGetSchema = z.object({
+  profile: z.record(z.string(), z.unknown()).nullable(),
+});
+
+/** The account's saved profile blob, or null for a brand-new account. */
+export async function getProfileData(
+  token: string,
+): Promise<Record<string, unknown> | null> {
+  const data = await request({ method: 'GET', path: '/api/profile', token });
+  return profileGetSchema.parse(data).profile;
+}
+
+/** Upsert the profile blob (the app's profile store owns the shape). */
+export async function putProfileData(
+  token: string,
+  profile: Record<string, unknown>,
+): Promise<void> {
+  await request({ method: 'PUT', path: '/api/profile', token, body: { profile } });
 }

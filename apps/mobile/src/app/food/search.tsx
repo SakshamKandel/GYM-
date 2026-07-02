@@ -134,7 +134,6 @@ export default function FoodSearchScreen() {
             accessibilityRole="button"
             accessibilityLabel="Scan barcode"
             onPress={() => {
-              tapHaptic();
               router.push(scanHref(meal, date));
             }}
             style={styles.iconBtn}
