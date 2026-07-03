@@ -272,6 +272,10 @@ export const accounts = pgTable('accounts', {
   tier: text('tier', { enum: ['starter', 'silver', 'gold', 'elite'] })
     .notNull()
     .default('starter'),
+  // 'suspended' kills every session for this account at the auth choke point
+  // (userForToken filters on status='active'). Defaulted so existing rows and
+  // the mobile GET/POST are unaffected.
+  status: text('status', { enum: ['active', 'suspended'] }).notNull().default('active'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -473,8 +477,147 @@ export const coachMessages = pgTable(
     kind: text('kind', { enum: ['coach_chat', 'support'] }).notNull(),
     sender: text('sender', { enum: ['user', 'coach'] }).notNull(),
     body: text('body').notNull(),
+    // Which human staff account authored a 'coach' row. Null = AI/system
+    // (greeceCoachReply / auto-ack). Nullable so the mobile POST that inserts
+    // AI replies keeps working unchanged.
+    senderAccountId: text('sender_account_id').references(() => accounts.id, {
+      onDelete: 'set null',
+    }),
+    // Coach-console unread badge, mirror of readByUser for the other side.
+    readByCoach: boolean('read_by_coach').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     readByUser: boolean('read_by_user').notNull().default(false),
   },
   (t) => [index('coach_messages_account_kind_created').on(t.accountId, t.kind, t.createdAt)],
+);
+
+/**
+ * RBAC / coach foundation (keyed on accounts.id, NOT the legacy profiles.id).
+ * Presence of an `admins` row = this account is staff. Roles are hardcoded in
+ * the guard layer (apps/web/src/lib/authz.ts) for the minimal CTO cut — no
+ * data-driven permission engine yet.
+ */
+export const admins = pgTable('admins', {
+  accountId: text('account_id')
+    .primaryKey()
+    .references(() => accounts.id, { onDelete: 'cascade' }),
+  role: text('role', {
+    enum: [
+      'super_admin',
+      'member_admin',
+      'nutrition_admin',
+      'content_admin',
+      'support_admin',
+      'coach',
+    ],
+  }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Coach ↔ user roster. A coach can only act on users assigned to them
+ * (checked in requireCoachOwnsUser). One active row per (coach,user) pair.
+ */
+export const coachAssignments = pgTable(
+  'coach_assignments',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: ['active', 'ended'] })
+      .notNull()
+      .default('active'),
+    assignedBy: text('assigned_by')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('coach_assignments_coach_user').on(t.coachId, t.userId),
+    index('coach_assignments_user').on(t.userId),
+    index('coach_assignments_coach_status').on(t.coachId, t.status),
+  ],
+);
+
+/** Public-facing coach identity + capacity settings. */
+export const coachProfiles = pgTable('coach_profiles', {
+  accountId: text('account_id')
+    .primaryKey()
+    .references(() => accounts.id, { onDelete: 'cascade' }),
+  displayName: text('display_name').notNull().default(''),
+  bio: text('bio').notNull().default(''),
+  avatarUrl: text('avatar_url'),
+  acceptingClients: boolean('accepting_clients').notNull().default(true),
+  replyWindowHours: integer('reply_window_hours').notNull().default(24),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Append-only audit trail for staff actions. actorId is SET NULL on account
+ * delete so the log survives the actor. `meta` is free-form JSON context.
+ */
+export const auditLog = pgTable(
+  'audit_log',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    actorId: text('actor_id').references(() => accounts.id, { onDelete: 'set null' }),
+    action: text('action').notNull(), // e.g. 'coach.message.user', 'account.suspend'
+    targetType: text('target_type').notNull(), // e.g. 'account', 'coach_message'
+    targetId: text('target_id'),
+    meta: jsonb('meta').$type<Record<string, unknown>>().notNull().default({}),
+    ip: text('ip'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('audit_log_actor_created').on(t.actorId, t.createdAt),
+    index('audit_log_target').on(t.targetType, t.targetId),
+  ],
+);
+
+/**
+ * Exercise/plan demonstration videos hosted on Cloudflare Stream. Gated by
+ * subscription tier (default 'gold'). `providerVideoId` stores the Cloudflare
+ * Stream uid ONLY — never a public/signed URL — so playback URLs are minted
+ * server-side per request. exerciseId/planId are both nullable so a video can
+ * attach to an exercise, a plan, or stand alone.
+ */
+export const planVideos = pgTable(
+  'plan_videos',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    title: text('title').notNull(),
+    description: text('description').notNull().default(''),
+    exerciseId: text('exercise_id').references(() => exercises.id, { onDelete: 'set null' }),
+    planId: text('plan_id').references(() => plans.id, { onDelete: 'set null' }),
+    tierRequired: text('tier_required', {
+      enum: ['starter', 'silver', 'gold', 'elite'],
+    })
+      .notNull()
+      .default('gold'),
+    provider: text('provider').notNull().default('cf_stream'),
+    providerVideoId: text('provider_video_id').notNull(), // Cloudflare Stream uid — never a public URL
+    thumbnailUrl: text('thumbnail_url'),
+    durationSec: integer('duration_sec'),
+    position: integer('position').notNull().default(0),
+    status: text('status', { enum: ['processing', 'ready', 'removed'] })
+      .notNull()
+      .default('processing'),
+    createdBy: text('created_by').references(() => accounts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('plan_videos_tier_status_position').on(t.tierRequired, t.status, t.position),
+    index('plan_videos_exercise').on(t.exerciseId),
+  ],
 );
