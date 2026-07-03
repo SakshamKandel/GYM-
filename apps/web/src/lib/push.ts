@@ -1,9 +1,18 @@
+import { cert, getApps, initializeApp, type App, type ServiceAccount } from 'firebase-admin/app';
+import { getMessaging } from 'firebase-admin/messaging';
 import { devicePushTokens } from '@gym/db';
 import { eq } from 'drizzle-orm';
 import { getDb } from './db';
 
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const PUSH_TIMEOUT_MS = 8000;
+/**
+ * Push delivery via the Firebase Admin SDK (FCM). The mobile app registers
+ * its NATIVE FCM device token, and we send to it directly — no Expo/EAS
+ * account in the loop.
+ *
+ * The service-account credential is read from FIREBASE_SERVICE_ACCOUNT_B64
+ * (base64 of the JSON key) so it drops cleanly into a Vercel env var with no
+ * escaping. When it's absent, sending no-ops (buddy actions still succeed).
+ */
 
 export type PushPlatform = 'ios' | 'android';
 
@@ -13,8 +22,50 @@ export interface PushMessage {
   data?: Record<string, unknown>;
 }
 
+// ── Firebase Admin singleton ──────────────────────────────────
+
+let cachedApp: App | null = null;
+let initFailed = false;
+
+function firebaseApp(): App | null {
+  if (cachedApp) return cachedApp;
+  if (initFailed) return null;
+  const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_B64;
+  if (!b64) {
+    console.warn('[push] FIREBASE_SERVICE_ACCOUNT_B64 not set — push disabled');
+    initFailed = true;
+    return null;
+  }
+  try {
+    const existing = getApps()[0];
+    if (existing) {
+      cachedApp = existing;
+      return cachedApp;
+    }
+    const json = Buffer.from(b64, 'base64').toString('utf8');
+    const raw = JSON.parse(json) as {
+      project_id: string;
+      client_email: string;
+      private_key: string;
+    };
+    const serviceAccount: ServiceAccount = {
+      projectId: raw.project_id,
+      clientEmail: raw.client_email,
+      privateKey: raw.private_key,
+    };
+    cachedApp = initializeApp({ credential: cert(serviceAccount) });
+    return cachedApp;
+  } catch (err) {
+    console.error('[push] Firebase Admin init failed', err);
+    initFailed = true;
+    return null;
+  }
+}
+
+// ── Token storage (unchanged: now holds native FCM tokens) ────
+
 /**
- * Upsert a device's Expo push token. A token maps to exactly one account, so
+ * Upsert a device's FCM token. A token maps to exactly one account, so
  * re-registering the same token (e.g. a device switching accounts) updates the
  * owning account, platform, and timestamp rather than creating a duplicate.
  */
@@ -32,7 +83,7 @@ export async function registerToken(
     });
 }
 
-/** All Expo push tokens registered to an account (may be empty). */
+/** All FCM tokens registered to an account (may be empty). */
 export async function tokensForAccount(accountId: string): Promise<string[]> {
   const rows = await getDb()
     .select({ token: devicePushTokens.token })
@@ -41,7 +92,7 @@ export async function tokensForAccount(accountId: string): Promise<string[]> {
   return rows.map((r) => r.token).filter((t): t is string => typeof t === 'string' && t.length > 0);
 }
 
-/** Best-effort cleanup: drop a token Expo reports as no longer valid. */
+/** Best-effort cleanup: drop a token FCM reports as no longer valid. */
 async function removeToken(token: string): Promise<void> {
   try {
     await getDb().delete(devicePushTokens).where(eq(devicePushTokens.token, token));
@@ -50,61 +101,52 @@ async function removeToken(token: string): Promise<void> {
   }
 }
 
+/** FCM data payloads must be string→string. */
+function stringifyData(data?: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!data) return out;
+  for (const [k, v] of Object.entries(data)) {
+    if (v === undefined || v === null) continue;
+    out[k] = typeof v === 'string' ? v : JSON.stringify(v);
+  }
+  return out;
+}
+
 /**
  * Send a push to every device registered to an account. NEVER throws — a push
- * failure (bad token, Expo down, network timeout) must not break the buddy
- * action that triggered it. Safe to call fire-and-forget with `void`.
+ * failure (bad token, FCM down, misconfigured credential) must not break the
+ * buddy action that triggered it. Safe to call fire-and-forget with `void`.
  */
 export async function sendPushToAccount(accountId: string, message: PushMessage): Promise<void> {
   try {
+    const app = firebaseApp();
+    if (!app) return; // credential absent/invalid — silently skip.
+
     const tokens = await tokensForAccount(accountId);
     if (tokens.length === 0) return;
 
-    const messages = tokens.map((to) => ({
-      to,
-      title: message.title,
-      body: message.body,
-      sound: 'default',
-      channelId: 'default',
-      data: message.data ?? {},
-    }));
+    const response = await getMessaging(app).sendEachForMulticast({
+      tokens,
+      notification: { title: message.title, body: message.body },
+      data: stringifyData(message.data),
+      android: {
+        priority: 'high',
+        notification: { channelId: 'default', sound: 'default' },
+      },
+    });
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
-    let res: Response;
-    try {
-      res = await fetch(EXPO_PUSH_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'Accept-Encoding': 'gzip, deflate',
-        },
-        body: JSON.stringify(messages),
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (!res.ok) {
-      console.error(`[push] Expo push send returned ${res.status}`);
-      return;
-    }
-
-    // Inspect per-message receipts. Expo returns { data: Ticket[] } where a
-    // ticket has status 'ok' | 'error'. DeviceNotRegistered → drop the token.
-    const payload = (await res.json().catch(() => null)) as {
-      data?: Array<{ status?: string; details?: { error?: string } }>;
-    } | null;
-    const tickets = payload?.data;
-    if (!Array.isArray(tickets)) return;
-
+    // Drop tokens FCM says are dead so the table stays clean.
     await Promise.all(
-      tickets.map((ticket, i) => {
-        if (ticket?.status === 'error' && ticket.details?.error === 'DeviceNotRegistered') {
-          const staleToken = tokens[i];
-          if (staleToken) return removeToken(staleToken);
+      response.responses.map((r, i) => {
+        if (r.success) return undefined;
+        const code = r.error?.code;
+        if (
+          code === 'messaging/registration-token-not-registered' ||
+          code === 'messaging/invalid-registration-token' ||
+          code === 'messaging/invalid-argument'
+        ) {
+          const stale = tokens[i];
+          if (stale) return removeToken(stale);
         }
         return undefined;
       }),

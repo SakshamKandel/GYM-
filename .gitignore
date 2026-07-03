@@ -59,3 +59,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Firebase (contains package-restricted API key — keep out of the public repo)
+apps/mobile/google-services.json

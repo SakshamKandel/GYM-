@@ -1,5 +1,4 @@
 import { Platform } from 'react-native';
-import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { colors } from '@gym/ui-tokens';
 import { registerPushToken } from './api/client';
@@ -136,33 +135,18 @@ export async function setupNotifications(): Promise<void> {
 }
 
 // ════════════════════════════════════════════════════════════════
-// Expo push-token registration (buddy pushes).
+// Native FCM push-token registration (buddy pushes).
+//
+// We use the DEVICE (native FCM) token, not the Expo token, so our own
+// server can send via the Firebase Admin SDK directly — no Expo/EAS account
+// needed. Requires google-services.json baked into the Android build.
 // ════════════════════════════════════════════════════════════════
 
-/** Read the EAS project id from app config; undefined in dev builds. */
-function readProjectId(): string | undefined {
-  // `expoConfig.extra` is typed as `{ [k: string]: any }`, so narrow via
-  // `unknown` to keep strict mode honest (no `any` leaks out of here).
-  const extra: unknown = Constants.expoConfig?.extra;
-  if (extra !== null && typeof extra === 'object' && 'eas' in extra) {
-    const eas: unknown = (extra as Record<string, unknown>)['eas'];
-    if (eas !== null && typeof eas === 'object' && 'projectId' in eas) {
-      const id: unknown = (eas as Record<string, unknown>)['projectId'];
-      if (typeof id === 'string' && id.length > 0) return id;
-    }
-  }
-  return undefined;
-}
-
 /**
- * Register this device's Expo push token with the server so buddy pushes can
- * arrive. No-ops (returns false) when signed out, unsupported, or permission
- * is denied. Never throws.
- *
- * NOTE: `getExpoPushTokenAsync` needs an EAS `projectId`, normally read from
- * `Constants.expoConfig.extra.eas.projectId`. Local/dev builds may lack one —
- * we still attempt the call (Expo can infer it in some contexts) and simply
- * swallow the failure, returning false, if it can't.
+ * Register this device's native FCM push token with the server so buddy
+ * pushes can arrive. No-ops (returns false) when signed out, unsupported, or
+ * permission is denied. Never throws — the app works fine without remote push
+ * (local reminders are unaffected).
  */
 export async function registerForPushNotificationsAsync(): Promise<boolean> {
   if (!isSupported()) return false;
@@ -174,19 +158,18 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
     const granted = await requestPermission();
     if (!granted) return false;
 
-    const projectId = readProjectId();
-    const tokenResponse = await Notifications.getExpoPushTokenAsync(
-      projectId !== undefined ? { projectId } : undefined,
-    );
-    const expoToken = tokenResponse.data;
-    if (!expoToken) return false;
+    // Native device token = the raw FCM token on Android (Firebase must be
+    // configured via google-services.json at build time for this to resolve).
+    const tokenResponse = await Notifications.getDevicePushTokenAsync();
+    const deviceToken =
+      typeof tokenResponse.data === 'string' ? tokenResponse.data : '';
+    if (!deviceToken) return false;
 
     const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
-    await registerPushToken(expoToken, platform, auth.token);
+    await registerPushToken(deviceToken, platform, auth.token);
     return true;
   } catch {
-    // Missing projectId, denied permission, offline, or unauthorized — the
-    // app works fine without remote push; local reminders are unaffected.
+    // Denied permission, offline, Firebase not configured, or unauthorized.
     return false;
   }
 }
