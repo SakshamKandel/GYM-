@@ -12,14 +12,17 @@
     },
     "preview": {
       "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://YOUR-VERCEL-DEPLOYMENT.vercel.app"
+        "EXPO_PUBLIC_API_URL": "https://gym-xi-tawny.vercel.app"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://YOUR-VERCEL-DEPLOYMENT.vercel.app"
+        "EXPO_PUBLIC_API_URL": "https://gym-xi-tawny.vercel.app"
       }
     }
   },
