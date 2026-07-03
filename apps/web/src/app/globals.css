@@ -1,0 +1,152 @@
+/**
+ * Web-console design tokens (coach console). Charcoal base, cards one step up,
+ * signal-red reserved for the primary action + active nav only. No glow, no
+ * pulsing dots, no gradient blobs. Loading = flat skeleton bars.
+ *
+ * Font family CSS variables (--font-poppins / --font-oswald) are injected by
+ * next/font in layout.tsx.
+ */
+:root {
+  --gt-bg: #131416; /* charcoal page background */
+  --gt-card: #1b1d20; /* cards one step up */
+  --gt-border: #26282b; /* hairline borders */
+  --gt-red: #ff3b30; /* signal red — primary action / active nav ONLY */
+  --gt-text: #f2f3f5;
+  --gt-text-dim: #9a9da3;
+  --gt-radius: 14px;
+
+  --font-heading: var(--font-poppins), system-ui, sans-serif;
+  --font-numeric: var(--font-oswald), system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--gt-bg);
+  color: var(--gt-text);
+  font-family: var(--font-poppins), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  margin: 0;
+}
+
+/* Oswald for numerals, dates, ids. */
+.gt-numeric {
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.gt-card {
+  background: var(--gt-card);
+  border: 1px solid var(--gt-border);
+  border-radius: var(--gt-radius);
+}
+
+/* Primary action — the only red button. */
+.gt-btn-primary {
+  background: var(--gt-red);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
+}
+.gt-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.gt-input {
+  width: 100%;
+  background: var(--gt-bg);
+  border: 1px solid var(--gt-border);
+  border-radius: 10px;
+  color: var(--gt-text);
+  padding: 10px 12px;
+  font-size: 15px;
+  font-family: var(--font-heading);
+}
+.gt-input:focus {
+  outline: none;
+  border-color: var(--gt-text-dim);
+}
+
+/* Pill chips for tier / status. */
+.gt-chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--gt-border);
+  font-size: 12px;
+  font-family: var(--font-numeric);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gt-text-dim);
+}
+
+/* Inbox row hover — border brightens only, no glow. */
+.gt-inbox-row {
+  transition: border-color 120ms, background 120ms;
+}
+.gt-inbox-row:hover {
+  border-color: var(--gt-text-dim);
+  background: #202226;
+}
+
+/* Flat skeleton bar (no shimmer, no pulse). */
+.gt-skeleton {
+  background: var(--gt-border);
+  border-radius: 6px;
+  height: 12px;
+}
+
+/* Drawer slide-in (right detail panel). Disabled for reduced-motion. */
+@keyframes gt-drawer-in {
+  from {
+    transform: translateX(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [style*='gt-drawer-in'] {
+    animation: none !important;
+  }
+}
+
+/* Data-table row hover — subtle lift, no color shift. */
+.gt-tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Left nav item; active state is the only other red. */
+.gt-nav-item {
+  display: block;
+  padding: 9px 12px;
+  border-radius: 10px;
+  color: var(--gt-text-dim);
+  text-decoration: none;
+  font-family: var(--font-heading);
+  font-size: 14px;
+}
+.gt-nav-item[data-active='true'] {
+  color: var(--gt-red);
+  background: rgba(255, 59, 48, 0.08);
+}
