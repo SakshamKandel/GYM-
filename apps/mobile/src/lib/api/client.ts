@@ -553,3 +553,135 @@ export async function registerPushToken(
     token: authToken,
   });
 }
+
+// ════════════════════════════════════════════════════════════════
+// Elite coach messaging (see COACH API CONTRACT)
+// Two async threads per account, split by `kind`. Same philosophy as
+// the rest of this client: zod at the boundary, typed error codes, and
+// network failures NEVER block the UI (the thread keeps its last-known
+// state and retries quietly). 'forbidden' means the account isn't Elite.
+// ════════════════════════════════════════════════════════════════
+
+export type CoachThreadKind = 'coach_chat' | 'support';
+
+export type CoachErrorCode = 'forbidden' | 'invalid' | 'unauthorized' | 'network';
+
+export class CoachApiError extends Error {
+  readonly code: CoachErrorCode;
+
+  constructor(code: CoachErrorCode, message?: string) {
+    super(message ?? code);
+    this.name = 'CoachApiError';
+    this.code = code;
+  }
+}
+
+/** Narrow an unknown thrown value to CoachApiError (anything else = network). */
+export function toCoachError(err: unknown): CoachApiError {
+  return err instanceof CoachApiError ? err : new CoachApiError('network');
+}
+
+const coachMessageSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['coach_chat', 'support']),
+  sender: z.enum(['user', 'coach']),
+  body: z.string(),
+  createdAt: z.string(),
+  readByUser: z.boolean(),
+});
+
+export type CoachMessage = z.infer<typeof coachMessageSchema>;
+
+/**
+ * Resilient list: if the server ever grows a new sender/kind the whole thread
+ * shouldn't blank out — drop unparseable rows instead of failing the fetch.
+ */
+const coachMessagesSchema = z.object({
+  messages: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): CoachMessage[] => {
+      const parsed = coachMessageSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+interface CoachRequestOptions {
+  method: 'GET' | 'POST';
+  path: string;
+  token: string;
+  body?: Record<string, unknown>;
+}
+
+/** Coach request; resolves with parsed JSON of a 2xx response. */
+async function coachRequest(opts: CoachRequestOptions): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${opts.path}`, {
+      method: opts.method,
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${opts.token}`,
+        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+      },
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch {
+    throw new CoachApiError('network', "Can't reach the server");
+  }
+
+  if (res.ok) {
+    try {
+      return (await res.json()) as unknown;
+    } catch {
+      throw new CoachApiError('network', 'Unexpected server response');
+    }
+  }
+
+  let code: CoachErrorCode =
+    res.status === 401 ? 'unauthorized' : res.status === 403 ? 'forbidden' : 'network';
+  try {
+    const parsed = errorBodySchema.safeParse(await res.json());
+    if (parsed.success && parsed.data.error === 'invalid') code = 'invalid';
+  } catch {
+    // Body wasn't JSON — keep the status-derived code.
+  }
+  throw new CoachApiError(code);
+}
+
+function parseCoach<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown): T {
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) throw new CoachApiError('network', 'Unexpected server response');
+  return parsed.data;
+}
+
+/** Load a thread (oldest → newest). Any signed-in tier can read its history. */
+export async function getCoachMessages(
+  kind: CoachThreadKind,
+  token: string,
+): Promise<CoachMessage[]> {
+  const data = await coachRequest({
+    method: 'GET',
+    path: `/api/coach/messages?kind=${encodeURIComponent(kind)}`,
+    token,
+  });
+  return parseCoach(coachMessagesSchema, data).messages;
+}
+
+/**
+ * Send a message. ELITE ONLY — throws CoachApiError 'forbidden' for any lower
+ * tier. Returns the inserted [userMessage, coachAutoAck] pair so the UI can
+ * reconcile its optimistic append with the server's real rows.
+ */
+export async function sendCoachMessage(
+  kind: CoachThreadKind,
+  body: string,
+  token: string,
+): Promise<CoachMessage[]> {
+  const data = await coachRequest({
+    method: 'POST',
+    path: '/api/coach/messages',
+    token,
+    body: { kind, body },
+  });
+  return parseCoach(coachMessagesSchema, data).messages;
+}

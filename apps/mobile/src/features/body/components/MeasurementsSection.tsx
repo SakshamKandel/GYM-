@@ -29,8 +29,9 @@ const styles = StyleSheet.create({
     rowGap: spacing.xl,
     marginTop: spacing.xl,
   },
-  cell: { width: '50%' },
-  valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  cell: { width: '50%', paddingRight: spacing.md },
+  valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, minWidth: 0 },
+  measureValue: { flexShrink: 1, minWidth: 0 },
   cta: { marginTop: spacing.xl },
   historyRow: {
     flexDirection: 'row',
@@ -39,6 +40,8 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingVertical: spacing.md,
   },
+  historyDate: { flexShrink: 0 },
+  historyMeta: { flexShrink: 1, minWidth: 0, textAlign: 'right' },
 });
 
 export function MeasurementsSection() {
@@ -69,11 +72,15 @@ export function MeasurementsSection() {
           const value = latest[key];
           return (
             <View key={key} style={styles.cell}>
-              <AppText variant="label">{label}</AppText>
+              <AppText variant="label" numberOfLines={1}>{label}</AppText>
               <View style={styles.valueRow}>
                 <AppText
                   variant="display"
                   color={value !== null ? colors.text : colors.textDim}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.6}
+                  style={styles.measureValue}
                 >
                   {value !== null ? value.toFixed(1) : '—'}
                 </AppText>
@@ -100,8 +107,12 @@ export function MeasurementsSection() {
           {entries.slice(0, 5).map((entry) => (
             <View key={entry.id}>
               <View style={styles.historyRow}>
-                <AppText variant="bodyBold">{posterDate(entry.date)}</AppText>
-                <AppText variant="caption">{measurementFieldsLabel(entry)}</AppText>
+                <AppText variant="bodyBold" numberOfLines={1} style={styles.historyDate}>
+                  {posterDate(entry.date)}
+                </AppText>
+                <AppText variant="caption" numberOfLines={1} style={styles.historyMeta}>
+                  {measurementFieldsLabel(entry)}
+                </AppText>
               </View>
               <Divider />
             </View>

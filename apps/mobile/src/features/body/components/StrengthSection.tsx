@@ -30,8 +30,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     minHeight: 64,
   },
-  name: { flex: 1 },
-  valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
+  name: { flex: 1, minWidth: 0 },
+  valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4, flexShrink: 0 },
   value: { fontFamily: type.display, fontSize: 24, color: colors.text },
   detail: { paddingBottom: spacing.lg },
   historyRow: {
@@ -91,7 +91,7 @@ export function StrengthSection() {
               </AppText>
               <Sparkline values={points.map((p) => p.value)} />
               <View style={styles.valueRow}>
-                <AppText style={styles.value} tabular>
+                <AppText style={styles.value} tabular numberOfLines={1}>
                   {Math.round(displayWeight(row.bestE1RmKg, unitPref))}
                 </AppText>
                 <AppText variant="caption">{unit}</AppText>

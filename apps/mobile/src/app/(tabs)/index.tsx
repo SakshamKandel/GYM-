@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { displayWeight, unitLabel, type PlanWorkout } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import {
+  AITipCard,
   AnimatedNumber,
   AppText,
   Button,
@@ -22,6 +23,7 @@ import {
   Tag,
 } from '../../components/ui';
 import { posterDate } from '../../lib/dates';
+import { useAiTip } from '../../lib/ai/useAiTip';
 import { useProfile } from '../../state/profile';
 import { FirstWorkoutsQuest } from '../../features/engagement/components/FirstWorkoutsQuest';
 import { StreakChip } from '../../features/engagement/components/StreakChip';
@@ -65,6 +67,7 @@ const styles = StyleSheet.create({
   tileRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
   tileCell: { flex: 1 },
   tileWide: { marginBottom: spacing.lg },
+  tipCard: { marginBottom: spacing.lg },
   foodRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -81,6 +84,8 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingVertical: spacing.md,
   },
+  // Right-aligned meta must not be pushed off-screen by a long session name.
+  lastMeta: { flexShrink: 0, textAlign: 'right' },
 });
 
 function Hero({
@@ -153,15 +158,36 @@ export default function HomeScreen() {
   const planId = useProfile((s) => s.planId);
   const targets = useProfile((s) => s.targets);
   const unitPref = useProfile((s) => s.unitPref);
+  const goalType = useProfile((s) => s.goalType);
+  const daysPerWeek = useProfile((s) => s.daysPerWeek);
   const data = useHomeData(planId);
   const quest = useQuestProgress();
   const questDismissed = useQuest((s) => s.dismissed);
 
   const unit = unitLabel(unitPref);
   const last = data?.lastSession ?? null;
-  // Show the activation card only while the quest is live: loaded, not expired,
-  // and not dismissed after completion.
   const showQuest = quest !== null && !quest.expired && !questDismissed;
+
+  const { state: tipState, refresh } = useAiTip(() => {
+    const streak = data?.streak?.current ?? 0;
+    const weekSessions = data?.weekSessions ?? 0;
+    const weekVolume = data?.weekVolumeKg ?? 0;
+    const planName = data?.planName ?? 'no plan';
+    const nextName = data?.nextWorkout?.name ?? 'rest day';
+    const goal = goalType ?? 'muscle';
+
+    return [
+      {
+        role: 'system' as const,
+        content:
+          'You are a hype gym coach. Give one short training or motivation tip based on the athlete\'s week. Keep it under 35 words. Be energetic and specific. Talk about training, lifting, consistency, form, or mindset. Do NOT mention health, diet, calories, nutrition, weight loss, or medical topics. Just training motivation.',
+      },
+      {
+        role: 'user' as const,
+        content: `Streak: ${streak} days. This week: ${weekSessions} sessions, ${weekVolume} kg volume. Plan: ${planName}. Next workout: ${nextName}. Goal: ${goal}. Target: ${daysPerWeek} days/week. Give one training tip or motivational push.`,
+      },
+    ];
+  }, [data?.streak?.current, data?.weekSessions, data?.weekVolumeKg, data?.planName, data?.nextWorkout?.name, goalType, daysPerWeek]);
 
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
@@ -241,9 +267,19 @@ export default function HomeScreen() {
             />
           </Animated.View>
 
-          <WeeklyCheckIn stagger={3} />
+          <Animated.View entering={enterUp(3)} style={styles.tipCard}>
+            <AITipCard
+              title="Coach tip"
+              tip={tipState.status === 'done' ? tipState.text : null}
+              loading={tipState.status === 'loading' || tipState.status === 'idle'}
+              error={tipState.status === 'error'}
+              onRefresh={refresh}
+            />
+          </Animated.View>
 
-          <Animated.View entering={enterUp(4)}>
+          <WeeklyCheckIn stagger={4} />
+
+          <Animated.View entering={enterUp(5)}>
             <PressableScale
               accessibilityRole="button"
               accessibilityLabel={`Food today: ${data.kcalEaten} of ${targets.kcal} kilocalories. Open Food`}
@@ -268,7 +304,7 @@ export default function HomeScreen() {
           </Animated.View>
 
           {last !== null ? (
-            <Animated.View entering={enterUp(5)}>
+            <Animated.View entering={enterUp(6)}>
               <SectionLabel>Last session</SectionLabel>
               <Divider />
               <View style={styles.lastRow}>
@@ -278,7 +314,7 @@ export default function HomeScreen() {
                   </AppText>
                   <AppText variant="caption">{posterDate(last.date)}</AppText>
                 </View>
-                <AppText variant="caption">
+                <AppText variant="caption" numberOfLines={1} style={styles.lastMeta}>
                   {formatCompact(displayWeight(last.volumeKg, unitPref))} {unit} · {last.sets} sets
                 </AppText>
               </View>

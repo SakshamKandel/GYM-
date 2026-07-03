@@ -80,9 +80,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.md,
     paddingVertical: spacing.md,
   },
-  historyNumbers: { fontFamily: type.display, fontSize: 22, color: colors.text },
+  historyDate: { flexShrink: 0 },
+  historyNumbers: { fontFamily: type.display, fontSize: 22, color: colors.text, flexShrink: 1, minWidth: 0, textAlign: 'right' },
   // Locked "Greece's demo" card — compact row, tap routes to plans.
   lockedCard: {
     flexDirection: 'row',
@@ -245,10 +247,16 @@ export default function ExerciseDetailScreen() {
           ) : null}
           {history.recentSessions.map((s) => (
             <View key={s.date} style={styles.historyRow}>
-              <AppText variant="caption" color={colors.textDim}>
+              <AppText variant="caption" color={colors.textDim} numberOfLines={1} style={styles.historyDate}>
                 {posterDate(s.date)}
               </AppText>
-              <AppText style={styles.historyNumbers} tabular>
+              <AppText
+                style={styles.historyNumbers}
+                tabular
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.6}
+              >
                 {`${formatWeightNumber(displayWeight(s.e1rm, unitPref))} ${unitPref} e1RM`}
               </AppText>
             </View>

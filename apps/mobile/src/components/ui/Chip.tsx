@@ -44,6 +44,7 @@ export function Chip({ label, selected = false, onPress }: Props) {
         style={styles.text}
         color={selected ? colors.text : colors.textDim}
         tabular={false}
+        numberOfLines={1}
       >
         {label}
       </AppText>

@@ -449,3 +449,32 @@ export const devicePushTokens = pgTable(
   },
   (t) => [uniqueIndex('device_push_tokens_token').on(t.token)],
 );
+
+/**
+ * Elite coach messaging — the real feature behind the Elite promise. One table
+ * serves two async threads per account, split by `kind`:
+ *  - 'coach_chat' → 1-on-1 messages with Greece,
+ *  - 'support'    → Elite priority support tickets.
+ * `sender` marks who wrote the row (the user, or Greece/the GM team as 'coach').
+ * No real-time: the app loads a thread on focus and appends optimistically; an
+ * auto-acknowledgement coach row makes the thread feel alive until a real
+ * coach reply lands (future admin panel). `readByUser` is reserved for an
+ * unread badge; the auto-ack is authored as 'coach' and starts unread.
+ */
+export const coachMessages = pgTable(
+  'coach_messages',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['coach_chat', 'support'] }).notNull(),
+    sender: text('sender', { enum: ['user', 'coach'] }).notNull(),
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    readByUser: boolean('read_by_user').notNull().default(false),
+  },
+  (t) => [index('coach_messages_account_kind_created').on(t.accountId, t.kind, t.createdAt)],
+);

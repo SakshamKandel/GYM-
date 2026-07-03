@@ -215,7 +215,7 @@ function TierCard({
       style={[styles.card, isRecommended && styles.cardRecommended]}
     >
       <View style={styles.nameRow}>
-        <AppText variant="title" style={styles.name}>
+        <AppText variant="title" style={styles.name} numberOfLines={1}>
           {gmTier.name}
         </AppText>
         <View style={styles.tags}>
@@ -226,13 +226,19 @@ function TierCard({
 
       <View style={styles.priceRow}>
         {isFree ? (
-          <AppText style={styles.priceNumber}>Free</AppText>
+          <AppText style={styles.priceNumber} numberOfLines={1}>Free</AppText>
         ) : (
           <>
             <AppText variant="caption" color={colors.textDim}>
               NPR
             </AppText>
-            <AppText style={styles.priceNumber} tabular>
+            <AppText
+              style={styles.priceNumber}
+              tabular
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
+            >
               {formatNprAmount(gmTier.pricePerMonthNpr)}
             </AppText>
             <AppText variant="caption" color={colors.textDim}>
@@ -331,8 +337,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.md,
   },
-  name: { flexShrink: 1 },
-  tags: { flexDirection: 'row', gap: spacing.sm },
+  name: { flexShrink: 1, minWidth: 0 },
+  tags: { flexShrink: 0, flexDirection: 'row', gap: spacing.sm },
 
   // Price: Oswald number + tiny dim currency/period captions.
   priceRow: {
@@ -340,6 +346,7 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
     gap: spacing.xs,
     marginTop: spacing.sm,
+    minWidth: 0,
   },
   priceNumber: {
     fontFamily: type.display,
@@ -347,6 +354,8 @@ const styles = StyleSheet.create({
     lineHeight: 40,
     letterSpacing: 0.5,
     color: colors.text,
+    flexShrink: 1,
+    minWidth: 0,
   },
 
   features: { marginTop: spacing.lg, gap: spacing.md },

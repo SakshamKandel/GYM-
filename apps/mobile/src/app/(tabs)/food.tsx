@@ -63,7 +63,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.lg,
   },
-  heroLeft: { flexShrink: 1 },
+  heroLeft: { flexShrink: 1, minWidth: 0 },
   ringCenter: { alignItems: 'center' },
   ringValue: { fontSize: 24, lineHeight: 28 },
   heroMacros: { marginTop: spacing.sm, gap: spacing.lg },
@@ -328,7 +328,7 @@ export default function FoodScreen() {
             <Animated.View key={key} entering={enterUp(4 + mealIndex)} layout={layoutSpring}>
               <View style={styles.mealHeader}>
                 <IconChip icon={MEAL_ICONS[key]} />
-                <AppText variant="bodyBold" style={styles.mealName}>
+                <AppText variant="bodyBold" style={styles.mealName} numberOfLines={1}>
                   {label}
                 </AppText>
                 {items.length > 0 ? (

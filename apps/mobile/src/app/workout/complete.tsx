@@ -43,10 +43,13 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     gap: spacing.md,
   },
-  prNumbers: { fontFamily: type.display, fontSize: 24, color: colors.text },
-  prName: { flex: 1 },
+  prNumbers: { fontFamily: type.display, fontSize: 24, color: colors.text, flexShrink: 0 },
+  prName: { flex: 1, minWidth: 0 },
   done: { marginTop: spacing.xxl },
-  statValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  statValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, minWidth: 0 },
+  // Each of the three recap stats gets an equal, shrinkable share of the row so
+  // a big volume number can't push "sets" off the card edge.
+  statCol: { flexShrink: 1, minWidth: 0 },
 });
 
 export default function WorkoutCompleteScreen() {
@@ -98,19 +101,19 @@ export default function WorkoutCompleteScreen() {
       </Animated.View>
 
       <View style={styles.statsRow}>
-        <Animated.View entering={enterUp(0)}>
+        <Animated.View entering={enterUp(0)} style={styles.statCol}>
           <StatBlock label="time" value={formatClock(workout?.durationSec ?? 0)} />
         </Animated.View>
-        <Animated.View entering={enterUp(1)}>
-          <AppText variant="label">volume</AppText>
+        <Animated.View entering={enterUp(1)} style={styles.statCol}>
+          <AppText variant="label" numberOfLines={1}>volume</AppText>
           <View style={styles.statValueRow}>
-            <AnimatedNumber value={volume} grouped variant="display" />
+            <AnimatedNumber value={volume} grouped variant="display" style={styles.statCol} />
             <AppText variant="caption" color={colors.textDim}>
               {unitPref}
             </AppText>
           </View>
         </Animated.View>
-        <Animated.View entering={enterUp(2)}>
+        <Animated.View entering={enterUp(2)} style={styles.statCol}>
           <StatBlock label="sets" value={sets.length} />
         </Animated.View>
       </View>
@@ -125,7 +128,7 @@ export default function WorkoutCompleteScreen() {
               <AppText variant="bodyBold" numberOfLines={1} style={styles.prName}>
                 {s.exerciseName}
               </AppText>
-              <AppText style={styles.prNumbers} tabular>
+              <AppText style={styles.prNumbers} tabular numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
                 {`${formatWeightNumber(displayWeight(s.weightKg, unitPref))} ${unitPref} × ${s.reps}`}
               </AppText>
             </Animated.View>

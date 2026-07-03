@@ -4,7 +4,8 @@ import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { unitLabel } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
-import { AnimatedNumber, AppText, Button, enterUp, HeroCard } from '../../../components/ui';
+import { AITipCard, AnimatedNumber, AppText, Button, enterUp, HeroCard } from '../../../components/ui';
+import { useAiTip } from '../../../lib/ai/useAiTip';
 import { useProfile } from '../../../state/profile';
 import { useWeights } from '../hooks';
 import { directionIcon, rateLabel, toHref, weightChartData, weightHeadline } from '../logic';
@@ -33,16 +34,41 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   cta: { marginTop: spacing.xl },
+  tipCard: { marginTop: spacing.lg },
 });
 
 export function WeightSection() {
   const unitPref = useProfile((s) => s.unitPref);
+  const goalType = useProfile((s) => s.goalType);
+  const targetWeightKg = useProfile((s) => s.targetWeightKg);
   const weights = useWeights();
   if (weights === null) return null;
 
   const { raw, trend } = weightChartData(weights, unitPref);
   const headline = weightHeadline(weights, unitPref);
   const unit = unitLabel(unitPref);
+
+  const { state: tipState, refresh } = useAiTip(() => {
+    const trendVal = headline.trendValue;
+    const rate = headline.summary.ratePerWeekKg;
+    const direction = headline.summary.direction;
+    const goal = goalType ?? 'muscle';
+    const target = targetWeightKg
+      ? `${(targetWeightKg).toFixed(1)} kg`
+      : 'not set';
+
+    return [
+      {
+        role: 'system' as const,
+        content:
+          'You are a friendly gym coach giving a single short weight-management tip. Keep it under 40 words. Be practical and encouraging. No medical advice. No disclaimers. Just the tip.',
+      },
+      {
+        role: 'user' as const,
+        content: `Current trend weight: ${trendVal ?? 'unknown'} ${unit}. Rate: ${rate.toFixed(2)} kg/week (${direction}). Goal: ${goal}. Target weight: ${target}. Give one actionable tip to help reach the target weight.`,
+      },
+    ];
+  }, [headline.trendValue, headline.summary.ratePerWeekKg, goalType, targetWeightKg, unitPref]);
 
   return (
     <View>
@@ -81,7 +107,17 @@ export function WeightSection() {
         />
       </Animated.View>
 
-      <Animated.View entering={enterUp(3)}>
+      <Animated.View entering={enterUp(3)} style={styles.tipCard}>
+        <AITipCard
+          title="Coach tip"
+          tip={tipState.status === 'done' ? tipState.text : null}
+          loading={tipState.status === 'loading' || tipState.status === 'idle'}
+          error={tipState.status === 'error'}
+          onRefresh={refresh}
+        />
+      </Animated.View>
+
+      <Animated.View entering={enterUp(4)}>
         <Button
           label="Log weight"
           onPress={() => router.push(toHref('/body/log-weight'))}

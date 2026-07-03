@@ -38,7 +38,7 @@ export function Tag({ label, variant = 'outline', color = colors.accent }: Props
         variant === 'outline' && { borderWidth: 1.5, borderColor: color },
       ]}
     >
-      <AppText style={[styles.text, { color: textColor }]} tabular={false}>
+      <AppText style={[styles.text, { color: textColor }]} tabular={false} numberOfLines={1}>
         {label}
       </AppText>
     </View>

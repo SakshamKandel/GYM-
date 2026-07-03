@@ -88,6 +88,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
+  planTileMeta: { flexShrink: 1, minWidth: 0, textAlign: 'right' },
 });
 
 function PlanTile({ plan, selected, onPress }: { plan: Plan; selected: boolean; onPress: () => void }) {
@@ -105,7 +106,13 @@ function PlanTile({ plan, selected, onPress }: { plan: Plan; selected: boolean; 
       </AppText>
       <View style={styles.planTileBottom}>
         <IconChip icon={GOAL_ICONS[plan.goalType]} size={40} />
-        <AppText variant="caption" color={colors.textDim} tabular>
+        <AppText
+          variant="caption"
+          color={colors.textDim}
+          tabular
+          numberOfLines={1}
+          style={styles.planTileMeta}
+        >
           {`${plan.daysPerWeek} days/wk · ${plan.weeks} weeks`}
         </AppText>
       </View>

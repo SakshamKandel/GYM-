@@ -46,6 +46,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.md,
   },
+  goalLabel: { flexShrink: 1, minWidth: 0 },
   editBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -149,7 +150,7 @@ export function GoalProjectionCard({ trendKg, ratePerWeekKg }: Props) {
   return (
     <View style={styles.card}>
       <View style={styles.topRow}>
-        <AppText variant="label">
+        <AppText variant="label" numberOfLines={1} style={styles.goalLabel}>
           Goal · {displayWeight(targetWeightKg, unitPref).toFixed(1)} {unit}
         </AppText>
         <PressableScale

@@ -8,10 +8,12 @@ import {
   StyleSheet,
   Switch,
   View,
+  type StyleProp,
+  type TextStyle,
 } from 'react-native';
 import Animated from 'react-native-reanimated';
 import * as LocalAuthentication from 'expo-local-authentication';
-import type { FontScale, Tier } from '@gym/shared';
+import { hasEntitlement, type FontScale, type Tier } from '@gym/shared';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
@@ -153,6 +155,7 @@ function MiniStepper({
   min,
   max,
   label,
+  valueStyle,
 }: {
   value: number;
   display?: string;
@@ -161,6 +164,8 @@ function MiniStepper({
   min: number;
   max: number;
   label: string;
+  /** Optional override for the value cell width (e.g. narrow clock digits). */
+  valueStyle?: StyleProp<TextStyle>;
 }) {
   const repeatTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const liveValue = useRef(value);
@@ -203,7 +208,13 @@ function MiniStepper({
           −
         </AppText>
       </Pressable>
-      <AppText style={styles.miniStepValue} tabular>
+      <AppText
+        style={[styles.miniStepValue, valueStyle]}
+        tabular
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
         {display ?? String(value)}
       </AppText>
       <Pressable
@@ -227,10 +238,22 @@ function MiniStepper({
 function TargetCell({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <View style={styles.targetCell}>
-      <AppText style={styles.targetValue} tabular>
+      <AppText
+        style={styles.targetValue}
+        tabular
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.6}
+      >
         {value}
       </AppText>
-      <AppText style={[styles.targetLabel, { color }]} tabular={false}>
+      <AppText
+        style={[styles.targetLabel, { color }]}
+        tabular={false}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
         {label}
       </AppText>
     </View>
@@ -684,17 +707,89 @@ export default function SettingsScreen() {
             style={styles.row}
           >
             <IconChip icon="card" size={36} />
-            <AppText style={styles.rowLabel}>Subscription</AppText>
+            <AppText style={styles.rowLabelGrow} numberOfLines={1}>Subscription</AppText>
             <View style={styles.rowValue}>
-              <AppText color={colors.textDim}>{TIER_LABEL[tier]}</AppText>
+              <AppText color={colors.textDim} numberOfLines={1}>{TIER_LABEL[tier]}</AppText>
               <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
             </View>
           </PressableScale>
         </View>
       </Animated.View>
 
-      {/* ── Reminders (local, recurring) ────────────────────── */}
+      {/* ── Elite coaching ──────────────────────────────────── */}
       <Animated.View entering={enterUp(5)}>
+        <AppText variant="label" style={styles.sectionLabel}>
+          Elite coaching
+        </AppText>
+        <View style={styles.group}>
+          {/* 1-on-1 coach chat — unlocked for Elite, else routes to plans. */}
+          {hasEntitlement({ tier }, 'coach_chat') ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="One on one coach chat"
+              onPress={() => pushPath('/coach-chat')}
+              style={styles.row}
+            >
+              <IconChip icon="chatbubbles" size={36} />
+              <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
+                1-on-1 coach chat
+              </AppText>
+              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+            </PressableScale>
+          ) : (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="One on one coach chat — Elite plan"
+              onPress={() => pushPath('/subscribe')}
+              style={styles.row}
+            >
+              <IconChip icon="chatbubbles" size={36} />
+              <AppText style={styles.rowLabelGrow} numberOfLines={1}>
+                1-on-1 coach chat
+              </AppText>
+              <View style={styles.lockedValue}>
+                <Tag label="Elite" variant="dim" />
+                <Ionicons name="lock-closed" size={14} color={colors.textFaint} />
+              </View>
+            </PressableScale>
+          )}
+          <Divider />
+          {/* Priority support — same Elite gating. */}
+          {hasEntitlement({ tier }, 'coach_chat') ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Priority support"
+              onPress={() => pushPath('/support')}
+              style={styles.row}
+            >
+              <IconChip icon="shield-checkmark" size={36} />
+              <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
+                Priority support
+              </AppText>
+              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+            </PressableScale>
+          ) : (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Priority support — Elite plan"
+              onPress={() => pushPath('/subscribe')}
+              style={styles.row}
+            >
+              <IconChip icon="shield-checkmark" size={36} />
+              <AppText style={styles.rowLabelGrow} numberOfLines={1}>
+                Priority support
+              </AppText>
+              <View style={styles.lockedValue}>
+                <Tag label="Elite" variant="dim" />
+                <Ionicons name="lock-closed" size={14} color={colors.textFaint} />
+              </View>
+            </PressableScale>
+          )}
+        </View>
+      </Animated.View>
+
+      {/* ── Reminders (local, recurring) ────────────────────── */}
+      <Animated.View entering={enterUp(6)}>
         <AppText variant="label" style={styles.sectionLabel}>
           Reminders
         </AppText>
@@ -702,7 +797,7 @@ export default function SettingsScreen() {
           {/* Row 1 — workout reminders + inline day/time controls. */}
           <View style={styles.reminderHeader}>
             <IconChip icon="alarm" size={36} />
-            <AppText variant="bodyBold" style={styles.rowLabel}>
+            <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
               Workout reminders
             </AppText>
             <Switch
@@ -727,7 +822,9 @@ export default function SettingsScreen() {
                 ))}
               </View>
               <View style={styles.timeRow}>
-                <AppText color={colors.textDim}>Time</AppText>
+                <AppText color={colors.textDim} numberOfLines={1} style={styles.timeLabel}>
+                  Time
+                </AppText>
                 <View style={styles.timeControls}>
                   <MiniStepper
                     value={reminderHour}
@@ -737,6 +834,7 @@ export default function SettingsScreen() {
                     min={0}
                     max={23}
                     label="hour"
+                    valueStyle={styles.timeStepperValue}
                   />
                   <AppText style={styles.timeColon} tabular>
                     :
@@ -749,6 +847,7 @@ export default function SettingsScreen() {
                     min={0}
                     max={55}
                     label="minute"
+                    valueStyle={styles.timeStepperValue}
                   />
                 </View>
               </View>
@@ -758,7 +857,7 @@ export default function SettingsScreen() {
           {/* Row 2 — daily morning nudge. */}
           <View style={styles.row}>
             <IconChip icon="sunny" size={36} />
-            <AppText style={styles.rowLabel}>Morning nudge</AppText>
+            <AppText style={styles.rowLabelGrow} numberOfLines={1}>Morning nudge</AppText>
             <Switch
               value={morningNudgeOn}
               onValueChange={onMorningNudgeToggle}
@@ -771,7 +870,9 @@ export default function SettingsScreen() {
           {/* Row 3 — weekly Sunday check-in. */}
           <View style={styles.row}>
             <IconChip icon="calendar-clear" size={36} />
-            <AppText style={styles.rowLabel}>Sunday check-in reminder</AppText>
+            <AppText style={styles.rowLabelGrow} numberOfLines={1}>
+              Sunday check-in reminder
+            </AppText>
             <Switch
               value={checkInReminderOn}
               onValueChange={onCheckInToggle}
@@ -785,7 +886,7 @@ export default function SettingsScreen() {
 
       {/* ── Security ────────────────────────────────────────── */}
       {Platform.OS !== 'web' ? (
-        <Animated.View entering={enterUp(6)}>
+        <Animated.View entering={enterUp(7)}>
           <AppText variant="label" style={styles.sectionLabel}>
             Security
           </AppText>
@@ -797,7 +898,7 @@ export default function SettingsScreen() {
                 color={colors.accentFaint}
                 iconColor={colors.accent}
               />
-              <AppText variant="bodyBold" style={styles.securityTitle}>
+              <AppText variant="bodyBold" style={styles.securityTitle} numberOfLines={1}>
                 App lock
               </AppText>
               {bioBusy ? (
@@ -827,7 +928,7 @@ export default function SettingsScreen() {
 
       {/* ── Sign out (destructive actions live last) ────────── */}
       {signedIn ? (
-        <Animated.View entering={enterUp(7)} style={styles.signOutBlock}>
+        <Animated.View entering={enterUp(8)} style={styles.signOutBlock}>
           <Button
             label="Sign out"
             variant="ghost"
@@ -952,7 +1053,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   rowWrap: { minHeight: 64 },
-  rowLabel: { flexShrink: 1 },
+  rowLabel: { flexShrink: 1, minWidth: 0 },
+  // Label that must take the row's leftover width and push a trailing Switch to
+  // the edge (reminder toggles, subscription) — flexes and truncates.
+  rowLabelGrow: { flex: 1, flexShrink: 1, minWidth: 0 },
   rowControl: {
     flex: 1,
     flexDirection: 'row',
@@ -968,6 +1072,8 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: spacing.xs,
   },
+  // Trailing lock affordance for gated Elite rows (Tag + small lock icon).
+  lockedValue: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
 
   // Mini chips (row-scale variant of ui/Chip)
   miniChip: {
@@ -996,14 +1102,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   reminderDetail: { paddingBottom: spacing.md, gap: spacing.md },
+  // Seven equal cells that flex to fill the card width — chips shrink to fit on
+  // narrow phones instead of the row spilling past the group border.
   dayRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     gap: spacing.xs,
   },
   dayChip: {
-    width: 36,
-    height: 36,
+    flex: 1,
+    minWidth: 0,
+    aspectRatio: 1,
+    maxWidth: 40,
     borderRadius: radius.full,
     borderWidth: 1.5,
     borderColor: colors.border,
@@ -1020,9 +1129,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.sm,
   },
-  timeControls: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  timeLabel: { flexShrink: 1, minWidth: 0 },
+  timeControls: {
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
   timeColon: { fontFamily: type.display, fontSize: 18, color: colors.textDim },
+  // The clock steppers only ever show 2 padded digits — a narrower value cell
+  // than the profile steppers ("175 cm") so both HH:MM fit one row.
+  timeStepperValue: { minWidth: 34 },
 
   // Mini stepper (row-scale variant of ui/Stepper)
   miniStepper: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
@@ -1053,7 +1172,7 @@ const styles = StyleSheet.create({
 
   // Daily targets strip
   targetsRow: { flexDirection: 'row', paddingVertical: spacing.md },
-  targetCell: { flex: 1, alignItems: 'center', gap: 2 },
+  targetCell: { flex: 1, minWidth: 0, alignItems: 'center', gap: 2, paddingHorizontal: 2 },
   targetValue: { fontFamily: type.display, fontSize: 20, color: colors.text },
   targetLabel: {
     fontFamily: type.display,

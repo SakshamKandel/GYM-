@@ -138,6 +138,9 @@ function QuestionRow({
                 variant="bodyBold"
                 color={selected ? colors.text : colors.textDim}
                 tabular={false}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
               >
                 {opt}
               </AppText>

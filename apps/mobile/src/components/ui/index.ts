@@ -1,3 +1,4 @@
+export { AITipCard } from './AITipCard';
 export { AnimatedNumber } from './AnimatedNumber';
 export { AppText } from './AppText';
 export { AppTextInput } from './AppTextInput';

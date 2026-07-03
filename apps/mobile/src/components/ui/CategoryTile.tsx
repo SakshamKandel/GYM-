@@ -42,8 +42,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
-  value: { fontFamily: type.display, fontSize: 40 },
+  // flexShrink + minWidth:0 lets the number shrink to fit rather than pushing
+  // past the tile's right edge when the value is long (e.g. "12.5k").
+  valueWrap: { flexShrink: 1, minWidth: 0 },
+  valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4, justifyContent: 'flex-end' },
+  value: { fontFamily: type.display, fontSize: 32, flexShrink: 1 },
   unit: { fontFamily: type.bodySemiBold, fontSize: 12, letterSpacing: 1 },
 });
 
@@ -72,8 +75,14 @@ export function CategoryTile({
         <View style={[styles.iconChip, { backgroundColor: deepColor }]}>
           <Ionicons name={icon} size={26} color={textColor} />
         </View>
-        <View style={styles.valueRow}>
-          <AppText style={[styles.value, { color: textColor }]} tabular>
+        <View style={[styles.valueWrap, styles.valueRow]}>
+          <AppText
+            style={[styles.value, { color: textColor }]}
+            tabular
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.6}
+          >
             {value}
           </AppText>
           {unit ? (

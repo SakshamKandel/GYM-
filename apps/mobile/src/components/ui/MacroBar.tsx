@@ -31,7 +31,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'baseline',
     marginBottom: 6,
+    gap: 8,
   },
+  label: { flexShrink: 1, minWidth: 0 },
+  amount: { flexShrink: 0 },
   track: {
     height: 8,
     borderRadius: radius.full,
@@ -59,8 +62,10 @@ export function MacroBar({ label, current, target, unit = 'g', color, delay = 0 
   return (
     <View accessibilityLabel={`${label}: ${Math.round(current)} of ${target} ${unit}`}>
       <View style={styles.row}>
-        <AppText variant="label">{label}</AppText>
-        <AppText variant="caption" tabular>
+        <AppText variant="label" numberOfLines={1} style={styles.label}>
+          {label}
+        </AppText>
+        <AppText variant="caption" tabular numberOfLines={1} style={styles.amount}>
           <AppText variant="caption" color={colors.text} tabular>
             {Math.round(current)}
           </AppText>

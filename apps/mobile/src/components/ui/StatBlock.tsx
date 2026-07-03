@@ -17,8 +17,9 @@ interface Props {
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  row: { flexDirection: 'row', alignItems: 'baseline', gap: 6, minWidth: 0 },
   center: { alignItems: 'center' },
+  value: { flexShrink: 1 },
 });
 
 export function StatBlock({
@@ -33,9 +34,16 @@ export function StatBlock({
   const color = accent ? colors.accent : colors.text;
   return (
     <View style={[align === 'center' ? styles.center : null, style]}>
-      <AppText variant="label">{label}</AppText>
+      <AppText variant="label" numberOfLines={1}>{label}</AppText>
       <View style={styles.row}>
-        <AppText variant={size} color={color}>
+        <AppText
+          variant={size}
+          color={color}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.6}
+          style={styles.value}
+        >
           {value}
         </AppText>
         {unit ? (
