@@ -10,7 +10,11 @@ import type { Tier } from '@gym/shared';
  * code so screens never string-match server messages.
  */
 
-const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
+/**
+ * API base URL. Exported so sibling clients (e.g. features/staff/api.ts) build
+ * their own request plumbing against the SAME host without re-reading the env.
+ */
+export const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
 
 export type ApiErrorCode =
   | 'email_taken'
@@ -710,4 +714,86 @@ export async function getAiTip(messages: AiTipMessage[], token: string): Promise
   } catch {
     return null;
   }
+}
+
+// ════════════════════════════════════════════════════════════════
+// Gated form-check playback (see PLAYBACK API CONTRACT)
+// GET /api/plan-videos/[exerciseId] mints a short-lived signed HLS url for
+// the exercise's coach video, gated per-tier SERVER-SIDE. The signed url is
+// disposable (~2h TTL) — fetch it per playback, never cache/persist it. The
+// providerVideoId is never returned. On 503/network the caller falls back to
+// the bundled greeceVideos seed so playback never hard-breaks for one release.
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Discriminated result of a playback lookup — the hook branches on `kind`
+ * instead of catching typed errors, because 'locked' is a normal (not
+ * exceptional) outcome that drives the paywall affordance.
+ *
+ *  - 'ok'             → play `url` (title/tierRequired for the caption/label).
+ *  - 'locked'         → 403; show the "unlock with <requiredTier>" affordance.
+ *  - 'not_found'      → no ready video for this exercise (fall back to seed).
+ *  - 'not_configured' → provider keys absent (503); fall back to seed.
+ *  - 'unavailable'    → 401/network/malformed; fall back to seed.
+ */
+export type PlanVideoResult =
+  | { kind: 'ok'; url: string; title: string; tierRequired: Tier }
+  | { kind: 'locked'; requiredTier: Tier }
+  | { kind: 'not_found' }
+  | { kind: 'not_configured' }
+  | { kind: 'unavailable' };
+
+const planVideoOkSchema = z.object({
+  url: z.string(),
+  title: z.string(),
+  tierRequired: tierSchema,
+});
+
+const planVideoLockedSchema = z.object({
+  error: z.literal('locked'),
+  requiredTier: tierSchema,
+});
+
+/**
+ * Fetch the signed playback url for an exercise's coach video.
+ *
+ * NEVER throws — every failure resolves to a fallback-triggering variant so
+ * the video path degrades to the bundled seed instead of crashing the screen.
+ * Only the 200 (playable) and 403 (locked → paywall) outcomes carry data.
+ */
+export async function getPlanVideo(exerciseId: string, token: string): Promise<PlanVideoResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}/api/plan-videos/${encodeURIComponent(exerciseId)}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    return { kind: 'unavailable' };
+  }
+
+  if (res.ok) {
+    try {
+      const parsed = planVideoOkSchema.safeParse(await res.json());
+      if (!parsed.success) return { kind: 'unavailable' };
+      return { kind: 'ok', ...parsed.data };
+    } catch {
+      return { kind: 'unavailable' };
+    }
+  }
+
+  if (res.status === 403) {
+    try {
+      const parsed = planVideoLockedSchema.safeParse(await res.json());
+      if (parsed.success) return { kind: 'locked', requiredTier: parsed.data.requiredTier };
+    } catch {
+      // Body wasn't JSON — treat as unavailable so we fall back to the seed.
+    }
+    return { kind: 'unavailable' };
+  }
+
+  if (res.status === 404) return { kind: 'not_found' };
+  if (res.status === 503) return { kind: 'not_configured' };
+  // 401 (expired session) and anything else → fall back to the local seed.
+  return { kind: 'unavailable' };
 }

@@ -28,6 +28,7 @@ import {
   enterDown,
   enterFade,
   enterUp,
+  layoutSpring,
 } from '../components/ui';
 import { successHaptic, tapHaptic, warnHaptic } from '../lib/haptics';
 import {
@@ -42,6 +43,7 @@ import { useProfile } from '../state/profile';
 import { useReminders } from '../state/reminders';
 import { useSecurity } from '../state/security';
 import { pushPath } from '../features/auth/nav';
+import { pushStaff, STAFF_ROUTES } from '../features/staff/nav';
 import { biometricsAvailable } from '../features/security/AppLock';
 import {
   BIRTH_YEAR,
@@ -277,6 +279,7 @@ export default function SettingsScreen() {
 
   const authStatus = useAuth((s) => s.status);
   const authUser = useAuth((s) => s.user);
+  const staffRole = useAuth((s) => s.staffRole);
   const signOut = useAuth((s) => s.signOut);
 
   const [editingName, setEditingName] = useState(false);
@@ -641,7 +644,7 @@ export default function SettingsScreen() {
       </Animated.View>
 
       {/* ── Training plan ───────────────────────────────────── */}
-      <Animated.View entering={enterUp(3)}>
+      <Animated.View entering={enterUp(3)} layout={layoutSpring}>
         <AppText variant="label" style={styles.sectionLabel}>
           Training plan
         </AppText>
@@ -698,7 +701,7 @@ export default function SettingsScreen() {
       </Animated.View>
 
       {/* ── Subscription ────────────────────────────────────── */}
-      <Animated.View entering={enterUp(4)}>
+      <Animated.View entering={enterUp(4)} layout={layoutSpring}>
         <View style={[styles.group, styles.subscriptionBlock]}>
           <PressableScale
             accessibilityRole="button"
@@ -716,9 +719,38 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
+      {/* ── Staff console ───────────────────────────────────── */}
+      {/* Only staff accounts see this; taps route OUTSIDE the onboarding gate. */}
+      {staffRole !== null ? (
+        <Animated.View entering={enterUp(4)} layout={layoutSpring}>
+          <AppText variant="label" style={styles.sectionLabel}>
+            Staff
+          </AppText>
+          <View style={styles.group}>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Staff console"
+              onPress={() => pushStaff(STAFF_ROUTES.hub)}
+              style={styles.row}
+            >
+              <IconChip
+                icon="briefcase"
+                size={36}
+                color={colors.accentFaint}
+                iconColor={colors.accent}
+              />
+              <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
+                Staff console
+              </AppText>
+              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+            </PressableScale>
+          </View>
+        </Animated.View>
+      ) : null}
+
       {/* ── Support ─────────────────────────────────────────── */}
       {/* Coach chat moved to a prominent Home entry; support stays here. */}
-      <Animated.View entering={enterUp(5)}>
+      <Animated.View entering={enterUp(5)} layout={layoutSpring}>
         <AppText variant="label" style={styles.sectionLabel}>
           Support
         </AppText>
@@ -758,7 +790,7 @@ export default function SettingsScreen() {
       </Animated.View>
 
       {/* ── Reminders (local, recurring) ────────────────────── */}
-      <Animated.View entering={enterUp(6)}>
+      <Animated.View entering={enterUp(6)} layout={layoutSpring}>
         <AppText variant="label" style={styles.sectionLabel}>
           Reminders
         </AppText>
@@ -855,7 +887,7 @@ export default function SettingsScreen() {
 
       {/* ── Security ────────────────────────────────────────── */}
       {Platform.OS !== 'web' ? (
-        <Animated.View entering={enterUp(7)}>
+        <Animated.View entering={enterUp(7)} layout={layoutSpring}>
           <AppText variant="label" style={styles.sectionLabel}>
             Security
           </AppText>
@@ -897,7 +929,7 @@ export default function SettingsScreen() {
 
       {/* ── Sign out (destructive actions live last) ────────── */}
       {signedIn ? (
-        <Animated.View entering={enterUp(8)} style={styles.signOutBlock}>
+        <Animated.View entering={enterUp(8)} layout={layoutSpring} style={styles.signOutBlock}>
           <Button
             label="Sign out"
             variant="ghost"
@@ -942,9 +974,11 @@ export default function SettingsScreen() {
       />
 
       {/* ── About ───────────────────────────────────────────── */}
-      <AppText variant="caption" color={colors.textFaint} center style={styles.about}>
-        v0.1.0 · Food data: Open Food Facts · Exercises: free-exercise-db
-      </AppText>
+      <Animated.View layout={layoutSpring}>
+        <AppText variant="caption" color={colors.textFaint} center style={styles.about}>
+          v0.1.0 · Food data: Open Food Facts · Exercises: free-exercise-db
+        </AppText>
+      </Animated.View>
     </Screen>
   );
 }

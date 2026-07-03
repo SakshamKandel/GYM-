@@ -13,6 +13,7 @@ import {
   register,
   type AuthUser,
 } from '../lib/api/client';
+import { getMeStaff, type StaffRole } from '../features/staff/api';
 import { useProfile } from './profile';
 
 /**
@@ -28,6 +29,14 @@ export interface AuthState {
   status: 'signedOut' | 'signedIn';
   token: string | null;
   user: AuthUser | null;
+  /**
+   * The signed-in account's staff role, or null for a plain member (and always
+   * null when signed out). Populated after sign-in and on refresh() by probing
+   * GET /api/me/staff; a failed probe leaves it null so the staff console just
+   * stays hidden. Persisted so a returning staff member sees their console
+   * immediately, before the refresh probe completes.
+   */
+  staffRole: StaffRole | null;
 
   /** Throws ApiError ('bad_credentials' | 'invalid' | 'network'). */
   signIn: (email: string, password: string) => Promise<void>;
@@ -49,6 +58,19 @@ function adoptServerUser(user: AuthUser): void {
   }
   if (!profile.displayName.trim() && user.displayName.trim()) {
     profile.update({ displayName: user.displayName.trim() });
+  }
+}
+
+/**
+ * Probe the account's staff role. Best-effort: a non-staff account resolves to
+ * null, and any failure (offline, server hiccup) resolves to null too — the
+ * staff console simply stays hidden rather than surfacing an error.
+ */
+async function fetchStaffRole(token: string): Promise<StaffRole | null> {
+  try {
+    return await getMeStaff(token);
+  } catch {
+    return null;
   }
 }
 
@@ -85,6 +107,7 @@ export const useAuth = create<AuthState>()(
       status: 'signedOut',
       token: null,
       user: null,
+      staffRole: null,
 
       signIn: async (email, password) => {
         const session = await login({ email: email.trim().toLowerCase(), password });
@@ -92,6 +115,9 @@ export const useAuth = create<AuthState>()(
         adoptServerUser(session.user);
         // Awaited: 'onboarded' must be restored BEFORE navigation gates run.
         await restoreOrBackupProfile(session.token);
+        // Awaited too: AuthScreen reads staffRole right after this resolves to
+        // decide between the staff console and the onboarding-gated root.
+        set({ staffRole: await fetchStaffRole(session.token) });
       },
 
       signInWithGoogle: async (idToken) => {
@@ -99,6 +125,7 @@ export const useAuth = create<AuthState>()(
         set({ status: 'signedIn', token: session.token, user: session.user });
         adoptServerUser(session.user);
         await restoreOrBackupProfile(session.token);
+        set({ staffRole: await fetchStaffRole(session.token) });
       },
 
       signUp: async (email, password, displayName) => {
@@ -110,6 +137,7 @@ export const useAuth = create<AuthState>()(
         set({ status: 'signedIn', token: session.token, user: session.user });
         adoptServerUser(session.user);
         await restoreOrBackupProfile(session.token);
+        set({ staffRole: await fetchStaffRole(session.token) });
       },
 
       signOut: async () => {
@@ -119,7 +147,7 @@ export const useAuth = create<AuthState>()(
         } catch {
           // Offline sign-out is fine — the server session expires on its own.
         }
-        set({ status: 'signedOut', token: null, user: null });
+        set({ status: 'signedOut', token: null, user: null, staffRole: null });
       },
 
       refresh: async () => {
@@ -129,10 +157,14 @@ export const useAuth = create<AuthState>()(
           const user = await me(token);
           set({ status: 'signedIn', user });
           adoptServerUser(user);
+          // Re-probe staff role so a mid-session grant/revoke is reflected. A
+          // failed probe leaves the persisted value untouched (offline-first).
+          const role = await fetchStaffRole(token);
+          set({ staffRole: role });
         } catch (err) {
           if (err instanceof ApiError && err.code === 'unauthorized') {
             // Session expired or revoked server-side — quietly sign out.
-            set({ status: 'signedOut', token: null, user: null });
+            set({ status: 'signedOut', token: null, user: null, staffRole: null });
           }
           // Network errors keep the signed-in state — the app is offline-first.
         }

@@ -84,6 +84,8 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
         <Stack.Screen name="workout" options={{ gestureEnabled: false }} />
+        {/* Staff console — a top-level route OUTSIDE the (tabs) onboarding gate. */}
+        <Stack.Screen name="staff" />
       </Stack>
       </AppLock>
     </GestureHandlerRootView>

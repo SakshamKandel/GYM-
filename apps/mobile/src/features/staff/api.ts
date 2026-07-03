@@ -1,0 +1,746 @@
+import { z } from 'zod';
+import { BASE_URL } from '../../lib/api/client';
+
+/**
+ * Staff console API client — coach + admin surfaces of the GM Method backend.
+ *
+ * Every staff/coach/admin web route accepts the mobile `Authorization: Bearer`
+ * token (requireStaff / requirePermission read it), so these are plain bearer
+ * calls against the SAME host as lib/api/client.ts. Same philosophy as the rest
+ * of the app: zod at the boundary, typed error codes, and NOTHING throws a raw
+ * error — every failure surfaces as a `StaffApiError` code so screens branch on
+ * `.code` instead of string-matching server messages.
+ *
+ *  Error codes:
+ *   'unauthorized' → 401 (no/expired session token)
+ *   'forbidden'    → 403 (signed in, but lacks the role/permission, or a coach
+ *                    with no active assignment over the target user)
+ *   'not_found'    → 404 (missing member / assignment / video / profile)
+ *   'invalid'      → 400 (validation rejected the request body)
+ *   'conflict'     → 409 (self-lockout guard etc.)
+ *   'not_configured' → 503 (e.g. the video host keys are absent)
+ *   'network'      → offline, non-JSON, or a malformed/unexpected response
+ */
+
+// ── Error type ────────────────────────────────────────────────
+
+export type StaffErrorCode =
+  | 'unauthorized'
+  | 'forbidden'
+  | 'not_found'
+  | 'invalid'
+  | 'conflict'
+  | 'not_configured'
+  | 'network';
+
+export class StaffApiError extends Error {
+  readonly code: StaffErrorCode;
+
+  constructor(code: StaffErrorCode, message?: string) {
+    super(message ?? code);
+    this.name = 'StaffApiError';
+    this.code = code;
+  }
+}
+
+/** Narrow an unknown thrown value to StaffApiError (anything else = network). */
+export function toStaffError(err: unknown): StaffApiError {
+  return err instanceof StaffApiError ? err : new StaffApiError('network');
+}
+
+// ── Shared enums ──────────────────────────────────────────────
+
+export type StaffRole =
+  | 'super_admin'
+  | 'member_admin'
+  | 'nutrition_admin'
+  | 'content_admin'
+  | 'support_admin'
+  | 'coach';
+
+export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
+export type MemberStatus = 'active' | 'suspended';
+export type VideoStatus = 'processing' | 'ready' | 'removed';
+export type AssignmentStatus = 'active' | 'ended';
+
+const staffRoleSchema = z.enum([
+  'super_admin',
+  'member_admin',
+  'nutrition_admin',
+  'content_admin',
+  'support_admin',
+  'coach',
+]);
+const tierSchema = z.enum(['starter', 'silver', 'gold', 'elite']);
+const memberStatusSchema = z.enum(['active', 'suspended']);
+const videoStatusSchema = z.enum(['processing', 'ready', 'removed']);
+const assignmentStatusSchema = z.enum(['active', 'ended']);
+
+// ── Fetch plumbing ────────────────────────────────────────────
+
+interface StaffRequestOptions {
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  path: string;
+  token: string;
+  body?: Record<string, unknown>;
+}
+
+function statusToCode(status: number): StaffErrorCode {
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not_found';
+  if (status === 400) return 'invalid';
+  if (status === 409) return 'conflict';
+  if (status === 503) return 'not_configured';
+  return 'network';
+}
+
+/** Perform the request; resolve with the parsed JSON (or null) of a 2xx body. */
+async function staffRequest(opts: StaffRequestOptions): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${opts.path}`, {
+      method: opts.method,
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${opts.token}`,
+        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+      },
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    });
+  } catch {
+    throw new StaffApiError('network', "Can't reach the server");
+  }
+
+  if (res.ok) {
+    // Some 2xx routes (rare) may carry no JSON body — tolerate that as null.
+    try {
+      return (await res.json()) as unknown;
+    } catch {
+      return null;
+    }
+  }
+
+  throw new StaffApiError(statusToCode(res.status));
+}
+
+/** Validate a payload; a malformed body is indistinguishable from a bad server. */
+function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown): T {
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) throw new StaffApiError('network', 'Unexpected server response');
+  return parsed.data;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Whoami
+// ════════════════════════════════════════════════════════════════
+
+const meStaffSchema = z.object({ role: staffRoleSchema.nullable() });
+
+/**
+ * GET /api/me/staff → the caller's staff role, or null for a non-staff account.
+ * 401 (no token) surfaces as StaffApiError 'unauthorized'; a valid non-staff
+ * token resolves to `null` (NOT an error).
+ */
+export async function getMeStaff(token: string): Promise<StaffRole | null> {
+  const data = await staffRequest({ method: 'GET', path: '/api/me/staff', token });
+  return parse(meStaffSchema, data).role;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console
+// ════════════════════════════════════════════════════════════════
+
+const coachInboxRowSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  email: z.string(),
+  tier: tierSchema,
+  unreadForCoach: z.number(),
+});
+export type CoachInboxRow = z.infer<typeof coachInboxRowSchema>;
+
+const coachInboxSchema = z.object({ users: z.array(coachInboxRowSchema) });
+
+/** GET /api/coach/users → the caller's active client roster with unread badges. */
+export async function getCoachInbox(token: string): Promise<CoachInboxRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/users', token });
+  return parse(coachInboxSchema, data).users;
+}
+
+const coachThreadMessageSchema = z.object({
+  id: z.string(),
+  kind: z.string(),
+  sender: z.enum(['user', 'coach']),
+  body: z.string(),
+  senderAccountId: z.string().nullable(),
+  readByUser: z.boolean(),
+  readByCoach: z.boolean(),
+  createdAt: z.string(),
+});
+export type CoachThreadMessage = z.infer<typeof coachThreadMessageSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole thread. */
+const coachThreadSchema = z.object({
+  messages: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): CoachThreadMessage[] => {
+      const parsed = coachThreadMessageSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/**
+ * GET /api/coach/threads/[userId] → that client's coach_chat thread
+ * (oldest → newest). Server-side this also marks inbound rows read by coach.
+ * 'forbidden' when the caller has no active assignment over the user.
+ */
+export async function getCoachThread(
+  userId: string,
+  token: string,
+): Promise<CoachThreadMessage[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/threads/${encodeURIComponent(userId)}`,
+    token,
+  });
+  return parse(coachThreadSchema, data).messages;
+}
+
+const coachReplySchema = z.object({ message: coachThreadMessageSchema });
+
+/**
+ * POST /api/coach/threads/[userId]/reply {body} → inserts the human coach's
+ * reply and returns the inserted row. 'invalid' for an empty/too-long body,
+ * 'forbidden' with no active assignment.
+ */
+export async function replyToClient(
+  userId: string,
+  body: string,
+  token: string,
+): Promise<CoachThreadMessage> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/coach/threads/${encodeURIComponent(userId)}/reply`,
+    token,
+    body: { body },
+  });
+  return parse(coachReplySchema, data).message;
+}
+
+const coachProfileSchema = z.object({
+  accountId: z.string(),
+  displayName: z.string().nullable(),
+  bio: z.string().nullable(),
+  acceptingClients: z.boolean(),
+  replyWindowHours: z.number(),
+  isActive: z.boolean(),
+});
+export type CoachProfile = z.infer<typeof coachProfileSchema>;
+
+const coachProfileEnvelope = z.object({ profile: coachProfileSchema });
+
+/** GET /api/coach/profile → the signed-in coach's own profile (lazy-created). */
+export async function getCoachProfile(token: string): Promise<CoachProfile> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/profile', token });
+  return parse(coachProfileEnvelope, data).profile;
+}
+
+export interface CoachProfilePatch {
+  displayName?: string;
+  bio?: string;
+  acceptingClients?: boolean;
+  replyWindowHours?: number;
+}
+
+/** PATCH /api/coach/profile → update the caller's own profile; returns it fresh. */
+export async function updateCoachProfile(
+  patch: CoachProfilePatch,
+  token: string,
+): Promise<CoachProfile> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: '/api/coach/profile',
+    token,
+    body: { ...patch },
+  });
+  return parse(coachProfileEnvelope, data).profile;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — overview
+// ════════════════════════════════════════════════════════════════
+
+const tierBreakdownSchema = z.object({ tier: tierSchema, count: z.number() });
+
+const recentSignupSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  displayName: z.string(),
+  tier: tierSchema,
+  status: memberStatusSchema,
+  createdAt: z.string(),
+});
+export type RecentSignup = z.infer<typeof recentSignupSchema>;
+
+const recentActivitySchema = z.object({
+  id: z.string(),
+  action: z.string(),
+  targetType: z.string(),
+  targetId: z.string().nullable(),
+  actorEmail: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type RecentActivity = z.infer<typeof recentActivitySchema>;
+
+const adminOverviewSchema = z.object({
+  totalMembers: z.number(),
+  activeCoaches: z.number(),
+  activeAssignments: z.number(),
+  readyVideos: z.number(),
+  tierBreakdown: z.array(tierBreakdownSchema),
+  recentSignups: z.array(recentSignupSchema),
+  recentActivity: z.array(recentActivitySchema),
+});
+export type AdminOverview = z.infer<typeof adminOverviewSchema>;
+
+/** GET /api/admin/overview → the console dashboard summary. */
+export async function getAdminOverview(token: string): Promise<AdminOverview> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/overview', token });
+  return parse(adminOverviewSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — members
+// ════════════════════════════════════════════════════════════════
+
+const memberRowSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  displayName: z.string(),
+  tier: tierSchema,
+  status: memberStatusSchema,
+});
+export type MemberRow = z.infer<typeof memberRowSchema>;
+
+const membersSchema = z.object({ members: z.array(memberRowSchema) });
+
+/**
+ * GET /api/admin/members?q= → the member directory (<=100 rows). `q` is a
+ * case-insensitive email substring filter.
+ */
+export async function getMembers(token: string, q?: string): Promise<MemberRow[]> {
+  const query = q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : '';
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/members${query}`,
+    token,
+  });
+  return parse(membersSchema, data).members;
+}
+
+const memberDetailAccountSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  displayName: z.string(),
+  tier: tierSchema,
+  status: memberStatusSchema,
+  createdAt: z.string(),
+});
+
+const memberDetailCoachSchema = z.object({
+  assignmentId: z.string(),
+  coachId: z.string(),
+  email: z.string(),
+  displayName: z.string(),
+});
+export type MemberDetailCoach = z.infer<typeof memberDetailCoachSchema>;
+
+const memberDetailSchema = z.object({
+  member: memberDetailAccountSchema,
+  // The server profile blob is an opaque jsonb (or null).
+  profile: z.record(z.string(), z.unknown()).nullable(),
+  coach: memberDetailCoachSchema.nullable(),
+});
+export type MemberDetail = z.infer<typeof memberDetailSchema>;
+
+/** GET /api/admin/members/[id] → a single member, their profile blob + coach. */
+export async function getMemberDetail(id: string, token: string): Promise<MemberDetail> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/members/${encodeURIComponent(id)}`,
+    token,
+  });
+  return parse(memberDetailSchema, data);
+}
+
+const memberUpdateSchema = z.object({ member: memberDetailAccountSchema });
+
+/**
+ * PATCH /api/admin/members/[id] → apply { status?, tier? } (+ optional reason).
+ * `tier` needs subscription.override, `status` needs members.suspend — checked
+ * independently server-side. Returns the fresh account row.
+ */
+export async function updateMember(
+  id: string,
+  patch: { status?: MemberStatus; tier?: Tier; reason?: string },
+  token: string,
+): Promise<z.infer<typeof memberDetailAccountSchema>> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/members/${encodeURIComponent(id)}`,
+    token,
+    body: { ...patch },
+  });
+  return parse(memberUpdateSchema, data).member;
+}
+export type MemberAccount = z.infer<typeof memberDetailAccountSchema>;
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — coaches & assignments
+// ════════════════════════════════════════════════════════════════
+
+const coachRowSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  displayName: z.string(),
+  coachName: z.string().nullable(),
+  acceptingClients: z.boolean().nullable(),
+  isActive: z.boolean().nullable(),
+  activeClients: z.number(),
+});
+export type CoachRow = z.infer<typeof coachRowSchema>;
+
+const coachesSchema = z.object({ coaches: z.array(coachRowSchema) });
+
+/** GET /api/admin/coaches → the assignable coach pool with active-client counts. */
+export async function getCoaches(token: string): Promise<CoachRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/coaches', token });
+  return parse(coachesSchema, data).coaches;
+}
+
+const assignmentSchema = z.object({
+  id: z.string(),
+  coachId: z.string(),
+  userId: z.string(),
+  status: assignmentStatusSchema,
+  assignedBy: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type Assignment = z.infer<typeof assignmentSchema>;
+
+const assignmentEnvelope = z.object({ assignment: assignmentSchema });
+
+/**
+ * POST /api/admin/assignments {coachId, userId} → assign a coach to a member
+ * (upsert reactivates an ended pair). Returns the assignment row.
+ * 'invalid' when coachId isn't a coach; 'not_found' when userId is unknown.
+ */
+export async function assignClient(
+  coachId: string,
+  userId: string,
+  token: string,
+): Promise<Assignment> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/assignments',
+    token,
+    body: { coachId, userId },
+  });
+  return parse(assignmentEnvelope, data).assignment;
+}
+
+const endedAssignmentSchema = z.object({
+  assignment: z.object({
+    id: z.string(),
+    coachId: z.string(),
+    userId: z.string(),
+    status: assignmentStatusSchema,
+  }),
+});
+export type EndedAssignment = z.infer<typeof endedAssignmentSchema>['assignment'];
+
+/**
+ * DELETE /api/admin/assignments/[id] → soft-end (status='ended') an assignment.
+ * 'not_found' for an unknown id.
+ */
+export async function endAssignment(id: string, token: string): Promise<EndedAssignment> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/admin/assignments/${encodeURIComponent(id)}`,
+    token,
+  });
+  return parse(endedAssignmentSchema, data).assignment;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — videos
+// ════════════════════════════════════════════════════════════════
+
+const videoRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  tierRequired: tierSchema,
+  status: videoStatusSchema,
+  position: z.number(),
+  thumbnailUrl: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type VideoRow = z.infer<typeof videoRowSchema>;
+
+const videosSchema = z.object({ videos: z.array(videoRowSchema) });
+
+/** GET /api/admin/videos → the plan-video library (newest first). */
+export async function getVideos(token: string): Promise<VideoRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/videos', token });
+  return parse(videosSchema, data).videos;
+}
+
+// The single-row PATCH returns the fuller row (with description/exerciseId/…).
+const videoDetailSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string().nullable(),
+  exerciseId: z.string().nullable(),
+  planId: z.string().nullable(),
+  tierRequired: tierSchema,
+  status: videoStatusSchema,
+  position: z.number(),
+  thumbnailUrl: z.string().nullable(),
+  durationSec: z.number().nullable(),
+  createdAt: z.string(),
+});
+export type VideoDetail = z.infer<typeof videoDetailSchema>;
+
+// POST returns the full row plus a provider-neutral upload descriptor: the
+// endpoint the phone POSTs the file to, and — for hosts that use signed
+// browser uploads (Cloudinary) — the signed form fields to attach alongside
+// the `file` part. Omitted for self-contained one-time URLs (CF Stream).
+const uploadDescriptorSchema = z.object({
+  url: z.string(),
+  fields: z.record(z.string(), z.string()).optional(),
+});
+
+const videoCreateEnvelope = z.object({
+  video: videoDetailSchema,
+  upload: uploadDescriptorSchema,
+});
+export type VideoCreateResult = z.infer<typeof videoCreateEnvelope>;
+
+export interface VideoCreateMeta {
+  title: string;
+  description?: string;
+  exerciseId?: string;
+  planId?: string;
+  tierRequired: Tier;
+}
+
+/**
+ * POST /api/admin/videos → reserve a direct-creator-upload slot on the video
+ * host and insert the row in status='processing'. The caller then POSTs the
+ * file bytes STRAIGHT to `upload.url` as multipart/form-data (every
+ * `upload.fields` entry first, then the file under `file`) and confirms via
+ * updateVideo(id, { status: 'ready' }). 'not_configured' (503) when the host
+ * keys are absent — no row is created in that case.
+ */
+export async function createVideo(
+  meta: VideoCreateMeta,
+  token: string,
+): Promise<VideoCreateResult> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/videos',
+    token,
+    body: { ...meta },
+  });
+  return parse(videoCreateEnvelope, data);
+}
+
+const videoUpdateEnvelope = z.object({ video: videoDetailSchema });
+
+export interface VideoPatch {
+  title?: string;
+  description?: string;
+  tierRequired?: Tier;
+  position?: number;
+  status?: VideoStatus;
+}
+
+/** PATCH /api/admin/videos/[id] → edit fields / flip status; returns the row. */
+export async function updateVideo(
+  id: string,
+  patch: VideoPatch,
+  token: string,
+): Promise<VideoDetail> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/videos/${encodeURIComponent(id)}`,
+    token,
+    body: { ...patch },
+  });
+  return parse(videoUpdateEnvelope, data).video;
+}
+
+const videoDeleteEnvelope = z.object({
+  video: z.object({ id: z.string(), status: videoStatusSchema }),
+});
+export type DeletedVideo = z.infer<typeof videoDeleteEnvelope>['video'];
+
+/** DELETE /api/admin/videos/[id] → soft-delete (status='removed'). */
+export async function deleteVideo(id: string, token: string): Promise<DeletedVideo> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/admin/videos/${encodeURIComponent(id)}`,
+    token,
+  });
+  return parse(videoDeleteEnvelope, data).video;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — subscriptions (tier override)
+// ════════════════════════════════════════════════════════════════
+
+const setTierSchema = z.object({
+  ok: z.literal(true),
+  accountId: z.string(),
+  tier: tierSchema,
+});
+export type SetTierResult = z.infer<typeof setTierSchema>;
+
+/**
+ * POST /api/admin/subscriptions {accountId, tier, reason?} → override a
+ * member's tier (audited). 'not_found' for an unknown account.
+ */
+export async function setTier(
+  accountId: string,
+  tier: Tier,
+  reason: string | undefined,
+  token: string,
+): Promise<SetTierResult> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/subscriptions',
+    token,
+    body: { accountId, tier, ...(reason !== undefined ? { reason } : {}) },
+  });
+  return parse(setTierSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — staff & roles
+// ════════════════════════════════════════════════════════════════
+
+const staffRowSchema = z.object({
+  accountId: z.string(),
+  email: z.string(),
+  displayName: z.string(),
+  status: memberStatusSchema,
+  role: staffRoleSchema,
+  coachName: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type StaffRow = z.infer<typeof staffRowSchema>;
+
+const staffSchema = z.object({ staff: z.array(staffRowSchema) });
+
+/** GET /api/admin/staff → every staff account with its role (super_admin only). */
+export async function getStaff(token: string): Promise<StaffRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/staff', token });
+  return parse(staffSchema, data).staff;
+}
+
+const okSchema = z.object({ ok: z.literal(true) });
+
+/**
+ * POST /api/admin/staff {accountId, role} → grant or change a role on an
+ * existing account (super_admin only). 'not_found' for an unknown account,
+ * 'invalid' for a bad role.
+ */
+export async function grantRole(
+  accountId: string,
+  role: StaffRole,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/staff',
+    token,
+    body: { accountId, role },
+  });
+  parse(okSchema, data);
+}
+
+/**
+ * DELETE /api/admin/staff/[accountId] → revoke all staff access + kill live
+ * sessions (super_admin only). 'conflict' (409-style) when trying to revoke
+ * your OWN role; 'not_found' when the account wasn't staff.
+ */
+export async function revokeRole(accountId: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/admin/staff/${encodeURIComponent(accountId)}`,
+    token,
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — audit log
+// ════════════════════════════════════════════════════════════════
+
+const auditEntrySchema = z.object({
+  id: z.string(),
+  action: z.string(),
+  targetType: z.string(),
+  targetId: z.string().nullable(),
+  meta: z.unknown(),
+  ip: z.string().nullable(),
+  createdAt: z.string(),
+  actorId: z.string().nullable(),
+  actorEmail: z.string().nullable(),
+});
+export type AuditEntry = z.infer<typeof auditEntrySchema>;
+
+/** Resilient: drop unparseable rows rather than failing the whole page. */
+const auditSchema = z.object({
+  entries: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): AuditEntry[] => {
+      const parsed = auditEntrySchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+  nextCursor: z.string().nullable(),
+});
+
+export interface AuditFilters {
+  action?: string;
+  actor?: string;
+  cursor?: string;
+}
+
+export interface AuditPage {
+  entries: AuditEntry[];
+  nextCursor: string | null;
+}
+
+/**
+ * GET /api/admin/audit?action=&actor=&cursor= → a keyset page of the audit
+ * trail, newest first (super_admin only). `nextCursor` is null on the last
+ * page.
+ */
+export async function getAudit(
+  token: string,
+  filters: AuditFilters = {},
+): Promise<AuditPage> {
+  const params = new URLSearchParams();
+  if (filters.action?.trim()) params.set('action', filters.action.trim());
+  if (filters.actor?.trim()) params.set('actor', filters.actor.trim());
+  if (filters.cursor?.trim()) params.set('cursor', filters.cursor.trim());
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/audit${query}`,
+    token,
+  });
+  return parse(auditSchema, data);
+}

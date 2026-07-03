@@ -8,6 +8,7 @@ import {
   AppText,
   Button,
   enterDown,
+  enterFade,
   enterUp,
   PressableScale,
   Screen,
@@ -17,6 +18,7 @@ import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { useAuth } from '../../state/auth';
 import { AuthField } from './components/AuthField';
 import { GoogleSignInButton } from './components/GoogleSignInButton';
+import { replaceStaff, STAFF_ROUTES } from '../staff/nav';
 import { replacePath } from './nav';
 import { emailError, nameError, newPasswordError, passwordError } from './validation';
 
@@ -78,8 +80,17 @@ function describeApiError(code: ApiErrorCode): { field: keyof FieldErrors | null
   }
 }
 
-/** Login is the app's front door — success always lands on the gated root. */
+/**
+ * Login is the app's front door. Staff members skip the onboarding-gated root
+ * and land straight in the staff console; everyone else goes to '/'. The store
+ * has already awaited the /api/me/staff probe by the time signIn/signUp
+ * resolves, so staffRole is settled here.
+ */
 function enterApp(): void {
+  if (useAuth.getState().staffRole !== null) {
+    replaceStaff(STAFF_ROUTES.hub);
+    return;
+  }
   router.replace('/');
 }
 
@@ -205,9 +216,11 @@ export function AuthScreen({ mode }: { mode: Mode }) {
         />
 
         {formError ? (
-          <AppText variant="caption" color={colors.error}>
-            {formError}
-          </AppText>
+          <Animated.View entering={enterFade()}>
+            <AppText variant="caption" color={colors.error}>
+              {formError}
+            </AppText>
+          </Animated.View>
         ) : null}
 
         <Button
