@@ -114,7 +114,10 @@ export default function WorkoutCompleteScreen() {
           </View>
         </Animated.View>
         <Animated.View entering={enterUp(2)} style={styles.statCol}>
-          <StatBlock label="sets" value={sets.length} />
+          <AppText variant="label" numberOfLines={1}>sets</AppText>
+          <View style={styles.statValueRow}>
+            <AnimatedNumber value={sets.length} variant="display" style={styles.statCol} />
+          </View>
         </Animated.View>
       </View>
 

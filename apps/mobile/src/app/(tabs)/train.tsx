@@ -1,9 +1,9 @@
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import type { GoalType, Plan } from '@gym/shared';
+import type { GoalType, Plan, PlanWorkout } from '@gym/shared';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
-import type { ComponentProps } from 'react';
+import { useRef, useState, type ComponentProps } from 'react';
 import {
   AppText,
   Button,
@@ -16,8 +16,10 @@ import {
   PressableScale,
   Screen,
   SectionLabel,
+  Sheet,
   Tag,
 } from '../../components/ui';
+import { WorkoutPreviewSheet } from '../../features/training/components/WorkoutPreviewSheet';
 import { useTrainData } from '../../features/training/hooks';
 import { estimateWorkoutMinutes } from '../../features/training/logic';
 import { pushPath } from '../../features/training/nav';
@@ -131,6 +133,12 @@ export default function TrainScreen() {
   const workouts = getPlanWorkouts(planId);
   const exerciseCount = allExercises().length;
 
+  // Tap a rotation row to peek before committing; the sheet's "Start" navigates
+  // once its exit finishes (so the modal never lingers over the pushed screen).
+  const [preview, setPreview] = useState<PlanWorkout | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const pendingStartId = useRef<string | null>(null);
+
   // Rows stagger after heading (0) + hero (1); cap so long lists don't crawl.
   const rowIdx = (i: number): number => Math.min(2 + i, 8);
   const tail = Math.min(2 + workouts.length, 8);
@@ -196,11 +204,15 @@ export default function TrainScreen() {
             return (
               <Animated.View key={w.id} entering={enterUp(rowIdx(i))}>
                 {i > 0 ? <Divider /> : null}
-                <Pressable
+                <PressableScale
                   accessibilityRole="button"
-                  accessibilityLabel={`${w.name}, day ${w.day}, ${w.exercises.length} exercises. Start this workout.`}
-                  onPress={() => pushPath(`/workout/start?planWorkoutId=${w.id}`)}
-                  style={({ pressed }) => [styles.planRow, pressed && { opacity: 0.7 }]}
+                  accessibilityLabel={`${w.name}, day ${w.day}, ${w.exercises.length} exercises. Preview this workout.`}
+                  onPress={() => {
+                    setPreview(w);
+                    setPreviewOpen(true);
+                  }}
+                  pressScale={0.985}
+                  style={styles.planRow}
                 >
                   <View style={styles.dayBlock}>
                     <AppText style={styles.dayNum} tabular>
@@ -217,7 +229,7 @@ export default function TrainScreen() {
                   </View>
                   {isNext ? <Tag label="Up next" /> : null}
                   <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-                </Pressable>
+                </PressableScale>
               </Animated.View>
             );
           })}
@@ -267,6 +279,29 @@ export default function TrainScreen() {
           ))}
         </ScrollView>
       </Animated.View>
+
+      {/* Peek at a rotation workout before starting it. On "Start" the sheet
+          closes first, then navigates — so the modal never sits over the logger. */}
+      <Sheet
+        visible={previewOpen}
+        onClose={() => {
+          setPreviewOpen(false);
+          const id = pendingStartId.current;
+          pendingStartId.current = null;
+          if (id) pushPath(`/workout/start?planWorkoutId=${id}`);
+        }}
+        title={preview?.name}
+      >
+        {preview ? (
+          <WorkoutPreviewSheet
+            workout={preview}
+            onStart={() => {
+              pendingStartId.current = preview.id;
+              setPreviewOpen(false);
+            }}
+          />
+        ) : null}
+      </Sheet>
     </Screen>
   );
 }

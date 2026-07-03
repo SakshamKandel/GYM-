@@ -4,9 +4,16 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
-import Animated from 'react-native-reanimated';
+import Animated, {
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withSequence,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
-import { AppText, Button, enterUp, PressableScale, Screen } from '../../components/ui';
+import { AppText, Button, enterUp, PRESS_SPRING, PressableScale, Screen } from '../../components/ui';
 import { tapHaptic, warnHaptic } from '../../lib/haptics';
 import { lookupBarcode } from '../../lib/api/openFoodFacts';
 import { getRepo } from '../../lib/repo';
@@ -31,11 +38,23 @@ const styles = StyleSheet.create({
     width: FRAME_W,
     height: FRAME_H,
     borderRadius: radius.lg,
-    borderWidth: 1.5,
-    borderColor: colors.textDim,
+    borderWidth: 2.5,
+    borderColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
+  // Brief signal-red wash the instant a barcode is captured.
+  // (absoluteFillObject spelled out — RN 0.86 types no longer export it.)
+  captureFlash: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.accent,
+  },
+  hint: { marginTop: spacing.sm },
   bottomOverlay: {
     flex: 1,
     backgroundColor: OVERLAY,
@@ -91,6 +110,14 @@ export default function ScanScreen() {
   const [phase, setPhase] = useState<ScanPhase>({ kind: 'scanning' });
   const handledRef = useRef(false);
 
+  // Capture feedback: the frame settles inward and flashes signal-red the
+  // instant a code is read (a user-driven moment — allowed to move).
+  const reduceMotion = useReducedMotion();
+  const flash = useSharedValue(0);
+  const frameScale = useSharedValue(1);
+  const flashStyle = useAnimatedStyle(() => ({ opacity: flash.value }));
+  const frameStyle = useAnimatedStyle(() => ({ transform: [{ scale: frameScale.value }] }));
+
   // Barcode scanning is a native-only flow — web gets a plain explanation.
   if (Platform.OS === 'web') {
     return (
@@ -114,14 +141,12 @@ export default function ScanScreen() {
       const repo = await getRepo();
       const local = await repo.getFoodByBarcode(code);
       if (local) {
-        tapHaptic();
         router.replace(portionHref(local.id, meal, date));
         return;
       }
       const remote = await lookupBarcode(code);
       if (remote) {
         await repo.saveFood(remote);
-        tapHaptic();
         router.replace(portionHref(remote.id, meal, date));
         return;
       }
@@ -136,6 +161,18 @@ export default function ScanScreen() {
   function onBarcodeScanned(result: BarcodeScanningResult): void {
     if (handledRef.current) return;
     handledRef.current = true;
+    // Confirm the capture immediately, before the async lookup resolves.
+    tapHaptic();
+    if (!reduceMotion) {
+      flash.value = withSequence(
+        withTiming(0.4, { duration: 80 }),
+        withTiming(0, { duration: 280 }),
+      );
+      frameScale.value = withSequence(
+        withTiming(0.95, { duration: 90 }),
+        withSpring(1, PRESS_SPRING),
+      );
+    }
     void handleCode(result.data);
   }
 
@@ -179,16 +216,23 @@ export default function ScanScreen() {
         <View style={styles.overlayFill} />
         <View style={styles.overlayMidRow}>
           <View style={styles.overlayFill} />
-          <View style={styles.frame}>
+          <Animated.View style={[styles.frame, frameStyle]}>
+            <Animated.View
+              pointerEvents="none"
+              style={[styles.captureFlash, flashStyle]}
+            />
             {phase.kind === 'busy' ? (
               <ActivityIndicator size="small" color={colors.text} />
             ) : null}
-          </View>
+          </Animated.View>
           <View style={styles.overlayFill} />
         </View>
         <View style={styles.bottomOverlay}>
-          <AppText variant="caption" color={colors.text}>
-            Point at the barcode
+          <AppText variant="label" color={colors.text}>
+            Scan barcode
+          </AppText>
+          <AppText variant="caption" color={colors.textDim} style={styles.hint}>
+            {phase.kind === 'busy' ? 'Looking it up…' : 'Line the barcode up inside the frame'}
           </AppText>
         </View>
       </View>

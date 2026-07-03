@@ -59,6 +59,14 @@ function isTyping(m: CoachMessage): boolean {
   return m.id.startsWith(TYPING_PREFIX);
 }
 
+/**
+ * True for the transient "Greece is typing" bubble. Exported so the thread view
+ * can render the animated indicator for it without re-hardcoding the id prefix.
+ */
+export function isTypingMessage(m: CoachMessage): boolean {
+  return isTyping(m);
+}
+
 export function useCoachThread(kind: CoachThreadKind): CoachThread {
   const token = useAuth((s) => s.token);
   const status = useAuth((s) => s.status);

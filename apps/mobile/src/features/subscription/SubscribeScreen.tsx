@@ -2,12 +2,19 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import Animated from 'react-native-reanimated';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import type { Tier } from '@gym/shared';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
   Button,
+  Divider,
   HeroCard,
   PressableScale,
   Screen,
@@ -30,6 +37,9 @@ import {
   RECOMMENDED_TIER,
   type GmTier,
 } from './logic';
+import { TierDetailSheet, type TierDetail } from './TierDetailSheet';
+
+const EASE_OUT = Easing.bezier(0.25, 0.8, 0.4, 1);
 
 /**
  * The GM Method paywall — THE sales moment, kept deliberately minimal.
@@ -50,6 +60,7 @@ export function SubscribeScreen() {
   const [trialing, setTrialing] = useState<string | null>(null);
   const [trialError, setTrialError] = useState<string | null>(null);
   const [trialSuccess, setTrialSuccess] = useState<string | null>(null);
+  const [detail, setDetail] = useState<TierDetail | null>(null);
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
 
@@ -103,6 +114,27 @@ export function SubscribeScreen() {
 
   const trialedTiers = new Set(trials.map((t) => t.tier));
   const activeTrial = trials.find((t) => t.active);
+
+  /** Open the tap-to-reveal detail sheet with this tier's resolved perks and
+   * its current trial status (computed here so the sheet stays buddy-free). */
+  function openDetail(t: GmTier): void {
+    const canTrial = TRIAL_TIERS.includes(t.tier as TrialTier);
+    const isActive = activeTrial?.tier === t.tier;
+    const used = trialedTiers.has(t.tier as TrialTier);
+    const trialLine = canTrial
+      ? isActive
+        ? 'Free trial active now'
+        : used
+          ? 'Free trial already used'
+          : `Includes a ${trialDays}-day free trial`
+      : null;
+    setDetail({
+      gmTier: t,
+      isCurrent: t.tier === currentTier,
+      isRecommended: t.tier === RECOMMENDED_TIER,
+      trialLine,
+    });
+  }
 
   return (
     <Screen scroll keyboardAware>
@@ -176,10 +208,13 @@ export function SubscribeScreen() {
             isTrialActive={activeTrial?.tier === t.tier}
             trialing={trialing}
             onTrial={startTrialFlow}
+            onOpenDetail={openDetail}
             signedIn={status === 'signedIn'}
           />
         ))}
       </View>
+
+      <TierDetailSheet detail={detail} onClose={() => setDetail(null)} />
     </Screen>
   );
 }
@@ -194,6 +229,7 @@ function TierCard({
   isTrialActive,
   trialing,
   onTrial,
+  onOpenDetail,
   signedIn,
 }: {
   gmTier: GmTier;
@@ -205,6 +241,7 @@ function TierCard({
   isTrialActive: boolean;
   trialing: string | null;
   onTrial: (tier: TrialTier) => Promise<void>;
+  onOpenDetail: (tier: GmTier) => void;
   signedIn: boolean;
 }) {
   const isCurrent = gmTier.tier === currentTier;
@@ -213,11 +250,25 @@ function TierCard({
   const previous = index > 0 ? GM_TIERS[index - 1] : undefined;
   const canTrial = TRIAL_TIERS.includes(gmTier.tier as TrialTier);
 
+  // Selection wash: a quiet accent tint fades in when this becomes the current
+  // plan (a user-driven state change — motion is allowed). Reduced-motion snaps.
+  const reduceMotion = useReducedMotion();
+  const selected = useSharedValue(isCurrent ? 1 : 0);
+  useEffect(() => {
+    selected.value = reduceMotion
+      ? isCurrent
+        ? 1
+        : 0
+      : withTiming(isCurrent ? 1 : 0, { duration: 260, easing: EASE_OUT });
+  }, [isCurrent, reduceMotion, selected]);
+  const washStyle = useAnimatedStyle(() => ({ opacity: selected.value * 0.7 }));
+
   return (
     <Animated.View
       entering={enterUp(index + 1)}
       style={[styles.card, isRecommended && styles.cardRecommended]}
     >
+      <Animated.View pointerEvents="none" style={[styles.cardWash, washStyle]} />
       <View style={styles.nameRow}>
         <AppText variant="title" style={styles.name} numberOfLines={1}>
           {gmTier.name}
@@ -271,6 +322,21 @@ function TierCard({
           </View>
         ))}
       </View>
+
+      <View style={styles.detailDivider}>
+        <Divider />
+      </View>
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={`See everything included in ${gmTier.name}`}
+        onPress={() => onOpenDetail(gmTier)}
+        style={styles.detailLink}
+      >
+        <AppText variant="caption" color={colors.textDim}>
+          See everything included
+        </AppText>
+        <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+      </PressableScale>
 
       {isCurrent ? null : (
         <View style={styles.btnStack}>
@@ -335,6 +401,17 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   cardRecommended: { borderWidth: 1.5, borderColor: colors.accent },
+  // Quiet accent wash marking the current plan; sits behind the card content.
+  // (absoluteFillObject spelled out — RN 0.86 types no longer export it.)
+  cardWash: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: radius.xl,
+    backgroundColor: colors.accentFaint,
+  },
   nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -366,6 +443,15 @@ const styles = StyleSheet.create({
   featureRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   featureIcon: { marginTop: 3 },
   featureText: { flex: 1, lineHeight: 24 },
+
+  // "See everything included" reveal affordance.
+  detailDivider: { marginTop: spacing.lg },
+  detailLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: touch.min,
+  },
 
   btnStack: { marginTop: spacing.lg, gap: spacing.xs },
   chooseBtn: {},

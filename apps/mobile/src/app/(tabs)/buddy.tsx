@@ -1,6 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import Animated from 'react-native-reanimated';
+import Animated, {
+  cancelAnimation,
+  Easing,
+  FadeOut,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
@@ -9,9 +18,11 @@ import {
   AppTextInput,
   Button,
   Divider,
+  enterFade,
   enterUp,
   FLOATING_TAB_SPACE,
   HeroCard,
+  layoutSpring,
   PressableScale,
   Screen,
   SectionLabel,
@@ -39,9 +50,16 @@ import {
   lastTrainedLabel,
   referralErrorLine,
   referralStatusLabel,
+  weekDots,
 } from '../../features/buddy/logic';
 import { nudgedToday, useBuddyStore } from '../../features/buddy/store';
-import type { BuddyErrorCode, BuddyLink, BuddySession, Referral } from '../../lib/api/client';
+import type {
+  BuddyErrorCode,
+  BuddyEvent,
+  BuddyLink,
+  BuddySession,
+  Referral,
+} from '../../lib/api/client';
 
 /** Buddy — pair up, train live, and refer friends for rewards. */
 
@@ -121,6 +139,14 @@ function BuddyContent({
 }: ContentProps) {
   const tier = useProfile((s) => s.tier);
   const myId = useAuth((s) => s.user?.id ?? null);
+  // Join gating must mirror the SERVER's check, which compares the host's
+  // account tier against the caller's account tier (both from the DB). The
+  // local profile tier can be stale — it only ever upgrades, never downgrades
+  // (see auth.ts adoptServerUser) — so gating on it wrongly blocks or enables
+  // joins after a tier change. Use the server-authoritative auth tier, falling
+  // back to the local profile tier only when signed out / not yet hydrated.
+  const authTier = useAuth((s) => s.user?.tier ?? null);
+  const joinTier = authTier ?? tier;
   const accepted = list?.accepted ?? [];
   const pendingIn = list?.pendingIn ?? [];
   const pendingOut = list?.pendingOut ?? [];
@@ -139,10 +165,20 @@ function BuddyContent({
       </Animated.View>
 
       {stale ? (
-        <View style={styles.staleRow}>
-          <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
-          <AppText variant="caption">Showing last known state — tap to retry.</AppText>
-        </View>
+        <Animated.View entering={enterFade(0)}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Showing last known state. Tap to retry."
+            onPress={reload}
+            style={styles.staleRow}
+          >
+            <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
+            <AppText variant="caption" style={styles.staleText}>
+              Showing last known state — tap to retry.
+            </AppText>
+            <Ionicons name="refresh" size={15} color={colors.textDim} />
+          </PressableScale>
+        </Animated.View>
       ) : null}
 
       {/* ── Pending incoming invites ──────────────────────────── */}
@@ -181,6 +217,7 @@ function BuddyContent({
             <BuddyRow
               key={link.linkId}
               link={link}
+              events={events}
               subtitle={lastTrainedLabel(events, link.buddy.id, todayIso())}
               tier={tier}
               onNudge={async () => {
@@ -195,12 +232,12 @@ function BuddyContent({
           ))}
         </View>
       ) : (
-        <View style={styles.emptyState}>
+        <Animated.View entering={enterFade(0)} style={styles.emptyState}>
           <Ionicons name="people-outline" size={40} color={colors.textFaint} />
           <AppText variant="caption" center style={styles.emptyText}>
             No buddies yet — invite a friend above to get started.
           </AppText>
-        </View>
+        </Animated.View>
       )}
 
       {/* ── Pending outgoing ──────────────────────────────────── */}
@@ -227,7 +264,7 @@ function BuddyContent({
         <SectionLabel>Live sessions</SectionLabel>
         <LiveSessionSection
           sessions={buddySessions}
-          tier={tier}
+          tier={joinTier}
           onJoin={async (sessionId) => {
             return joinLiveSession(sessionId);
           }}
@@ -319,14 +356,18 @@ function InviteForm({ buddyCount, onSent }: { buddyCount: number; onSent: () => 
             style={styles.formBtn}
           />
           {success ? (
-            <AppText variant="caption" color={colors.success} style={styles.formMsg}>
-              Invite sent! They'll appear here once they accept.
-            </AppText>
+            <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
+              <AppText variant="caption" color={colors.success} style={styles.formMsg}>
+                Invite sent! They'll appear here once they accept.
+              </AppText>
+            </Animated.View>
           ) : null}
           {error ? (
-            <AppText variant="caption" color={colors.error} style={styles.formMsg}>
-              {error}
-            </AppText>
+            <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
+              <AppText variant="caption" color={colors.error} style={styles.formMsg}>
+                {error}
+              </AppText>
+            </Animated.View>
           ) : null}
         </>
       )}
@@ -340,26 +381,34 @@ function InviteForm({ buddyCount, onSent }: { buddyCount: number; onSent: () => 
 
 function BuddyRow({
   link,
+  events,
   subtitle,
   tier,
   onNudge,
   onRemove,
 }: {
   link: BuddyLink;
+  events: BuddyEvent[];
   subtitle: string;
   tier: string;
   onNudge: () => void;
   onRemove: () => void;
 }) {
   const [showActions, setShowActions] = useState(false);
+  const today = todayIso();
   const nudged = nudgedToday(
     useBuddyStore.getState().nudgedByLink,
     link.linkId,
-    todayIso(),
+    today,
   );
+  const dots = useMemo(
+    () => weekDots(events, link.buddy.id, today),
+    [events, link.buddy.id, today],
+  );
+  const trainedDays = dots.filter(Boolean).length;
 
   return (
-    <View style={styles.buddyCard}>
+    <Animated.View style={styles.buddyCard} layout={layoutSpring}>
       <View style={styles.buddyTop}>
         <View style={styles.avatar}>
           <AppText variant="title" color={colors.accent}>
@@ -374,35 +423,60 @@ function BuddyRow({
         </View>
         <PressableScale
           accessibilityRole="button"
-          accessibilityLabel="Toggle actions"
-          onPress={() => setShowActions(!showActions)}
+          accessibilityLabel={showActions ? 'Hide details' : 'Show details'}
+          accessibilityState={{ expanded: showActions }}
+          onPress={() => setShowActions((v) => !v)}
           style={styles.iconBtn}
         >
-          <Ionicons name="ellipsis-horizontal" size={20} color={colors.textDim} />
+          <Ionicons
+            name={showActions ? 'chevron-up' : 'chevron-down'}
+            size={20}
+            color={colors.textDim}
+          />
         </PressableScale>
       </View>
 
       {showActions ? (
-        <View style={styles.buddyActions}>
-          <Button
-            label={nudged ? 'Nudged today' : 'Nudge'}
-            variant="secondary"
-            disabled={nudged}
-            onPress={onNudge}
-            style={styles.actionBtn}
-          />
-          <Button
-            label="Remove"
-            variant="danger"
-            onPress={() => {
-              onRemove();
-              setShowActions(false);
-            }}
-            style={styles.actionBtn}
-          />
-        </View>
+        <Animated.View
+          entering={enterFade(0)}
+          exiting={FadeOut.duration(120)}
+          style={styles.buddyExpand}
+        >
+          <View>
+            <AppText variant="label" color={colors.textDim} style={styles.weekLabel}>
+              This week
+            </AppText>
+            <View
+              style={styles.weekStrip}
+              accessible
+              accessibilityLabel={`Trained ${trainedDays} of 7 days this week`}
+            >
+              {dots.map((on, i) => (
+                <View key={i} style={[styles.weekDot, on && styles.weekDotOn]} />
+              ))}
+            </View>
+          </View>
+          <View style={styles.buddyActions}>
+            <Button
+              label={nudged ? 'Nudged today' : 'Nudge'}
+              variant="secondary"
+              disabled={nudged}
+              onPress={onNudge}
+              style={styles.actionBtn}
+            />
+            <Button
+              label="Remove"
+              variant="danger"
+              onPress={() => {
+                onRemove();
+                setShowActions(false);
+              }}
+              style={styles.actionBtn}
+            />
+          </View>
+        </Animated.View>
       ) : null}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -473,6 +547,45 @@ function PendingOutRow({ link, onCancel }: { link: BuddyLink; onCancel: () => vo
 }
 
 // ════════════════════════════════════════════════════════════════
+// Live status dot — a solid accent dot with a slow radiating halo: a
+// genuine "broadcasting" indicator for an active session. The halo is
+// ambient motion, so it's disabled under reduced motion (the solid dot
+// remains as the static status marker).
+// ════════════════════════════════════════════════════════════════
+
+function LiveDot() {
+  const reduceMotion = useReducedMotion();
+  const ping = useSharedValue(0);
+
+  useEffect(() => {
+    if (reduceMotion) {
+      ping.value = 0;
+      return;
+    }
+    ping.value = withRepeat(
+      withTiming(1, { duration: 1800, easing: Easing.out(Easing.ease) }),
+      -1,
+      false,
+    );
+    return () => cancelAnimation(ping);
+  }, [reduceMotion, ping]);
+
+  const haloStyle = useAnimatedStyle(() => ({
+    opacity: (1 - ping.value) * 0.4,
+    transform: [{ scale: 1 + ping.value * 2.4 }],
+  }));
+
+  return (
+    <View style={styles.liveDotWrap}>
+      {reduceMotion ? null : (
+        <Animated.View pointerEvents="none" style={[styles.liveHalo, haloStyle]} />
+      )}
+      <View style={styles.liveDot} />
+    </View>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
 // Live session section
 // ════════════════════════════════════════════════════════════════
 
@@ -504,26 +617,28 @@ function LiveSessionSection({
 
   if (sessions.length === 0) {
     return (
-      <View style={styles.emptyState}>
+      <Animated.View entering={enterFade(0)} style={styles.emptyState}>
         <Ionicons name="barbell-outline" size={36} color={colors.textFaint} />
         <AppText variant="caption" center style={styles.emptyText}>
           No active live sessions. Start one below or wait for a buddy to go live.
         </AppText>
-      </View>
+      </Animated.View>
     );
   }
 
   return (
     <View style={styles.sessionList}>
       {error ? (
-        <AppText variant="caption" color={colors.error} style={styles.formMsg}>
-          {error}
-        </AppText>
+        <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
+          <AppText variant="caption" color={colors.error} style={styles.formMsg}>
+            {error}
+          </AppText>
+        </Animated.View>
       ) : null}
       {sessions.map((session) => (
         <View key={session.id} style={styles.sessionCard}>
           <View style={styles.sessionTop}>
-            <View style={styles.liveDot} />
+            <LiveDot />
             <AppText variant="label" color={colors.accent}>
               LIVE
             </AppText>
@@ -606,7 +721,7 @@ function StartSessionForm({
     return (
       <View style={styles.mySessionCard}>
         <View style={styles.sessionTop}>
-          <View style={styles.liveDot} />
+          <LiveDot />
           <AppText variant="label" color={colors.accent}>
             YOUR SESSION IS LIVE
           </AppText>
@@ -646,9 +761,11 @@ function StartSessionForm({
         style={styles.formBtn}
       />
       {error ? (
-        <AppText variant="caption" color={colors.error} style={styles.formMsg}>
-          Couldn't start the session — try again in a bit.
-        </AppText>
+        <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
+          <AppText variant="caption" color={colors.error} style={styles.formMsg}>
+            Couldn't start the session — try again in a bit.
+          </AppText>
+        </Animated.View>
       ) : null}
     </View>
   );
@@ -724,21 +841,30 @@ function ReferralSection({
           style={styles.formBtn}
         />
         {success ? (
-          <AppText variant="caption" color={colors.success} style={styles.formMsg}>
-            Referral sent! You'll get a discount when they join.
-          </AppText>
+          <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
+            <AppText variant="caption" color={colors.success} style={styles.formMsg}>
+              Referral sent! You'll get a discount when they join.
+            </AppText>
+          </Animated.View>
         ) : null}
         {error ? (
-          <AppText variant="caption" color={colors.error} style={styles.formMsg}>
-            {error}
-          </AppText>
+          <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
+            <AppText variant="caption" color={colors.error} style={styles.formMsg}>
+              {error}
+            </AppText>
+          </Animated.View>
         ) : null}
       </View>
 
       {referrals.length > 0 ? (
         <View style={styles.referralList}>
-          {referrals.map((ref) => (
-            <View key={ref.id} style={styles.referralRow}>
+          {referrals.map((ref, i) => (
+            <Animated.View
+              key={ref.id}
+              entering={enterFade(i)}
+              layout={layoutSpring}
+              style={styles.referralRow}
+            >
               <View style={styles.avatar}>
                 <AppText variant="title" color={colors.textDim}>
                   {avatarLetter(ref.inviteeEmail)}
@@ -764,7 +890,7 @@ function ReferralSection({
               ) : (
                 <Ionicons name="hourglass-outline" size={22} color={colors.textFaint} />
               )}
-            </View>
+            </Animated.View>
           ))}
         </View>
       ) : null}
@@ -788,9 +914,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.sm,
     paddingHorizontal: spacing.md,
+    minHeight: touch.min,
     paddingVertical: spacing.sm,
     marginBottom: spacing.md,
   },
+  staleText: { flex: 1 },
 
   // Cards
   formCard: {
@@ -846,6 +974,16 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   actionBtn: { flex: 1 },
+  buddyExpand: { gap: spacing.md },
+  weekLabel: { marginBottom: spacing.xs },
+  weekStrip: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  weekDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.surfaceRaised,
+  },
+  weekDotOn: { backgroundColor: colors.accent },
 
   // Empty state
   emptyState: {
@@ -869,6 +1007,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+  },
+  liveDotWrap: {
+    width: 8,
+    height: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  liveHalo: {
+    position: 'absolute',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.accent,
   },
   liveDot: {
     width: 8,

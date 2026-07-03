@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Platform,
   StyleSheet,
@@ -8,13 +8,24 @@ import {
   type TextInputProps,
   type TextStyle,
 } from 'react-native';
+import Animated, {
+  interpolateColor,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
-import { AppText, PressableScale } from '../../../components/ui';
+import { AppText, enterFade, PressableScale } from '../../../components/ui';
 
 /**
  * Form field per the brief: surface background, radius.lg, 16px Poppins,
  * red border on focus, inline error caption. `secure` adds a 48dp
  * show/hide toggle so passwords are checkable before submitting.
+ *
+ * The border eases from the resting hairline to the accent on focus (a
+ * direct response to the user tapping in), and the error caption fades in
+ * rather than popping. Reduced motion snaps to the final state.
  */
 
 interface Props extends Omit<TextInputProps, 'style' | 'secureTextEntry'> {
@@ -35,9 +46,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     borderWidth: 1.5,
-    borderColor: 'transparent',
+    borderColor: colors.border,
   },
-  frameFocused: { borderColor: colors.accent },
   frameError: { borderColor: colors.error },
   input: {
     flex: 1,
@@ -59,16 +69,25 @@ const styles = StyleSheet.create({
 export function AuthField({ label, error, secure = false, ...inputProps }: Props) {
   const [focused, setFocused] = useState(false);
   const [hidden, setHidden] = useState(true);
+  const reduceMotion = useReducedMotion();
+
+  // 0 = resting hairline, 1 = accent. Eases on focus. An error border is a
+  // static style used INSTEAD of the animated one (never layered on top) so
+  // reanimated's UI-thread writes can't fight the error colour.
+  const focus = useSharedValue(0);
+  useEffect(() => {
+    const to = focused ? 1 : 0;
+    focus.value = reduceMotion ? to : withTiming(to, { duration: 150 });
+  }, [focused, reduceMotion, focus]);
+  const borderStyle = useAnimatedStyle(() => ({
+    borderColor: interpolateColor(focus.value, [0, 1], [colors.border, colors.accent]),
+  }));
 
   return (
     <View style={styles.wrap}>
       <AppText variant="label">{label}</AppText>
-      <View
-        style={[
-          styles.frame,
-          focused && styles.frameFocused,
-          error ? styles.frameError : null,
-        ]}
+      <Animated.View
+        style={[styles.frame, error ? styles.frameError : borderStyle]}
       >
         <TextInput
           {...inputProps}
@@ -98,11 +117,13 @@ export function AuthField({ label, error, secure = false, ...inputProps }: Props
             />
           </PressableScale>
         ) : null}
-      </View>
+      </Animated.View>
       {error ? (
-        <AppText variant="caption" color={colors.error}>
-          {error}
-        </AppText>
+        <Animated.View entering={enterFade()}>
+          <AppText variant="caption" color={colors.error}>
+            {error}
+          </AppText>
+        </Animated.View>
       ) : null}
     </View>
   );

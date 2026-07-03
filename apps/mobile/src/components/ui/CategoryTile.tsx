@@ -64,8 +64,9 @@ export function CategoryTile({
   return (
     <PressableScale
       accessibilityRole={onPress ? 'button' : undefined}
-      accessibilityLabel={`${title}: ${value} ${unit ?? ''}`}
-      onPress={onPress ?? (() => undefined)}
+      accessibilityLabel={unit ? `${title}: ${value} ${unit}` : `${title}: ${value}`}
+      disabled={!onPress}
+      onPress={onPress}
       style={[styles.tile, { backgroundColor: color }, width !== undefined ? { width } : null]}
     >
       <AppText style={[styles.title, { color: textColor }]} tabular={false}>

@@ -33,3 +33,15 @@ export function enterFade(index = 0) {
 
 /** Rows appearing/disappearing in lists — quick settle, no spring bounce. */
 export const layoutSpring = LinearTransition.duration(150).easing(EASE_OUT);
+
+/**
+ * Shared spring configs for user-driven MOVEMENT (presses, sheet slide-up).
+ * These are the only kind of motion allowed to spring/slide — the user
+ * initiated them. Exported so every surface springs with one feel.
+ */
+
+/** Scale-settle for presses / active-state pops (PressableScale family). */
+export const PRESS_SPRING = { damping: 18, stiffness: 320, mass: 0.9 } as const;
+
+/** Bottom-sheet panel riding up from the bottom on tap-open. */
+export const SHEET_SPRING = { damping: 22, stiffness: 240, mass: 0.9 } as const;

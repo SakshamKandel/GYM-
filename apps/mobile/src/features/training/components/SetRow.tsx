@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
+import { useReducedMotion } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import type { SetLog, UnitPref } from '@gym/shared';
 import { displayWeight } from '@gym/shared';
@@ -98,9 +99,18 @@ export function SetRow({
 }: Props) {
   const flashOpacity = useRef(new Animated.Value(0)).current;
   const tagScale = useRef(new Animated.Value(flash ? 1.15 : 1)).current;
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     if (!flash) return;
+    // Reduced motion: skip the fill sweep + tag settle, land on the final
+    // stamp immediately, and clear the one-shot flash flag.
+    if (reduceMotion) {
+      flashOpacity.setValue(0);
+      tagScale.setValue(1);
+      onFlashDone();
+      return;
+    }
     const seq = Animated.sequence([
       Animated.timing(flashOpacity, { toValue: 1, duration: 150, useNativeDriver: useNative }),
       Animated.timing(flashOpacity, { toValue: 0, duration: 300, useNativeDriver: useNative }),

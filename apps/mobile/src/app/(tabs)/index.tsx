@@ -10,7 +10,6 @@ import {
   AnimatedNumber,
   AppText,
   Button,
-  CategoryTile,
   Divider,
   enterDown,
   enterFade,
@@ -27,6 +26,12 @@ import { posterDate } from '../../lib/dates';
 import { useAiTip } from '../../lib/ai/useAiTip';
 import { useProfile } from '../../state/profile';
 import { FirstWorkoutsQuest } from '../../features/engagement/components/FirstWorkoutsQuest';
+import {
+  PrDetail,
+  SessionsDetail,
+  StatTile,
+  VolumeDetail,
+} from '../../features/engagement/components/StatDetailSheets';
 import { StreakChip } from '../../features/engagement/components/StreakChip';
 import { WeeklyCheckIn } from '../../features/engagement/components/WeeklyCheckIn';
 import { useHomeData, useQuestProgress, type DoneToday } from '../../features/engagement/hooks';
@@ -194,7 +199,7 @@ function CoachEntry({ tier }: { tier: Tier }) {
       onPress={() => router.push(unlocked ? toHref('/coach-chat') : toHref('/subscribe'))}
       style={styles.coachCard}
     >
-      <Image source={NEWIE} style={styles.coachAvatar} contentFit="cover" accessibilityElementsHidden />
+      <Image source={NEWIE} style={styles.coachAvatar} contentFit="cover" contentPosition="top" accessibilityElementsHidden />
       <View style={styles.coachText}>
         <AppText variant="bodyBold" numberOfLines={1}>
           Chat with Greece
@@ -221,7 +226,8 @@ export default function HomeScreen() {
   const targets = useProfile((s) => s.targets);
   const unitPref = useProfile((s) => s.unitPref);
   const goalType = useProfile((s) => s.goalType);
-  const daysPerWeek = useProfile((s) => s.daysPerWeek);
+  const startWeightKg = useProfile((s) => s.startWeightKg);
+  const targetWeightKg = useProfile((s) => s.targetWeightKg);
   const tier = useProfile((s) => s.tier);
   const data = useHomeData(planId);
   const quest = useQuestProgress();
@@ -234,23 +240,24 @@ export default function HomeScreen() {
   const { state: tipState, refresh } = useAiTip(() => {
     const streak = data?.streak?.current ?? 0;
     const weekSessions = data?.weekSessions ?? 0;
-    const weekVolume = data?.weekVolumeKg ?? 0;
-    const planName = data?.planName ?? 'no plan';
-    const nextName = data?.nextWorkout?.name ?? 'rest day';
     const goal = goalType ?? 'muscle';
+    const bodyWeight =
+      startWeightKg != null ? `${displayWeight(startWeightKg, unitPref)} ${unit}` : 'unknown';
+    const goalWeight =
+      targetWeightKg != null ? `${displayWeight(targetWeightKg, unitPref)} ${unit}` : 'unset';
 
     return [
       {
         role: 'system' as const,
         content:
-          'You are a hype gym coach. Give one short training or motivation tip based on the athlete\'s week. Keep it under 35 words. Be energetic and specific. Talk about training, lifting, consistency, form, or mindset. Do NOT mention health, diet, calories, nutrition, weight loss, or medical topics. Just training motivation.',
+          "You are an energetic gym coach who shares ONE surprising, TRUE fitness fact each time — fascinating, motivating, and specific. Whenever you can, tie the fact to the athlete's bodyweight or goal (e.g. calories a body their size burns, how much muscle they carry, strength-to-bodyweight feats, what moving their bodyweight achieves). Keep it under 35 words, upbeat, and always a fresh, different fact. No medical, diet, or weight-loss advice — keep it fun, factual, and about training and the body.",
       },
       {
         role: 'user' as const,
-        content: `Streak: ${streak} days. This week: ${weekSessions} sessions, ${weekVolume} kg volume. Plan: ${planName}. Next workout: ${nextName}. Goal: ${goal}. Target: ${daysPerWeek} days/week. Give one training tip or motivational push.`,
+        content: `My bodyweight is ${bodyWeight}. Goal weight: ${goalWeight}. Goal: ${goal}. This week: ${weekSessions} sessions, ${streak}-day streak. Share one amazing fitness fact, tied to my bodyweight or training when you can.`,
       },
     ];
-  }, [data?.streak?.current, data?.weekSessions, data?.weekVolumeKg, data?.planName, data?.nextWorkout?.name, goalType, daysPerWeek]);
+  }, [data?.streak?.current, data?.weekSessions, goalType, startWeightKg, targetWeightKg, unitPref, unit]);
 
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
@@ -304,34 +311,48 @@ export default function HomeScreen() {
 
           <Animated.View entering={enterUp(1)} style={styles.tileRow}>
             <View style={styles.tileCell}>
-              <CategoryTile
+              <StatTile
                 title="Volume"
                 value={formatCompact(displayWeight(data.weekVolumeKg, unitPref))}
                 unit={unit}
                 icon="barbell"
                 color={colors.accent}
                 deepColor={colors.accentDim}
-              />
+                sheetTitle="Volume this week"
+              >
+                <VolumeDetail
+                  byDay={data.weekVolumeByDay}
+                  totalKg={data.weekVolumeKg}
+                  sessionCount={data.weekSessions}
+                  unitPref={unitPref}
+                />
+              </StatTile>
             </View>
             <View style={styles.tileCell}>
-              <CategoryTile
+              <StatTile
                 title="Sessions"
                 value={data.weekSessions}
                 icon="calendar"
                 color={colors.blue}
                 deepColor={colors.blueDeep}
-              />
+                sheetTitle="Sessions this week"
+              >
+                <SessionsDetail sessions={data.weekSessionList} unitPref={unitPref} />
+              </StatTile>
             </View>
           </Animated.View>
           <Animated.View entering={enterUp(2)} style={styles.tileWide}>
-            <CategoryTile
+            <StatTile
               title="PRs"
               value={data.prCount}
               icon="trophy"
               color={colors.orange}
               deepColor={colors.orangeDeep}
               textColor={colors.onOrange}
-            />
+              sheetTitle="Recent PRs"
+            >
+              <PrDetail prs={data.recentPrs} unitPref={unitPref} />
+            </StatTile>
           </Animated.View>
 
           <Animated.View entering={enterUp(3)} style={styles.tipCard}>

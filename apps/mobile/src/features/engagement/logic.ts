@@ -55,6 +55,30 @@ export function volumeOfSets(sets: SetLog[]): number {
   return Math.round(sets.reduce((sum, s) => sum + s.weightKg * s.reps, 0));
 }
 
+/** Inclusive list of ISO dates from `fromIso` to `toIso` (capped at 14 days). */
+export function weekDays(fromIso: string, toIso: string): string[] {
+  const out: string[] = [];
+  let d = fromIso;
+  for (let i = 0; i < 14 && d <= toIso; i++) {
+    out.push(d);
+    d = addDays(d, 1);
+  }
+  return out;
+}
+
+/**
+ * Sum volume per day across `days`, preserving the given day order. Days with no
+ * matching sessions come back at 0 so the caller gets one entry per day.
+ */
+export function volumeByDay(
+  sessions: readonly { date: string; volumeKg: number }[],
+  days: readonly string[],
+): { date: string; volumeKg: number }[] {
+  const byDate = new Map<string, number>();
+  for (const s of sessions) byDate.set(s.date, (byDate.get(s.date) ?? 0) + s.volumeKg);
+  return days.map((date) => ({ date, volumeKg: byDate.get(date) ?? 0 }));
+}
+
 /** Goal for the first-workouts activation quest: three finished workouts. */
 export const QUEST_GOAL = 3 as const;
 /** Activation window length in days from the quest start. */

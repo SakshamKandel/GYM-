@@ -1,9 +1,23 @@
-import { Pressable, StyleSheet, View } from 'react-native';
+import { useState } from 'react';
+import { StyleSheet, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { router, type Href } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { hasEntitlement } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
-import { AppText, Button, HeroCard, IconChip, Screen, UpgradePrompt } from '../components/ui';
+import {
+  AppText,
+  Button,
+  Divider,
+  HeroCard,
+  IconChip,
+  PressableScale,
+  Screen,
+  SectionLabel,
+  UpgradePrompt,
+  enterFade,
+  layoutSpring,
+} from '../components/ui';
 import { CoachThread } from '../features/coach/components/CoachThread';
 import { useProfile } from '../state/profile';
 
@@ -17,6 +31,27 @@ import { useProfile } from '../state/profile';
 const QUICK_CONTACTS: { icon: 'logo-whatsapp' | 'mail-outline'; label: string; value: string }[] = [
   { icon: 'logo-whatsapp', label: 'WhatsApp', value: 'Coming soon' },
   { icon: 'mail-outline', label: 'Email', value: 'Coming soon' },
+];
+
+// Common questions for anyone who hasn't unlocked live coaching yet. Plain,
+// honest copy — no tier names hardcoded as gating, just descriptive help.
+const FAQ_ITEMS: { q: string; a: string }[] = [
+  {
+    q: 'What do the plans include?',
+    a: 'Starter is free forever. Paid plans unlock full nutrition tracking, the adaptive GM Method, and — at the top tier — direct coaching. Tap See plans for the full breakdown.',
+  },
+  {
+    q: 'Can I try a plan before paying?',
+    a: "Yes. Every paid plan comes with a free trial you can start from the Plans screen. Cancel before it ends and you won't be charged.",
+  },
+  {
+    q: 'How do I change or cancel my plan?',
+    a: 'Open Settings, then Subscription. You can switch tiers or cancel any time and keep access until the current period ends.',
+  },
+  {
+    q: 'Is my data safe if I sign out?',
+    a: "Your logs live on your phone first. Signing out only disconnects your account — nothing you've tracked is lost.",
+  },
 ];
 
 const styles = StyleSheet.create({
@@ -45,23 +80,85 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   contactText: { flex: 1 },
+
+  // FAQ accordion (gated view) — bordered surface, hairline-split rows.
+  faqCard: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.lg,
+  },
+  faqHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    minHeight: 56,
+    paddingVertical: spacing.sm,
+  },
+  faqQuestion: { flex: 1, minWidth: 0 },
+  faqAnswer: { paddingBottom: spacing.md },
 });
 
 function Header({ title, caption }: { title: string; caption?: string }) {
   return (
     <View style={styles.header}>
-      <Pressable
+      <PressableScale
         accessibilityRole="button"
         accessibilityLabel="Go back"
         onPress={() => router.back()}
         style={styles.backBtn}
       >
         <Ionicons name="chevron-back" size={22} color={colors.text} />
-      </Pressable>
+      </PressableScale>
       <View style={styles.headerText}>
         <AppText variant="title">{title}</AppText>
         {caption ? <AppText variant="caption">{caption}</AppText> : null}
       </View>
+    </View>
+  );
+}
+
+/**
+ * Common-questions accordion. Each row is a user-driven expander: tap toggles
+ * the answer, which fades in while the row (and those below it) settle via
+ * layoutSpring instead of popping. Reduced-motion falls back to the fade.
+ */
+function SupportFaq() {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  return (
+    <View style={styles.faqCard}>
+      {FAQ_ITEMS.map((item, i) => {
+        const open = openIndex === i;
+        return (
+          <Animated.View key={item.q} layout={layoutSpring}>
+            {i > 0 ? <Divider /> : null}
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityState={{ expanded: open }}
+              accessibilityLabel={item.q}
+              onPress={() => setOpenIndex(open ? null : i)}
+              style={styles.faqHeader}
+            >
+              <AppText variant="bodyBold" style={styles.faqQuestion}>
+                {item.q}
+              </AppText>
+              <Ionicons
+                name={open ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color={colors.textDim}
+              />
+            </PressableScale>
+            {open ? (
+              <Animated.View entering={enterFade(0)} style={styles.faqAnswer}>
+                <AppText variant="body" color={colors.textDim}>
+                  {item.a}
+                </AppText>
+              </Animated.View>
+            ) : null}
+          </Animated.View>
+        );
+      })}
     </View>
   );
 }
@@ -82,6 +179,8 @@ export default function SupportScreen() {
           />
           <Button label="See plans" onPress={() => router.push('/subscribe' as Href)} />
         </View>
+        <SectionLabel>Common questions</SectionLabel>
+        <SupportFaq />
       </Screen>
     );
   }

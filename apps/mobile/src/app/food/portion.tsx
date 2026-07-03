@@ -12,11 +12,12 @@ import {
   Chip,
   enterDown,
   enterUp,
+  MacroRing,
   PressableScale,
   Screen,
   Stepper,
 } from '../../components/ui';
-import { logHaptic } from '../../lib/haptics';
+import { logHaptic, tapHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
 import { getRepo } from '../../lib/repo';
 import {
@@ -62,10 +63,6 @@ const styles = StyleSheet.create({
   },
   kcalRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
   macroRow: { flexDirection: 'row', justifyContent: 'space-around', alignSelf: 'stretch' },
-  macroBlock: { alignItems: 'center', gap: 2 },
-  macroValueRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dot: { width: 8, height: 8, borderRadius: 4 },
-  macroValue: { fontSize: 24, lineHeight: 28 },
   mealsRow: {
     marginTop: spacing.xl,
     flexDirection: 'row',
@@ -114,6 +111,16 @@ export default function PortionScreen() {
     }
   }
 
+  function pickGrams(next: number): void {
+    tapHaptic();
+    setGrams(next);
+  }
+
+  function pickMeal(next: Meal): void {
+    tapHaptic();
+    setMeal(next);
+  }
+
   const back = (
     <Animated.View entering={enterDown(0)} style={styles.headerRow}>
       <PressableScale
@@ -151,7 +158,7 @@ export default function PortionScreen() {
     { label: 'Protein', value: macros.protein, color: colors.protein },
     { label: 'Carbs', value: macros.carbs, color: colors.carbs },
     { label: 'Fat', value: macros.fat, color: colors.fat },
-  ];
+  ] as const;
 
   return (
     <Screen>
@@ -185,15 +192,15 @@ export default function PortionScreen() {
             />
           </View>
           <View style={styles.chipsRow}>
-            <Chip label="100g" selected={grams === 100} onPress={() => setGrams(100)} />
+            <Chip label="100g" selected={grams === 100} onPress={() => pickGrams(100)} />
             {serving ? (
               <Chip
                 label={`1 serving · ${serving}g`}
                 selected={grams === serving}
-                onPress={() => setGrams(serving)}
+                onPress={() => pickGrams(serving)}
               />
             ) : null}
-            <Chip label="200g" selected={grams === 200} onPress={() => setGrams(200)} />
+            <Chip label="200g" selected={grams === 200} onPress={() => pickGrams(200)} />
           </View>
         </Animated.View>
 
@@ -210,25 +217,21 @@ export default function PortionScreen() {
             </View>
           </View>
           <View style={styles.macroRow}>
-            {macroBlocks.map((m) => (
-              <View key={m.label} style={styles.macroBlock}>
-                <View style={styles.macroValueRow}>
-                  <View style={[styles.dot, { backgroundColor: m.color }]} />
-                  <AppText variant="display" style={styles.macroValue}>
-                    {m.value}g
-                  </AppText>
-                </View>
-                <AppText variant="caption" color={colors.textDim}>
-                  {m.label}
-                </AppText>
-              </View>
+            {macroBlocks.map((m, i) => (
+              <MacroRing
+                key={m.label}
+                label={m.label}
+                current={m.value}
+                color={m.color}
+                delay={120 + i * 80}
+              />
             ))}
           </View>
         </Animated.View>
 
         <Animated.View entering={enterUp(3)} style={styles.mealsRow}>
           {MEALS.map(({ key, label }) => (
-            <Chip key={key} label={label} selected={meal === key} onPress={() => setMeal(key)} />
+            <Chip key={key} label={label} selected={meal === key} onPress={() => pickMeal(key)} />
           ))}
         </Animated.View>
       </ScrollView>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -6,16 +6,20 @@ import type { Measurement } from '@gym/shared';
 import { spacing } from '@gym/ui-tokens';
 import { AppText, Button, Divider, enterDown, enterUp, Screen, Stepper } from '../../components/ui';
 import { posterDate, todayIso } from '../../lib/dates';
-import { logHaptic } from '../../lib/haptics';
+import { successHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
 import { getRepo } from '../../lib/repo';
 import { BackHeader } from '../../features/body/components/BackHeader';
+import { SaveConfirmation } from '../../features/body/components/SaveConfirmation';
 import {
   MEASUREMENT_DEFAULTS,
   MEASUREMENT_FIELDS,
   latestMeasurementValues,
   type MeasurementKey,
 } from '../../features/body/logic';
+
+/** How long the "Saved" affirmation shows before the screen pops. */
+const SAVE_CONFIRM_MS = 520;
 
 /**
  * Tape day. Steppers prefilled with the last known value per field; only the
@@ -40,6 +44,13 @@ export default function MeasureScreen() {
   const [values, setValues] = useState<Values | null>(null);
   const [baseline, setBaseline] = useState<Values | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  // Clear the auto-pop timer if we leave first (hardware/swipe back) so it can't
+  // fire router.back() on an already-popped screen and pop one screen too many.
+  const popTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (popTimer.current) clearTimeout(popTimer.current);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -67,7 +78,7 @@ export default function MeasureScreen() {
       : [];
 
   async function save(): Promise<void> {
-    if (values === null || changedKeys.length === 0 || saving) return;
+    if (values === null || changedKeys.length === 0 || saving || saved) return;
     setSaving(true);
     const changed = new Set<MeasurementKey>(changedKeys);
     const entry: Measurement = {
@@ -81,13 +92,14 @@ export default function MeasureScreen() {
     };
     const repo = await getRepo();
     await repo.addMeasurement(entry);
-    logHaptic();
-    router.back();
+    successHaptic();
+    setSaved(true);
+    popTimer.current = setTimeout(() => router.back(), SAVE_CONFIRM_MS);
   }
 
   return (
     <Screen scroll>
-      <BackHeader />
+      {saved ? null : <BackHeader />}
       <Animated.View entering={enterDown(1)} style={styles.headingWrap}>
         <AppText variant="label">{posterDate()}</AppText>
         <AppText variant="heading">Measurements</AppText>
@@ -113,15 +125,21 @@ export default function MeasureScreen() {
           ))}
 
           <Animated.View entering={enterUp(Math.min(MEASUREMENT_FIELDS.length + 1, 8))}>
-            <AppText variant="caption" style={styles.hint}>
-              Only the fields you change are saved — everything is in cm.
-            </AppText>
-            <Button
-              label="Save"
-              onPress={() => void save()}
-              loading={saving}
-              disabled={changedKeys.length === 0}
-            />
+            {saved ? (
+              <SaveConfirmation label="Measurements saved" />
+            ) : (
+              <>
+                <AppText variant="caption" style={styles.hint}>
+                  Only the fields you change are saved — everything is in cm.
+                </AppText>
+                <Button
+                  label="Save"
+                  onPress={() => void save()}
+                  loading={saving}
+                  disabled={changedKeys.length === 0}
+                />
+              </>
+            )}
           </Animated.View>
         </>
       ) : null}

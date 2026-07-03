@@ -3,8 +3,9 @@ import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { useEffect, useState } from 'react';
 import { Platform, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { colors } from '@gym/ui-tokens';
-import { AppText } from '../../../components/ui';
+import { AppText, enterFade } from '../../../components/ui';
 import { toApiError } from '../../../lib/api/client';
 import { successHaptic, warnHaptic } from '../../../lib/haptics';
 import { useAuth } from '../../../state/auth';
@@ -82,9 +83,11 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
         busy={busy}
       />
       {error ? (
-        <AppText variant="caption" color={colors.error}>
-          {error}
-        </AppText>
+        <Animated.View entering={enterFade()}>
+          <AppText variant="caption" color={colors.error}>
+            {error}
+          </AppText>
+        </Animated.View>
       ) : null}
     </View>
   );

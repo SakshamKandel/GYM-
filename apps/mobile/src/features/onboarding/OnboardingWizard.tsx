@@ -8,6 +8,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
+import Animated from 'react-native-reanimated';
 import type { UnitPref } from '@gym/shared';
 import { inputToKg } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -15,20 +16,23 @@ import {
   AppText,
   AppTextInput,
   Button,
+  enterFade,
   MacroBar,
   OptionCard,
   PressableScale,
   Screen,
-  StatBlock,
   Stepper,
 } from '../../components/ui';
 import { todayIso } from '../../lib/dates';
 import { successHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
+import { syncProfileNow } from '../../lib/profileSync';
 import { getRepo } from '../../lib/repo';
 import { getPlan } from '../../lib/seed/plans';
 import { useProfile } from '../../state/profile';
+import { CountUpStat } from './components/CountUpStat';
 import { NewieStage } from './components/NewieStage';
+import { ProgressSegments } from './components/ProgressSegments';
 import {
   ACTIVITY_OPTIONS,
   BIRTH_YEAR,
@@ -176,6 +180,11 @@ export function OnboardingWizard() {
       completeOnboarding({ targets, planId });
       const repo = await getRepo();
       await repo.upsertWeight({ id: uid(), date: todayIso(), kg });
+      // Push the freshly-onboarded profile to Neon immediately — don't rely on
+      // the 3s debounce, which a quick app-close could miss (that's how an
+      // account ends up onboarded locally but empty on the server). No-op when
+      // signed out; the next sign-in backs it up.
+      syncProfileNow();
       successHaptic();
       router.replace('/');
     } finally {
@@ -317,11 +326,11 @@ export function OnboardingWizard() {
         const plan = getPlan(planIdForGoal(draft.goal ?? 'muscle'));
         return (
           <View>
-            <StatBlock label="Calories" value={targets.kcal} unit="kcal / day" size="stat" accent />
+            <CountUpStat label="Calories" value={targets.kcal} unit="kcal / day" accent />
             <View style={styles.macroBlock}>
-              <MacroBar label="Protein" current={targets.protein} target={targets.protein} color={colors.protein} />
-              <MacroBar label="Carbs" current={targets.carbs} target={targets.carbs} color={colors.carbs} />
-              <MacroBar label="Fat" current={targets.fat} target={targets.fat} color={colors.fat} />
+              <MacroBar label="Protein" current={targets.protein} target={targets.protein} color={colors.protein} delay={80} />
+              <MacroBar label="Carbs" current={targets.carbs} target={targets.carbs} color={colors.carbs} delay={200} />
+              <MacroBar label="Fat" current={targets.fat} target={targets.fat} color={colors.fat} delay={320} />
             </View>
             <AppText variant="caption" style={styles.gmMethodNote}>
               Starting targets by the GM Method. Gold adapts them to your weekly trend.
@@ -372,11 +381,7 @@ export function OnboardingWizard() {
           ) : (
             <View style={styles.backSpacer} />
           )}
-          <View style={styles.segments} accessibilityLabel={`Step ${step} of ${TOTAL_STEPS}`}>
-            {Array.from({ length: TOTAL_STEPS }, (_, i) => (
-              <View key={i} style={[styles.segment, i < step && styles.segmentFilled]} />
-            ))}
-          </View>
+          <ProgressSegments step={step} total={TOTAL_STEPS} />
           <View style={styles.backSpacer} />
         </View>
 
@@ -392,7 +397,11 @@ export function OnboardingWizard() {
             caption={reaction ? undefined : script.caption}
             mood={reaction ? 'react' : 'ask'}
           >
-            {renderAnswers()}
+            {/* Each step's answers fade in place (never slide) as the step
+                changes — keyed so the fade replays per question. */}
+            <Animated.View key={step} entering={enterFade()}>
+              {renderAnswers()}
+            </Animated.View>
           </NewieStage>
         </ScrollView>
 
@@ -426,14 +435,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   backSpacer: { width: touch.min, height: touch.min },
-  segments: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  segment: {
-    flex: 1,
-    height: 4,
-    borderRadius: radius.full,
-    backgroundColor: colors.surfaceRaised,
-  },
-  segmentFilled: { backgroundColor: colors.accent },
   scrollContent: { paddingBottom: spacing.xl },
   // lg bottom so the button clears the viewport edge even at insets=0 (web).
   footer: { paddingTop: spacing.md, paddingBottom: spacing.lg },

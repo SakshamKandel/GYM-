@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useFocusEffect } from 'expo-router';
 import {
@@ -21,6 +21,7 @@ import {
   enterFade,
   enterUp,
   HeroCard,
+  PressableScale,
   UpgradePrompt,
 } from '../../../components/ui';
 import { addDays, todayIso } from '../../../lib/dates';
@@ -98,16 +99,6 @@ const styles = StyleSheet.create({
   replyLines: { gap: spacing.xs, marginTop: spacing.xs },
 });
 
-/** Mounts at 0 then sweeps to `delta`, so the result line visibly counts up. */
-function DeltaCountUp({ delta }: { delta: number }) {
-  const [value, setValue] = useState(0);
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setValue(delta));
-    return () => cancelAnimationFrame(raf);
-  }, [delta]);
-  return <AnimatedNumber value={value} variant="display" />;
-}
-
 /** One question row: a label above three tappable option chips. */
 function QuestionRow({
   question,
@@ -126,7 +117,7 @@ function QuestionRow({
           const optValue = (i + 1) as 1 | 2 | 3;
           const selected = value === optValue;
           return (
-            <Pressable
+            <PressableScale
               key={opt}
               accessibilityRole="button"
               accessibilityState={{ selected }}
@@ -144,7 +135,7 @@ function QuestionRow({
               >
                 {opt}
               </AppText>
-            </Pressable>
+            </PressableScale>
           );
         })}
       </View>

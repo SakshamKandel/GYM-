@@ -1,16 +1,30 @@
+import { useState } from 'react';
 import { router } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing } from '@gym/ui-tokens';
-import { AppText, Button, Divider, enterUp, IconChip, SectionLabel } from '../../../components/ui';
+import {
+  AppText,
+  Button,
+  Divider,
+  enterUp,
+  IconChip,
+  PressableScale,
+  SectionLabel,
+  Sheet,
+} from '../../../components/ui';
 import { posterDate } from '../../../lib/dates';
 import { useMeasurements } from '../hooks';
 import {
   MEASUREMENT_FIELDS,
   latestMeasurementValues,
   measurementFieldsLabel,
+  measurementSeries,
   toHref,
+  type MeasurementKey,
 } from '../logic';
+import { MeasurementDetailSheet } from './MeasurementDetailSheet';
 
 /** Latest tape values in a 2-column grid + entry history. Always cm. */
 
@@ -30,6 +44,8 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
   },
   cell: { width: '50%', paddingRight: spacing.md },
+  labelRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  labelText: { flexShrink: 1, minWidth: 0 },
   valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, minWidth: 0 },
   measureValue: { flexShrink: 1, minWidth: 0 },
   cta: { marginTop: spacing.xl },
@@ -46,9 +62,20 @@ const styles = StyleSheet.create({
 
 export function MeasurementsSection() {
   const entries = useMeasurements();
+  // `openKey` names the field to render; `sheetOpen` drives visibility. Keeping
+  // the key set while the sheet animates out means the content doesn't blank
+  // mid-exit (same idea as StreakChip keeping its prop).
+  const [openKey, setOpenKey] = useState<MeasurementKey | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
   if (entries === null) return null;
 
   const latest = latestMeasurementValues(entries);
+  const openField = MEASUREMENT_FIELDS.find((f) => f.key === openKey) ?? null;
+
+  const openDetail = (key: MeasurementKey): void => {
+    setOpenKey(key);
+    setSheetOpen(true);
+  };
   // Order-independent "last taped" date — entries only carry changed fields.
   const lastDate = entries.reduce<string | null>(
     (acc, e) => (acc === null || e.date > acc ? e.date : acc),
@@ -70,9 +97,16 @@ export function MeasurementsSection() {
       <Animated.View entering={enterUp(1)} style={styles.grid}>
         {MEASUREMENT_FIELDS.map(({ key, label }) => {
           const value = latest[key];
-          return (
-            <View key={key} style={styles.cell}>
-              <AppText variant="label" numberOfLines={1}>{label}</AppText>
+          const inner = (
+            <>
+              <View style={styles.labelRow}>
+                <AppText variant="label" numberOfLines={1} style={styles.labelText}>
+                  {label}
+                </AppText>
+                {value !== null ? (
+                  <Ionicons name="chevron-forward" size={13} color={colors.textFaint} />
+                ) : null}
+              </View>
               <View style={styles.valueRow}>
                 <AppText
                   variant="display"
@@ -86,6 +120,21 @@ export function MeasurementsSection() {
                 </AppText>
                 <AppText variant="caption">cm</AppText>
               </View>
+            </>
+          );
+          return value !== null ? (
+            <PressableScale
+              key={key}
+              accessibilityRole="button"
+              accessibilityLabel={`View ${label} history, latest ${value.toFixed(1)} centimetres`}
+              onPress={() => openDetail(key)}
+              style={styles.cell}
+            >
+              {inner}
+            </PressableScale>
+          ) : (
+            <View key={key} style={styles.cell}>
+              {inner}
             </View>
           );
         })}
@@ -119,6 +168,19 @@ export function MeasurementsSection() {
           ))}
         </Animated.View>
       ) : null}
+
+      <Sheet
+        visible={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        title={openField ? `${openField.label} history` : ''}
+      >
+        {openKey !== null && openField ? (
+          <MeasurementDetailSheet
+            label={openField.label}
+            series={measurementSeries(entries, openKey)}
+          />
+        ) : null}
+      </Sheet>
     </View>
   );
 }

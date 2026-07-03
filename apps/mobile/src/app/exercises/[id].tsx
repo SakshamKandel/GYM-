@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { displayWeight, hasEntitlement } from '@gym/shared';
+import { displayWeight } from '@gym/shared';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import {
   AppText,
@@ -18,10 +18,9 @@ import {
   Tag,
 } from '../../components/ui';
 import { ExerciseVideo } from '../../features/training/components/ExerciseVideo';
-import { useExerciseHistory } from '../../features/training/hooks';
+import { useExerciseHistory, usePlanVideo } from '../../features/training/hooks';
 import { formatWeightNumber } from '../../features/training/logic';
 import { getExercise } from '../../lib/exercises';
-import { getGreeceVideo } from '../../lib/seed/greeceVideos';
 import { SEED_PLAN_WORKOUTS } from '../../lib/seed/plans';
 import { posterDate } from '../../lib/dates';
 import { useProfile } from '../../state/profile';
@@ -61,6 +60,21 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   image: { width: '100%', height: '100%' },
+  // Discoverability badge on multi-angle photos: a dark pill on the white image
+  // showing the current angle + a swap glyph, hinting the tap-to-rotate.
+  swapBadge: {
+    position: 'absolute',
+    right: spacing.sm,
+    bottom: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.surface,
+    borderRadius: radius.full,
+    paddingVertical: 4,
+    paddingHorizontal: spacing.sm,
+  },
+  swapText: { fontFamily: type.display, fontSize: 12, color: colors.text, letterSpacing: 0.5 },
   pillRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -115,22 +129,22 @@ export default function ExerciseDetailScreen() {
   const exerciseId = typeof id === 'string' ? id : '';
   const exercise = getExercise(exerciseId);
   const unitPref = useProfile((s) => s.unitPref);
-  const tier = useProfile((s) => s.tier);
   const history = useExerciseHistory(exerciseId);
+  const planVideo = usePlanVideo(exerciseId);
   const [imgIdx, setImgIdx] = useState(0);
 
   if (!exercise) {
     return (
       <Screen>
         <View style={styles.topRow}>
-          <Pressable
+          <PressableScale
             accessibilityRole="button"
             accessibilityLabel="Go back"
             onPress={() => router.back()}
             style={styles.backBtn}
           >
             <Ionicons name="chevron-back" size={22} color={colors.text} />
-          </Pressable>
+          </PressableScale>
         </View>
         <AppText variant="body" color={colors.textDim}>
           Exercise not found.
@@ -146,32 +160,38 @@ export default function ExerciseDetailScreen() {
     exercise.muscleGroup,
   ].filter((f): f is string => f !== null && f.length > 0);
 
-  // Greece's coach demo: unlocked for Gold (signature_plans), locked teaser
-  // below Gold, and a small "coming soon" tease for seed-plan exercises only.
-  const greeceVideo = getGreeceVideo(exerciseId);
-  const canWatchDemo = hasEntitlement({ tier }, 'signature_plans');
+  // Greece's coach demo. The gated playback API is the source of truth (it mints
+  // a signed, per-tier stream); usePlanVideo falls back to the bundled seed clip
+  // when the host isn't wired up yet. 'ready' → play, 'locked' → paywall teaser
+  // for the required tier, otherwise a quiet "coming soon" for seed exercises.
   const isSeedExercise = SEED_EXERCISE_IDS.has(exerciseId);
   const posterUri = images[0];
+  const lockedTierLabel =
+    planVideo.status === 'locked'
+      ? planVideo.requiredTier.charAt(0).toUpperCase() + planVideo.requiredTier.slice(1)
+      : 'Gold';
 
   return (
     <Screen scroll>
       <Animated.View entering={enterDown(0)} style={styles.topRow}>
-        <Pressable
+        <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Go back"
           onPress={() => router.back()}
           style={styles.backBtn}
         >
           <Ionicons name="chevron-back" size={22} color={colors.text} />
-        </Pressable>
+        </PressableScale>
       </Animated.View>
 
       <Animated.View entering={enterUp(0)}>
-        <Pressable
+        <PressableScale
           accessibilityRole={images.length > 1 ? 'button' : 'image'}
           accessibilityLabel={
             images.length > 1 ? `${exercise.name} photo. Tap to see the other angle.` : exercise.name
           }
+          disabled={images.length <= 1}
+          pressScale={0.985}
           onPress={() => {
             if (images.length > 1) setImgIdx((i) => (i + 1) % images.length);
           }}
@@ -185,7 +205,15 @@ export default function ExerciseDetailScreen() {
               transition={150}
             />
           ) : null}
-        </Pressable>
+          {images.length > 1 ? (
+            <View style={styles.swapBadge} pointerEvents="none" accessibilityElementsHidden>
+              <Ionicons name="swap-horizontal" size={13} color={colors.textDim} />
+              <AppText style={styles.swapText} tabular>
+                {`${imgIdx + 1}/${images.length}`}
+              </AppText>
+            </View>
+          ) : null}
+        </PressableScale>
       </Animated.View>
 
       <Animated.View entering={enterUp(1)}>
@@ -197,21 +225,17 @@ export default function ExerciseDetailScreen() {
         </View>
       </Animated.View>
 
-      {greeceVideo && canWatchDemo ? (
+      {planVideo.status === 'ready' ? (
         <Animated.View entering={enterUp(2)}>
           <SectionLabel>Coach demo</SectionLabel>
-          <ExerciseVideo
-            url={greeceVideo.url}
-            posterUri={posterUri}
-            label={greeceVideo.label ?? "Greece's demo"}
-          />
+          <ExerciseVideo url={planVideo.url} posterUri={posterUri} label={planVideo.label} />
         </Animated.View>
-      ) : greeceVideo ? (
+      ) : planVideo.status === 'locked' ? (
         <Animated.View entering={enterUp(2)}>
           <SectionLabel>Coach demo</SectionLabel>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel="Greece's demo video. Unlock with the Gold plan."
+            accessibilityLabel={`Greece's demo video. Unlock with the ${lockedTierLabel} plan.`}
             onPress={() => router.push('/subscribe' as Href)}
             style={styles.lockedCard}
           >
@@ -219,10 +243,10 @@ export default function ExerciseDetailScreen() {
             <View style={styles.lockedText}>
               <AppText variant="bodyBold">Greece's demo</AppText>
               <AppText variant="caption" color={colors.textDim}>
-                Watch the GM technique — Gold plan.
+                {`Watch the GM technique — ${lockedTierLabel} plan.`}
               </AppText>
             </View>
-            <Tag label="Gold" variant="filled" />
+            <Tag label={lockedTierLabel} variant="filled" />
           </PressableScale>
         </Animated.View>
       ) : isSeedExercise ? (

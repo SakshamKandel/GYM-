@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import {
   getBuddies,
@@ -18,12 +19,14 @@ import { useBuddyStore } from './store';
 
 /**
  * Everything the Buddy tab needs. Refreshes on focus plus a lightweight
- * 60s interval while the tab stays focused. Failures keep the cached
- * snapshot and flip `stale` so the screen shows a quiet retry row —
- * never a blocking error screen.
+ * 12s interval while the tab stays focused AND the app is foregrounded.
+ * Returning from background triggers an immediate reload (the interval is
+ * paused while backgrounded to save battery, resumed on 'active'). Failures
+ * keep the cached snapshot and flip `stale` so the screen shows a quiet retry
+ * row — never a blocking error screen.
  */
 
-const REFRESH_MS = 60_000;
+const REFRESH_MS = 12_000;
 
 export interface BuddyData {
   list: BuddyList | null;
@@ -96,9 +99,40 @@ export function useBuddyData(): BuddyData {
 
   useFocusEffect(
     useCallback(() => {
+      let timer: ReturnType<typeof setInterval> | null = null;
+
+      const startTimer = () => {
+        if (timer === null) timer = setInterval(reload, REFRESH_MS);
+      };
+      const stopTimer = () => {
+        if (timer !== null) {
+          clearInterval(timer);
+          timer = null;
+        }
+      };
+
+      // Immediate refresh on focus, then poll while foregrounded.
       reload();
-      const timer = setInterval(reload, REFRESH_MS);
-      return () => clearInterval(timer);
+      startTimer();
+
+      // useFocusEffect fires on NAVIGATION focus only — it does NOT re-run
+      // when the app returns from OS background while this tab is already
+      // focused. Without this listener the screen shows stale data until the
+      // user navigates away and back (or relaunches). On resume we reload
+      // immediately and resume polling; while backgrounded we pause the timer.
+      const sub = AppState.addEventListener('change', (state) => {
+        if (state === 'active') {
+          reload();
+          startTimer();
+        } else {
+          stopTimer();
+        }
+      });
+
+      return () => {
+        stopTimer();
+        sub.remove();
+      };
     }, [reload]),
   );
 

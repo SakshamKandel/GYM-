@@ -1,5 +1,5 @@
 import { StyleSheet } from 'react-native';
-import { colors, radius, type } from '@gym/ui-tokens';
+import { colors, radius, touch, type } from '@gym/ui-tokens';
 import { AppText } from './AppText';
 import { PressableScale } from './PressableScale';
 
@@ -19,7 +19,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.border,
     paddingHorizontal: 20,
-    height: 44,
+    height: touch.min,
     alignItems: 'center',
     justifyContent: 'center',
   },

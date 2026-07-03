@@ -70,6 +70,19 @@ export function directionIcon(
   return 'remove';
 }
 
+/** Trend arrow for a signed delta (0 → flat dash). Adherence-neutral. */
+export function deltaIcon(delta: number): 'trending-up' | 'trending-down' | 'remove' {
+  if (delta > 0) return 'trending-up';
+  if (delta < 0) return 'trending-down';
+  return 'remove';
+}
+
+/** "+0.3" / "−1.2" / "±0.0" — signed magnitude for delta captions. */
+export function signedDelta(delta: number, decimals = 1): string {
+  const sign = delta > 0 ? '+' : delta < 0 ? '−' : '±';
+  return `${sign}${Math.abs(delta).toFixed(decimals)}`;
+}
+
 // ── Measurements ──────────────────────────────────────────────
 
 export type MeasurementKey = 'waistCm' | 'chestCm' | 'armCm' | 'hipCm' | 'thighCm';
@@ -118,6 +131,17 @@ export function latestMeasurementValues(
 export function measurementFieldsLabel(entry: Measurement): string {
   const names = MEASUREMENT_FIELDS.filter((f) => entry[f.key] !== null).map((f) => f.label);
   return names.length > 0 ? names.join(' · ') : '—';
+}
+
+/**
+ * Chronological (oldest→newest) series for one measurement field, skipping
+ * the entries that didn't record it. Values in cm. Feeds the detail sheet.
+ */
+export function measurementSeries(entries: Measurement[], key: MeasurementKey): ChartPoint[] {
+  return entries
+    .filter((e) => e[key] !== null)
+    .map((e) => ({ date: e.date, value: e[key] as number }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /** Best (max) e1RM in a history series, null when empty. */

@@ -1,8 +1,8 @@
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import type { UnitPref } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
-import { AppText, enterUp, layoutSpring } from '../../../components/ui';
+import { AppText, enterUp, layoutSpring, PressableScale } from '../../../components/ui';
 import { ghostTarget } from '../logic';
 import type { SessionExercise } from '../session';
 import { SetRow } from './SetRow';
@@ -54,11 +54,12 @@ export function ExerciseSection({
 
   return (
     <View style={styles.root}>
-      <Pressable
+      <PressableScale
         accessibilityRole="button"
         accessibilityLabel={`${exercise.exerciseName}. ${loggedCount} of ${exercise.targetSets} sets logged. Tap to log this exercise.`}
         accessibilityState={{ selected: isCurrent }}
         onPress={onSelect}
+        pressScale={0.98}
         style={styles.header}
       >
         <View style={[styles.marker, !isCurrent && styles.markerOff]} />
@@ -70,7 +71,7 @@ export function ExerciseSection({
             {`${exercise.equipment ?? 'bodyweight'} · ${loggedCount}/${exercise.targetSets} sets`}
           </AppText>
         </View>
-      </Pressable>
+      </PressableScale>
       {Array.from({ length: rowCount }, (_, i) => {
         const setNo = i + 1;
         const logged = exercise.loggedSets[i] ?? null;

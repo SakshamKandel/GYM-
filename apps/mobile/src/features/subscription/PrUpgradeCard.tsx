@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, type Href } from 'expo-router';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import type { UnitPref } from '@gym/shared';
 import { displayWeight } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
@@ -32,6 +33,14 @@ interface Props {
   unit: UnitPref;
 }
 
+/** What Gold's adaptive engine does with a fresh PR — concrete, scannable
+ * value (mirrors the paywall's feature language) instead of one long line. */
+const GOLD_BENEFITS = [
+  'Predicts your next lift from this PR',
+  'Targets adapt to your weekly trend',
+  "Greece's plan levels up every week",
+] as const;
+
 const styles = StyleSheet.create({
   card: {
     borderWidth: 1.5,
@@ -50,6 +59,10 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
   },
   headText: { flex: 1, gap: 4 },
+  benefits: { alignSelf: 'stretch', gap: spacing.sm },
+  benefitRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  benefitIcon: { marginTop: 3 },
+  benefitText: { flex: 1, lineHeight: 24 },
   buttonRow: {
     alignSelf: 'stretch',
     flexDirection: 'row',
@@ -84,10 +97,21 @@ export function PrUpgradeCard({ topPr, unit }: Props) {
         </View>
       </View>
 
-      <AppText variant="body" color={colors.textDim}>
-        Gold predicts your next lift and adapts your targets to this progress —
-        Greece&apos;s plan levels up with every week you train.
-      </AppText>
+      <View style={styles.benefits}>
+        {GOLD_BENEFITS.map((benefit) => (
+          <View key={benefit} style={styles.benefitRow}>
+            <Ionicons
+              name="checkmark-circle"
+              size={18}
+              color={colors.textDim}
+              style={styles.benefitIcon}
+            />
+            <AppText color={colors.textDim} style={styles.benefitText}>
+              {benefit}
+            </AppText>
+          </View>
+        ))}
+      </View>
 
       <View style={styles.buttonRow}>
         <View style={styles.primary}>

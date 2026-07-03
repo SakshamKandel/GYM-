@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useLocalSearchParams } from 'expo-router';
-import { colors } from '@gym/ui-tokens';
+import { colors, spacing } from '@gym/ui-tokens';
+import { AppText, enterFade } from '../../components/ui';
 import { replacePath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
 
@@ -18,6 +20,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  center: { alignItems: 'center', gap: spacing.md },
 });
 
 export default function StartWorkoutScreen() {
@@ -37,7 +40,12 @@ export default function StartWorkoutScreen() {
 
   return (
     <View style={styles.root}>
-      <ActivityIndicator color={colors.accent} />
+      <Animated.View entering={enterFade(0)} style={styles.center}>
+        <ActivityIndicator color={colors.accent} />
+        <AppText variant="label" color={colors.textDim}>
+          Starting…
+        </AppText>
+      </Animated.View>
     </View>
   );
 }

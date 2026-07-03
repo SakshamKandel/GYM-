@@ -86,7 +86,7 @@ export function DayStrip({
             </AppText>
             <AppText
               variant="caption"
-              color={isToday ? colors.accent : isSelected ? colors.text : colors.textFaint}
+              color={isToday ? colors.accent : isSelected ? colors.text : colors.textDim}
             >
               {dayLabel(date).charAt(0) + dayLabel(date).slice(1).toLowerCase()}
             </AppText>

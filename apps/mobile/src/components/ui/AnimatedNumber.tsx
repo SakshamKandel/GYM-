@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { StyleProp, TextStyle } from 'react-native';
+import { useReducedMotion } from 'react-native-reanimated';
 import { AppText } from './AppText';
 
 /**
@@ -35,10 +36,17 @@ export function AnimatedNumber({
   const [shown, setShown] = useState(value);
   const fromRef = useRef(value);
   const rafRef = useRef<number | null>(null);
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     const from = fromRef.current;
     if (from === value) return;
+    // Reduced motion: land on the value immediately, no count-up.
+    if (reduceMotion) {
+      setShown(value);
+      fromRef.current = value;
+      return;
+    }
     const start = Date.now();
     const tick = () => {
       const t = Math.min(1, (Date.now() - start) / duration);
@@ -52,7 +60,7 @@ export function AnimatedNumber({
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       fromRef.current = value;
     };
-  }, [value, duration]);
+  }, [value, duration, reduceMotion]);
 
   const fixed = shown.toFixed(decimals);
   const text = grouped ? Number(fixed).toLocaleString('en-US', {

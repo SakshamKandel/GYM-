@@ -1,0 +1,112 @@
+import { StyleSheet, View } from 'react-native';
+import type { PlanWorkout } from '@gym/shared';
+import { colors, radius, spacing, type } from '@gym/ui-tokens';
+import { AppText, Button, Divider, SectionLabel, StatBlock } from '../../../components/ui';
+import { getExercise } from '../../../lib/exercises';
+import { estimateWorkoutMinutes } from '../logic';
+
+/**
+ * Peek at a plan workout before committing: a compact exercises · sets · time
+ * stat card, the full movement list (name + target sets × reps), and one
+ * primary "Start workout". Rendered inside <Sheet>, so all movement belongs to
+ * the sheet itself — the content here is passive and static.
+ */
+
+interface Props {
+  workout: PlanWorkout;
+  onStart: () => void;
+}
+
+const styles = StyleSheet.create({
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.lg,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
+  },
+  statCol: { flex: 1, minWidth: 0 },
+  exRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+    minHeight: 52,
+  },
+  numBlock: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  numText: { fontFamily: type.display, fontSize: 15, color: colors.textDim },
+  exText: { flex: 1, minWidth: 0 },
+  exNumbers: {
+    fontFamily: type.display,
+    fontSize: 18,
+    color: colors.text,
+    flexShrink: 0,
+  },
+  startBtn: { marginTop: spacing.lg },
+});
+
+export function WorkoutPreviewSheet({ workout, onStart }: Props) {
+  const totalSets = workout.exercises.reduce((n, e) => n + e.sets, 0);
+  const minutes = estimateWorkoutMinutes(workout);
+
+  return (
+    <View>
+      <View style={styles.statsRow}>
+        <StatBlock label="exercises" value={workout.exercises.length} align="center" style={styles.statCol} />
+        <StatBlock label="sets" value={totalSets} align="center" style={styles.statCol} />
+        <StatBlock label="est. min" value={`~${minutes}`} align="center" style={styles.statCol} />
+      </View>
+
+      <SectionLabel>Exercises</SectionLabel>
+      {workout.exercises.map((e, i) => {
+        const info = getExercise(e.exerciseId);
+        const meta = info ? `${info.muscleGroup} · ${info.equipment ?? 'bodyweight'}` : null;
+        return (
+          <View key={e.id}>
+            {i > 0 ? <Divider /> : null}
+            <View
+              style={styles.exRow}
+              accessible
+              accessibilityLabel={`${e.exerciseName}, ${e.sets} sets of ${e.repRange} reps`}
+            >
+              <View style={styles.numBlock}>
+                <AppText style={styles.numText} tabular>
+                  {i + 1}
+                </AppText>
+              </View>
+              <View style={styles.exText}>
+                <AppText variant="bodyBold" numberOfLines={1}>
+                  {e.exerciseName}
+                </AppText>
+                {meta ? (
+                  <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+                    {meta}
+                  </AppText>
+                ) : null}
+              </View>
+              <AppText style={styles.exNumbers} tabular numberOfLines={1}>
+                {`${e.sets} × ${e.repRange}`}
+              </AppText>
+            </View>
+          </View>
+        );
+      })}
+
+      <Button
+        label="Start workout"
+        onPress={onStart}
+        style={styles.startBtn}
+        accessibilityLabel={`Start ${workout.name}`}
+      />
+    </View>
+  );
+}

@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withDelay,
   withTiming,
@@ -46,14 +47,22 @@ const styles = StyleSheet.create({
 
 export function MacroBar({ label, current, target, unit = 'g', color, delay = 0 }: Props) {
   const pct = target > 0 ? Math.min(current / target, 1) : 0;
+  // Over target: keep the bar readable at 100% and state the overshoot plainly
+  // in dim text — adherence-neutral, never a shame colour.
+  const over = target > 0 ? Math.round(current - target) : 0;
 
   const width = useSharedValue(0);
+  const reduceMotion = useReducedMotion();
   useEffect(() => {
-    width.value = withDelay(
-      delay,
-      withTiming(pct, { duration: 550, easing: Easing.bezier(0.16, 1, 0.3, 1) }),
-    );
-  }, [pct, delay, width]);
+    // Same 500ms expo-out sweep as Ring, so the two data reveals feel like one
+    // vocabulary. Reduced motion: snap the fill straight to its width.
+    width.value = reduceMotion
+      ? pct
+      : withDelay(
+          delay,
+          withTiming(pct, { duration: 500, easing: Easing.bezier(0.16, 1, 0.3, 1) }),
+        );
+  }, [pct, delay, width, reduceMotion]);
 
   const fillStyle = useAnimatedStyle(() => ({
     width: `${width.value * 100}%`,
@@ -70,6 +79,11 @@ export function MacroBar({ label, current, target, unit = 'g', color, delay = 0 
             {Math.round(current)}
           </AppText>
           {` / ${target}${unit}`}
+          {over > 0 ? (
+            <AppText variant="caption" color={colors.textDim} tabular>
+              {`  +${over}`}
+            </AppText>
+          ) : null}
         </AppText>
       </View>
       <View style={styles.track}>

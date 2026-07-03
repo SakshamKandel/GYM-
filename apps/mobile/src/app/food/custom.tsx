@@ -3,16 +3,18 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import type { FoodItem } from '@gym/shared';
 import {
   AppText,
   AppTextInput,
   Button,
   enterDown,
+  enterFade,
   enterUp,
   PressableScale,
   Screen,
+  SectionLabel,
   Stepper,
 } from '../../components/ui';
 import { tapHaptic } from '../../lib/haptics';
@@ -57,6 +59,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   fieldInfo: { flexShrink: 1 },
+  fieldLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  dot: { width: 10, height: 10, borderRadius: 5 },
   mismatch: { marginTop: spacing.xs },
   // paddingBottom keeps the button off the screen edge when insets.bottom is 0 (web).
   pinned: { marginTop: 'auto', paddingTop: spacing.md, paddingBottom: spacing.md },
@@ -152,18 +156,27 @@ export default function CustomFoodScreen() {
               kcal per 100 g
             </AppText>
             {implied !== null ? (
-              <AppText variant="caption" color={colors.textFaint} style={styles.mismatch} tabular>
-                macros imply {implied} kcal
-              </AppText>
+              <Animated.View entering={enterFade(0)}>
+                <AppText variant="caption" color={colors.textFaint} style={styles.mismatch} tabular>
+                  macros imply {implied} kcal
+                </AppText>
+              </Animated.View>
             ) : null}
           </View>
           <Stepper value={kcal} onChange={setKcal} step={10} min={0} max={900} />
         </Animated.View>
 
+        <Animated.View entering={enterUp(2)}>
+          <SectionLabel>Macros</SectionLabel>
+        </Animated.View>
+
         {MACRO_FIELDS.map((field, i) => (
-          <Animated.View key={field.key} entering={enterUp(2 + i)} style={styles.fieldRow}>
+          <Animated.View key={field.key} entering={enterUp(3 + i)} style={styles.fieldRow}>
             <View style={styles.fieldInfo}>
-              <AppText variant="body">{field.label}</AppText>
+              <View style={styles.fieldLabelRow}>
+                <View style={[styles.dot, { backgroundColor: field.color }]} />
+                <AppText variant="body">{field.label}</AppText>
+              </View>
               <AppText variant="caption" color={colors.textDim}>
                 grams per 100 g
               </AppText>
@@ -178,7 +191,7 @@ export default function CustomFoodScreen() {
           </Animated.View>
         ))}
 
-        <Animated.View entering={enterUp(5)} style={styles.fieldRow}>
+        <Animated.View entering={enterUp(6)} style={styles.fieldRow}>
           <View style={styles.fieldInfo}>
             <AppText variant="body">Serving size</AppText>
             <AppText variant="caption" color={colors.textDim}>
@@ -196,7 +209,7 @@ export default function CustomFoodScreen() {
         </Animated.View>
       </ScrollView>
 
-      <Animated.View entering={enterUp(6)} style={styles.pinned}>
+      <Animated.View entering={enterUp(7)} style={styles.pinned}>
         <Button
           label="Save food"
           onPress={() => void save()}

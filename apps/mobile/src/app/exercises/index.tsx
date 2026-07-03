@@ -14,7 +14,10 @@ import {
   Chip,
   Divider,
   enterDown,
+  enterFade,
   enterUp,
+  IconChip,
+  PressableScale,
 } from '../../components/ui';
 import { pushPath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
@@ -100,7 +103,13 @@ const styles = StyleSheet.create({
   },
   rowText: { flex: 1 },
   separatorPad: { paddingHorizontal: 20 },
-  emptyWrap: { alignItems: 'center', paddingTop: spacing.xxl },
+  emptyWrap: {
+    alignItems: 'center',
+    paddingTop: spacing.xxl,
+    paddingHorizontal: spacing.xl,
+    gap: spacing.sm,
+  },
+  emptyTitle: { marginTop: spacing.sm },
 });
 
 /** Hairline between rows, inset to the content gutters and width-capped so it
@@ -193,14 +202,14 @@ export default function ExerciseLibraryScreen() {
     <View style={[styles.root, { paddingTop: insets.top + TOP_AIR }]}>
       <View style={[styles.contentCap, styles.header]}>
         <Animated.View entering={enterDown(0)} style={styles.topRow}>
-          <Pressable
+          <PressableScale
             accessibilityRole="button"
             accessibilityLabel="Go back"
             onPress={() => router.back()}
             style={styles.backBtn}
           >
             <Ionicons name="chevron-back" size={22} color={colors.text} />
-          </Pressable>
+          </PressableScale>
           <View>
             <AppText variant="heading">{selectMode ? 'Add exercise' : 'Exercises'}</AppText>
           </View>
@@ -263,11 +272,15 @@ export default function ExerciseLibraryScreen() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}
           ListEmptyComponent={
-            <View style={styles.emptyWrap}>
-              <AppText variant="body" color={colors.textDim}>
-                No exercises match.
+            <Animated.View entering={enterFade(0)} style={styles.emptyWrap}>
+              <IconChip icon="search" color={colors.surface} iconColor={colors.textFaint} size={52} />
+              <AppText variant="bodyBold" center style={styles.emptyTitle}>
+                No matches
               </AppText>
-            </View>
+              <AppText variant="body" color={colors.textDim} center>
+                Try a different name or muscle group.
+              </AppText>
+            </Animated.View>
           }
         />
       </Animated.View>

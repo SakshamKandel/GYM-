@@ -2,6 +2,13 @@ import { useCallback, useEffect, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Image } from 'expo-image';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText, Button } from '../../../components/ui';
 import {
@@ -53,15 +60,49 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: radius.full,
     backgroundColor: colors.surfaceRaised,
+    overflow: 'hidden',
   },
-  pillDone: { backgroundColor: colors.accent },
+  pillFill: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: radius.full,
+    backgroundColor: colors.accent,
+  },
 });
+
+const EASE_OUT = Easing.bezier(0.25, 0.8, 0.4, 1);
 
 /** Coach line that escalates as the user closes in on the goal. */
 function coachLine(done: number): string {
   if (done <= 0) return "Let's get the first one in.";
   if (done === 1) return 'Nice start — two more to make it stick.';
   return "One more and it's a habit.";
+}
+
+/**
+ * One progress segment. The accent fill fades in when the segment is earned
+ * (an opacity fade, so it obeys the motion philosophy for passive content) and
+ * lands instantly under reduced motion.
+ */
+function QuestPill({ done }: { done: boolean }) {
+  const reduceMotion = useReducedMotion();
+  const fill = useSharedValue(done ? 1 : 0);
+  useEffect(() => {
+    if (!done) {
+      fill.value = 0;
+      return;
+    }
+    fill.value = reduceMotion ? 1 : withTiming(1, { duration: 320, easing: EASE_OUT });
+  }, [done, reduceMotion, fill]);
+  const fillStyle = useAnimatedStyle(() => ({ opacity: fill.value }));
+  return (
+    <View style={styles.pill}>
+      <Animated.View style={[styles.pillFill, fillStyle]} />
+    </View>
+  );
 }
 
 export function FirstWorkoutsQuest({ progress }: { progress: QuestProgress }) {
@@ -125,7 +166,7 @@ export function FirstWorkoutsQuest({ progress }: { progress: QuestProgress }) {
 
       <View style={styles.pills} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
         {Array.from({ length: goal }, (_, i) => (
-          <View key={i} style={[styles.pill, i < done && styles.pillDone]} />
+          <QuestPill key={i} done={i < done} />
         ))}
       </View>
 

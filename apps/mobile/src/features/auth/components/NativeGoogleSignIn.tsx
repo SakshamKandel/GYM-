@@ -1,13 +1,14 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import {
   GoogleSignin,
   isErrorWithCode,
   statusCodes,
 } from '@react-native-google-signin/google-signin';
 import { colors } from '@gym/ui-tokens';
-import { AppText } from '../../../components/ui';
+import { AppText, enterFade } from '../../../components/ui';
 import { toApiError } from '../../../lib/api/client';
 import { successHaptic, warnHaptic } from '../../../lib/haptics';
 import { useAuth } from '../../../state/auth';
@@ -83,9 +84,11 @@ export function NativeGoogleSignIn({ webClientId }: { webClientId: string }) {
     <View style={googleStyles.wrap}>
       <GooglePill onPress={() => void press()} disabled={false} busy={busy} />
       {error ? (
-        <AppText variant="caption" color={colors.error}>
-          {error}
-        </AppText>
+        <Animated.View entering={enterFade()}>
+          <AppText variant="caption" color={colors.error}>
+            {error}
+          </AppText>
+        </Animated.View>
       ) : null}
     </View>
   );

@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
-import type { PlanWorkout, Streak } from '@gym/shared';
+import type { PlanWorkout, PrRecord, Streak } from '@gym/shared';
 import { addDays, todayIso } from '../../lib/dates';
 import { getRepo } from '../../lib/repo';
 import { getNextPlanWorkout } from '../../lib/planProgress';
@@ -8,9 +8,10 @@ import { getPlan } from '../../lib/seed/plans';
 import { useQuest } from '../../state/quest';
 import {
   countFinished,
-  prCountSince,
   questProgress,
+  volumeByDay,
   volumeOfSets,
+  weekDays,
   weekStartIso,
   type QuestProgress,
 } from './logic';
@@ -29,6 +30,21 @@ export interface LastSession {
   sets: number;
 }
 
+/** One finished session in the current week (powers the Sessions detail sheet). */
+export interface SessionSummary {
+  id: string;
+  name: string;
+  date: string;
+  volumeKg: number;
+  sets: number;
+}
+
+/** Volume for a single day of the current week (powers the Volume detail sheet). */
+export interface DayVolume {
+  date: string;
+  volumeKg: number;
+}
+
 export interface HomeData {
   streak: Streak;
   planName: string | null;
@@ -39,6 +55,12 @@ export interface HomeData {
   prCount: number;
   kcalEaten: number;
   lastSession: LastSession | null;
+  /** Finished sessions this week, most recent first. */
+  weekSessionList: SessionSummary[];
+  /** This week's volume broken down by day (Monday → today). */
+  weekVolumeByDay: DayVolume[];
+  /** PRs set in the last 30 days (the records behind `prCount`), most recent first. */
+  recentPrs: PrRecord[];
 }
 
 export function useHomeData(planId: string | null): HomeData | null {
@@ -86,6 +108,25 @@ export function useHomeData(planId: string | null): HomeData | null {
           };
         }
 
+        // Per-session breakdown for the week — powers the Sessions + Volume
+        // sheets from data we already have on hand (getWorkoutsBetween returns
+        // finished sessions only, so no extra filtering is needed).
+        const weekSetsLists = await Promise.all(
+          weekWorkouts.map((w) => repo.getSetsForWorkout(w.id)),
+        );
+        const weekSessionList: SessionSummary[] = weekWorkouts.map((w, i) => {
+          const sets = weekSetsLists[i] ?? [];
+          return {
+            id: w.id,
+            name: w.name,
+            date: w.date,
+            volumeKg: volumeOfSets(sets),
+            sets: sets.length,
+          };
+        });
+        const weekVolumeByDay = volumeByDay(weekSessionList, weekDays(monday, today));
+        const recentPrs = prs.filter((p) => p.date >= addDays(today, -30));
+
         if (!mounted) return;
         setData({
           streak,
@@ -94,9 +135,12 @@ export function useHomeData(planId: string | null): HomeData | null {
           doneToday,
           weekVolumeKg,
           weekSessions: countFinished(weekWorkouts),
-          prCount: prCountSince(prs, addDays(today, -30)),
+          prCount: recentPrs.length,
           kcalEaten: Math.round(kcalByDate[today] ?? 0),
           lastSession,
+          weekSessionList,
+          weekVolumeByDay,
+          recentPrs,
         });
       })();
       return () => {

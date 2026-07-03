@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedProps,
+  useReducedMotion,
   useSharedValue,
   withDelay,
   withTiming,
@@ -42,12 +43,16 @@ export function Ring({
   const c = 2 * Math.PI * r;
 
   const animated = useSharedValue(0);
+  const reduceMotion = useReducedMotion();
   useEffect(() => {
-    animated.value = withDelay(
-      delay,
-      withTiming(clamped, { duration: 500, easing: Easing.bezier(0.16, 1, 0.3, 1) }),
-    );
-  }, [clamped, delay, animated]);
+    // Reduced motion: land on the final arc with no sweep.
+    animated.value = reduceMotion
+      ? clamped
+      : withDelay(
+          delay,
+          withTiming(clamped, { duration: 500, easing: Easing.bezier(0.16, 1, 0.3, 1) }),
+        );
+  }, [clamped, delay, animated, reduceMotion]);
 
   const animatedProps = useAnimatedProps(() => ({
     strokeDashoffset: c * (1 - animated.value),

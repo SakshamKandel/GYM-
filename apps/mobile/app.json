@@ -53,6 +53,18 @@
         {
           "color": "#FF3B30"
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "GYM Tracker uses the camera to scan food barcodes."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "GYM Tracker needs photo library access so coaches can upload exercise demo videos."
+        }
       ]
     ],
     "experiments": {

@@ -1,0 +1,173 @@
+import { useRef } from 'react';
+import { StyleSheet, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import type { Tier } from '@gym/shared';
+import { colors, radius, spacing, type } from '@gym/ui-tokens';
+import { AppText, Divider, SectionLabel, Sheet, Tag } from '../../components/ui';
+import { formatNprAmount, GM_TIERS, type GmTier } from './logic';
+
+/**
+ * Tap-to-reveal detail for a paywall tier. Where the card only lists what a
+ * tier ADDS ("Everything in Silver, plus…"), this sheet resolves the FULL
+ * cumulative "everything you get" checklist for the plan, alongside its price
+ * and trial status. Purely informational — the card keeps the CTAs.
+ *
+ * `detail` is controlled: null closes the sheet. The last non-null payload is
+ * retained so the content stays put through the exit animation.
+ */
+
+export interface TierDetail {
+  gmTier: GmTier;
+  isCurrent: boolean;
+  isRecommended: boolean;
+  /** Precomputed trial line (parent owns the buddy-trial coupling), or null. */
+  trialLine: string | null;
+}
+
+/** Cumulative feature set for a tier: every plan up to and including it, with
+ * the "Everything in X" pointer lines dropped so the list reads as real perks. */
+function resolveFeatures(tier: Tier): string[] {
+  const idx = GM_TIERS.findIndex((t) => t.tier === tier);
+  if (idx < 0) return [];
+  return GM_TIERS.slice(0, idx + 1)
+    .flatMap((t) => t.features)
+    .filter((f) => !/^everything in/i.test(f));
+}
+
+export function TierDetailSheet({
+  detail,
+  onClose,
+}: {
+  detail: TierDetail | null;
+  onClose: () => void;
+}) {
+  // Retain the last payload so the sheet's exit animation still has content to
+  // render after `detail` flips to null. Computed during render (no empty frame).
+  const lastRef = useRef<TierDetail | null>(detail);
+  if (detail) lastRef.current = detail;
+  const shown = detail ?? lastRef.current;
+
+  return (
+    <Sheet visible={detail !== null} onClose={onClose} title={shown?.gmTier.name}>
+      {shown ? <Body detail={shown} /> : null}
+    </Sheet>
+  );
+}
+
+function Body({ detail }: { detail: TierDetail }) {
+  const { gmTier, isCurrent, isRecommended, trialLine } = detail;
+  const isFree = gmTier.pricePerMonthNpr <= 0;
+  const features = resolveFeatures(gmTier.tier);
+
+  return (
+    <View>
+      {isRecommended || isCurrent ? (
+        <View style={styles.tags}>
+          {isRecommended ? <Tag label="Most popular" variant="filled" /> : null}
+          {isCurrent ? <Tag label="Current" variant="dim" /> : null}
+        </View>
+      ) : null}
+
+      <View style={styles.priceRow}>
+        {isFree ? (
+          <AppText style={styles.priceNumber} numberOfLines={1}>
+            Free
+          </AppText>
+        ) : (
+          <>
+            <AppText variant="caption" color={colors.textDim}>
+              NPR
+            </AppText>
+            <AppText
+              style={styles.priceNumber}
+              tabular
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
+            >
+              {formatNprAmount(gmTier.pricePerMonthNpr)}
+            </AppText>
+            <AppText variant="caption" color={colors.textDim}>
+              /mo
+            </AppText>
+          </>
+        )}
+      </View>
+
+      <AppText variant="body" color={colors.textDim} style={styles.tagline}>
+        {gmTier.tagline}
+      </AppText>
+
+      {trialLine ? (
+        <View style={styles.trialPill} accessible accessibilityLabel={trialLine}>
+          <Ionicons name="time-outline" size={16} color={colors.textDim} />
+          <AppText variant="caption" color={colors.textDim} style={styles.trialText}>
+            {trialLine}
+          </AppText>
+        </View>
+      ) : null}
+
+      <View style={styles.dividerWrap}>
+        <Divider />
+      </View>
+
+      <SectionLabel>Everything you get</SectionLabel>
+      <View style={styles.features}>
+        {features.map((feature) => (
+          <View key={feature} style={styles.featureRow}>
+            <Ionicons
+              name="checkmark-circle"
+              size={18}
+              color={colors.accent}
+              style={styles.featureIcon}
+            />
+            <AppText style={styles.featureText}>{feature}</AppText>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: spacing.xs,
+    minWidth: 0,
+  },
+  priceNumber: {
+    fontFamily: type.display,
+    fontSize: 34,
+    lineHeight: 40,
+    letterSpacing: 0.5,
+    color: colors.text,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  tags: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  tagline: { marginTop: spacing.sm },
+  trialPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    alignSelf: 'flex-start',
+    marginTop: spacing.md,
+    minHeight: 32,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+  },
+  trialText: { flexShrink: 1 },
+  dividerWrap: { marginTop: spacing.xl },
+  features: { gap: spacing.md },
+  featureRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
+  featureIcon: { marginTop: 3 },
+  featureText: { flex: 1, lineHeight: 24 },
+});

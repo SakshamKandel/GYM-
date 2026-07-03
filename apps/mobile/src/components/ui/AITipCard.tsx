@@ -5,6 +5,7 @@ import Animated, {
   cancelAnimation,
   Easing,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withDelay,
   withRepeat,
@@ -76,7 +77,13 @@ const styles = StyleSheet.create({
 /** One pulsing dot of the "thinking" indicator — a gentle opacity wave. */
 function ThinkingDot({ index }: { index: number }) {
   const pulse = useSharedValue(0.3);
+  const reduceMotion = useReducedMotion();
   useEffect(() => {
+    // Reduced motion: hold a steady dot rather than pulsing forever.
+    if (reduceMotion) {
+      pulse.value = 0.7;
+      return;
+    }
     pulse.value = withDelay(
       index * 160,
       withRepeat(
@@ -88,7 +95,7 @@ function ThinkingDot({ index }: { index: number }) {
       ),
     );
     return () => cancelAnimation(pulse);
-  }, [index, pulse]);
+  }, [index, pulse, reduceMotion]);
   const style = useAnimatedStyle(() => ({ opacity: pulse.value }));
   return <Animated.View style={[styles.dot, style]} />;
 }
@@ -126,10 +133,11 @@ export function AITipCard({ title, tip, loading, error, onRefresh }: Props) {
         accessibilityRole="button"
         accessibilityLabel="Refresh tip"
         onPress={onRefresh}
+        hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
         style={styles.refreshRow}
       >
-        <Ionicons name="refresh" size={13} color={colors.textFaint} />
-        <AppText variant="caption" color={colors.textFaint}>
+        <Ionicons name="refresh" size={13} color={colors.textDim} />
+        <AppText variant="caption" color={colors.textDim}>
           New tip
         </AppText>
       </PressableScale>

@@ -9,7 +9,7 @@ import {
 import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import type { FoodItem } from '@gym/shared';
 import {
   AppText,
@@ -18,6 +18,7 @@ import {
   enterDown,
   enterFade,
   enterUp,
+  IconChip,
   layoutSpring,
   PressableScale,
   Screen,
@@ -46,13 +47,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  inputWrap: { flex: 1, justifyContent: 'center' },
   input: {
-    flex: 1,
     minHeight: touch.min,
     height: touch.min,
     borderRadius: radius.full,
-    paddingHorizontal: spacing.lg,
+    paddingLeft: spacing.lg,
+    // Room for the clear button so long queries never run under it.
+    paddingRight: 44,
   },
+  clearWrap: { position: 'absolute', right: 4, top: 0, bottom: 0, width: 40 },
+  clearBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   list: { flex: 1 },
   listContent: { paddingBottom: spacing.xxl },
   statusRow: {
@@ -65,7 +70,7 @@ const styles = StyleSheet.create({
   ghostRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: spacing.md,
     minHeight: touch.min,
   },
 });
@@ -101,7 +106,7 @@ export default function FoodSearchScreen() {
       onPress={() => router.push(customHref(meal, date))}
       style={styles.ghostRow}
     >
-      <Ionicons name="add" size={20} color={colors.textDim} />
+      <IconChip icon="add" />
       <AppText variant="bodyBold" color={colors.textDim}>
         Create custom food
       </AppText>
@@ -119,16 +124,34 @@ export default function FoodSearchScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppTextInput
-          autoFocus
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Search foods…"
-          returnKeyType="search"
-          autoCorrect={false}
-          style={styles.input}
-          accessibilityLabel="Search foods"
-        />
+        <View style={styles.inputWrap}>
+          <AppTextInput
+            autoFocus
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search foods…"
+            returnKeyType="search"
+            autoCorrect={false}
+            style={styles.input}
+            accessibilityLabel="Search foods"
+          />
+          {query.length > 0 ? (
+            <Animated.View entering={enterFade(0)} style={styles.clearWrap}>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="Clear search"
+                hitSlop={{ top: 4, bottom: 4, left: 6, right: 6 }}
+                onPress={() => {
+                  tapHaptic();
+                  setQuery('');
+                }}
+                style={styles.clearBtn}
+              >
+                <Ionicons name="close-circle" size={20} color={colors.textFaint} />
+              </PressableScale>
+            </Animated.View>
+          ) : null}
+        </View>
         {Platform.OS !== 'web' ? (
           <PressableScale
             accessibilityRole="button"

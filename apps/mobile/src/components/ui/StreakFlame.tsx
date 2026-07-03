@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Platform, View } from 'react-native';
 import LottieView from 'lottie-react-native';
+import { useReducedMotion } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '@gym/ui-tokens';
 
@@ -17,10 +18,13 @@ interface Props {
 
 export function StreakFlame({ active, size = 28 }: Props) {
   const ref = useRef<LottieView>(null);
+  const reduceMotion = useReducedMotion();
+  // Reduced motion: keep the flame lit but hold it on a single frame.
+  const animate = active && !reduceMotion;
 
   useEffect(() => {
-    if (!active) ref.current?.pause();
-  }, [active]);
+    if (!animate) ref.current?.pause();
+  }, [animate]);
 
   // lottie-react-native web support needs the DOM renderer; guard defensively.
   if (Platform.OS === 'web' && typeof document === 'undefined') {
@@ -38,9 +42,9 @@ export function StreakFlame({ active, size = 28 }: Props) {
       <LottieView
         ref={ref}
         source={require('../../../assets/animations/streak.json')}
-        autoPlay={active}
-        loop={active}
-        progress={active ? undefined : 0.5}
+        autoPlay={animate}
+        loop={animate}
+        progress={animate ? undefined : 0.5}
         style={{ width: size, height: size }}
       />
     </View>

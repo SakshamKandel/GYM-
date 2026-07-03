@@ -1,16 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { displayWeight, inputToKg, unitLabel } from '@gym/shared';
 import { spacing } from '@gym/ui-tokens';
 import { AppText, Button, enterDown, enterUp, Screen, Stepper } from '../../components/ui';
 import { posterDate, todayIso } from '../../lib/dates';
-import { logHaptic } from '../../lib/haptics';
+import { successHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
 import { getRepo } from '../../lib/repo';
 import { useProfile } from '../../state/profile';
 import { BackHeader } from '../../features/body/components/BackHeader';
+import { SaveConfirmation } from '../../features/body/components/SaveConfirmation';
+
+/** How long the "Saved" affirmation shows before the screen pops. */
+const SAVE_CONFIRM_MS = 520;
 
 /**
  * One weigh-in per day (upsert). Stepper, not keyboard — prefilled with the
@@ -30,6 +34,13 @@ export default function LogWeightScreen() {
   const [value, setValue] = useState<number | null>(null);
   const [hasToday, setHasToday] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  // Clear the auto-pop timer if we leave first (hardware/swipe back) so it can't
+  // fire router.back() on an already-popped screen and pop one screen too many.
+  const popTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (popTimer.current) clearTimeout(popTimer.current);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -49,17 +60,18 @@ export default function LogWeightScreen() {
   }, []);
 
   async function save(): Promise<void> {
-    if (value === null || saving) return;
+    if (value === null || saving || saved) return;
     setSaving(true);
     const repo = await getRepo();
     await repo.upsertWeight({ id: uid(), date: todayIso(), kg: inputToKg(value, unitPref) });
-    logHaptic();
-    router.back();
+    successHaptic();
+    setSaved(true);
+    popTimer.current = setTimeout(() => router.back(), SAVE_CONFIRM_MS);
   }
 
   return (
     <Screen>
-      <BackHeader />
+      {saved ? null : <BackHeader />}
       <Animated.View entering={enterDown(1)} style={styles.headingWrap}>
         <AppText variant="label">{posterDate()}</AppText>
         <AppText variant="heading">Body weight</AppText>
@@ -78,17 +90,25 @@ export default function LogWeightScreen() {
             big
           />
         ) : null}
-        {hasToday ? <AppText variant="caption" center>Updates today's entry</AppText> : null}
+        {hasToday && !saved ? (
+          <AppText variant="caption" center>Updates today's entry</AppText>
+        ) : null}
       </Animated.View>
 
       <Animated.View entering={enterUp(2)}>
-        <Button
-          label="Save"
-          onPress={() => void save()}
-          loading={saving}
-          disabled={value === null}
-          style={styles.save}
-        />
+        {saved ? (
+          <View style={styles.save}>
+            <SaveConfirmation />
+          </View>
+        ) : (
+          <Button
+            label="Save"
+            onPress={() => void save()}
+            loading={saving}
+            disabled={value === null}
+            style={styles.save}
+          />
+        )}
       </Animated.View>
     </Screen>
   );

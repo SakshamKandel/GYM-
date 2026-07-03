@@ -5,16 +5,19 @@ import {
   KeyboardAvoidingView,
   type ListRenderItem,
   Platform,
-  Pressable,
   StyleSheet,
+  type TextInput,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
+import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
-import { AppText, AppTextInput } from '../../../components/ui';
+import { AppText, AppTextInput, enterUp, PressableScale } from '../../../components/ui';
+import { addDays, posterDate, toIsoDate, todayIso } from '../../../lib/dates';
 import { successHaptic } from '../../../lib/haptics';
 import type { CoachMessage, CoachThreadKind } from '../../../lib/api/client';
-import { useCoachThread } from '../useCoachThread';
+import { isTypingMessage, useCoachThread } from '../useCoachThread';
 import { MessageBubble } from './MessageBubble';
 
 /**
@@ -22,7 +25,13 @@ import { MessageBubble } from './MessageBubble';
  * Crash-safe and offline-tolerant — the hook keeps the last-known thread and
  * a failed load shows a quiet retry row, never a blocking error screen.
  * Optimistic send; successHaptic fires only when a message actually posts.
+ *
+ * Messages are grouped by sender + day, fade in quietly (never slide), and the
+ * empty state greets with the Newie mascot plus optional starter prompts that
+ * pre-fill the composer.
  */
+
+const NEWIE = require('../../../../assets/images/newie.png');
 
 interface Props {
   kind: CoachThreadKind;
@@ -31,18 +40,69 @@ interface Props {
   emptyBody: string;
   /** Placeholder for the input. */
   placeholder: string;
+  /** Optional tap-to-fill prompts shown in the empty state. */
+  starters?: string[];
 }
 
 const MAX_LEN = 2000;
+
+/** Same local calendar day? Used for grouping and day dividers. */
+function sameLocalDay(a: string, b: string): boolean {
+  return toIsoDate(new Date(a)) === toIsoDate(new Date(b));
+}
+
+/** "Today" / "Yesterday" / "THU, JUL 3" for the day divider. */
+function dividerLabel(iso: string): string {
+  const local = toIsoDate(new Date(iso));
+  const today = todayIso();
+  if (local === today) return 'Today';
+  if (local === addDays(today, -1)) return 'Yesterday';
+  return posterDate(local);
+}
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   listContent: {
     paddingVertical: spacing.md,
-    gap: 2,
     flexGrow: 1,
   },
-  centre: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.sm, padding: spacing.xl },
+  centre: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    padding: spacing.xl,
+  },
+  emptyAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    marginBottom: spacing.sm,
+  },
+  starters: {
+    alignSelf: 'stretch',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+  },
+  starter: {
+    minHeight: touch.min,
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  dayDivider: {
+    alignSelf: 'center',
+    marginVertical: spacing.md,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+  },
   staleRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -71,10 +131,21 @@ const styles = StyleSheet.create({
   sendBtnDisabled: { opacity: 0.4 },
 });
 
-export function CoachThread({ kind, emptyTitle, emptyBody, placeholder }: Props) {
+function DayDivider({ iso }: { iso: string }) {
+  return (
+    <View style={styles.dayDivider} accessibilityRole="header">
+      <AppText variant="label" color={colors.textDim}>
+        {dividerLabel(iso)}
+      </AppText>
+    </View>
+  );
+}
+
+export function CoachThread({ kind, emptyTitle, emptyBody, placeholder, starters }: Props) {
   const { messages, loading, stale, sending, reload, send, sendError } = useCoachThread(kind);
   const [draft, setDraft] = useState('');
   const listRef = useRef<FlatList<CoachMessage>>(null);
+  const inputRef = useRef<TextInput>(null);
 
   // Keep the newest message in view as the thread grows or the keyboard opens.
   const scrollToEnd = useCallback(() => {
@@ -97,9 +168,34 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder }: Props)
     })();
   }, [draft, sending, send]);
 
+  const applyStarter = useCallback((text: string) => {
+    setDraft(text);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, []);
+
   const renderItem = useCallback<ListRenderItem<CoachMessage>>(
-    ({ item }) => <MessageBubble message={item} />,
-    [],
+    ({ item, index }) => {
+      const prev = index > 0 ? messages[index - 1] : undefined;
+      const next = index < messages.length - 1 ? messages[index + 1] : undefined;
+      const newDay = !prev || !sameLocalDay(prev.createdAt, item.createdAt);
+      const firstInGroup = newDay || prev === undefined || prev.sender !== item.sender;
+      const lastInGroup =
+        !next || !sameLocalDay(next.createdAt, item.createdAt) || next.sender !== item.sender;
+
+      return (
+        <Animated.View entering={enterUp()}>
+          {newDay ? <DayDivider iso={item.createdAt} /> : null}
+          <MessageBubble
+            message={item}
+            firstInGroup={firstInGroup}
+            lastInGroup={lastInGroup}
+            showAvatar={item.sender === 'coach' && lastInGroup}
+            typing={isTypingMessage(item)}
+          />
+        </Animated.View>
+      );
+    },
+    [messages],
   );
 
   const showEmpty = !loading && messages.length === 0;
@@ -115,12 +211,30 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder }: Props)
         </View>
       ) : showEmpty ? (
         <View style={styles.centre}>
+          <Image source={NEWIE} style={styles.emptyAvatar} contentFit="cover" contentPosition="top" />
           <AppText variant="title" center>
             {emptyTitle}
           </AppText>
           <AppText variant="caption" center>
             {emptyBody}
           </AppText>
+          {starters && starters.length > 0 ? (
+            <View style={styles.starters}>
+              {starters.map((s) => (
+                <PressableScale
+                  key={s}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Start with: ${s}`}
+                  onPress={() => applyStarter(s)}
+                  style={styles.starter}
+                >
+                  <AppText color={colors.text} numberOfLines={2}>
+                    {s}
+                  </AppText>
+                </PressableScale>
+              ))}
+            </View>
+          ) : null}
         </View>
       ) : (
         <FlatList
@@ -134,7 +248,7 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder }: Props)
           onContentSizeChange={scrollToEnd}
           ListHeaderComponent={
             stale ? (
-              <Pressable
+              <PressableScale
                 accessibilityRole="button"
                 accessibilityLabel="Retry loading messages"
                 onPress={reload}
@@ -142,7 +256,7 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder }: Props)
               >
                 <Ionicons name="cloud-offline-outline" size={14} color={colors.textDim} />
                 <AppText variant="caption">Showing saved messages · tap to retry</AppText>
-              </Pressable>
+              </PressableScale>
             ) : null
           }
         />
@@ -160,6 +274,7 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder }: Props)
 
       <View style={styles.inputBar}>
         <AppTextInput
+          ref={inputRef}
           style={styles.input}
           value={draft}
           onChangeText={setDraft}
@@ -169,7 +284,7 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder }: Props)
           onFocus={scrollToEnd}
           accessibilityLabel="Message"
         />
-        <Pressable
+        <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Send message"
           disabled={!canSend}
@@ -181,7 +296,7 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder }: Props)
           ) : (
             <Ionicons name="arrow-up" size={22} color={colors.onAccent} />
           )}
-        </Pressable>
+        </PressableScale>
       </View>
     </KeyboardAvoidingView>
   );

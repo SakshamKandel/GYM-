@@ -1,16 +1,30 @@
+import { useState } from 'react';
 import { router } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { unitLabel } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
-import { AITipCard, AnimatedNumber, AppText, Button, enterUp, HeroCard } from '../../../components/ui';
+import {
+  AITipCard,
+  AnimatedNumber,
+  AppText,
+  Button,
+  enterUp,
+  HeroCard,
+  PressableScale,
+  Sheet,
+} from '../../../components/ui';
 import { useAiTip } from '../../../lib/ai/useAiTip';
 import { useProfile } from '../../../state/profile';
 import { useWeights } from '../hooks';
 import { directionIcon, rateLabel, toHref, weightChartData, weightHeadline } from '../logic';
 import { GoalProjectionCard } from './GoalProjectionCard';
 import { WeightChart } from './WeightChart';
+import { WeightHistorySheet } from './WeightHistorySheet';
+
+/** Days shown in the trend window — matches weightChartData's default. */
+const WINDOW_DAYS = 30;
 
 /**
  * Trend-first weight: the hero is the SMOOTHED trend, not this morning's
@@ -33,6 +47,12 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: spacing.md,
   },
+  chartHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
   cta: { marginTop: spacing.xl },
   tipCard: { marginTop: spacing.lg },
 });
@@ -52,6 +72,7 @@ export function WeightSection() {
   const { raw, trend } = weightChartData(list, unitPref);
   const headline = weightHeadline(list, unitPref);
   const unit = unitLabel(unitPref);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const { state: tipState, refresh } = useAiTip(() => {
     const trendVal = headline.trendValue;
@@ -104,8 +125,26 @@ export function WeightSection() {
         </HeroCard>
       </Animated.View>
 
-      <Animated.View entering={enterUp(1)} style={styles.chartCard}>
-        <WeightChart raw={raw} trend={trend} height={200} emptyLabel="Log your first weigh-in" />
+      <Animated.View entering={enterUp(1)}>
+        {raw.length > 0 ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="View weight history"
+            accessibilityHint="Opens recent weigh-ins and the change over time"
+            onPress={() => setHistoryOpen(true)}
+            style={styles.chartCard}
+          >
+            <View style={styles.chartHeader}>
+              <AppText variant="label">Last {WINDOW_DAYS} days</AppText>
+              <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+            </View>
+            <WeightChart raw={raw} trend={trend} height={200} emptyLabel="Log your first weigh-in" />
+          </PressableScale>
+        ) : (
+          <View style={styles.chartCard}>
+            <WeightChart raw={raw} trend={trend} height={200} emptyLabel="Log your first weigh-in" />
+          </View>
+        )}
       </Animated.View>
 
       <Animated.View entering={enterUp(2)}>
@@ -132,6 +171,10 @@ export function WeightSection() {
           style={styles.cta}
         />
       </Animated.View>
+
+      <Sheet visible={historyOpen} onClose={() => setHistoryOpen(false)} title="Weight history">
+        <WeightHistorySheet points={raw} unit={unit} windowDays={WINDOW_DAYS} />
+      </Sheet>
     </View>
   );
 }

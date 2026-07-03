@@ -78,6 +78,11 @@ export default function CoachChatScreen() {
         emptyTitle="Say hello to Greece"
         emptyBody="Ask about your training, form, or nutrition — Greece reviews these personally and replies within 24h."
         placeholder="Message Greece…"
+        starters={[
+          "How's my training looking?",
+          'Any tips for my squat form?',
+          'What should I eat post-workout?',
+        ]}
       />
     </Screen>
   );
