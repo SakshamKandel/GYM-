@@ -20,7 +20,11 @@
         "backgroundColor": "#000000",
         "foregroundImage": "./assets/images/android-icon-foreground.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -70,6 +74,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "688fd373-aa41-4662-b5aa-eae6ec6e0dda"
+      }
+    },
+    "owner": "kurlybrains"
   }
 }
