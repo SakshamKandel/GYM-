@@ -42,10 +42,15 @@ export function WeightSection() {
   const goalType = useProfile((s) => s.goalType);
   const targetWeightKg = useProfile((s) => s.targetWeightKg);
   const weights = useWeights();
-  if (weights === null) return null;
 
-  const { raw, trend } = weightChartData(weights, unitPref);
-  const headline = weightHeadline(weights, unitPref);
+  // Derive from an empty list while weights are still loading (null) so EVERY
+  // hook below — including useAiTip — runs on every render. (Calling a hook
+  // after an early `return null` is a Rules-of-Hooks violation and crashes the
+  // Progress tab the moment weights load.) The real early return happens after
+  // all hooks, below.
+  const list = weights ?? [];
+  const { raw, trend } = weightChartData(list, unitPref);
+  const headline = weightHeadline(list, unitPref);
   const unit = unitLabel(unitPref);
 
   const { state: tipState, refresh } = useAiTip(() => {
@@ -69,6 +74,9 @@ export function WeightSection() {
       },
     ];
   }, [headline.trendValue, headline.summary.ratePerWeekKg, goalType, targetWeightKg, unitPref]);
+
+  // Safe now: all hooks above ran unconditionally.
+  if (weights === null) return null;
 
   return (
     <View>

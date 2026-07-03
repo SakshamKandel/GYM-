@@ -1,6 +1,16 @@
+import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Animated from 'react-native-reanimated';
+import Animated, {
+  cancelAnimation,
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withDelay,
+  withRepeat,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText, enterUp, PressableScale } from './index';
 
@@ -42,6 +52,19 @@ const styles = StyleSheet.create({
   tipText: {
     lineHeight: 22,
   },
+  thinkingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 2,
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.accent,
+  },
+  thinkingText: { marginLeft: 4 },
   refreshRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -49,6 +72,26 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
 });
+
+/** One pulsing dot of the "thinking" indicator — a gentle opacity wave. */
+function ThinkingDot({ index }: { index: number }) {
+  const pulse = useSharedValue(0.3);
+  useEffect(() => {
+    pulse.value = withDelay(
+      index * 160,
+      withRepeat(
+        withSequence(
+          withTiming(1, { duration: 320, easing: Easing.inOut(Easing.quad) }),
+          withTiming(0.3, { duration: 320, easing: Easing.inOut(Easing.quad) }),
+        ),
+        -1,
+      ),
+    );
+    return () => cancelAnimation(pulse);
+  }, [index, pulse]);
+  const style = useAnimatedStyle(() => ({ opacity: pulse.value }));
+  return <Animated.View style={[styles.dot, style]} />;
+}
 
 export function AITipCard({ title, tip, loading, error, onRefresh }: Props) {
   return (
@@ -61,9 +104,14 @@ export function AITipCard({ title, tip, loading, error, onRefresh }: Props) {
       </View>
 
       {loading ? (
-        <AppText variant="caption" color={colors.textDim}>
-          Thinking…
-        </AppText>
+        <View style={styles.thinkingRow}>
+          <ThinkingDot index={0} />
+          <ThinkingDot index={1} />
+          <ThinkingDot index={2} />
+          <AppText variant="caption" color={colors.textDim} style={styles.thinkingText}>
+            Coach is thinking
+          </AppText>
+        </View>
       ) : error ? (
         <AppText variant="caption" color={colors.textDim}>
           Tip unavailable right now.
