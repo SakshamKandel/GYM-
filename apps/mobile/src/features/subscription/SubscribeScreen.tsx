@@ -17,6 +17,7 @@ import {
   enterUp,
 } from '../../components/ui';
 import { successHaptic } from '../../lib/haptics';
+import { syncProfileNow } from '../../lib/profileSync';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
 import { activateTrial } from '../buddy/actions';
@@ -77,6 +78,9 @@ export function SubscribeScreen() {
     // TODO: RevenueCat purchase flow — until then the pick applies locally
     // as a preview so the whole app can be exercised on any tier.
     update({ tier });
+    // Sync the tier to the server account immediately so server-gated features
+    // (coach chat) unlock right away instead of after the backup debounce.
+    syncProfileNow();
     setPreviewActive(true);
     successHaptic();
   }

@@ -1,8 +1,9 @@
 import { router } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { displayWeight, unitLabel, type PlanWorkout } from '@gym/shared';
+import { displayWeight, hasEntitlement, unitLabel, type PlanWorkout, type Tier } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import {
   AITipCard,
@@ -34,6 +35,9 @@ import { useQuest } from '../../state/quest';
 
 /** Home — answers "what's today?" in one glance. */
 
+/** Newie/mascot avatar — the coach entry reads as "from Greece", not the system. */
+const NEWIE = require('../../../assets/images/newie.png');
+
 const styles = StyleSheet.create({
   topRow: {
     flexDirection: 'row',
@@ -60,6 +64,28 @@ const styles = StyleSheet.create({
   },
   headingWrap: { marginBottom: spacing.lg },
   questWrap: { marginBottom: spacing.lg },
+  // Prominent coach entry — surface row with the Newie avatar, sits right below
+  // the heading so "message Greece" is the first thing after the greeting.
+  coachCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  coachAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+  },
+  coachText: { flex: 1, gap: 2 },
+  // Trailing lock affordance for the gated (non-Elite) state: Elite tag + lock.
+  coachLocked: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   heroCard: { marginBottom: spacing.lg },
   /** The one big moment: workout name in huge condensed caps. */
   heroName: { fontSize: 48, lineHeight: 56, marginTop: -4 },
@@ -153,6 +179,42 @@ function Hero({
   );
 }
 
+/**
+ * Prominent Home entry into the 1-on-1 coach chat. Elite unlocks the thread and
+ * taps through to /coach-chat; lower tiers see an Elite lock and route to plans.
+ */
+function CoachEntry({ tier }: { tier: Tier }) {
+  const unlocked = hasEntitlement({ tier }, 'coach_chat');
+  return (
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel={
+        unlocked ? 'Chat with Greece, your one on one coach' : 'Chat with Greece — Elite plan'
+      }
+      onPress={() => router.push(unlocked ? toHref('/coach-chat') : toHref('/subscribe'))}
+      style={styles.coachCard}
+    >
+      <Image source={NEWIE} style={styles.coachAvatar} contentFit="cover" accessibilityElementsHidden />
+      <View style={styles.coachText}>
+        <AppText variant="bodyBold" numberOfLines={1}>
+          Chat with Greece
+        </AppText>
+        <AppText variant="caption" numberOfLines={1}>
+          Your 1-on-1 coach, ready when you are
+        </AppText>
+      </View>
+      {unlocked ? (
+        <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+      ) : (
+        <View style={styles.coachLocked}>
+          <Tag label="Elite" variant="dim" />
+          <Ionicons name="lock-closed" size={14} color={colors.textFaint} />
+        </View>
+      )}
+    </PressableScale>
+  );
+}
+
 export default function HomeScreen() {
   const displayName = useProfile((s) => s.displayName);
   const planId = useProfile((s) => s.planId);
@@ -160,6 +222,7 @@ export default function HomeScreen() {
   const unitPref = useProfile((s) => s.unitPref);
   const goalType = useProfile((s) => s.goalType);
   const daysPerWeek = useProfile((s) => s.daysPerWeek);
+  const tier = useProfile((s) => s.tier);
   const data = useHomeData(planId);
   const quest = useQuestProgress();
   const questDismissed = useQuest((s) => s.dismissed);
@@ -215,6 +278,10 @@ export default function HomeScreen() {
       <Animated.View entering={enterDown(1)} style={styles.headingWrap}>
         <AppText variant="label">{posterDate()}</AppText>
         <AppText variant="heading">Today</AppText>
+      </Animated.View>
+
+      <Animated.View entering={enterUp(0)}>
+        <CoachEntry tier={tier} />
       </Animated.View>
 
       {showQuest ? (

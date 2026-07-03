@@ -669,19 +669,29 @@ export async function getCoachMessages(
 
 /**
  * Send a message. ELITE ONLY — throws CoachApiError 'forbidden' for any lower
- * tier. Returns the inserted [userMessage, coachAutoAck] pair so the UI can
+ * tier. Returns the inserted [userMessage, coachReply] pair so the UI can
  * reconcile its optimistic append with the server's real rows.
+ *
+ * `coachReply` is the on-device AI Greece reply (generated with the bundled
+ * EXPO_PUBLIC_GROQ_API_KEY). When present the server stores it verbatim; when
+ * omitted (generation failed / offline) the server falls back to its own Groq
+ * reply or the canned auto-ack, so the thread is never left hanging.
  */
 export async function sendCoachMessage(
   kind: CoachThreadKind,
   body: string,
   token: string,
+  coachReply?: string,
 ): Promise<CoachMessage[]> {
+  const trimmedReply = coachReply?.trim();
   const data = await coachRequest({
     method: 'POST',
     path: '/api/coach/messages',
     token,
-    body: { kind, body },
+    body:
+      trimmedReply && trimmedReply.length > 0
+        ? { kind, body, coachReply: trimmedReply }
+        : { kind, body },
   });
   return parseCoach(coachMessagesSchema, data).messages;
 }

@@ -716,45 +716,14 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
-      {/* ── Elite coaching ──────────────────────────────────── */}
+      {/* ── Support ─────────────────────────────────────────── */}
+      {/* Coach chat moved to a prominent Home entry; support stays here. */}
       <Animated.View entering={enterUp(5)}>
         <AppText variant="label" style={styles.sectionLabel}>
-          Elite coaching
+          Support
         </AppText>
         <View style={styles.group}>
-          {/* 1-on-1 coach chat — unlocked for Elite, else routes to plans. */}
-          {hasEntitlement({ tier }, 'coach_chat') ? (
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="One on one coach chat"
-              onPress={() => pushPath('/coach-chat')}
-              style={styles.row}
-            >
-              <IconChip icon="chatbubbles" size={36} />
-              <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
-                1-on-1 coach chat
-              </AppText>
-              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-            </PressableScale>
-          ) : (
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="One on one coach chat — Elite plan"
-              onPress={() => pushPath('/subscribe')}
-              style={styles.row}
-            >
-              <IconChip icon="chatbubbles" size={36} />
-              <AppText style={styles.rowLabelGrow} numberOfLines={1}>
-                1-on-1 coach chat
-              </AppText>
-              <View style={styles.lockedValue}>
-                <Tag label="Elite" variant="dim" />
-                <Ionicons name="lock-closed" size={14} color={colors.textFaint} />
-              </View>
-            </PressableScale>
-          )}
-          <Divider />
-          {/* Priority support — same Elite gating. */}
+          {/* Priority support — Elite gated. */}
           {hasEntitlement({ tier }, 'coach_chat') ? (
             <PressableScale
               accessibilityRole="button"

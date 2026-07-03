@@ -29,4 +29,16 @@ export function startProfileSync(): void {
     if (timer) clearTimeout(timer);
     timer = setTimeout(push, 3000);
   });
+  // Push once shortly after start so the CURRENT profile (incl. the selected
+  // tier) syncs to the server even if nothing changes this session — this is
+  // what makes server-gated Elite features unlock without re-toggling.
+  setTimeout(push, 1500);
+}
+
+/**
+ * Force an immediate profile backup (e.g. right after choosing a plan) so the
+ * server tier updates without waiting for the debounce. Fire-and-forget.
+ */
+export function syncProfileNow(): void {
+  push();
 }
