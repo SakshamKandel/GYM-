@@ -28,12 +28,6 @@ const kindSchema = z.enum(['coach_chat', 'support']);
 const postSchema = z.object({
   kind: kindSchema,
   body: z.string().trim().min(1).max(2000),
-  /**
-   * Optional client-generated coach reply (AI Greece runs on-device with the
-   * app's bundled Groq key). When present it's stored verbatim as the coach
-   * message; when absent we fall back to the server Groq reply / auto-ack.
-   */
-  coachReply: z.string().trim().min(1).max(4000).optional(),
 });
 
 /** The auto-ack sets expectations so an async thread still feels answered. */
@@ -88,7 +82,7 @@ export async function POST(req: Request) {
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { kind, body, coachReply } = parsed.data;
+  const { kind, body } = parsed.data;
 
   const db = getDb();
 
@@ -106,24 +100,17 @@ export async function POST(req: Request) {
       readByUser: coachMessages.readByUser,
     });
 
-  // The coach reply is AI-generated in Greece's voice. Preferred path: the
-  // app generates it on-device with its bundled Groq key and sends it as
-  // `coachReply`, so this works with no server key set. If the client didn't
-  // provide one (offline / generation failed), fall back to the server Groq
-  // reply, and finally to the canned acknowledgement — so the thread is never
-  // left hanging.
-  let replyBody: string;
-  if (coachReply) {
-    replyBody = coachReply;
-  } else {
-    const history = await db
-      .select({ sender: coachMessages.sender, body: coachMessages.body })
-      .from(coachMessages)
-      .where(and(eq(coachMessages.accountId, user.id), eq(coachMessages.kind, kind)))
-      .orderBy(asc(coachMessages.createdAt));
-    const aiReply = await greeceCoachReply(kind, user.displayName, history);
-    replyBody = aiReply ?? autoAckBody(kind, user.displayName);
-  }
+  // The coach reply is AI-generated in Greece's voice, SERVER-SIDE (the key
+  // never ships in the app). Load the thread so the model can answer in
+  // context, then fall back to the canned acknowledgement if Groq is
+  // unavailable — so the thread is never left hanging.
+  const history = await db
+    .select({ sender: coachMessages.sender, body: coachMessages.body })
+    .from(coachMessages)
+    .where(and(eq(coachMessages.accountId, user.id), eq(coachMessages.kind, kind)))
+    .orderBy(asc(coachMessages.createdAt));
+  const aiReply = await greeceCoachReply(kind, user.displayName, history);
+  const replyBody = aiReply ?? autoAckBody(kind, user.displayName);
 
   const insertedCoach = await db
     .insert(coachMessages)

@@ -1,22 +1,15 @@
 /**
- * Server-side Groq client for the AI "Greece" coach. Keeps the key on the
- * server (GROQ_API_KEY) rather than in the app bundle.
+ * AI "Greece" coach reply generation. Runs SERVER-SIDE (via lib/groq, which
+ * holds GROQ_API_KEY) so the key never ships in the app bundle.
  *
  * This is the INTERIM coach: an AI in Greece Maharjan's voice answers Elite
  * members instantly. When the coach admin panel ships, the real Greece's
  * replies replace these — the thread + persistence stay the same.
  */
 
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const MODEL = 'llama-3.3-70b-versatile';
-const TIMEOUT_MS = 12_000;
+import { groqComplete, type GroqChatMessage } from './groq';
 
 export type CoachKind = 'coach_chat' | 'support';
-
-interface ChatMsg {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
 
 export interface ThreadMessage {
   sender: 'user' | 'coach';
@@ -55,33 +48,10 @@ export async function greeceCoachReply(
   name: string,
   history: ThreadMessage[],
 ): Promise<string | null> {
-  const key = process.env.GROQ_API_KEY;
-  if (!key) return null;
-
-  const messages: ChatMsg[] = [{ role: 'system', content: persona(kind, name) }];
+  const messages: GroqChatMessage[] = [{ role: 'system', content: persona(kind, name) }];
   // Only the last dozen turns matter; keeps the prompt small and cheap.
   for (const m of history.slice(-12)) {
     messages.push({ role: m.sender === 'user' ? 'user' : 'assistant', content: m.body });
   }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    const res = await fetch(GROQ_URL, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: MODEL, messages, temperature: 0.7, max_tokens: 220 }),
-      signal: controller.signal,
-    });
-    if (!res.ok) return null;
-    const jsonBody = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
-    };
-    const text = jsonBody.choices?.[0]?.message?.content?.trim();
-    return text && text.length > 0 ? text : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  return groqComplete(messages, { temperature: 0.7, maxTokens: 220 });
 }

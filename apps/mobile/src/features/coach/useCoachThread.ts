@@ -7,9 +7,7 @@ import {
   type CoachMessage,
   type CoachThreadKind,
 } from '../../lib/api/client';
-import { coachReplyAI } from '../../lib/ai/groq';
 import { useAuth } from '../../state/auth';
-import { useProfile } from '../../state/profile';
 
 /**
  * One async coach thread (coach_chat or support). Loads on focus, appends
@@ -17,11 +15,10 @@ import { useProfile } from '../../state/profile';
  * last-known messages and flips `stale` so the screen shows a quiet retry row
  * instead of a blocking error. A failed send rolls the optimistic bubble back.
  *
- * The AI Greece reply is generated ON-DEVICE (coachReplyAI, bundled Groq key)
- * the moment the user sends, and handed to the server to persist — so it works
- * with no server key set. While it generates, a transient "typing" coach bubble
- * shows so the member sees Greece is thinking. If generation returns null we
- * still persist the user message and let the server auto-ack.
+ * The AI Greece reply is generated SERVER-SIDE (the Groq key never ships in the
+ * app). While the send round-trips — which is when the server generates the
+ * reply — a transient "typing" coach bubble shows so the member sees Greece is
+ * thinking; it's swapped for the real reply when the server responds.
  *
  * No real-time otherwise — messaging here is deliberately async.
  */
@@ -65,11 +62,6 @@ function isTyping(m: CoachMessage): boolean {
 export function useCoachThread(kind: CoachThreadKind): CoachThread {
   const token = useAuth((s) => s.token);
   const status = useAuth((s) => s.status);
-  // Name for Greece's persona: the local profile is canonical; the account's
-  // display name is the fallback for a fresh, not-yet-onboarded profile.
-  const profileName = useProfile((s) => s.displayName);
-  const authName = useAuth((s) => s.user?.displayName ?? '');
-  const coachName = profileName.trim() || authName;
 
   const [messages, setMessages] = useState<CoachMessage[]>([]);
   const [loading, setLoading] = useState(false);
@@ -157,21 +149,11 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
       setGenerating(true);
       setSendError(null);
 
-      // Generate Greece's reply on-device (bundled Groq key). Include the just
-      // -sent user turn so the model answers it. Prior turns are the current
-      // thread minus our own transient bubbles. Never throws — null means the
-      // server will fall back to its own reply / auto-ack.
-      const history = [
-        ...messages
-          .filter((m) => !isTyping(m))
-          .map((m) => ({ sender: m.sender, body: m.body })),
-        { sender: 'user' as const, body },
-      ];
-      const reply = await coachReplyAI(kind, coachName, history);
-      if (mounted.current) setGenerating(false);
-
       try {
-        const inserted = await sendCoachMessage(kind, body, token, reply ?? undefined);
+        // The server generates Greece's reply in context while this round-trips
+        // (the Groq key lives on the server). The typing bubble shows until it
+        // responds with the real [user, coachReply] pair.
+        const inserted = await sendCoachMessage(kind, body, token);
         if (mounted.current) {
           // Swap the optimistic user + typing bubbles for the server's real
           // [user, coachReply] pair.
@@ -199,7 +181,7 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         }
       }
     },
-    [kind, status, token, coachName, messages],
+    [kind, status, token],
   );
 
   return { messages, loading, stale, sending, generating, reload, send, sendError };

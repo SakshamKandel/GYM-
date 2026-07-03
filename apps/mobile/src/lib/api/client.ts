@@ -669,29 +669,45 @@ export async function getCoachMessages(
 
 /**
  * Send a message. ELITE ONLY — throws CoachApiError 'forbidden' for any lower
- * tier. Returns the inserted [userMessage, coachReply] pair so the UI can
- * reconcile its optimistic append with the server's real rows.
- *
- * `coachReply` is the on-device AI Greece reply (generated with the bundled
- * EXPO_PUBLIC_GROQ_API_KEY). When present the server stores it verbatim; when
- * omitted (generation failed / offline) the server falls back to its own Groq
- * reply or the canned auto-ack, so the thread is never left hanging.
+ * tier. The coach reply is generated SERVER-SIDE in Greece's voice (the Groq
+ * key never ships in the app). Returns the inserted [userMessage, coachReply]
+ * pair so the UI can reconcile its optimistic append with the server's rows.
  */
 export async function sendCoachMessage(
   kind: CoachThreadKind,
   body: string,
   token: string,
-  coachReply?: string,
 ): Promise<CoachMessage[]> {
-  const trimmedReply = coachReply?.trim();
   const data = await coachRequest({
     method: 'POST',
     path: '/api/coach/messages',
     token,
-    body:
-      trimmedReply && trimmedReply.length > 0
-        ? { kind, body, coachReply: trimmedReply }
-        : { kind, body },
+    body: { kind, body },
   });
   return parseCoach(coachMessagesSchema, data).messages;
+}
+
+// ── AI coach tips ─────────────────────────────────────────────
+
+/** A single tip-prompt turn (built by the caller, sent to the server). */
+export interface AiTipMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+const aiTipSchema = z.object({ text: z.string().nullable() });
+
+/**
+ * Fetch a short AI coach tip. Generated SERVER-SIDE with the server's Groq
+ * key (no key in the app bundle), so it requires a signed-in `token`. Never
+ * throws — any failure (offline, signed-out server error, missing key) resolves
+ * to null so the tip card degrades quietly.
+ */
+export async function getAiTip(messages: AiTipMessage[], token: string): Promise<string | null> {
+  try {
+    const data = await request({ method: 'POST', path: '/api/ai/tip', body: { messages }, token });
+    return aiTipSchema.parse(data).text;
+  } catch {
+    return null;
+  }
 }
