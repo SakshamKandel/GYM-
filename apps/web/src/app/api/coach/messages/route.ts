@@ -1,4 +1,4 @@
-import { coachMessages } from '@gym/db';
+import { coachAssignments, coachMessages } from '@gym/db';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
@@ -100,6 +100,29 @@ export async function POST(req: Request) {
       readByUser: coachMessages.readByUser,
     });
 
+  const userMsg = insertedUser[0];
+  if (!userMsg) return json({ error: 'invalid' }, 400);
+
+  // Human-coach handoff — coach_chat thread ONLY: if this account has an ACTIVE
+  // coach assignment, a real coach owns the reply, so skip the AI auto-reply and
+  // return just the user's message. The coach answers later via the console
+  // (sender='coach', which the mobile app already renders on the left as a
+  // "Greece" message). The 'support' thread is a separate channel handled by
+  // support staff, so it KEEPS its auto-ack regardless of coach assignment.
+  // With no assignment, today's AI behavior is preserved exactly below.
+  if (kind === 'coach_chat') {
+    const assigned = await db
+      .select({ id: coachAssignments.id })
+      .from(coachAssignments)
+      .where(
+        and(eq(coachAssignments.userId, user.id), eq(coachAssignments.status, 'active')),
+      )
+      .limit(1);
+    if (assigned.length > 0) {
+      return json({ messages: [userMsg] }, 201);
+    }
+  }
+
   // The coach reply is AI-generated in Greece's voice, SERVER-SIDE (the key
   // never ships in the app). Load the thread so the model can answer in
   // context, then fall back to the canned acknowledgement if Groq is
@@ -130,9 +153,8 @@ export async function POST(req: Request) {
       readByUser: coachMessages.readByUser,
     });
 
-  const userMsg = insertedUser[0];
   const coachMsg = insertedCoach[0];
-  if (!userMsg || !coachMsg) return json({ error: 'invalid' }, 400);
+  if (!coachMsg) return json({ error: 'invalid' }, 400);
 
   return json({ messages: [userMsg, coachMsg] }, 201);
 }
