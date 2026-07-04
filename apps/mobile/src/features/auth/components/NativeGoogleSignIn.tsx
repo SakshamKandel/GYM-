@@ -29,6 +29,24 @@ function ensureConfigured(webClientId: string): void {
   configured = true;
 }
 
+/**
+ * Drop the native Google session so the next "Continue with Google" asks
+ * which account instead of silently reusing the last one. Self-configures
+ * from the env because sign-out can happen in a fresh app launch where no
+ * Google button has mounted yet. Never throws; no-ops when Google sign-in
+ * isn't set up in this build. Web builds resolve the stub twin instead.
+ */
+export async function signOutGoogle(): Promise<void> {
+  const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
+  if (!webClientId) return;
+  try {
+    ensureConfigured(webClientId);
+    await GoogleSignin.signOut();
+  } catch {
+    // No Google session to drop (or Play Services absent) — fine.
+  }
+}
+
 /** v13+ returns {type,data}; older versions return the user object directly. */
 function extractIdToken(result: unknown): string | null {
   if (result && typeof result === 'object') {

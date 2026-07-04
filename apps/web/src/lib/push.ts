@@ -1,7 +1,7 @@
 import { cert, getApps, initializeApp, type App, type ServiceAccount } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import { devicePushTokens } from '@gym/db';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb } from './db';
 
 /**
@@ -81,6 +81,17 @@ export async function registerToken(
       target: devicePushTokens.token,
       set: { accountId, platform: platform ?? null, updatedAt: new Date() },
     });
+}
+
+/**
+ * Sign-out counterpart to registerToken: drop the device's mapping so the
+ * account stops receiving pushes there. Scoped to the calling account so one
+ * user can never evict a mapping that now belongs to someone else.
+ */
+export async function unregisterToken(accountId: string, token: string): Promise<void> {
+  await getDb()
+    .delete(devicePushTokens)
+    .where(and(eq(devicePushTokens.token, token), eq(devicePushTokens.accountId, accountId)));
 }
 
 /** All FCM tokens registered to an account (may be empty). */

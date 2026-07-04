@@ -14,9 +14,24 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 
 function push(): void {
   const auth = useAuth.getState();
-  if (auth.status !== 'signedIn' || auth.token === null) return;
-  const { update: _u, completeOnboarding: _c, ...data } = useProfile.getState();
-  if (!data.onboarded) return; // nothing worth backing up yet
+  if (auth.status !== 'signedIn' || auth.token === null || auth.user === null) return;
+  const profile = useProfile.getState();
+  if (!profile.onboarded) return; // nothing worth backing up yet
+  // Cross-account guard: a profile fingerprinted to another account must
+  // never be uploaded into this one (mirrors restoreOrBackupProfile).
+  if (profile.syncAccountId !== null && profile.syncAccountId !== auth.user.id) return;
+  if (profile.syncAccountId === null) {
+    // First backup for this account — claim the local profile for it.
+    profile.update({ syncAccountId: auth.user.id });
+  }
+  const {
+    update: _u,
+    completeOnboarding: _c,
+    resetAccountFields: _r,
+    resetForAccount: _f,
+    syncAccountId: _s,
+    ...data
+  } = useProfile.getState();
   void putProfileData(auth.token, data as unknown as Record<string, unknown>).catch(() => {
     // Offline — the next change or sign-in retries.
   });

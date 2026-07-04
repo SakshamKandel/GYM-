@@ -81,6 +81,11 @@ export function useBuddyData(): BuddyData {
           getReferrals(token).catch(() => [] as Referral[]),
           getTrialStatus(token).catch(() => ({ trials: [] as Trial[], trialDays: 2 })),
         ]);
+        // The session changed while the fetch was in flight (sign-out or
+        // account switch) — a late response must not write the previous
+        // account's buddies back into the persisted cache.
+        const current = useAuth.getState();
+        if (current.status !== 'signedIn' || current.token !== token) return;
         useBuddyStore.getState().setData(nextList, nextEvents);
         useBuddyStore.getState().setSessions(nextSessions);
         useBuddyStore.getState().setReferrals(nextReferrals);

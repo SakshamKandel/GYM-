@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { colors } from '@gym/ui-tokens';
-import { registerPushToken } from './api/client';
+import { registerPushToken, unregisterPushToken } from './api/client';
 import { useAuth } from '../state/auth';
 
 /**
@@ -143,6 +143,33 @@ export async function setupNotifications(): Promise<void> {
 // ════════════════════════════════════════════════════════════════
 
 /**
+ * A sign-out's unregister that is still in flight. Registration awaits it so
+ * a stale server-side delete can never evict the fresh registration of the
+ * same device token (same account signing straight back in).
+ */
+let pendingUnregister: Promise<boolean> | null = null;
+
+/**
+ * getDevicePushTokenAsync can pend forever (e.g. APNs registration with no
+ * network) — bound it so the sign-out chain behind it always proceeds.
+ */
+const DEVICE_TOKEN_TIMEOUT_MS = 5_000;
+
+/** This device's native FCM token, or null when unavailable within the bound. */
+async function currentDeviceToken(): Promise<string | null> {
+  const timeout = new Promise<null>((resolve) => {
+    setTimeout(() => resolve(null), DEVICE_TOKEN_TIMEOUT_MS);
+  });
+  const tokenResponse = await Promise.race([
+    Notifications.getDevicePushTokenAsync(),
+    timeout,
+  ]);
+  if (!tokenResponse) return null;
+  const deviceToken = typeof tokenResponse.data === 'string' ? tokenResponse.data : '';
+  return deviceToken || null;
+}
+
+/**
  * Register this device's native FCM push token with the server so buddy
  * pushes can arrive. No-ops (returns false) when signed out, unsupported, or
  * permission is denied. Never throws — the app works fine without remote push
@@ -150,6 +177,10 @@ export async function setupNotifications(): Promise<void> {
  */
 export async function registerForPushNotificationsAsync(): Promise<boolean> {
   if (!isSupported()) return false;
+
+  // Let a just-fired sign-out unregister finish first, so its server-side
+  // delete lands before (not after) the registration we're about to make.
+  if (pendingUnregister) await pendingUnregister;
 
   const auth = useAuth.getState();
   if (auth.status !== 'signedIn' || auth.token === null) return false;
@@ -170,6 +201,34 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
     return true;
   } catch {
     // Denied permission, offline, Firebase not configured, or unauthorized.
+    return false;
+  }
+}
+
+/**
+ * Sign-out counterpart: tell the server to forget this device's FCM token so
+ * the account signing out stops receiving buddy pushes here. Takes the auth
+ * token explicitly because it runs during sign-out, after local auth state
+ * is already cleared. Best-effort, never throws.
+ */
+export function unregisterPushNotificationsAsync(authToken: string): Promise<boolean> {
+  const task = doUnregisterPush(authToken);
+  pendingUnregister = task;
+  void task.finally(() => {
+    if (pendingUnregister === task) pendingUnregister = null;
+  });
+  return task;
+}
+
+async function doUnregisterPush(authToken: string): Promise<boolean> {
+  if (!isSupported()) return false;
+  try {
+    const deviceToken = await currentDeviceToken();
+    if (!deviceToken) return false;
+    await unregisterPushToken(deviceToken, authToken);
+    return true;
+  } catch {
+    // No token, Firebase not configured, offline — nothing to unregister.
     return false;
   }
 }

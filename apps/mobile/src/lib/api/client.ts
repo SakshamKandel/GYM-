@@ -78,11 +78,34 @@ function serverErrorCode(raw: string): ApiErrorCode | null {
     : null;
 }
 
+/**
+ * Every call gives up after this long. Without a bound, a hung connection
+ * can freeze flows that await the network — sign-out once sat on
+ * "Signing out…" forever because of exactly this.
+ */
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/** fetch with a timeout; the abort surfaces as a rejection the callers
+ * already map to their typed 'network' errors. */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Perform the request; resolve with the parsed JSON of a 2xx response. */
 async function request(opts: RequestOptions): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${opts.path}`, {
+    res = await fetchWithTimeout(`${BASE_URL}${opts.path}`, {
       method: opts.method,
       headers: {
         Accept: 'application/json',
@@ -277,7 +300,7 @@ interface BuddyRequestOptions {
 async function buddyRequest(opts: BuddyRequestOptions): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${opts.path}`, {
+    res = await fetchWithTimeout(`${BASE_URL}${opts.path}`, {
       method: opts.method,
       headers: {
         Accept: 'application/json',
@@ -558,6 +581,20 @@ export async function registerPushToken(
   });
 }
 
+/**
+ * Sign-out counterpart to registerPushToken: remove this device's token
+ * mapping so the account signing out stops receiving pushes here. Throws
+ * ApiError on failure — callers treat it as best-effort.
+ */
+export async function unregisterPushToken(token: string, authToken: string): Promise<void> {
+  await request({
+    method: 'POST',
+    path: '/api/push/unregister',
+    body: { token },
+    token: authToken,
+  });
+}
+
 // ════════════════════════════════════════════════════════════════
 // Elite coach messaging (see COACH API CONTRACT)
 // Two async threads per account, split by `kind`. Same philosophy as
@@ -614,13 +651,15 @@ interface CoachRequestOptions {
   path: string;
   token: string;
   body?: Record<string, unknown>;
+  /** Override for endpoints whose server legitimately works longer than the default. */
+  timeoutMs?: number;
 }
 
 /** Coach request; resolves with parsed JSON of a 2xx response. */
 async function coachRequest(opts: CoachRequestOptions): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${opts.path}`, {
+    res = await fetchWithTimeout(`${BASE_URL}${opts.path}`, {
       method: opts.method,
       headers: {
         Accept: 'application/json',
@@ -628,7 +667,7 @@ async function coachRequest(opts: CoachRequestOptions): Promise<unknown> {
         ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
+    }, opts.timeoutMs);
   } catch {
     throw new CoachApiError('network', "Can't reach the server");
   }
@@ -687,6 +726,9 @@ export async function sendCoachMessage(
     path: '/api/coach/messages',
     token,
     body: { kind, body },
+    // The server runs an LLM round trip before responding — the default 10s
+    // deadline would abort sends the server has already persisted.
+    timeoutMs: 30_000,
   });
   return parseCoach(coachMessagesSchema, data).messages;
 }
@@ -764,7 +806,7 @@ const planVideoLockedSchema = z.object({
 export async function getPlanVideo(exerciseId: string, token: string): Promise<PlanVideoResult> {
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}/api/plan-videos/${encodeURIComponent(exerciseId)}`, {
+    res = await fetchWithTimeout(`${BASE_URL}/api/plan-videos/${encodeURIComponent(exerciseId)}`, {
       method: 'GET',
       headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
     });
