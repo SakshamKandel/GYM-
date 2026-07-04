@@ -1,4 +1,5 @@
 import type {
+  DailyMacros,
   FoodItem,
   FoodLog,
   Meal,
@@ -9,6 +10,18 @@ import type {
   WeightLog,
   WorkoutLog,
 } from '@gym/shared';
+
+/** One set with its workout's date attached — the analytics query shape. */
+export interface AnalyticsSet {
+  exerciseId: string;
+  exerciseName: string;
+  weightKg: number;
+  reps: number;
+  rpe: number | null;
+  isPr: boolean;
+  /** Date (yyyy-mm-dd) of the workout the set belongs to. */
+  workoutDate: string;
+}
 
 /**
  * Local persistence contract. All feature code talks to THIS interface —
@@ -44,6 +57,8 @@ export interface Repo {
   getE1RmHistory(exerciseId: string, limit: number): Promise<{ date: string; e1rm: number }[]>;
   /** Exercise ids the user has logged, most recently used first. */
   getRecentExerciseIds(limit: number): Promise<string[]>;
+  /** Sets from FINISHED workouts whose workout date is within [fromDate, toDate], oldest first. */
+  getSetsBetween(fromDate: string, toDate: string): Promise<AnalyticsSet[]>;
 
   // ── Body ────────────────────────────────────────────────────
   upsertWeight(w: WeightLog): Promise<void>;
@@ -57,6 +72,8 @@ export interface Repo {
   getFoodLogs(date: string): Promise<FoodLog[]>;
   /** kcal totals for each of the given dates (missing dates → 0). */
   getKcalByDate(dates: string[]): Promise<Record<string, number>>;
+  /** Macro totals for each of the given dates (missing dates → all zeros). */
+  getMacrosByDate(dates: string[]): Promise<Record<string, DailyMacros>>;
   saveFood(item: FoodItem): Promise<void>;
   getFoodByBarcode(barcode: string): Promise<FoodItem | null>;
   getFood(id: string): Promise<FoodItem | null>;

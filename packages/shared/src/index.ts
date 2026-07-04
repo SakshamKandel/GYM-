@@ -1,4 +1,5 @@
 export * from './types';
+export * from './logic/analytics';
 export * from './logic/macros';
 export * from './logic/pr';
 export * from './logic/trend';

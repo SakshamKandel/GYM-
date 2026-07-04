@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import { epley1Rm } from '@gym/shared';
 import type {
+  DailyMacros,
   FoodItem,
   FoodLog,
   Measurement,
@@ -10,7 +11,7 @@ import type {
   WeightLog,
   WorkoutLog,
 } from '@gym/shared';
-import type { Repo } from './types';
+import type { AnalyticsSet, Repo } from './types';
 
 /** Offline-first native store (CLAUDE.md rule 5): every write lands here first. */
 
@@ -168,6 +169,13 @@ export async function createSqliteRepo(): Promise<Repo> {
   const db = await SQLite.openDatabaseAsync('gym-tracker.db');
   await db.execAsync(SCHEMA);
 
+  // Installs that created set_logs before RPE landed lack the column —
+  // CREATE TABLE IF NOT EXISTS never alters an existing table.
+  const setCols = await db.getAllAsync<{ name: string }>('PRAGMA table_info(set_logs)');
+  if (!setCols.some((c) => c.name === 'rpe')) {
+    await db.execAsync('ALTER TABLE set_logs ADD COLUMN rpe REAL');
+  }
+
   return {
     // ── Workouts ────────────────────────────────────────────
     async startWorkout(w) {
@@ -318,6 +326,30 @@ export async function createSqliteRepo(): Promise<Repo> {
       );
       return rows.map((r) => r.exercise_id);
     },
+    async getSetsBetween(fromDate, toDate) {
+      const rows = await db.getAllAsync<{
+        exercise_id: string; exercise_name: string; weight_kg: number;
+        reps: number; rpe: number | null; is_pr: number; workout_date: string;
+      }>(
+        `SELECT s.exercise_id, s.exercise_name, s.weight_kg, s.reps, s.rpe, s.is_pr, w.date as workout_date
+         FROM set_logs s
+         JOIN workout_logs w ON w.id = s.workout_log_id
+         WHERE w.finished_at IS NOT NULL AND w.date >= ? AND w.date <= ?
+         ORDER BY s.logged_at ASC`,
+        fromDate, toDate,
+      );
+      return rows.map(
+        (r): AnalyticsSet => ({
+          exerciseId: r.exercise_id,
+          exerciseName: r.exercise_name,
+          weightKg: r.weight_kg,
+          reps: r.reps,
+          rpe: r.rpe,
+          isPr: r.is_pr === 1,
+          workoutDate: r.workout_date,
+        }),
+      );
+    },
 
     // ── Body ────────────────────────────────────────────────
     async upsertWeight(w) {
@@ -386,6 +418,26 @@ export async function createSqliteRepo(): Promise<Repo> {
         ...dates,
       );
       for (const r of rows) out[r.date] = Math.round(r.k);
+      return out;
+    },
+    async getMacrosByDate(dates) {
+      const out: Record<string, DailyMacros> = {};
+      for (const d of dates) out[d] = { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+      if (dates.length === 0) return out;
+      const placeholders = dates.map(() => '?').join(',');
+      const rows = await db.getAllAsync<{ date: string; k: number; p: number; c: number; f: number }>(
+        `SELECT date, SUM(kcal) as k, SUM(protein) as p, SUM(carbs) as c, SUM(fat) as f
+         FROM food_logs WHERE date IN (${placeholders}) GROUP BY date`,
+        ...dates,
+      );
+      for (const r of rows) {
+        out[r.date] = {
+          kcal: Math.round(r.k),
+          protein: Math.round(r.p),
+          carbs: Math.round(r.c),
+          fat: Math.round(r.f),
+        };
+      }
       return out;
     },
     async saveFood(item) {

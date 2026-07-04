@@ -4,7 +4,7 @@ import Animated from 'react-native-reanimated';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { displayWeight, hasEntitlement, unitLabel, type PlanWorkout, type Tier } from '@gym/shared';
-import { colors, radius, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AITipCard,
   AnimatedNumber,
@@ -34,6 +34,7 @@ import {
 } from '../../features/engagement/components/StatDetailSheets';
 import { StreakChip } from '../../features/engagement/components/StreakChip';
 import { WeeklyCheckIn } from '../../features/engagement/components/WeeklyCheckIn';
+import { openLastSession, pushHistory } from '../../features/history/nav';
 import { useHomeData, useQuestProgress, type DoneToday } from '../../features/engagement/hooks';
 import { avatarLetter, formatCompact, greetingForHour, toHref } from '../../features/engagement/logic';
 import { useQuest } from '../../state/quest';
@@ -117,6 +118,14 @@ const styles = StyleSheet.create({
   },
   // Right-aligned meta must not be pushed off-screen by a long session name.
   lastMeta: { flexShrink: 0, textAlign: 'right' },
+  historyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    minHeight: touch.min,
+    paddingVertical: spacing.sm,
+  },
 });
 
 function Hero({
@@ -395,7 +404,12 @@ export default function HomeScreen() {
             <Animated.View entering={enterUp(6)}>
               <SectionLabel>Last session</SectionLabel>
               <Divider />
-              <View style={styles.lastRow}>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel={`Last session: ${last.name}, ${posterDate(last.date)}. See details`}
+                onPress={() => void openLastSession()}
+                style={styles.lastRow}
+              >
                 <View style={{ flex: 1 }}>
                   <AppText variant="bodyBold" numberOfLines={1}>
                     {last.name}
@@ -405,7 +419,18 @@ export default function HomeScreen() {
                 <AppText variant="caption" numberOfLines={1} style={styles.lastMeta}>
                   {formatCompact(displayWeight(last.volumeKg, unitPref))} {unit} · {last.sets} sets
                 </AppText>
-              </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+              </PressableScale>
+              <Divider />
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="See all history"
+                onPress={() => pushHistory()}
+                style={styles.historyRow}
+              >
+                <AppText variant="bodyBold">See all history</AppText>
+                <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+              </PressableScale>
               <Divider />
             </Animated.View>
           ) : null}

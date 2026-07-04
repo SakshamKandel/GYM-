@@ -17,6 +17,7 @@ import {
   StatBlock,
   Tag,
 } from '../../components/ui';
+import { WeightChart } from '../../features/body/components/WeightChart';
 import { ExerciseVideo } from '../../features/training/components/ExerciseVideo';
 import { useExerciseHistory, usePlanVideo } from '../../features/training/hooks';
 import { formatWeightNumber } from '../../features/training/logic';
@@ -33,6 +34,14 @@ const SEED_EXERCISE_IDS: ReadonlySet<string> = new Set(
 );
 
 /** Exercise detail: image (tap swaps angle), facts, steps, personal history. */
+
+/** Inverse Epley: the weight you could lift for `reps`, given an e1RM. */
+function repMaxKg(e1rmKg: number, reps: number): number {
+  return e1rmKg / (1 + reps / 30);
+}
+
+/** Rep counts shown as estimated rep-maxes in the records grid. */
+const REP_MAX_TARGETS = [5, 8, 12] as const;
 
 const styles = StyleSheet.create({
   topRow: {
@@ -90,6 +99,21 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   stepText: { flex: 1 },
+  // "E1RM TREND" label + trend tag on one line — same spacing as SectionLabel.
+  trendHeader: {
+    marginTop: spacing.xl,
+    marginBottom: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  recordsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: spacing.lg,
+  },
+  recordCell: { width: '50%', paddingRight: spacing.md },
   historyRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -99,6 +123,7 @@ const styles = StyleSheet.create({
   },
   historyDate: { flexShrink: 0 },
   historyNumbers: { fontFamily: type.display, fontSize: 22, color: colors.text, flexShrink: 1, minWidth: 0, textAlign: 'right' },
+  sessionRight: { alignItems: 'flex-end', flexShrink: 1, minWidth: 0 },
   // Locked "Greece's demo" card — compact row, tap routes to plans.
   lockedCard: {
     flexDirection: 'row',
@@ -166,6 +191,16 @@ export default function ExerciseDetailScreen() {
   // for the required tier, otherwise a quiet "coming soon" for seed exercises.
   const isSeedExercise = SEED_EXERCISE_IDS.has(exerciseId);
   const posterUri = images[0];
+  // Local const so the null-check narrows into the rep-max map callback below.
+  const bestE1RmKg = history.bestE1RmKg;
+  const hasHistory =
+    history.e1rmHistory.length > 0 ||
+    history.recentSessions.length > 0 ||
+    history.bestWeightKg !== null;
+  const chartPoints = history.e1rmHistory.map((h) => ({
+    date: h.date,
+    value: displayWeight(h.e1rm, unitPref),
+  }));
   const lockedTierLabel =
     planVideo.status === 'locked'
       ? planVideo.requiredTier.charAt(0).toUpperCase() + planVideo.requiredTier.slice(1)
@@ -259,33 +294,106 @@ export default function ExerciseDetailScreen() {
         </Animated.View>
       ) : null}
 
-      {history.bestE1Rm !== null || history.recentSessions.length > 0 ? (
-        <Animated.View entering={enterUp(2)}>
-          <SectionLabel>Your history</SectionLabel>
-          {history.bestE1Rm !== null ? (
-            <StatBlock
-              label="best 1rm (est.)"
-              value={formatWeightNumber(displayWeight(history.bestE1Rm, unitPref))}
-              unit={unitPref}
-            />
-          ) : null}
-          {history.recentSessions.map((s) => (
-            <View key={s.date} style={styles.historyRow}>
-              <AppText variant="caption" color={colors.textDim} numberOfLines={1} style={styles.historyDate}>
-                {posterDate(s.date)}
-              </AppText>
-              <AppText
-                style={styles.historyNumbers}
-                tabular
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.6}
-              >
-                {`${formatWeightNumber(displayWeight(s.e1rm, unitPref))} ${unitPref} e1RM`}
-              </AppText>
+      {history.loaded ? (
+        hasHistory ? (
+          <Animated.View entering={enterUp(2)}>
+            <View style={styles.trendHeader}>
+              <AppText variant="label">e1RM trend</AppText>
+              {history.plateau === 'progressing' ? (
+                <Tag label="Trending up" color={colors.success} />
+              ) : history.plateau === 'plateau' ? (
+                <Tag label="Flat lately" variant="dim" />
+              ) : history.plateau === 'regressing' ? (
+                <Tag label="Trending down" color={colors.warning} />
+              ) : null}
             </View>
-          ))}
-        </Animated.View>
+            <WeightChart
+              raw={chartPoints}
+              trend={chartPoints}
+              height={180}
+              emptyLabel="No e1RM history yet"
+              format={(v) => String(Math.round(v))}
+            />
+
+            <SectionLabel>Records</SectionLabel>
+            <View style={styles.recordsGrid}>
+              {history.bestWeightKg !== null ? (
+                <StatBlock
+                  style={styles.recordCell}
+                  label="heaviest set"
+                  value={formatWeightNumber(displayWeight(history.bestWeightKg, unitPref))}
+                  unit={unitPref}
+                />
+              ) : null}
+              {bestE1RmKg !== null ? (
+                <StatBlock
+                  style={styles.recordCell}
+                  label="best 1rm (est.)"
+                  value={formatWeightNumber(displayWeight(bestE1RmKg, unitPref))}
+                  unit={unitPref}
+                />
+              ) : null}
+              {history.bestSessionVolumeKg !== null ? (
+                <StatBlock
+                  style={styles.recordCell}
+                  label="best session volume"
+                  value={Math.round(displayWeight(history.bestSessionVolumeKg, unitPref))}
+                  unit={unitPref}
+                />
+              ) : null}
+              {bestE1RmKg !== null
+                ? REP_MAX_TARGETS.map((reps) => (
+                    <StatBlock
+                      key={reps}
+                      style={styles.recordCell}
+                      label={`${reps}-rep max (est.)`}
+                      value={formatWeightNumber(displayWeight(repMaxKg(bestE1RmKg, reps), unitPref))}
+                      unit={unitPref}
+                    />
+                  ))
+                : null}
+            </View>
+
+            {history.recentSessions.length > 0 ? (
+              <>
+                <SectionLabel>Recent sessions</SectionLabel>
+                {history.recentSessions.map((s) => (
+                  <View key={s.date} style={styles.historyRow}>
+                    <AppText
+                      variant="caption"
+                      color={colors.textDim}
+                      numberOfLines={1}
+                      style={styles.historyDate}
+                    >
+                      {posterDate(s.date)}
+                    </AppText>
+                    <View style={styles.sessionRight}>
+                      <AppText
+                        style={styles.historyNumbers}
+                        tabular
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.6}
+                      >
+                        {`${formatWeightNumber(displayWeight(s.topWeightKg, unitPref))} ${unitPref} × ${s.topReps}`}
+                      </AppText>
+                      <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+                        {`${Math.round(displayWeight(s.volumeKg, unitPref))} ${unitPref} total`}
+                      </AppText>
+                    </View>
+                  </View>
+                ))}
+              </>
+            ) : null}
+          </Animated.View>
+        ) : (
+          <Animated.View entering={enterUp(2)}>
+            <SectionLabel>Your history</SectionLabel>
+            <AppText variant="caption" color={colors.textDim}>
+              Log a set and your numbers land here.
+            </AppText>
+          </Animated.View>
+        )
       ) : null}
 
       {exercise.instructions.length > 0 ? (

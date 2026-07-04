@@ -10,6 +10,7 @@ import { getRepo } from '../../lib/repo';
 import { getPlanWorkout } from '../../lib/seed/plans';
 import { useAuth } from '../../state/auth';
 import { DEFAULT_ADHOC_SETS, DEFAULT_REST_SEC, nextIncompleteIndex } from './logic';
+import type { CustomTemplate } from './templates';
 
 /**
  * Active workout session — a single zustand store so the rest timer keeps
@@ -48,13 +49,19 @@ interface SessionState {
   rest: RestState | null;
   /** Set id that should run its one-time PR flash, then clear. */
   flashSetId: string | null;
+  /** Optional effort rating for the NEXT logged set; consumed by commitSet. */
+  pendingRpe: number | null;
 
   /** Create a workout (or resume the active one). Used by /workout/start. */
   start: (planWorkoutId: string | null) => Promise<void>;
+  /** Create a workout from a saved custom template (or resume the active one). */
+  startFromTemplate: (template: CustomTemplate) => Promise<void>;
   /** Rebuild from the repo's active workout. False when none exists. */
   hydrate: () => Promise<boolean>;
   setCurrent: (idx: number) => void;
   addExercise: (exerciseId: string) => void;
+  /** Stage an RPE for the next set (null clears). Never blocks logging. */
+  setPendingRpe: (rpe: number | null) => void;
   /** PR-check, persist, advance the pointer and start the rest timer. */
   commitSet: (weightKg: number, reps: number) => Promise<void>;
   startRest: (sec: number) => void;
@@ -80,7 +87,7 @@ function planExerciseToSession(pe: {
   exerciseId: string;
   exerciseName: string;
   sets: number;
-  repRange: string;
+  repRange: string | null;
   restSec: number;
 }): SessionExercise {
   return {
@@ -124,6 +131,7 @@ export const useSession = create<SessionState>()((set, get) => {
     currentIdx: 0,
     rest: null,
     flashSetId: null,
+    pendingRpe: null,
 
     start: async (planWorkoutId) => {
       const repo = await getRepo();
@@ -160,6 +168,45 @@ export const useSession = create<SessionState>()((set, get) => {
         currentIdx: 0,
         rest: null,
         flashSetId: null,
+        pendingRpe: null,
+      });
+    },
+
+    startFromTemplate: async (template) => {
+      const repo = await getRepo();
+      const active = await repo.getActiveWorkout();
+      if (active) {
+        // A workout is already running — resume it instead of stacking a new one.
+        if (get().workoutId !== active.id || get().status !== 'active') {
+          await get().hydrate();
+        }
+        return;
+      }
+      const log: Omit<WorkoutLog, 'finishedAt' | 'durationSec'> = {
+        id: uid(),
+        date: todayIso(),
+        planWorkoutId: null,
+        name: template.name,
+        startedAt: nowIso(),
+      };
+      await repo.startWorkout(log);
+      const exercises = template.exercises.map(planExerciseToSession);
+      await Promise.all(
+        exercises.map(async (e) => {
+          e.lastSets = await repo.getLastSetsForExercise(e.exerciseId, log.id);
+        }),
+      );
+      stopRestTimer();
+      set({
+        status: 'active',
+        workoutId: log.id,
+        workoutName: log.name,
+        startedAt: log.startedAt,
+        exercises,
+        currentIdx: 0,
+        rest: null,
+        flashSetId: null,
+        pendingRpe: null,
       });
     },
 
@@ -211,13 +258,17 @@ export const useSession = create<SessionState>()((set, get) => {
         currentIdx,
         rest: null,
         flashSetId: null,
+        pendingRpe: null,
       });
       return true;
     },
 
     setCurrent: (idx) => {
-      const { exercises } = get();
-      if (idx >= 0 && idx < exercises.length) set({ currentIdx: idx });
+      const { exercises, currentIdx } = get();
+      if (idx >= 0 && idx < exercises.length && idx !== currentIdx) {
+        // A staged RPE belongs to the set it was picked for — drop it on switch.
+        set({ currentIdx: idx, pendingRpe: null });
+      }
     },
 
     addExercise: (exerciseId) => {
@@ -225,7 +276,7 @@ export const useSession = create<SessionState>()((set, get) => {
       if (s.status !== 'active') return;
       const existing = s.exercises.findIndex((e) => e.exerciseId === exerciseId);
       if (existing >= 0) {
-        set({ currentIdx: existing });
+        set({ currentIdx: existing, pendingRpe: null });
         return;
       }
       const info = getExercise(exerciseId);
@@ -240,7 +291,7 @@ export const useSession = create<SessionState>()((set, get) => {
         loggedSets: [],
         lastSets: [],
       };
-      set({ exercises: [...s.exercises, entry], currentIdx: s.exercises.length });
+      set({ exercises: [...s.exercises, entry], currentIdx: s.exercises.length, pendingRpe: null });
       // Ghost targets arrive in the background — no need to block the tap.
       void (async () => {
         const repo = await getRepo();
@@ -253,6 +304,10 @@ export const useSession = create<SessionState>()((set, get) => {
           ),
         });
       })();
+    },
+
+    setPendingRpe: (rpe) => {
+      set({ pendingRpe: rpe });
     },
 
     commitSet: async (weightKg, reps) => {
@@ -281,7 +336,7 @@ export const useSession = create<SessionState>()((set, get) => {
         setNo: ex.loggedSets.length + 1,
         weightKg,
         reps,
-        rpe: null,
+        rpe: s.pendingRpe,
         isPr: pr.isPr,
         loggedAt: nowIso(),
       };
@@ -302,6 +357,7 @@ export const useSession = create<SessionState>()((set, get) => {
         exercises,
         currentIdx: complete ? nextIncompleteIndex(exercises, idx) : idx,
         flashSetId: loudPr ? setLog.id : null,
+        pendingRpe: null,
       });
       get().startRest(ex.restSec);
     },
@@ -385,6 +441,7 @@ export const useSession = create<SessionState>()((set, get) => {
         currentIdx: 0,
         rest: null,
         flashSetId: null,
+        pendingRpe: null,
       });
     },
   };

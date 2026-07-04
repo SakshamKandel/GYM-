@@ -156,6 +156,11 @@ export function SetRow({
             <AppText style={styles.numbers} tabular>
               {fmtSet(logged, unitPref)}
             </AppText>
+            {logged.rpe !== null ? (
+              <AppText variant="caption" color={colors.textFaint} tabular>
+                {`RPE ${logged.rpe}`}
+              </AppText>
+            ) : null}
             <Ionicons name="checkmark" size={16} color={colors.textDim} />
           </>
         ) : isCurrent ? (

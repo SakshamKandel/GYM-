@@ -30,6 +30,7 @@ import {
   enterUp,
   layoutSpring,
 } from '../components/ui';
+import { shareTrainingData } from '../lib/export';
 import { successHaptic, tapHaptic, warnHaptic } from '../lib/haptics';
 import {
   scheduleCheckInReminder,
@@ -289,6 +290,9 @@ export default function SettingsScreen() {
   const [signingOut, setSigningOut] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
 
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
   const biometricLock = useSecurity((s) => s.biometricLock);
   const setBiometricLock = useSecurity((s) => s.setBiometricLock);
   const [confirmingBioOff, setConfirmingBioOff] = useState(false);
@@ -344,6 +348,23 @@ export default function SettingsScreen() {
   function onCheckInToggle(next: boolean): void {
     setCheckInReminderOn(next);
     void scheduleCheckInReminder(next);
+  }
+
+  /** Build the 12-month JSON export and hand it to the OS share sheet. */
+  async function onExport(): Promise<void> {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const shared = await shareTrainingData();
+      // The OS sheet is the visual feedback — a haptic is all we add.
+      if (shared) successHaptic();
+    } catch {
+      setExportError(
+        "The share sheet didn't open. Your data is safe on this phone — give it another try in a moment.",
+      );
+    } finally {
+      setExporting(false);
+    }
   }
 
   /** Toggle the fingerprint lock — verify once before enabling. */
@@ -885,6 +906,38 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
+      {/* ── Your data ───────────────────────────────────────── */}
+      <Animated.View entering={enterUp(7)} layout={layoutSpring}>
+        <AppText variant="label" style={styles.sectionLabel}>
+          Your data
+        </AppText>
+        <View style={styles.group}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Export training data — last 12 months as JSON"
+            accessibilityState={{ disabled: exporting, busy: exporting }}
+            disabled={exporting}
+            onPress={() => void onExport()}
+            style={styles.row}
+          >
+            <IconChip icon="download" size={36} />
+            <View style={styles.exportInfo}>
+              <AppText variant="bodyBold" numberOfLines={1}>
+                Export training data
+              </AppText>
+              <AppText variant="caption" numberOfLines={1}>
+                Last 12 months, JSON
+              </AppText>
+            </View>
+            {exporting ? (
+              <ActivityIndicator size="small" color={colors.textDim} />
+            ) : (
+              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+            )}
+          </PressableScale>
+        </View>
+      </Animated.View>
+
       {/* ── Security ────────────────────────────────────────── */}
       {Platform.OS !== 'web' ? (
         <Animated.View entering={enterUp(7)} layout={layoutSpring}>
@@ -962,6 +1015,15 @@ export default function SettingsScreen() {
           tapHaptic();
         }}
         onCancel={() => setConfirmingBioOff(false)}
+      />
+      <ConfirmDialog
+        visible={exportError !== null}
+        title="Export didn't work"
+        message={exportError ?? ''}
+        confirmLabel="OK"
+        hideCancel
+        onConfirm={() => setExportError(null)}
+        onCancel={() => setExportError(null)}
       />
       <ConfirmDialog
         visible={bioInfo !== null}
@@ -1204,6 +1266,9 @@ const styles = StyleSheet.create({
   planInfo: { flex: 1, gap: 2 },
 
   subscriptionBlock: { marginTop: spacing.xl },
+
+  // Your data — two-line export row (title + caption, like plan options)
+  exportInfo: { flex: 1, minWidth: 0, gap: 2 },
 
   // Security card
   securityCard: { paddingVertical: spacing.lg, gap: spacing.sm },

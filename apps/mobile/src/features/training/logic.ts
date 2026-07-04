@@ -1,5 +1,6 @@
 import type { PlanWorkout, SetLog } from '@gym/shared';
 import { colors } from '@gym/ui-tokens';
+import type { CustomTemplateExercise } from './templates';
 
 /** Pure training logic — no React, no repo. Screens stay thin. */
 
@@ -32,9 +33,15 @@ export function parseRepRange(range: string | null | undefined): RepRange | null
 }
 
 /** ~45s of work per set + prescribed rest, rounded to the nearest 5 minutes. */
-export function estimateWorkoutMinutes(pw: PlanWorkout): number {
-  const totalSec = pw.exercises.reduce((sum, e) => sum + e.sets * (45 + e.restSec), 0);
+export function estimateMinutesForExercises(
+  exercises: { sets: number; restSec: number }[],
+): number {
+  const totalSec = exercises.reduce((sum, e) => sum + e.sets * (45 + e.restSec), 0);
   return Math.max(5, Math.round(totalSec / 60 / 5) * 5);
+}
+
+export function estimateWorkoutMinutes(pw: PlanWorkout): number {
+  return estimateMinutesForExercises(pw.exercises);
 }
 
 /** 754 → "12:34"; 3765 → "1:02:45". Tabular-friendly clock string. */
@@ -115,4 +122,71 @@ export function prefillFor(input: PrefillInput): { weightKg: number; reps: numbe
 /** Last-session numbers to beat for a given set number (ghosted in the row). */
 export function ghostTarget(lastSets: SetLog[], setNo: number): SetLog | null {
   return lastSets.find((s) => s.setNo === setNo) ?? lastSets[lastSets.length - 1] ?? null;
+}
+
+// ── Recap helpers (complete screen) ──────────────────────────────
+
+export interface ExerciseRecap {
+  exerciseId: string;
+  exerciseName: string;
+  sets: SetLog[];
+  volumeKg: number;
+}
+
+/** Group a workout's sets per exercise, in first-logged order. */
+export function groupSetsByExercise(sets: SetLog[]): ExerciseRecap[] {
+  const out: ExerciseRecap[] = [];
+  const byId = new Map<string, ExerciseRecap>();
+  for (const s of sets) {
+    let group = byId.get(s.exerciseId);
+    if (!group) {
+      group = { exerciseId: s.exerciseId, exerciseName: s.exerciseName, sets: [], volumeKg: 0 };
+      byId.set(s.exerciseId, group);
+      out.push(group);
+    }
+    group.sets.push(s);
+    group.volumeKg += s.weightKg * s.reps;
+  }
+  return out;
+}
+
+/** Mean RPE across rated sets, 1 decimal. Null when nothing was rated. */
+export function averageRpe(sets: SetLog[]): number | null {
+  const rated = sets.filter((s) => s.rpe !== null);
+  if (rated.length === 0) return null;
+  const sum = rated.reduce((total, s) => total + (s.rpe ?? 0), 0);
+  return Math.round((sum / rated.length) * 10) / 10;
+}
+
+/** "+240" / "−180" — neutral signed delta for the vs-last-time card. */
+export function formatSignedInt(v: number): string {
+  const sign = v < 0 ? '−' : '+';
+  return `${sign}${Math.abs(Math.round(v)).toLocaleString('en-US')}`;
+}
+
+/** "+4:32" / "−0:45" — signed duration delta. */
+export function formatSignedClock(deltaSec: number): string {
+  const sign = deltaSec < 0 ? '−' : '+';
+  return `${sign}${formatClock(Math.abs(Math.round(deltaSec)))}`;
+}
+
+/**
+ * Turn a finished workout's sets into template exercises: set counts from
+ * what was actually logged, rep range / rest from the source plan when the
+ * session came from one.
+ */
+export function templateExercisesFromSets(
+  sets: SetLog[],
+  planWorkout: PlanWorkout | null,
+): CustomTemplateExercise[] {
+  return groupSetsByExercise(sets).map((g) => {
+    const pe = planWorkout?.exercises.find((e) => e.exerciseId === g.exerciseId);
+    return {
+      exerciseId: g.exerciseId,
+      exerciseName: g.exerciseName,
+      sets: g.sets.length,
+      repRange: pe?.repRange ?? null,
+      restSec: pe?.restSec ?? DEFAULT_REST_SEC,
+    };
+  });
 }

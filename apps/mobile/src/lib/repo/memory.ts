@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { epley1Rm } from '@gym/shared';
 import type {
+  DailyMacros,
   FoodItem,
   FoodLog,
   Measurement,
@@ -10,7 +11,7 @@ import type {
   WeightLog,
   WorkoutLog,
 } from '@gym/shared';
-import type { Repo } from './types';
+import type { AnalyticsSet, Repo } from './types';
 
 /**
  * Web/QA implementation — same contract as SQLite, backed by an in-memory
@@ -207,6 +208,27 @@ export async function createMemoryRepo(): Promise<Repo> {
         .slice(0, limit)
         .map(([id]) => id);
     },
+    async getSetsBetween(fromDate, toDate) {
+      const dateById = new Map(
+        state.workouts
+          .filter((w) => w.finishedAt !== null && w.date >= fromDate && w.date <= toDate)
+          .map((w) => [w.id, w.date]),
+      );
+      return state.sets
+        .filter((s) => dateById.has(s.workoutLogId))
+        .sort((a, b) => a.loggedAt.localeCompare(b.loggedAt))
+        .map(
+          (s): AnalyticsSet => ({
+            exerciseId: s.exerciseId,
+            exerciseName: s.exerciseName,
+            weightKg: s.weightKg,
+            reps: s.reps,
+            rpe: s.rpe,
+            isPr: s.isPr,
+            workoutDate: dateById.get(s.workoutLogId) ?? '',
+          }),
+        );
+    },
 
     // ── Body ────────────────────────────────────────────────
     async upsertWeight(w) {
@@ -247,6 +269,28 @@ export async function createMemoryRepo(): Promise<Repo> {
         if (f.date in out) out[f.date] = (out[f.date] ?? 0) + f.kcal;
       }
       for (const d of dates) out[d] = Math.round(out[d] ?? 0);
+      return out;
+    },
+    async getMacrosByDate(dates) {
+      const out: Record<string, DailyMacros> = {};
+      for (const d of dates) out[d] = { kcal: 0, protein: 0, carbs: 0, fat: 0 };
+      for (const f of state.foodLogs) {
+        const day = out[f.date];
+        if (!day) continue;
+        day.kcal += f.kcal;
+        day.protein += f.protein;
+        day.carbs += f.carbs;
+        day.fat += f.fat;
+      }
+      for (const d of dates) {
+        const day = out[d]!;
+        out[d] = {
+          kcal: Math.round(day.kcal),
+          protein: Math.round(day.protein),
+          carbs: Math.round(day.carbs),
+          fat: Math.round(day.fat),
+        };
+      }
       return out;
     },
     async saveFood(item) {

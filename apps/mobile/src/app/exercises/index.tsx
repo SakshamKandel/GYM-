@@ -19,6 +19,7 @@ import {
   IconChip,
   PressableScale,
 } from '../../components/ui';
+import { useRecentExercises, type RecentExercise } from '../../features/training/hooks';
 import { pushPath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
 import { MUSCLE_GROUPS, searchExercises } from '../../lib/exercises';
@@ -33,6 +34,8 @@ import { MUSCLE_GROUPS, searchExercises } from '../../lib/exercises';
 const TOP_AIR = 16;
 /** Keep phone-first line lengths on wide viewports — same cap as Screen. */
 const MAX_CONTENT_WIDTH = 640;
+/** Tiles in the Recent strip (browse and picker modes). */
+const RECENT_LIMIT = 8;
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
@@ -84,6 +87,26 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
   },
   chipsRow: { gap: spacing.sm, paddingVertical: spacing.md, paddingHorizontal: 20 },
+  recentLabel: { paddingHorizontal: 20, marginBottom: spacing.sm },
+  recentStrip: { gap: spacing.sm, paddingHorizontal: 20, paddingBottom: spacing.md },
+  recentTile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    minHeight: touch.min,
+  },
+  // Same white-chip treatment as the row thumbs, just smaller.
+  recentThumb: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm - 4,
+    backgroundColor: colors.onAccent,
+  },
+  recentName: { maxWidth: 140 },
   list: { flex: 1 },
   row: {
     flexDirection: 'row',
@@ -119,6 +142,47 @@ function RowSeparator() {
     <View style={[styles.contentCap, styles.separatorPad]}>
       <Divider />
     </View>
+  );
+}
+
+function RecentTile({
+  item,
+  onPress,
+  selectMode,
+}: {
+  item: RecentExercise;
+  onPress: () => void;
+  selectMode: boolean;
+}) {
+  const { exercise, daysAgo } = item;
+  const caption =
+    daysAgo === null ? null : daysAgo === 0 ? 'today' : `${daysAgo} d ago`;
+  return (
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel={
+        selectMode ? `Add ${exercise.name} to workout` : `Open ${exercise.name}`
+      }
+      onPress={onPress}
+      style={styles.recentTile}
+    >
+      <Image
+        source={exercise.imageUrls[0] ? { uri: exercise.imageUrls[0] } : undefined}
+        style={styles.recentThumb}
+        contentFit="contain"
+        transition={100}
+      />
+      <View>
+        <AppText variant="bodyBold" numberOfLines={1} style={styles.recentName}>
+          {exercise.name}
+        </AppText>
+        {caption ? (
+          <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+            {caption}
+          </AppText>
+        ) : null}
+      </View>
+    </PressableScale>
   );
 }
 
@@ -175,6 +239,8 @@ export default function ExerciseLibraryScreen() {
   const [query, setQuery] = useState('');
   const [muscle, setMuscle] = useState<string | null>(null);
   const [searchFocused, setSearchFocused] = useState(false);
+  const recent = useRecentExercises(RECENT_LIMIT);
+  const showRecent = query.trim().length === 0 && muscle === null && recent.length > 0;
 
   const results = useMemo(
     () =>
@@ -259,6 +325,29 @@ export default function ExerciseLibraryScreen() {
           ))}
         </ScrollView>
       </Animated.View>
+
+      {showRecent ? (
+        <Animated.View entering={enterFade(0)} style={styles.contentCap}>
+          <View style={styles.recentLabel}>
+            <AppText variant="label">Recent</AppText>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.recentStrip}
+            keyboardShouldPersistTaps="handled"
+          >
+            {recent.map((r) => (
+              <RecentTile
+                key={r.exercise.id}
+                item={r}
+                selectMode={selectMode}
+                onPress={() => handlePick(r.exercise)}
+              />
+            ))}
+          </ScrollView>
+        </Animated.View>
+      ) : null}
 
       {/* FlashList is virtualized — animate the container only, never the rows. */}
       <Animated.View entering={enterUp(1)} style={styles.list}>

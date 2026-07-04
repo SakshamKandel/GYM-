@@ -7,6 +7,7 @@ import { useRef, useState, type ComponentProps } from 'react';
 import {
   AppText,
   Button,
+  ConfirmDialog,
   Divider,
   enterDown,
   enterUp,
@@ -21,13 +22,15 @@ import {
 } from '../../components/ui';
 import { WorkoutPreviewSheet } from '../../features/training/components/WorkoutPreviewSheet';
 import { useTrainData } from '../../features/training/hooks';
-import { estimateWorkoutMinutes } from '../../features/training/logic';
+import { estimateMinutesForExercises, estimateWorkoutMinutes } from '../../features/training/logic';
 import { pushPath } from '../../features/training/nav';
+import { useSession } from '../../features/training/session';
+import { useTemplates, type CustomTemplate } from '../../features/training/templates';
 import { allExercises } from '../../lib/exercises';
 import { getPlan, getPlanWorkouts, SEED_PLANS } from '../../lib/seed/plans';
 import { useProfile } from '../../state/profile';
 
-/** Train tab — next workout hero, this plan's rotation, library, plan switcher. */
+/** Train tab — next workout hero, plan rotation, saved templates, library, plan switcher. */
 
 const FALLBACK_PLAN_ID = 'muscle-ppl';
 
@@ -128,6 +131,7 @@ export default function TrainScreen() {
   const planId = storedPlanId && getPlan(storedPlanId) ? storedPlanId : FALLBACK_PLAN_ID;
   const update = useProfile((s) => s.update);
   const { nextWorkout, activeWorkout, loaded } = useTrainData(planId);
+  const templates = useTemplates((s) => s.templates);
 
   const plan = getPlan(planId);
   const workouts = getPlanWorkouts(planId);
@@ -138,6 +142,23 @@ export default function TrainScreen() {
   const [preview, setPreview] = useState<PlanWorkout | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const pendingStartId = useRef<string | null>(null);
+
+  // Long-press a template row to delete it (with a branded confirm).
+  const [deleteTarget, setDeleteTarget] = useState<CustomTemplate | null>(null);
+  const startingTemplate = useRef(false);
+
+  const startTemplate = (t: CustomTemplate): void => {
+    if (startingTemplate.current) return;
+    startingTemplate.current = true;
+    void (async () => {
+      try {
+        await useSession.getState().startFromTemplate(t);
+        pushPath('/workout');
+      } finally {
+        startingTemplate.current = false;
+      }
+    })();
+  };
 
   // Rows stagger after heading (0) + hero (1); cap so long lists don't crawl.
   const rowIdx = (i: number): number => Math.min(2 + i, 8);
@@ -236,7 +257,41 @@ export default function TrainScreen() {
         </>
       ) : null}
 
+      {/* Saved custom templates — tap to start, long-press to delete. */}
       <Animated.View entering={enterUp(tail)}>
+        <SectionLabel>Your templates</SectionLabel>
+        {templates.length === 0 ? (
+          <AppText variant="caption" color={colors.textFaint}>
+            Finish a workout to save it as a template.
+          </AppText>
+        ) : null}
+      </Animated.View>
+      {templates.map((t, i) => (
+        <Animated.View key={t.id} entering={enterUp(Math.min(tail + i, 8))}>
+          {i > 0 ? <Divider /> : null}
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={`${t.name} template, ${t.exercises.length} exercises. Tap to start, long press to delete.`}
+            onPress={() => startTemplate(t)}
+            onLongPress={() => setDeleteTarget(t)}
+            pressScale={0.985}
+            style={styles.planRow}
+          >
+            <IconChip icon="bookmark" />
+            <View style={styles.planRowText}>
+              <AppText variant="bodyBold" numberOfLines={1}>
+                {t.name}
+              </AppText>
+              <AppText variant="caption" color={colors.textDim} tabular>
+                {`${t.exercises.length} exercises · ~${estimateMinutesForExercises(t.exercises)} min`}
+              </AppText>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+          </PressableScale>
+        </Animated.View>
+      ))}
+
+      <Animated.View entering={enterUp(Math.min(tail + 1, 8))}>
         <Button
           label="Quick start"
           variant="secondary"
@@ -247,7 +302,7 @@ export default function TrainScreen() {
       </Animated.View>
 
       {/* Exercise library */}
-      <Animated.View entering={enterUp(tail + 1)}>
+      <Animated.View entering={enterUp(Math.min(tail + 2, 8))}>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel={`Exercise library, ${exerciseCount} exercises`}
@@ -266,7 +321,7 @@ export default function TrainScreen() {
       </Animated.View>
 
       {/* Plan switcher */}
-      <Animated.View entering={enterUp(tail + 2)}>
+      <Animated.View entering={enterUp(Math.min(tail + 3, 8))}>
         <SectionLabel>Plans</SectionLabel>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.planTiles}>
           {SEED_PLANS.map((p) => (
@@ -302,6 +357,25 @@ export default function TrainScreen() {
           />
         ) : null}
       </Sheet>
+
+      {/* Template delete confirm — long-press is destructive, so ask first. */}
+      <ConfirmDialog
+        visible={deleteTarget !== null}
+        title="Delete template?"
+        message={
+          deleteTarget
+            ? `"${deleteTarget.name}" will be removed. Your logged workouts stay.`
+            : undefined
+        }
+        confirmLabel="Delete"
+        cancelLabel="Keep"
+        danger
+        onConfirm={() => {
+          if (deleteTarget) useTemplates.getState().deleteTemplate(deleteTarget.id);
+          setDeleteTarget(null);
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </Screen>
   );
 }

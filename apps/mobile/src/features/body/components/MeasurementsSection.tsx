@@ -15,7 +15,9 @@ import {
   Sheet,
 } from '../../../components/ui';
 import { posterDate } from '../../../lib/dates';
+import { useProfile } from '../../../state/profile';
 import { useMeasurements } from '../hooks';
+import { displayLength, lengthUnitLabel } from '../lengthUnits';
 import {
   MEASUREMENT_FIELDS,
   latestMeasurementValues,
@@ -26,7 +28,8 @@ import {
 } from '../logic';
 import { MeasurementDetailSheet } from './MeasurementDetailSheet';
 
-/** Latest tape values in a 2-column grid + entry history. Always cm. */
+/** Latest tape values in a 2-column grid + entry history.
+ * Stored cm canonically; displayed in the user's unit (cm or inches). */
 
 const styles = StyleSheet.create({
   headerRow: {
@@ -62,6 +65,7 @@ const styles = StyleSheet.create({
 
 export function MeasurementsSection() {
   const entries = useMeasurements();
+  const unitPref = useProfile((s) => s.unitPref);
   // `openKey` names the field to render; `sheetOpen` drives visibility. Keeping
   // the key set while the sheet animates out means the content doesn't blank
   // mid-exit (same idea as StreakChip keeping its prop).
@@ -97,6 +101,7 @@ export function MeasurementsSection() {
       <Animated.View entering={enterUp(1)} style={styles.grid}>
         {MEASUREMENT_FIELDS.map(({ key, label }) => {
           const value = latest[key];
+          const shown = value !== null ? displayLength(value, unitPref) : null;
           const inner = (
             <>
               <View style={styles.labelRow}>
@@ -116,17 +121,19 @@ export function MeasurementsSection() {
                   minimumFontScale={0.6}
                   style={styles.measureValue}
                 >
-                  {value !== null ? value.toFixed(1) : '—'}
+                  {shown !== null ? shown.toFixed(1) : '—'}
                 </AppText>
-                <AppText variant="caption">cm</AppText>
+                <AppText variant="caption">{lengthUnitLabel(unitPref)}</AppText>
               </View>
             </>
           );
-          return value !== null ? (
+          return value !== null && shown !== null ? (
             <PressableScale
               key={key}
               accessibilityRole="button"
-              accessibilityLabel={`View ${label} history, latest ${value.toFixed(1)} centimetres`}
+              accessibilityLabel={`View ${label} history, latest ${shown.toFixed(1)} ${
+                unitPref === 'kg' ? 'centimetres' : 'inches'
+              }`}
               onPress={() => openDetail(key)}
               style={styles.cell}
             >
