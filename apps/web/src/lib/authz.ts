@@ -1,4 +1,5 @@
-import { auditLog, coachAssignments } from '@gym/db';
+import { admins, auditLog, coachAssignments } from '@gym/db';
+import { canManageRole } from '@gym/shared';
 import { and, eq } from 'drizzle-orm';
 import { bearerToken, staffForToken, type StaffRole } from './auth';
 import { getDb } from './db';
@@ -31,11 +32,14 @@ export type Permission =
   | 'roles.grant'; // grant/revoke staff roles
 
 /**
- * Hardcoded role → permission matrix. super_admin bypasses all. Anything not
- * listed is denied (fail closed).
+ * Hardcoded role → permission matrix. super_admin AND main_admin bypass all —
+ * main_admin holds the full permission set; its restriction is RANK, not
+ * permissions (it may never target a peer/higher staff account — see
+ * requireOutranks + canManageRole from @gym/shared). Anything not listed is
+ * denied (fail closed).
  */
 function roleHasPermission(role: StaffRole, perm: Permission): boolean {
-  if (role === 'super_admin') return true;
+  if (role === 'super_admin' || role === 'main_admin') return true;
   switch (role) {
     case 'coach':
       return (
@@ -88,13 +92,14 @@ export async function requirePermission(
 
 /**
  * True when `principal` (a coach) has an ACTIVE assignment over `userId`.
- * super_admin is allowed through without an assignment row.
+ * super_admin and main_admin are allowed through without an assignment row —
+ * the target here is always a MEMBER, never a staff row, so no rank check.
  */
 export async function requireCoachOwnsUser(
   principal: Principal,
   userId: string,
 ): Promise<boolean> {
-  if (principal.role === 'super_admin') return true;
+  if (principal.role === 'super_admin' || principal.role === 'main_admin') return true;
   const rows = await getDb()
     .select({ id: coachAssignments.id })
     .from(coachAssignments)
@@ -107,6 +112,38 @@ export async function requireCoachOwnsUser(
     )
     .limit(1);
   return rows.length > 0;
+}
+
+/**
+ * The target account's admin role, or null when the account is not staff.
+ * Used by the rank guards below before any operation that TARGETS an account.
+ */
+export async function adminRoleOf(accountId: string): Promise<StaffRole | null> {
+  const rows = await getDb()
+    .select({ role: admins.role })
+    .from(admins)
+    .where(eq(admins.accountId, accountId))
+    .limit(1);
+  return rows[0]?.role ?? null;
+}
+
+/**
+ * Rank guard for operations that target a STAFF account (grant/change/revoke a
+ * role, suspend the holder). Returns null to continue, or a 403 Response when
+ * the actor does not outrank `targetRole` (per canManageRole: super_admin
+ * manages everyone; main_admin manages sub-roles only; sub-roles manage
+ * nobody). A null `targetRole` (target is not staff) always passes — rank only
+ * protects staff rows. Identity self-checks stay at the call sites.
+ */
+export function requireOutranks(
+  principal: Principal,
+  targetRole: StaffRole | null,
+): Response | null {
+  if (targetRole === null) return null;
+  if (!canManageRole(principal.role, targetRole)) {
+    return json({ error: 'insufficient_rank' }, 403);
+  }
+  return null;
 }
 
 /** Appends an audit row. Best-effort context; never throws to the caller path. */

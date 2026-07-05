@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing } from '@gym/ui-tokens';
@@ -12,9 +13,12 @@ import {
   enterUp,
   layoutSpring,
 } from '../../components/ui';
+import { SuggestionRow } from '../../features/progression/components/SuggestionRow';
+import { refreshServerSuggestions, useSuggestion } from '../../features/progression/hooks';
 import { LogEditor } from '../../features/training/components/LogEditor';
 import { RestTimerPanel } from '../../features/training/components/RestTimerPanel';
 import { ExerciseSection } from '../../features/training/components/ExerciseSection';
+import { PrCelebration } from '../../features/training/components/PrCelebration';
 import { formatClock } from '../../features/training/logic';
 import { pushPath, replacePath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
@@ -37,6 +41,8 @@ import { useProfile } from '../../state/profile';
 const TOP_AIR = 16;
 /** Keep phone-first line lengths on wide viewports — same cap as Screen. */
 const MAX_CONTENT_WIDTH = 640;
+/** Scoped tag so this screen's keep-awake claim can't collide with another. */
+const KEEP_AWAKE_TAG = 'workout-session';
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
@@ -64,6 +70,15 @@ const styles = StyleSheet.create({
   },
   empty: { alignItems: 'center', paddingVertical: spacing.md, gap: spacing.sm },
   addBtn: { alignSelf: 'center', marginTop: spacing.sm },
+  celebrationOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
 
 export default function WorkoutScreen() {
@@ -75,6 +90,44 @@ export default function WorkoutScreen() {
   const [logging, setLogging] = useState(false);
   /** Branded finish confirmation: 'finish' saves, 'discard' throws away an empty session. */
   const [finishPrompt, setFinishPrompt] = useState<null | 'finish' | 'discard'>(null);
+  /** Progression target the user tapped Apply on — piped into the editor prefill. */
+  const [appliedSuggestion, setAppliedSuggestion] = useState<{
+    exerciseId: string;
+    weightKg: number;
+    reps: number;
+  } | null>(null);
+
+  // Suggested next target for the exercise under the editor. The hook is
+  // local-first; the one-shot fetch below only adds coach-review state.
+  const currentExercise = session.exercises[session.currentIdx] ?? null;
+  const suggestion = useSuggestion(
+    currentExercise
+      ? {
+          exerciseId: currentExercise.exerciseId,
+          exerciseName: currentExercise.exerciseName,
+          repRange: currentExercise.repRange,
+        }
+      : null,
+  );
+
+  // Workout start: pull coach-reviewed suggestions once. Fire-and-forget —
+  // offline or unreviewed silently falls back to the local engine result.
+  useEffect(() => {
+    void refreshServerSuggestions();
+  }, []);
+
+  // Memoized: the elapsed clock re-renders this screen every second, and a
+  // fresh object literal per render would refire LogEditor's prefill effect
+  // on every tick — snapping the steppers back to the applied target while
+  // the user is adjusting them.
+  const currentExerciseId = currentExercise?.exerciseId ?? null;
+  const appliedForCurrent = useMemo(
+    () =>
+      appliedSuggestion !== null && appliedSuggestion.exerciseId === currentExerciseId
+        ? { weightKg: appliedSuggestion.weightKg, reps: appliedSuggestion.reps }
+        : null,
+    [appliedSuggestion, currentExerciseId],
+  );
 
   // Resume from the repo if the store is cold (app restart, deep link).
   useEffect(() => {
@@ -127,6 +180,26 @@ export default function WorkoutScreen() {
     });
   }, [isActive, workoutName, restRemainingSec, elapsed]);
 
+  // Keep the screen awake for the length of the workout — sweaty thumbs
+  // shouldn't have to fight a lock timeout mid-set.
+  useEffect(() => {
+    if (!isActive) return;
+    void activateKeepAwakeAsync(KEEP_AWAKE_TAG);
+    return () => {
+      void deactivateKeepAwake(KEEP_AWAKE_TAG);
+    };
+  }, [isActive]);
+
+  // Fire the PR burst once per flashed set — decoupled from flashSetId's own
+  // lifetime (the row clears its flash well before the burst finishes).
+  const [celebrateId, setCelebrateId] = useState<string | null>(null);
+  useEffect(() => {
+    if (session.flashSetId && session.flashSetId !== celebrateId) {
+      setCelebrateId(session.flashSetId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.flashSetId]);
+
   // Clear on unmount — covers navigation away / screen teardown so no stale
   // "workout in progress" lingers (finish/discard also clear explicitly below).
   useEffect(() => {
@@ -140,7 +213,6 @@ export default function WorkoutScreen() {
   }
 
   const totalSets = session.exercises.reduce((n, e) => n + e.loggedSets.length, 0);
-  const currentExercise = session.exercises[session.currentIdx] ?? null;
 
   const doFinish = async (): Promise<void> => {
     void clearActiveWorkout();
@@ -234,11 +306,26 @@ export default function WorkoutScreen() {
           </Animated.View>
         ) : currentExercise ? (
           <Animated.View key="editor" entering={enterFade(0)}>
+            {suggestion && currentExercise.loggedSets.length === 0 ? (
+              <SuggestionRow
+                suggestion={suggestion}
+                unitPref={unitPref}
+                applied={appliedForCurrent !== null}
+                onApply={(weightKg, reps) =>
+                  setAppliedSuggestion({
+                    exerciseId: currentExercise.exerciseId,
+                    weightKg,
+                    reps,
+                  })
+                }
+              />
+            ) : null}
             <LogEditor
               exercise={currentExercise}
               unitPref={unitPref}
               onLog={handleLog}
               logging={logging}
+              appliedSuggestion={appliedForCurrent}
             />
           </Animated.View>
         ) : (
@@ -282,6 +369,12 @@ export default function WorkoutScreen() {
         }}
         onCancel={() => setFinishPrompt(null)}
       />
+
+      {celebrateId ? (
+        <View style={styles.celebrationOverlay} pointerEvents="none">
+          <PrCelebration key={celebrateId} onDone={() => setCelebrateId(null)} />
+        </View>
+      ) : null}
     </View>
   );
 }

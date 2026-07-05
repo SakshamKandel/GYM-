@@ -13,7 +13,10 @@ import { useEffect } from 'react';
 import { AppState, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { colors } from '@gym/ui-tokens';
+import { hydrateCheckIns } from '../features/checkin/store';
+import { registerPushRefresh } from '../features/realtime/pushRefresh';
 import { AppLock } from '../features/security/AppLock';
+import { syncWorkouts } from '../features/sync/workoutSync';
 import {
   registerForPushNotificationsAsync,
   setupNotifications,
@@ -61,7 +64,19 @@ export default function RootLayout() {
   // registers too. Fire-and-forget: it never throws and no-ops when signed out.
   const authStatus = useAuth((s) => s.status);
   useEffect(() => {
-    if (authStatus === 'signedIn') void registerForPushNotificationsAsync();
+    if (authStatus === 'signedIn') {
+      void registerForPushNotificationsAsync();
+      // Drain the unsynced-workout backlog and reconcile check-in due-state.
+      // Keyed to authStatus (not mount) because the persisted 'signedIn' state
+      // rehydrates from AsyncStorage AFTER mount — a mount-only call would race
+      // rehydration and no-op on every cold start, leaving offline workouts
+      // stuck until the next finish(). This also covers fresh sign-ins.
+      void syncWorkouts();
+      void hydrateCheckIns();
+      // Push→refresh listeners (coach review / check-in reply pushes trigger
+      // an immediate store re-fetch). Registers once; later calls no-op.
+      registerPushRefresh();
+    }
   }, [authStatus]);
 
   if (!fontsLoaded && !fontsError) {

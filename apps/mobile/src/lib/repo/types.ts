@@ -60,6 +60,12 @@ export interface Repo {
   /** Sets from FINISHED workouts whose workout date is within [fromDate, toDate], oldest first. */
   getSetsBetween(fromDate: string, toDate: string): Promise<AnalyticsSet[]>;
 
+  // ── Sync (one-way server backup) ────────────────────────────
+  /** Finished workouts not yet backed up to the server (with their sets), oldest first. */
+  getUnsyncedFinishedWorkouts(limit: number): Promise<{ workout: WorkoutLog; sets: SetLog[] }[]>;
+  /** Stamp workouts synced — call ONLY after the server confirmed the batch. */
+  markWorkoutsSynced(ids: string[], syncedAt: string): Promise<void>;
+
   // ── Body ────────────────────────────────────────────────────
   upsertWeight(w: WeightLog): Promise<void>;
   getWeights(limitDays: number): Promise<WeightLog[]>;

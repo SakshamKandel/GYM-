@@ -154,6 +154,7 @@ export async function GET(req: Request) {
       status: planVideos.status,
       position: planVideos.position,
       thumbnailUrl: planVideos.thumbnailUrl,
+      views: planVideos.views,
       createdAt: planVideos.createdAt,
     })
     .from(planVideos)

@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  Badge,
   type Column,
   DataTable,
   PageHeader,
@@ -11,6 +12,8 @@ import {
   TierChip,
   Toolbar,
 } from '@/components/console';
+import { staffRoleLabel } from '@/app/admin/_lib/staffRoleLabel';
+import type { StaffRole } from '@/lib/auth';
 import { MemberDrawer } from './MemberDrawer';
 import type { CoachOption, MemberRow, Tier } from './types';
 
@@ -26,12 +29,14 @@ const STATUS_OPTIONS = ['all', 'active', 'suspended'] as const;
 export function MembersDirectory({
   members,
   coaches,
+  callerRole,
   canSuspend,
   canTier,
   canAssign,
 }: {
   members: MemberRow[];
   coaches: CoachOption[];
+  callerRole: StaffRole;
   canSuspend: boolean;
   canTier: boolean;
   canAssign: boolean;
@@ -66,12 +71,18 @@ export function MembersDirectory({
     {
       key: 'name',
       header: 'Name',
-      render: (r) =>
-        r.displayName?.trim() ? (
-          r.displayName
-        ) : (
-          <span style={{ color: 'var(--gt-text-dim)' }}>—</span>
-        ),
+      render: (r) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          {r.displayName?.trim() ? (
+            r.displayName
+          ) : (
+            <span style={{ color: 'var(--gt-text-dim)' }}>—</span>
+          )}
+          {r.staffRole != null ? (
+            <Badge tone="info">{staffRoleLabel(r.staffRole)}</Badge>
+          ) : null}
+        </span>
+      ),
     },
     {
       key: 'tier',
@@ -169,6 +180,7 @@ export function MembersDirectory({
         memberId={openId}
         fallback={selected}
         coaches={coaches}
+        callerRole={callerRole}
         canSuspend={canSuspend}
         canTier={canTier}
         canAssign={canAssign}

@@ -1,7 +1,7 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { todayIso } from '../lib/dates';
+import { mmkvStorage } from '../lib/mmkvStorage';
 
 /**
  * First-3-workouts activation quest — tiny persisted slice.
@@ -40,7 +40,7 @@ export const useQuest = create<QuestState>()(
     }),
     {
       name: 'gym-tracker-quest-v1',
-      storage: createJSONStorage(() => AsyncStorage),
+      storage: createJSONStorage(() => mmkvStorage),
     },
   ),
 );

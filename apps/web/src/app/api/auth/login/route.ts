@@ -1,4 +1,5 @@
 import { accounts } from '@gym/db';
+import { effectiveTier } from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { createSession } from '@/lib/auth';
@@ -28,6 +29,7 @@ export async function POST(req: Request) {
       email: accounts.email,
       displayName: accounts.displayName,
       tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
       passwordHash: accounts.passwordHash,
     })
     .from(accounts)
@@ -52,7 +54,8 @@ export async function POST(req: Request) {
         id: account.id,
         email: account.email,
         displayName: account.displayName,
-        tier: account.tier,
+        // Effective tier: a lapsed paid tier logs in as 'starter' (no cron).
+        tier: effectiveTier(account.tier, account.tierExpiresAt, new Date()),
       },
     },
     200,

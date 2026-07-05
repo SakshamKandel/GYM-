@@ -61,7 +61,9 @@ export default async function AdminContentPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
   const isContentStaff =
-    principal.role === 'super_admin' || principal.role === 'content_admin';
+    principal.role === 'super_admin' ||
+    principal.role === 'main_admin' ||
+    principal.role === 'content_admin';
   if (!isContentStaff) redirect('/admin');
 
   const videos = await loadVideos();

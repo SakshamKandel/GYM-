@@ -45,8 +45,11 @@ import { useAuth } from '../../../state/auth';
 const ERR_TEXT: Record<StaffErrorCode, string> = {
   unauthorized: 'Your session expired. Sign in again.',
   forbidden: "You don't have access to this.",
+  insufficient_rank: 'Only a higher admin can do that.',
   not_found: 'Not found.',
   invalid: "That didn't work.",
+  cannot_target_self: "You can't change your own role.",
+  cannot_revoke_self: "You can't revoke your own access.",
   conflict: 'That conflicts with the current state.',
   not_configured: 'This feature is not set up yet.',
   network: "Couldn't reach the server.",

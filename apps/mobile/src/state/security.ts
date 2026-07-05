@@ -1,6 +1,6 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { mmkvStorage } from '../lib/mmkvStorage';
 
 /** Security preferences — currently the biometric app lock. */
 
@@ -18,7 +18,7 @@ export const useSecurity = create<SecurityState>()(
     }),
     {
       name: 'gym-tracker-security-v1',
-      storage: createJSONStorage(() => AsyncStorage),
+      storage: createJSONStorage(() => mmkvStorage),
     },
   ),
 );

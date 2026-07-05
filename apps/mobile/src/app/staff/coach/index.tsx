@@ -28,6 +28,12 @@ import {
   type Tier,
 } from '../../../features/staff/api';
 import { pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import {
+  StaffHeaderAction,
+  StaffSignOutDialog,
+  switchToMemberApp,
+  useStaffSignOut,
+} from '../../../features/staff/StaffExit';
 
 /**
  * Coach inbox — the assigned-client roster, the first screen of Greece's phone
@@ -128,6 +134,7 @@ function ClientRow({ row, index }: { row: CoachInboxRow; index: number }) {
 
 export default function CoachInboxScreen() {
   const token = useAuth((s) => s.token);
+  const signOut = useStaffSignOut();
 
   const [rows, setRows] = useState<CoachInboxRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -181,6 +188,7 @@ export default function CoachInboxScreen() {
   return (
     <Screen edges={{ bottom: false }}>
       <Animated.View entering={enterDown()} style={styles.header}>
+        {/* Back → the staff hub (always reachable, never an app-exit). */}
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Back to staff console"
@@ -199,6 +207,13 @@ export default function CoachInboxScreen() {
                 : 'All caught up'}
           </AppText>
         </View>
+        {/* Leave the console for the member app (stay signed in) — the fix for
+            the back button dead-ending after a fresh coach login. */}
+        <StaffHeaderAction
+          icon="phone-portrait-outline"
+          label="Switch to member app"
+          onPress={switchToMemberApp}
+        />
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Coaching profile"
@@ -206,6 +221,34 @@ export default function CoachInboxScreen() {
           style={styles.backBtn}
         >
           <Ionicons name="person-circle-outline" size={24} color={colors.text} />
+        </PressableScale>
+        <StaffHeaderAction
+          icon="log-out-outline"
+          label="Sign out of the staff console"
+          onPress={signOut.requestSignOut}
+        />
+      </Animated.View>
+
+      {/* ── videos-feature: link to the coach video library (owned by the
+          videos/subscription slice — kept as its own block below the header for
+          a clean merge with the header/sign-out work). ── */}
+      <Animated.View entering={enterDown()}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Open the plan-video library"
+          onPress={() => pushStaff(STAFF_ROUTES.coachVideos)}
+          style={styles.videosLink}
+        >
+          <View style={styles.videosIcon}>
+            <Ionicons name="film-outline" size={20} color={colors.accent} />
+          </View>
+          <View style={styles.videosText}>
+            <AppText variant="bodyBold">Video library</AppText>
+            <AppText variant="caption" color={colors.textDim}>
+              Add, retier or remove plan videos · see view counts
+            </AppText>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textFaint} />
         </PressableScale>
       </Animated.View>
 
@@ -270,6 +313,13 @@ export default function CoachInboxScreen() {
           }
         />
       )}
+
+      <StaffSignOutDialog
+        confirming={signOut.confirming}
+        signingOut={signOut.signingOut}
+        confirmSignOut={signOut.confirmSignOut}
+        cancelSignOut={signOut.cancelSignOut}
+      />
     </Screen>
   );
 }
@@ -290,6 +340,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerText: { flex: 1, gap: 2 },
+  // videos-feature: the video-library link block (own styles for clean merge).
+  videosLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  videosIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.full,
+    backgroundColor: colors.accentFaint,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videosText: { flex: 1, gap: 2 },
   centre: {
     flex: 1,
     alignItems: 'center',

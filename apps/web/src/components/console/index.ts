@@ -23,3 +23,4 @@ export { Modal } from './Modal';
 export { ConfirmButton } from './ConfirmButton';
 export { ConsoleShell } from './ConsoleShell';
 export type { NavItem } from './ConsoleShell';
+export { LogoutButton } from './LogoutButton';

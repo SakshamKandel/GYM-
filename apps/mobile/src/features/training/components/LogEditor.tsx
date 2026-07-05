@@ -20,6 +20,8 @@ interface Props {
   unitPref: UnitPref;
   onLog: (weightKg: number, reps: number) => void;
   logging: boolean;
+  /** Progression target the user tapped Apply on (canonical kg) — prefill override. */
+  appliedSuggestion?: { weightKg: number; reps: number } | null;
 }
 
 /** Meaningful effort ratings only — below 6 nobody bothers to rate. */
@@ -39,7 +41,7 @@ const styles = StyleSheet.create({
   button: { alignSelf: 'stretch', marginTop: spacing.md },
 });
 
-export function LogEditor({ exercise, unitPref, onLog, logging }: Props) {
+export function LogEditor({ exercise, unitPref, onLog, logging, appliedSuggestion }: Props) {
   const [weight, setWeight] = useState(0); // display units
   const [reps, setReps] = useState(10);
   // Staged in the session store so commitSet can attach it to the saved set.
@@ -52,12 +54,23 @@ export function LogEditor({ exercise, unitPref, onLog, logging }: Props) {
       sessionSets: exercise.loggedSets,
       lastSets: exercise.lastSets,
       repRange: exercise.repRange,
+      suggested: appliedSuggestion ?? null,
     });
     setWeight(displayWeight(p.weightKg, unitPref));
     setReps(p.reps);
-    // Re-prefill when the exercise, its set count, or ghost data changes.
+    // Re-prefill when the exercise, its set count, ghost data, or an applied
+    // suggestion changes. The suggestion is keyed on its primitive values, not
+    // the object reference — a parent re-render (e.g. the 1s elapsed clock)
+    // must never clobber the user's manual stepper adjustments.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [exercise.exerciseId, loggedCount, exercise.lastSets, unitPref]);
+  }, [
+    exercise.exerciseId,
+    loggedCount,
+    exercise.lastSets,
+    unitPref,
+    appliedSuggestion?.weightKg,
+    appliedSuggestion?.reps,
+  ]);
 
   const weightKg = inputToKg(weight, unitPref);
   const setLabel = `Set ${loggedCount + 1}${exercise.repRange ? ` · target ${exercise.repRange}` : ''}`;

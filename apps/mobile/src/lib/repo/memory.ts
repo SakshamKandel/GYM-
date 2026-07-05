@@ -28,6 +28,8 @@ interface MemoryState {
   foodLogs: (FoodLog & { loggedAt: string })[];
   water: Record<string, number>;
   streak: Streak;
+  /** Ids of workouts already backed up to the server (mirrors sqlite synced_at). */
+  syncedWorkoutIds: string[];
 }
 
 const KEY = 'gym-tracker-db-v1';
@@ -42,6 +44,7 @@ function emptyState(): MemoryState {
     foodLogs: [],
     water: {},
     streak: { current: 0, best: 0, lastWorkoutDate: null },
+    syncedWorkoutIds: [],
   };
 }
 
@@ -228,6 +231,27 @@ export async function createMemoryRepo(): Promise<Repo> {
             workoutDate: dateById.get(s.workoutLogId) ?? '',
           }),
         );
+    },
+
+    // ── Sync (one-way server backup) ────────────────────────
+    async getUnsyncedFinishedWorkouts(limit) {
+      const synced = new Set(state.syncedWorkoutIds);
+      return state.workouts
+        .filter((w) => w.finishedAt !== null && !synced.has(w.id))
+        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+        .slice(0, limit)
+        .map((workout) => ({
+          workout,
+          sets: state.sets
+            .filter((s) => s.workoutLogId === workout.id)
+            .sort((a, b) => a.loggedAt.localeCompare(b.loggedAt)),
+        }));
+    },
+    async markWorkoutsSynced(ids, _syncedAt) {
+      const synced = new Set(state.syncedWorkoutIds);
+      for (const id of ids) synced.add(id);
+      state.syncedWorkoutIds = [...synced];
+      persist();
     },
 
     // ── Body ────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { accounts, admins, sessions } from '@gym/db';
+import { type StaffRole, effectiveTier } from '@gym/shared';
 import { and, eq, gt } from 'drizzle-orm';
 import { getDb } from './db';
 
@@ -12,13 +13,10 @@ export interface PublicUser {
   tier: 'starter' | 'silver' | 'gold' | 'elite';
 }
 
-export type StaffRole =
-  | 'super_admin'
-  | 'member_admin'
-  | 'nutrition_admin'
-  | 'content_admin'
-  | 'support_admin'
-  | 'coach';
+// The role union now lives in @gym/shared (logic/staffRoles.ts) so the rank
+// rules and the role names can never drift apart. Re-exported here so every
+// existing `import type { StaffRole } from '@/lib/auth'` keeps working.
+export type { StaffRole };
 
 export interface StaffPrincipal {
   user: PublicUser;
@@ -44,6 +42,10 @@ export function bearerToken(req: Request): string | null {
  * Joins session → account; returns null for unknown or expired tokens, or when
  * the account is suspended (status !== 'active') — so suspending an account
  * kills all of its live tokens instantly.
+ *
+ * The returned `tier` is the EFFECTIVE tier: a paid tier whose tierExpiresAt is
+ * in the past collapses to 'starter' here (no cron), so every bearer-authed
+ * route that gates on user.tier sees the lapsed value automatically.
  */
 export async function userForToken(token: string): Promise<PublicUser | null> {
   const rows = await getDb()
@@ -52,6 +54,7 @@ export async function userForToken(token: string): Promise<PublicUser | null> {
       email: accounts.email,
       displayName: accounts.displayName,
       tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
     })
     .from(sessions)
     .innerJoin(accounts, eq(sessions.accountId, accounts.id))
@@ -63,7 +66,10 @@ export async function userForToken(token: string): Promise<PublicUser | null> {
       ),
     )
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0];
+  if (!row) return null;
+  const { tierExpiresAt, ...user } = row;
+  return { ...user, tier: effectiveTier(user.tier, tierExpiresAt, new Date()) };
 }
 
 /**
@@ -78,6 +84,7 @@ export async function staffForToken(token: string): Promise<StaffPrincipal | nul
       email: accounts.email,
       displayName: accounts.displayName,
       tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
       role: admins.role,
     })
     .from(sessions)
@@ -94,7 +101,13 @@ export async function staffForToken(token: string): Promise<StaffPrincipal | nul
   const row = rows[0];
   if (!row) return null;
   return {
-    user: { id: row.id, email: row.email, displayName: row.displayName, tier: row.tier },
+    user: {
+      id: row.id,
+      email: row.email,
+      displayName: row.displayName,
+      // Effective tier so a lapsed Elite staff/member sees the collapsed value.
+      tier: effectiveTier(row.tier, row.tierExpiresAt, new Date()),
+    },
     role: row.role,
   };
 }

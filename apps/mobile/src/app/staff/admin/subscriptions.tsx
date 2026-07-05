@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -13,6 +13,7 @@ import {
   PressableScale,
   Screen,
   SectionLabel,
+  Stepper,
   Tag,
 } from '../../../components/ui';
 import {
@@ -25,17 +26,30 @@ import {
   type StaffErrorCode,
   type Tier,
 } from '../../../features/staff/api';
+import {
+  defaultCustomDateParts,
+  DURATION_OPTIONS,
+  expiresAtFor,
+  expiryLabel,
+  isoFromDateParts,
+  tierAllowsExpiry,
+  type DurationChoice,
+} from '../../../features/staff/duration';
 import { pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
 
 /**
- * Admin · Subscriptions — override a member's tier and review recent overrides.
+ * Admin · Subscriptions — override a member's tier + expiry and review recent
+ * overrides.
  *
  * Top: the member directory (getMembers) with a search box; each row shows the
- * member's current tier and opens a sheet to pick a new tier + optional reason,
- * committed via setTier(accountId, tier, reason). Bottom: the most recent tier
- * overrides pulled from the audit log filtered to `subscription.override`.
- * Every override refetches both the affected row's tier and the changes list.
+ * member's current tier and opens a sheet to pick a new tier, a duration
+ * (30 / 90 days · 1 year · permanent · custom date) and an optional reason,
+ * committed via setTier(accountId, tier, reason, { expiresAt }). Bottom: the
+ * most recent tier overrides pulled from the audit log filtered to
+ * `subscription.override` — whose meta also carries the expiry we surface as
+ * each member's current window. Every override refetches both the affected
+ * row's tier and the changes list.
  */
 
 const TIERS: Tier[] = ['starter', 'silver', 'gold', 'elite'];
@@ -57,8 +71,11 @@ const TIER_COLOR: Record<Tier, string> = {
 const ERR_TEXT: Record<StaffErrorCode, string> = {
   unauthorized: 'Your session expired. Sign in again.',
   forbidden: "You don't have access to this.",
+  insufficient_rank: 'Only a higher admin can do that.',
   not_found: 'Member not found.',
   invalid: "That didn't work.",
+  cannot_target_self: "You can't change your own role.",
+  cannot_revoke_self: "You can't revoke your own access.",
   conflict: 'That conflicts with the current state.',
   not_configured: 'This feature is not set up yet.',
   network: "Couldn't reach the server.",
@@ -94,6 +111,47 @@ function metaTier(meta: unknown): Tier | null {
   return null;
 }
 
+/**
+ * The expiry window an override recorded, from its audit meta. The server logs
+ * `{ tier, reason, startsAt?, expiresAt? }` as ISO strings or null. Three-way
+ * result:
+ *   - `undefined` → the meta didn't carry an expiresAt (older override / not set)
+ *   - `null`      → set permanent (no expiry)
+ *   - string      → the ISO expiry instant
+ */
+function metaExpiresAt(meta: unknown): string | null | undefined {
+  if (meta && typeof meta === 'object' && 'expiresAt' in meta) {
+    const v = (meta as Record<string, unknown>).expiresAt;
+    if (v === null) return null;
+    if (typeof v === 'string') return v;
+  }
+  return undefined;
+}
+
+/**
+ * Best-effort current expiry for a member: the expiresAt from the most-recent
+ * `subscription.override` audit entry that targeted them AND carried the field.
+ * Entries arrive newest-first, so the first match wins. `undefined` = unknown.
+ */
+function latestExpiryFor(memberId: string, entries: AuditEntry[]): string | null | undefined {
+  for (const e of entries) {
+    if (e.targetId !== memberId) continue;
+    const exp = metaExpiresAt(e.meta);
+    if (exp !== undefined) return exp;
+  }
+  return undefined;
+}
+
+const MONTHS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/** Clamp a day to the days in the given month/year (no Feb 30). */
+function daysInMonth(year: number, month1to12: number): number {
+  return new Date(year, month1to12, 0).getDate();
+}
+
 // ── Quiet retry line ──────────────────────────────────────────
 function RetryLine({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
@@ -115,37 +173,96 @@ function RetryLine({ message, onRetry }: { message: string; onRetry: () => void 
 
 function OverrideSheet({
   member,
+  currentExpiry,
   token,
   onClose,
   onSaved,
 }: {
   member: MemberRow;
+  /** Best-effort current expiry: undefined = unknown, null = permanent, ISO = set. */
+  currentExpiry: string | null | undefined;
   token: string;
   onClose: () => void;
   onSaved: (tier: Tier) => void;
 }) {
   const [picked, setPicked] = useState<Tier>(member.tier);
+  // The window the operator wants. `null` (permanent) is the safe default so a
+  // plain tier bump doesn't silently attach an expiry; touching a duration chip
+  // opts into a dated window.
+  const [duration, setDuration] = useState<DurationChoice>('permanent');
+  const [windowTouched, setWindowTouched] = useState(false);
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const changed = picked !== member.tier;
+  // Custom date parts default ~90 days out. Lazy initializers read the clock
+  // once at mount (never during render — React purity).
+  const [year, setYear] = useState(() => defaultCustomDateParts().year);
+  const [month, setMonth] = useState(() => defaultCustomDateParts().month);
+  const [day, setDay] = useState(() => defaultCustomDateParts().day);
+
+  const allowsExpiry = tierAllowsExpiry(picked);
+  const usingCustom = allowsExpiry && duration === 'custom';
+  const maxDay = daysInMonth(year, month);
+  const safeDay = Math.min(day, maxDay);
+
+  // Resolve the picked window to an ISO expiry (or null = permanent).
+  const resolvedExpiresAt = useMemo((): string | null => {
+    if (!allowsExpiry) return null; // starter → permanent
+    const option = DURATION_OPTIONS.find((o) => o.key === duration);
+    if (!option) return null;
+    if (duration === 'custom') return isoFromDateParts(year, month, safeDay);
+    return expiresAtFor(option) ?? null;
+  }, [allowsExpiry, duration, year, month, safeDay]);
+
+  const tierChanged = picked !== member.tier;
+  // "Dirty" when the tier changed OR the operator chose a window (extend/renew
+  // without a tier change is a valid override).
+  const dirty = tierChanged || windowTouched;
+
+  function chooseTier(t: Tier): void {
+    setPicked(t);
+    // Starter can't carry an expiry — snap the window back to permanent.
+    if (!tierAllowsExpiry(t)) {
+      setDuration('permanent');
+    }
+  }
+
+  function chooseDuration(key: DurationChoice): void {
+    setDuration(key);
+    setWindowTouched(true);
+  }
 
   async function save(): Promise<void> {
-    if (!changed) {
+    if (!dirty) {
       onClose();
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      const result = await setTier(member.id, picked, reason.trim() || undefined, token);
+      const result = await setTier(
+        member.id,
+        picked,
+        reason.trim() || undefined,
+        // Only send expiresAt when the operator set a window (or the tier is
+        // starter, which must be permanent). Otherwise omit it so a plain tier
+        // bump leaves the existing expiry column untouched.
+        windowTouched || !allowsExpiry ? { expiresAt: allowsExpiry ? resolvedExpiresAt : null } : undefined,
+        token,
+      );
       onSaved(result.tier);
     } catch (e) {
       setError(ERR_TEXT[toStaffError(e).code]);
       setSaving(false);
     }
   }
+
+  const previewLine = !allowsExpiry
+    ? 'Permanent (free tier)'
+    : windowTouched
+      ? expiryLabel(resolvedExpiresAt)
+      : 'Expiry unchanged';
 
   return (
     <Modal visible transparent animationType="none" onRequestClose={onClose}>
@@ -158,6 +275,7 @@ function OverrideSheet({
           </AppText>
           <AppText variant="caption" numberOfLines={1}>
             Currently {TIER_LABEL[member.tier]}
+            {currentExpiry !== undefined ? ` · ${expiryLabel(currentExpiry)}` : ''}
           </AppText>
 
           <View style={styles.tierGrid}>
@@ -169,7 +287,7 @@ function OverrideSheet({
                   accessibilityRole="button"
                   accessibilityState={{ selected: on }}
                   accessibilityLabel={TIER_LABEL[t]}
-                  onPress={() => setPicked(t)}
+                  onPress={() => chooseTier(t)}
                   style={[
                     styles.tierPill,
                     on && { borderColor: TIER_COLOR[t], backgroundColor: colors.surfaceRaised },
@@ -186,6 +304,78 @@ function OverrideSheet({
                 </PressableScale>
               );
             })}
+          </View>
+
+          {allowsExpiry ? (
+            <>
+              <AppText variant="label" style={styles.durationLabel}>
+                Duration
+              </AppText>
+              <View style={styles.durationGrid}>
+                {DURATION_OPTIONS.map((opt) => {
+                  const on = windowTouched && duration === opt.key;
+                  return (
+                    <PressableScale
+                      key={opt.key}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: on }}
+                      accessibilityLabel={opt.label}
+                      onPress={() => chooseDuration(opt.key)}
+                      style={[styles.durationPill, on && styles.durationPillOn]}
+                    >
+                      <AppText
+                        variant="body"
+                        color={on ? colors.text : colors.textDim}
+                        tabular={false}
+                      >
+                        {opt.label}
+                      </AppText>
+                    </PressableScale>
+                  );
+                })}
+              </View>
+
+              {usingCustom ? (
+                <View style={styles.stepperRow}>
+                  <Stepper
+                    label="Year"
+                    value={year}
+                    onChange={setYear}
+                    step={1}
+                    min={new Date().getFullYear()}
+                    max={new Date().getFullYear() + 5}
+                  />
+                  <Stepper
+                    label="Month"
+                    value={month}
+                    onChange={setMonth}
+                    step={1}
+                    min={1}
+                    max={12}
+                    format={(v) => MONTHS[Math.min(Math.max(v, 1), 12) - 1] ?? String(v)}
+                  />
+                  <Stepper
+                    label="Day"
+                    value={safeDay}
+                    onChange={setDay}
+                    step={1}
+                    min={1}
+                    max={maxDay}
+                  />
+                </View>
+              ) : null}
+            </>
+          ) : null}
+
+          <View style={styles.previewRow}>
+            <Ionicons
+              name={allowsExpiry && windowTouched ? 'calendar-outline' : 'infinite-outline'}
+              size={15}
+              color={colors.accent}
+            />
+            <AppText variant="caption" color={colors.text}>
+              {previewLine}
+            </AppText>
           </View>
 
           <AppTextInput
@@ -210,10 +400,10 @@ function OverrideSheet({
               onPress={onClose}
             />
             <Button
-              label={changed ? 'Apply' : 'No change'}
+              label={dirty ? 'Apply' : 'No change'}
               style={styles.sheetBtn}
               onPress={() => void save()}
-              disabled={saving || !changed}
+              disabled={saving || !dirty}
               loading={saving}
             />
           </View>
@@ -405,6 +595,7 @@ export default function AdminSubscriptionsScreen() {
       {editing && token ? (
         <OverrideSheet
           member={editing}
+          currentExpiry={latestExpiryFor(editing.id, changes)}
           token={token}
           onClose={() => setEditing(null)}
           onSaved={onSaved}
@@ -513,6 +704,36 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     paddingHorizontal: 16,
     height: touch.min,
+  },
+  durationLabel: { marginTop: spacing.md },
+  durationGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  durationPill: {
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    paddingHorizontal: 16,
+    height: touch.min,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  durationPillOn: { borderColor: colors.text, backgroundColor: colors.surfaceRaised },
+  stepperRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+    marginTop: spacing.md,
+  },
+  previewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
   },
   reasonInput: {
     marginTop: spacing.md,

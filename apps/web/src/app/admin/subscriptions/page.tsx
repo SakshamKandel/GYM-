@@ -18,11 +18,11 @@ export const dynamic = 'force-dynamic';
 /**
  * Roles allowed to override subscription tiers. Mirrors canSubscriptions() in
  * admin/layout.tsx and the 'subscription.override' grant in authz.ts
- * (super_admin + member_admin). The layout hides the nav link and guards the
+ * (super_admin + main_admin + member_admin). The layout hides the nav link and guards the
  * subtree, but we re-check here so hitting the URL directly still fails safe —
  * every page re-checks its own role set.
  */
-const CAN_OVERRIDE: readonly StaffRole[] = ['super_admin', 'member_admin'];
+const CAN_OVERRIDE: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
 
 const MEMBER_CAP = 200;
 const LOG_CAP = 30;
@@ -41,6 +41,8 @@ async function loadMembers(): Promise<MemberRow[]> {
       displayName: accounts.displayName,
       tier: accounts.tier,
       status: accounts.status,
+      tierStartedAt: accounts.tierStartedAt,
+      tierExpiresAt: accounts.tierExpiresAt,
     })
     .from(accounts)
     .orderBy(asc(accounts.email))
@@ -51,6 +53,19 @@ async function loadMembers(): Promise<MemberRow[]> {
     displayName: r.displayName,
     tier: r.tier as Tier,
     status: r.status,
+    // ISO strings (or null) so the client component is a plain serializable prop.
+    tierStartedAt:
+      r.tierStartedAt instanceof Date
+        ? r.tierStartedAt.toISOString()
+        : r.tierStartedAt
+          ? String(r.tierStartedAt)
+          : null,
+    tierExpiresAt:
+      r.tierExpiresAt instanceof Date
+        ? r.tierExpiresAt.toISOString()
+        : r.tierExpiresAt
+          ? String(r.tierExpiresAt)
+          : null,
   }));
 }
 

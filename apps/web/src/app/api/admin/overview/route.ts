@@ -36,8 +36,8 @@ export const runtime = 'nodejs';
  *                        round-trip (actorId is SET NULL after actor deletion,
  *                        so those rows carry actorEmail: null).
  *
- * Guarded by requirePermission('members.read') — super_admin, member_admin and
- * support_admin hold it per the role matrix.
+ * Guarded by requirePermission('members.read') — super_admin, main_admin,
+ * member_admin and support_admin hold it per the role matrix.
  */
 
 type Tier = 'starter' | 'silver' | 'gold' | 'elite';

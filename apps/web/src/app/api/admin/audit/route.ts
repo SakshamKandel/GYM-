@@ -21,8 +21,9 @@ export const runtime = 'nodejs';
  *  and the (createdAt,id) tuple is a stable keyset. Page size is PAGE_SIZE; the
  *  response carries `nextCursor` (or null when the last page is reached).
  *
- * Guarded by requirePermission('audit.read') — super_admin only per the role
- * matrix (audit.read is granted to no other role and falls through fail-closed).
+ * Guarded by requirePermission('audit.read') — super_admin + main_admin only
+ * (both bypass the permission matrix; audit.read is granted to no other role
+ * and falls through fail-closed).
  */
 
 const PAGE_SIZE = 50;

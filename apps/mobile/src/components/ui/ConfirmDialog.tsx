@@ -1,6 +1,8 @@
+import { useEffect } from 'react';
 import { Modal, Pressable, StyleSheet, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { colors, radius, spacing } from '@gym/ui-tokens';
+import { warnHaptic } from '../../lib/haptics';
 import { AppText } from './AppText';
 import { Button } from './Button';
 
@@ -60,6 +62,13 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: Props) {
+  // Destructive prompts get a physical warning the moment they appear —
+  // the same cue used elsewhere for errors/irreversible actions.
+  useEffect(() => {
+    if (visible && danger) warnHaptic();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, danger]);
+
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onCancel}>
       <Animated.View entering={FadeIn.duration(120)} style={{ flex: 1 }}>

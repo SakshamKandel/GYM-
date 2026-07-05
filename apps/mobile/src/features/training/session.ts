@@ -9,6 +9,7 @@ import { uid } from '../../lib/id';
 import { getRepo } from '../../lib/repo';
 import { getPlanWorkout } from '../../lib/seed/plans';
 import { useAuth } from '../../state/auth';
+import { syncWorkouts } from '../sync/workoutSync';
 import { DEFAULT_ADHOC_SETS, DEFAULT_REST_SEC, nextIncompleteIndex } from './logic';
 import type { CustomTemplate } from './templates';
 
@@ -415,6 +416,9 @@ export const useSession = create<SessionState>()((set, get) => {
           prCount: sets.filter((x) => x.isPr).length,
         });
       }
+      // One-way server backup of the finished workout (fire-and-forget — it
+      // no-ops signed out and swallows failures; the backlog retries later).
+      void syncWorkouts();
 
       successHaptic();
       const id = s.workoutId;

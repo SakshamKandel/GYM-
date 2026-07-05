@@ -272,6 +272,14 @@ export const accounts = pgTable('accounts', {
   tier: text('tier', { enum: ['starter', 'silver', 'gold', 'elite'] })
     .notNull()
     .default('starter'),
+  // Dated subscriptions. Both nullable so existing rows and db:push are safe.
+  //  - tierStartedAt: when the current tier took effect (audit/history).
+  //  - tierExpiresAt: null = no expiry (permanent/free). A past timestamp means
+  //    the paid tier has lapsed; the account keeps `tier` (for history and
+  //    one-click reactivation) but effectiveTier() collapses it to 'starter' at
+  //    the auth choke point — so an expired Elite loses access with NO cron.
+  tierStartedAt: timestamp('tier_started_at', { withTimezone: true }),
+  tierExpiresAt: timestamp('tier_expires_at', { withTimezone: true }),
   // 'suspended' kills every session for this account at the auth choke point
   // (userForToken filters on status='active'). Defaulted so existing rows and
   // the mobile GET/POST are unaffected.
@@ -504,6 +512,7 @@ export const admins = pgTable('admins', {
   role: text('role', {
     enum: [
       'super_admin',
+      'main_admin',
       'member_admin',
       'nutrition_admin',
       'content_admin',
@@ -610,6 +619,10 @@ export const planVideos = pgTable(
     thumbnailUrl: text('thumbnail_url'),
     durationSec: integer('duration_sec'),
     position: integer('position').notNull().default(0),
+    // Successful signed-playback mints (tier-allowed 200s). Incremented atomically
+    // and best-effort in the playback route — never blocks playback. Defaulted so
+    // existing rows read 0 and db:push is safe.
+    views: integer('views').notNull().default(0),
     status: text('status', { enum: ['processing', 'ready', 'removed'] })
       .notNull()
       .default('processing'),
@@ -619,5 +632,129 @@ export const planVideos = pgTable(
   (t) => [
     index('plan_videos_tier_status_position').on(t.tierRequired, t.status, t.position),
     index('plan_videos_exercise').on(t.exerciseId),
+  ],
+);
+
+/**
+ * One-way, append-only workout backup from the device (accounts-keyed).
+ * The legacy `workoutLogs`/`setLogs` tables FK to profiles.id (auth-less
+ * identity) and stay untouched — bearer-authed sync lands HERE. `id` is the
+ * client-generated UUID and doubles as the idempotency key: the sync route
+ * upserts with ON CONFLICT DO NOTHING, so a replayed batch is harmless.
+ */
+export const syncedWorkouts = pgTable(
+  'synced_workouts',
+  {
+    id: text('id').primaryKey(), // client-generated UUID — idempotency key
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    date: date('date').notNull(),
+    name: text('name').notNull(),
+    templateId: text('template_id'),
+    templateName: text('template_name'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }).notNull(),
+    durationSec: integer('duration_sec'),
+    syncedAt: timestamp('synced_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('synced_workouts_account_date').on(t.accountId, t.date)],
+);
+
+export const syncedSets = pgTable(
+  'synced_sets',
+  {
+    id: text('id').primaryKey(), // client-generated UUID
+    workoutId: text('workout_id')
+      .notNull()
+      .references(() => syncedWorkouts.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    exerciseId: text('exercise_id').notNull(),
+    exerciseName: text('exercise_name').notNull(),
+    setNo: integer('set_no').notNull(),
+    weightKg: doublePrecision('weight_kg').notNull(), // canonical kg always
+    weightUnit: text('weight_unit', { enum: ['kg', 'lb'] }).notNull().default('kg'), // user's display unit
+    reps: integer('reps').notNull(),
+    rpe: doublePrecision('rpe'),
+    isWarmup: boolean('is_warmup').notNull().default(false), // local schema has no flag yet; reserved
+    isPr: boolean('is_pr').notNull().default(false),
+    loggedAt: timestamp('logged_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [index('synced_sets_account_exercise_logged').on(t.accountId, t.exerciseId, t.loggedAt)],
+);
+
+/**
+ * Client-computed progression suggestions awaiting/holding coach review.
+ * One row per (account, exercise, source workout); the mobile app posts them
+ * after a workout syncs, the coach console approves or adjusts, and mobile
+ * renders reviewed rows with a "Reviewed by your coach" badge.
+ */
+export const progressionSuggestions = pgTable(
+  'progression_suggestions',
+  {
+    id: text('id').primaryKey(), // client-generated UUID
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    exerciseId: text('exercise_id').notNull(),
+    exerciseName: text('exercise_name').notNull(),
+    sourceWorkoutId: text('source_workout_id').notNull(), // synced workout the suggestion was computed after
+    action: text('action', { enum: ['increase', 'hold', 'deload'] }).notNull(),
+    targetWeightKg: doublePrecision('target_weight_kg').notNull(),
+    targetRepsMin: integer('target_reps_min').notNull(),
+    targetRepsMax: integer('target_reps_max').notNull(),
+    reason: text('reason').notNull(),
+    status: text('status', { enum: ['pending', 'approved', 'adjusted'] })
+      .notNull()
+      .default('pending'),
+    coachId: text('coach_id').references(() => accounts.id, { onDelete: 'set null' }),
+    adjustedWeightKg: doublePrecision('adjusted_weight_kg'),
+    coachNote: text('coach_note'),
+    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('progression_suggestions_account_exercise_source').on(
+      t.accountId,
+      t.exerciseId,
+      t.sourceWorkoutId,
+    ),
+    index('progression_suggestions_account_status').on(t.accountId, t.status, t.createdAt),
+  ],
+);
+
+/**
+ * Weekly coach check-ins (distinct from the local GM WeeklyCheckIn feature).
+ * One per account per day; `summary` is the client-computed week recap and
+ * `coachReplyMessageId` links the coach's reply row in coach_messages so the
+ * mobile thread renders it with zero changes.
+ */
+export const checkIns = pgTable(
+  'check_ins',
+  {
+    id: text('id').primaryKey(), // client-generated UUID
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    date: date('date').notNull(),
+    bodyweightKg: doublePrecision('bodyweight_kg'),
+    sleep: integer('sleep').notNull(), // 1-5
+    energy: integer('energy').notNull(), // 1-5
+    soreness: integer('soreness').notNull(), // 1-5
+    note: text('note').notNull().default(''),
+    summary: jsonb('summary')
+      .$type<{ sessions: number; volumeKg: number; prCount: number }>()
+      .notNull()
+      .default({ sessions: 0, volumeKg: 0, prCount: 0 }),
+    coachReplyMessageId: text('coach_reply_message_id').references(() => coachMessages.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('check_ins_account_date').on(t.accountId, t.date),
+    index('check_ins_account_created').on(t.accountId, t.createdAt),
   ],
 );

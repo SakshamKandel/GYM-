@@ -1,8 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { router } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { colors, radius, spacing, touch } from '@gym/ui-tokens';
+import { colors, radius, spacing } from '@gym/ui-tokens';
 import {
   AppText,
   enterDown,
@@ -19,25 +18,24 @@ import {
   pushStaff,
   STAFF_ROUTES,
 } from '../../features/staff/nav';
+import { roleLabel } from '../../features/staff/roles';
+import {
+  StaffHeaderAction,
+  StaffSignOutDialog,
+  switchToMemberApp,
+  useStaffSignOut,
+} from '../../features/staff/StaffExit';
 
 /**
  * Staff hub — the role-aware entry point for the mobile staff console. Greets
- * the staff member and surfaces a "Coach console" card (coach / super_admin)
+ * the staff member and surfaces a "Coach console" card (coach / super_admin /
+ * main_admin)
  * and/or an "Admin console" card (any admin-tier role). Screen agents own the
  * destinations; this screen only routes.
  *
  * Reached via router.replace('/staff') straight after a staff sign-in (skipping
  * onboarding) or from the Settings "Staff console" row.
  */
-
-const ROLE_LABEL: Record<string, string> = {
-  super_admin: 'Super admin',
-  member_admin: 'Member admin',
-  nutrition_admin: 'Nutrition admin',
-  content_admin: 'Content admin',
-  support_admin: 'Support admin',
-  coach: 'Coach',
-};
 
 /** A tappable console card — icon, title, one-line blurb, chevron. */
 function ConsoleCard({
@@ -82,6 +80,7 @@ export default function StaffHubScreen() {
   const staffRole = useAuth((s) => s.staffRole);
   const authUser = useAuth((s) => s.user);
   const profileName = useProfile((s) => s.displayName);
+  const signOut = useStaffSignOut();
 
   const firstName =
     (authUser?.displayName?.trim() || profileName.trim() || 'there').split(' ')[0] ?? 'there';
@@ -89,31 +88,30 @@ export default function StaffHubScreen() {
   const showCoach = canOpenCoachConsole(staffRole);
   const showAdmin = canOpenAdminConsole(staffRole);
 
-  function goHome(): void {
-    // Leave the console back into the normal athlete app.
-    if (router.canGoBack()) router.back();
-    else router.replace('/');
-  }
-
   return (
     <Screen scroll>
       <Animated.View entering={enterDown()} style={styles.headerRow}>
-        <PressableScale
-          accessibilityRole="button"
-          accessibilityLabel="Back to app"
-          onPress={goHome}
-          style={styles.backBtn}
-        >
-          <Ionicons name="chevron-back" size={24} color={colors.text} />
-        </PressableScale>
-        <AppText variant="heading">Staff console</AppText>
+        {/* Leave the console for the member app (stay signed in). Replaces the
+            old back-chevron, which dead-ended (exited the app) after a fresh
+            staff login because the console is the app root then. */}
+        <StaffHeaderAction
+          icon="arrow-back"
+          label="Switch to member app"
+          onPress={switchToMemberApp}
+        />
+        <AppText variant="heading" style={styles.headerTitle}>
+          Staff console
+        </AppText>
+        <StaffHeaderAction
+          icon="log-out-outline"
+          label="Sign out of the staff console"
+          onPress={signOut.requestSignOut}
+        />
       </Animated.View>
 
       <Animated.View entering={enterUp(0)} style={styles.hero}>
         <HeroCard>
-          <AppText variant="label">
-            {staffRole ? (ROLE_LABEL[staffRole] ?? 'Staff') : 'Staff'}
-          </AppText>
+          <AppText variant="label">{roleLabel(staffRole)}</AppText>
           <AppText variant="title">Welcome back, {firstName}</AppText>
           <AppText variant="caption">
             Manage your clients and the platform from one place.
@@ -148,6 +146,56 @@ export default function StaffHubScreen() {
           </AppText>
         </Animated.View>
       ) : null}
+
+      {/* Explicit console-exit rows — an always-visible way out that never
+          dead-ends the app (see StaffExit for the routing rationale). */}
+      <Animated.View entering={enterUp(3)} style={styles.exitGroup}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Switch to member app"
+          onPress={switchToMemberApp}
+          style={styles.exitRow}
+        >
+          <View style={styles.exitIcon}>
+            <Ionicons name="phone-portrait-outline" size={20} color={colors.text} />
+          </View>
+          <View style={styles.cardText}>
+            <AppText variant="bodyBold" numberOfLines={1}>
+              Switch to member app
+            </AppText>
+            <AppText variant="caption" numberOfLines={2}>
+              Leave the console for your normal athlete app — you stay signed in.
+            </AppText>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+        </PressableScale>
+
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Sign out of the staff console"
+          onPress={signOut.requestSignOut}
+          style={styles.exitRow}
+        >
+          <View style={styles.exitIcon}>
+            <Ionicons name="log-out-outline" size={20} color={colors.accent} />
+          </View>
+          <View style={styles.cardText}>
+            <AppText variant="bodyBold" numberOfLines={1} color={colors.accent}>
+              Sign out
+            </AppText>
+            <AppText variant="caption" numberOfLines={2}>
+              Sign out of your account completely.
+            </AppText>
+          </View>
+        </PressableScale>
+      </Animated.View>
+
+      <StaffSignOutDialog
+        confirming={signOut.confirming}
+        signingOut={signOut.signingOut}
+        confirmSignOut={signOut.confirmSignOut}
+        cancelSignOut={signOut.cancelSignOut}
+      />
     </Screen>
   );
 }
@@ -159,14 +207,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingBottom: spacing.lg,
   },
-  backBtn: {
-    width: touch.min,
-    height: touch.min,
-    borderRadius: radius.full,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  headerTitle: { flex: 1 },
   hero: { marginBottom: spacing.xl },
   card: {
     flexDirection: 'row',
@@ -189,4 +230,23 @@ const styles = StyleSheet.create({
   },
   cardText: { flex: 1, gap: 2 },
   empty: { marginTop: spacing.xl, paddingHorizontal: spacing.md },
+  exitGroup: { marginTop: spacing.xl, gap: spacing.md },
+  exitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+  },
+  exitIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

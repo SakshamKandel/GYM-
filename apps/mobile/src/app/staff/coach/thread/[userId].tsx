@@ -189,6 +189,24 @@ export default function CoachThreadScreen() {
             <AppText variant="caption">Coaching chat</AppText>
           )}
         </View>
+        {/* Manage this client's subscription — tier + expiry, own active
+            clients only (the coach-scoped endpoint enforces ownership). */}
+        {userId ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={`Manage ${clientName}'s subscription`}
+            onPress={() =>
+              pushStaff(
+                `${STAFF_ROUTES.coachClient(userId)}?name=${encodeURIComponent(clientName)}${
+                  tier ? `&tier=${tier}` : ''
+                }`,
+              )
+            }
+            style={styles.backBtn}
+          >
+            <Ionicons name="card-outline" size={22} color={colors.text} />
+          </PressableScale>
+        ) : null}
       </View>
 
       <KeyboardAvoidingView

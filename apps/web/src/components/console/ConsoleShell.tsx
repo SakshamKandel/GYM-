@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { LogoutButton } from './LogoutButton';
 
 /**
  * A single left-nav destination. `match` decides the active state:
@@ -22,24 +23,29 @@ function isActive(item: NavItem, pathname: string): boolean {
 /**
  * Shared console chrome for the admin + coach shells: fixed-width sidebar with
  * a brand label, role-filtered nav (active item painted the one accent red via
- * the .gt-nav-item token), and a footer showing the signed-in email + a Sign
- * out button (posts to /api/staff/logout). Server-component; the caller passes
- * the resolved pathname so active state renders without client JS.
+ * the .gt-nav-item token), and a footer showing the signed-in email + a Log out
+ * button. Logout POSTs to /api/staff/logout and then redirects the browser to
+ * this console's own login page (`loginHref`) — see LogoutButton. Server
+ * component apart from that one client button; the caller passes the resolved
+ * pathname so active state renders without client JS.
  *
  * `nav` items are pre-filtered by the caller (role gating lives in the layout),
- * so ConsoleShell renders exactly what it's given.
+ * so ConsoleShell renders exactly what it's given. `loginHref` is the console's
+ * login route ('/admin/login' or '/coach/login').
  */
 export function ConsoleShell({
   brand,
   nav,
   pathname,
   email,
+  loginHref,
   children,
 }: {
   brand: string;
   nav: NavItem[];
   pathname: string;
   email: string;
+  loginHref: string;
   children: ReactNode;
 }) {
   return (
@@ -131,22 +137,7 @@ export function ConsoleShell({
               {email}
             </div>
           </div>
-          <form action="/api/staff/logout" method="post">
-            <button
-              type="submit"
-              className="gt-nav-item"
-              style={{
-                width: '100%',
-                textAlign: 'left',
-                background: 'none',
-                border: '1px solid var(--gt-border)',
-                cursor: 'pointer',
-                fontFamily: 'var(--font-heading)',
-              }}
-            >
-              Sign out
-            </button>
-          </form>
+          <LogoutButton loginHref={loginHref} />
         </div>
       </aside>
       <main style={{ flex: 1, minWidth: 0, padding: '28px 32px' }}>{children}</main>

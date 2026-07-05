@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -18,51 +18,94 @@ import {
   SectionLabel,
   Tag,
 } from '../../../components/ui';
+import { assignableRolesFor, canManageRole } from '@gym/shared';
 import {
   getMembers,
   getStaff,
   grantRole,
   revokeRole,
   type MemberRow,
+  type StaffErrorCode,
   type StaffRole,
   type StaffRow,
   toStaffError,
 } from '../../../features/staff/api';
-import { replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { isTopAdmin, replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { ROLE_LABEL } from '../../../features/staff/roles';
 import { useAuth } from '../../../state/auth';
 
 /**
- * Admin · Staff & roles (super_admin only).
+ * Admin · Staff & roles (super_admin + main_admin).
  *
- * Lists every staff account (getStaff), lets a super_admin grant a role to any
+ * Lists every staff account (getStaff), lets the caller grant a role to any
  * account found via a member search (grantRole), and revoke an existing staff
  * member's access (revokeRole) behind a confirm. Mutations refetch the roster.
- * Gated: a non-super_admin sees a locked notice, never the data.
+ *
+ * Rank-aware: the grant chips come from assignableRolesFor(callerRole) (a
+ * main_admin hands out sub-roles only), rows the caller cannot manage carry a
+ * lock tag and no actions, and the caller's own row is labeled "You" with no
+ * actions — mirroring the server's cannot_target_self / insufficient_rank
+ * guards so a tap can never end in a surprise 403. Gated: sub-roles see a
+ * locked notice, never the data.
  */
 
-const ROLE_LABEL: Record<StaffRole, string> = {
-  super_admin: 'Super admin',
-  member_admin: 'Member admin',
-  nutrition_admin: 'Nutrition admin',
-  content_admin: 'Content admin',
-  support_admin: 'Support admin',
-  coach: 'Coach',
-};
+/** Friendly line for a failed grant/role change. */
+function grantFailLine(code: StaffErrorCode): string {
+  switch (code) {
+    case 'insufficient_rank':
+      return 'Only a super admin can manage that role.';
+    case 'cannot_target_self':
+      return "You can't change your own role.";
+    case 'unauthorized':
+      return 'Your session expired. Sign in again.';
+    case 'forbidden':
+      return "You don't have permission to grant roles.";
+    case 'not_found':
+      return 'That account no longer exists.';
+    case 'invalid':
+      return "The server didn't accept that role.";
+    default:
+      return "Couldn't reach the server. Try again.";
+  }
+}
 
-/** The roles a super_admin can hand out from this screen. */
-const GRANTABLE_ROLES: StaffRole[] = [
-  'coach',
-  'support_admin',
-  'content_admin',
-  'nutrition_admin',
-  'member_admin',
-  'super_admin',
-];
+/** Friendly line for a failed revoke. */
+function revokeFailLine(code: StaffErrorCode): string {
+  switch (code) {
+    case 'cannot_revoke_self':
+    case 'conflict':
+      return "You can't revoke your own access.";
+    case 'insufficient_rank':
+      return 'Only a super admin can revoke that role.';
+    case 'unauthorized':
+      return 'Your session expired. Sign in again.';
+    case 'forbidden':
+      return "You don't have permission to revoke roles.";
+    case 'not_found':
+      return 'That account is no longer staff.';
+    default:
+      return "Couldn't reach the server. Try again.";
+  }
+}
 
 export default function StaffAndRolesScreen() {
   const token = useAuth((s) => s.token);
   const staffRole = useAuth((s) => s.staffRole);
-  const isSuperAdmin = staffRole === 'super_admin';
+  const myAccountId = useAuth((s) => s.user?.id ?? null);
+  const canManageStaff = isTopAdmin(staffRole);
+
+  /** Roles the CALLER may hand out — highest rank first (canonical order). */
+  // useMemo (not a plain expression): the React Compiler refuses to optimise
+  // the component when this call result feeds JSX unmemoised.
+  const grantableRoles: StaffRole[] = useMemo(
+    () => (staffRole ? assignableRolesFor(staffRole) : []),
+    [staffRole],
+  );
+
+  /** May the caller manage (change/revoke) a row holding `role`? */
+  function canManage(role: StaffRole): boolean {
+    return staffRole !== null && canManageRole(staffRole, role);
+  }
 
   // ── Roster ────────────────────────────────────────────────
   const [staff, setStaff] = useState<StaffRow[] | null>(null);
@@ -83,8 +126,8 @@ export default function StaffAndRolesScreen() {
   }, [token]);
 
   useEffect(() => {
-    if (isSuperAdmin) void loadStaff();
-  }, [isSuperAdmin, loadStaff]);
+    if (canManageStaff) void loadStaff();
+  }, [canManageStaff, loadStaff]);
 
   // ── Grant flow ────────────────────────────────────────────
   const [query, setQuery] = useState('');
@@ -122,7 +165,7 @@ export default function StaffAndRolesScreen() {
       setPicked(null);
       await loadStaff();
     } catch (err) {
-      setBanner(`Couldn't grant role (${toStaffError(err).code}).`);
+      setBanner(grantFailLine(toStaffError(err).code));
     } finally {
       setGranting(false);
     }
@@ -142,11 +185,7 @@ export default function StaffAndRolesScreen() {
       await loadStaff();
     } catch (err) {
       const code = toStaffError(err).code;
-      setBanner(
-        code === 'conflict'
-          ? "You can't revoke your own access."
-          : `Couldn't revoke access (${code}).`,
-      );
+      setBanner(revokeFailLine(code));
       setRevoking(null);
     } finally {
       setRevokeBusy(false);
@@ -159,14 +198,14 @@ export default function StaffAndRolesScreen() {
   }
 
   // ── Gate ──────────────────────────────────────────────────
-  if (!isSuperAdmin) {
+  if (!canManageStaff) {
     return (
       <Screen>
         <BackRow title="Staff & roles" onBack={goBack} />
         <Animated.View entering={enterUp(0)} style={styles.locked}>
           <Ionicons name="lock-closed" size={28} color={colors.textFaint} />
           <AppText variant="caption" center color={colors.textFaint}>
-            Only a super admin can manage staff and roles.
+            Only a super admin or main admin can manage staff and roles.
           </AppText>
         </Animated.View>
       </Screen>
@@ -221,13 +260,22 @@ export default function StaffAndRolesScreen() {
 
       {results.map((m) => {
         const isPicked = picked?.id === m.id;
+        const isSelf = m.id === myAccountId;
+        // Mirror the server guards: no self-targeting, no touching a staff
+        // row the caller does not outrank.
+        const blocked = isSelf || (m.staffRole !== null && !canManage(m.staffRole));
         return (
           <PressableScale
             key={m.id}
             accessibilityRole="button"
-            accessibilityState={{ selected: isPicked }}
+            accessibilityState={{ selected: isPicked, disabled: blocked }}
+            disabled={blocked}
             onPress={() => setPicked(isPicked ? null : m)}
-            style={[styles.resultRow, isPicked && styles.resultRowPicked]}
+            style={[
+              styles.resultRow,
+              isPicked && styles.resultRowPicked,
+              blocked && styles.rowBlocked,
+            ]}
           >
             <View style={styles.resultText}>
               <AppText variant="bodyBold" numberOfLines={1}>
@@ -236,10 +284,32 @@ export default function StaffAndRolesScreen() {
               <AppText variant="caption" numberOfLines={1}>
                 {m.email}
               </AppText>
+              {isSelf ? (
+                <View style={styles.staffTags}>
+                  <Tag label="You" variant="outline" color={colors.textDim} />
+                </View>
+              ) : m.staffRole !== null ? (
+                <View style={styles.staffTags}>
+                  <Tag label={ROLE_LABEL[m.staffRole]} variant="dim" />
+                  {blocked ? (
+                    <Tag
+                      label="Managed by super admin"
+                      variant="outline"
+                      color={colors.textFaint}
+                    />
+                  ) : null}
+                </View>
+              ) : null}
             </View>
             <Ionicons
-              name={isPicked ? 'checkmark-circle' : 'ellipse-outline'}
-              size={22}
+              name={
+                blocked
+                  ? 'lock-closed'
+                  : isPicked
+                    ? 'checkmark-circle'
+                    : 'ellipse-outline'
+              }
+              size={blocked ? 18 : 22}
               color={isPicked ? colors.accent : colors.textFaint}
             />
           </PressableScale>
@@ -252,7 +322,7 @@ export default function StaffAndRolesScreen() {
             Role for {picked.email}
           </AppText>
           <View style={styles.roleChips}>
-            {GRANTABLE_ROLES.map((r) => (
+            {grantableRoles.map((r) => (
               <Chip
                 key={r}
                 label={ROLE_LABEL[r]}
@@ -288,35 +358,57 @@ export default function StaffAndRolesScreen() {
         </AppText>
       ) : null}
 
-      {staff?.map((s, i) => (
-        <Animated.View key={s.accountId} entering={enterUp(Math.min(i, 6))}>
-          <View style={styles.staffRow}>
-            <View style={styles.staffText}>
-              <AppText variant="bodyBold" numberOfLines={1}>
-                {s.displayName || s.email}
-              </AppText>
-              <AppText variant="caption" numberOfLines={1}>
-                {s.email}
-              </AppText>
-              <View style={styles.staffTags}>
-                <Tag label={ROLE_LABEL[s.role]} variant="dim" />
-                {s.status === 'suspended' ? (
-                  <Tag label="Suspended" variant="outline" color={colors.warning} />
-                ) : null}
+      {staff?.map((s, i) => {
+        const isSelf = s.accountId === myAccountId;
+        const locked = !isSelf && !canManage(s.role);
+        return (
+          <Animated.View key={s.accountId} entering={enterUp(Math.min(i, 6))}>
+            <View style={styles.staffRow}>
+              <View style={styles.staffText}>
+                <AppText variant="bodyBold" numberOfLines={1}>
+                  {s.displayName || s.email}
+                </AppText>
+                <AppText variant="caption" numberOfLines={1}>
+                  {s.email}
+                </AppText>
+                <View style={styles.staffTags}>
+                  <Tag label={ROLE_LABEL[s.role]} variant="dim" />
+                  {isSelf ? (
+                    <Tag label="You" variant="outline" color={colors.textDim} />
+                  ) : null}
+                  {locked ? (
+                    <Tag
+                      label="Managed by super admin"
+                      variant="outline"
+                      color={colors.textFaint}
+                    />
+                  ) : null}
+                  {s.status === 'suspended' ? (
+                    <Tag label="Suspended" variant="outline" color={colors.warning} />
+                  ) : null}
+                </View>
               </View>
+              {isSelf || locked ? (
+                <View style={styles.lockSlot}>
+                  {locked ? (
+                    <Ionicons name="lock-closed" size={16} color={colors.textFaint} />
+                  ) : null}
+                </View>
+              ) : (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel={`Revoke ${s.email}`}
+                  onPress={() => setRevoking(s)}
+                  style={styles.revokeBtn}
+                >
+                  <Ionicons name="close" size={18} color={colors.error} />
+                </PressableScale>
+              )}
             </View>
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel={`Revoke ${s.email}`}
-              onPress={() => setRevoking(s)}
-              style={styles.revokeBtn}
-            >
-              <Ionicons name="close" size={18} color={colors.error} />
-            </PressableScale>
-          </View>
-          {i < (staff.length - 1) ? <Divider /> : null}
-        </Animated.View>
-      ))}
+            {i < (staff.length - 1) ? <Divider /> : null}
+          </Animated.View>
+        );
+      })}
 
       <ConfirmDialog
         visible={revoking !== null}
@@ -415,6 +507,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   resultRowPicked: { borderColor: colors.accent },
+  rowBlocked: { opacity: 0.55 },
   resultText: { flex: 1, gap: 2 },
   grantPanel: {
     marginTop: spacing.md,
@@ -434,7 +527,18 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   staffText: { flex: 1, gap: 4 },
-  staffTags: { flexDirection: 'row', gap: spacing.sm, marginTop: 2 },
+  staffTags: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: 2,
+  },
+  lockSlot: {
+    width: touch.min,
+    height: touch.min,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   revokeBtn: {
     width: touch.min,
     height: touch.min,

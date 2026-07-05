@@ -1,6 +1,15 @@
-import { useEffect, useRef } from 'react';
-import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
-import { useReducedMotion } from 'react-native-reanimated';
+import { useEffect } from 'react';
+import { StyleSheet, View } from 'react-native';
+import Animated, {
+  cancelAnimation,
+  Easing,
+  runOnJS,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withSequence,
+  withTiming,
+} from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import type { SetLog, UnitPref } from '@gym/shared';
 import { displayWeight } from '@gym/shared';
@@ -27,8 +36,6 @@ interface Props {
   onFlashDone: () => void;
   unitPref: UnitPref;
 }
-
-const useNative = Platform.OS !== 'web';
 
 const styles = StyleSheet.create({
   row: {
@@ -97,8 +104,8 @@ export function SetRow({
   onFlashDone,
   unitPref,
 }: Props) {
-  const flashOpacity = useRef(new Animated.Value(0)).current;
-  const tagScale = useRef(new Animated.Value(flash ? 1.15 : 1)).current;
+  const flashOpacity = useSharedValue(0);
+  const tagScale = useSharedValue(flash ? 1.15 : 1);
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
@@ -106,32 +113,31 @@ export function SetRow({
     // Reduced motion: skip the fill sweep + tag settle, land on the final
     // stamp immediately, and clear the one-shot flash flag.
     if (reduceMotion) {
-      flashOpacity.setValue(0);
-      tagScale.setValue(1);
+      flashOpacity.value = 0;
+      tagScale.value = 1;
       onFlashDone();
       return;
     }
-    const seq = Animated.sequence([
-      Animated.timing(flashOpacity, { toValue: 1, duration: 150, useNativeDriver: useNative }),
-      Animated.timing(flashOpacity, { toValue: 0, duration: 300, useNativeDriver: useNative }),
-    ]);
-    seq.start(() => onFlashDone());
-    Animated.timing(tagScale, {
-      toValue: 1,
-      duration: 200,
-      easing: Easing.out(Easing.back(2)),
-      useNativeDriver: useNative,
-    }).start();
-    return () => seq.stop();
+    flashOpacity.value = withSequence(
+      withTiming(1, { duration: 150 }),
+      withTiming(0, { duration: 300 }, (finished) => {
+        if (finished) runOnJS(onFlashDone)();
+      }),
+    );
+    tagScale.value = withTiming(1, { duration: 200, easing: Easing.out(Easing.back(2)) });
+    return () => cancelAnimation(flashOpacity);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flash]);
+
+  const flashStyle = useAnimatedStyle(() => ({ opacity: flashOpacity.value }));
+  const tagStyle = useAnimatedStyle(() => ({ transform: [{ scale: tagScale.value }] }));
 
   const targetText = repRange ? `${repRange} reps` : isCurrent || logged ? '' : 'open set';
 
   return (
     <View style={[styles.row, isCurrent && styles.current]}>
       {flash ? (
-        <Animated.View pointerEvents="none" style={[styles.flashFill, { opacity: flashOpacity }]} />
+        <Animated.View pointerEvents="none" style={[styles.flashFill, flashStyle]} />
       ) : null}
       <AppText style={styles.setNo} tabular>
         {String(setNo)}
@@ -147,7 +153,7 @@ export function SetRow({
         {logged ? (
           <>
             {logged.isPr ? (
-              <Animated.View style={[styles.prTag, { transform: [{ scale: tagScale }] }]}>
+              <Animated.View style={[styles.prTag, tagStyle]}>
                 <AppText style={styles.prTagText} tabular={false}>
                   PR
                 </AppText>

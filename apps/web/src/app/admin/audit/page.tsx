@@ -70,14 +70,17 @@ async function loadDistinctActions(): Promise<string[]> {
 }
 
 /**
- * Audit log page — super_admin ONLY. The admin layout already hides the nav
- * link for non-super_admins, but we re-check here server-side so hitting the
- * URL directly still fails safe (mirrors the pattern in admin/coaches/page.tsx).
+ * Audit log page — super_admin + main_admin (audit VIEW is part of
+ * main_admin's full permission set; rank only limits who they can TARGET).
+ * The admin layout already hides the nav link for other roles, but we re-check
+ * here server-side so hitting the URL directly still fails safe (mirrors the
+ * pattern in admin/coaches/page.tsx).
  */
 export default async function AdminAuditPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (principal.role !== 'super_admin') redirect('/admin');
+  if (principal.role !== 'super_admin' && principal.role !== 'main_admin')
+    redirect('/admin');
 
   const [{ entries, cursor }, actions] = await Promise.all([
     loadFirstPage(),

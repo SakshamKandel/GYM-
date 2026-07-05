@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Image } from 'expo-image';
 import Animated, {
   cancelAnimation,
@@ -13,18 +13,25 @@ import Animated, {
 } from 'react-native-reanimated';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText, enterFade } from '../../../components/ui';
+import { fontScaleMultiplier, useProfile } from '../../../state/profile';
 
 /**
- * Newie's speech bubble — chat-app pattern. Per new line: a short typing
- * indicator (three dots), then the FULL text lands at once as one plain,
- * always-visible AppText. No typewriter, no transparent-text tricks.
- * NOTHING else is ever hidden or gated; inputs and buttons stay on screen.
+ * Newie's voice — a first-class card in the app's card family (surface,
+ * 1px border, radius.md — same anatomy as every other tile) instead of a
+ * cartoon speech bubble. A rounded-square avatar chip + Oswald micro-label
+ * ("NEWIE · COACH") attribute the message; the chat-app behavior survives:
+ * a short typing indicator, then the FULL text lands at once as plain,
+ * always-visible AppText. NOTHING else is ever hidden or gated; inputs and
+ * buttons stay on screen.
  */
 
-const NEWIE = require('../../../../assets/images/newie.png');
+const MASCOT = require('../../../../assets/images/mascot.png');
 
 /** How long Newie "types" before his line lands. */
 const TYPING_MS = 650;
+
+/** Message line height at fontScale 1 — reservation math scales with it. */
+const LINE_HEIGHT = 24;
 
 /**
  * One dot of the typing indicator — a gentle opacity wave, 400ms cycle.
@@ -51,20 +58,32 @@ function TypingDot({ index }: { index: number }) {
 }
 
 /**
- * Chat bubble: typing dots for ~650ms, then the whole message. `instant`
- * (reactions) skips the indicator. minHeight keeps the dots→text swap from
- * jumping; the enterFade on the text covers any growth for longer lines.
+ * Coach message card: identity strip (avatar chip + "NEWIE · COACH"), then
+ * typing dots for ~650ms, then the whole message. `instant` (reactions)
+ * skips the indicator and plays a one-shot squash-hop on the avatar.
+ * `reserveLines` fixes the message zone height (in scaled text lines) so
+ * the dots→text swap and line cycling never shift the layout below.
  */
-export function Bubble({
+export function CoachCard({
   text,
   caption,
   instant = false,
+  showAvatar = true,
+  reserveLines = 2,
+  style,
 }: {
   text: string;
   caption?: string;
   instant?: boolean;
+  /** Hide the avatar chip where a full Newie image sits nearby (welcome). */
+  showAvatar?: boolean;
+  reserveLines?: number;
+  style?: StyleProp<ViewStyle>;
 }) {
-  // Which line is currently shown (null = typing dots). Adjusted during
+  const fontScale = useProfile((s) => s.fontScale);
+  const lineHeight = Math.round(LINE_HEIGHT * fontScaleMultiplier(fontScale));
+
+  // Which content is currently shown (null = typing dots). Adjusted during
   // render so a new line never flashes stale text for a frame.
   const [shownText, setShownText] = useState<string | null>(instant ? text : null);
   if (instant) {
@@ -81,35 +100,68 @@ export function Bubble({
 
   const shown = shownText === text;
 
+  // A little squash-hop on the avatar when a reaction lands. Transform-only,
+  // one-shot — user-driven movement, not ambient animation.
+  const hop = useSharedValue(0);
+  useEffect(() => {
+    if (instant) {
+      hop.value = withSequence(
+        withTiming(1, { duration: 110 }),
+        withTiming(0, { duration: 110 }),
+      );
+    }
+  }, [text, instant, hop]);
+  const hopStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: hop.value * -3 }, { scaleY: 1 - hop.value * 0.06 }],
+  }));
+
   return (
     <View
-      style={styles.bubble}
+      style={[styles.card, style]}
       accessible
-      accessibilityLabel={caption ? `${text} ${caption}` : text}
+      accessibilityLabel={`Newie, your coach. ${text}${caption ? `. ${caption}` : ''}`}
     >
-      {shown ? (
-        <Animated.View entering={enterFade()}>
-          <AppText variant="bodyBold" style={styles.line} tabular={false}>
-            {text}
+      <View style={styles.headerRow}>
+        {showAvatar ? (
+          <Animated.View style={[styles.avatar, hopStyle]}>
+            <Image source={MASCOT} style={styles.avatarImg} contentFit="cover" />
+          </Animated.View>
+        ) : null}
+        <AppText variant="label">
+          Newie{' '}
+          <AppText variant="label" color={colors.accent}>
+            · Coach
           </AppText>
-          {caption ? (
-            <AppText variant="caption" style={styles.caption}>
-              {caption}
+        </AppText>
+      </View>
+
+      <View style={[styles.messageSlot, { minHeight: lineHeight * reserveLines }]}>
+        {shown ? (
+          <Animated.View entering={enterFade()}>
+            <AppText variant="bodyBold" style={{ lineHeight }} tabular={false}>
+              {text}
             </AppText>
-          ) : null}
-        </Animated.View>
-      ) : (
-        <View style={styles.dots}>
-          <TypingDot index={0} />
-          <TypingDot index={1} />
-          <TypingDot index={2} />
-        </View>
-      )}
+            {caption ? (
+              <AppText variant="caption" style={styles.caption}>
+                {caption}
+              </AppText>
+            ) : null}
+          </Animated.View>
+        ) : (
+          // Dots row is exactly one text line tall, top-aligned — they sit
+          // precisely where the first line of type will land.
+          <View style={[styles.dots, { height: lineHeight }]}>
+            <TypingDot index={0} />
+            <TypingDot index={1} />
+            <TypingDot index={2} />
+          </View>
+        )}
+      </View>
     </View>
   );
 }
 
-/** Newie + bubble row. Children (answers) always render right below. */
+/** Coach card + answers. Children (answers) always render right below. */
 export function NewieStage({
   text,
   caption,
@@ -121,76 +173,47 @@ export function NewieStage({
   mood?: 'ask' | 'react';
   children?: React.ReactNode;
 }) {
-  // A little squash-hop when he reacts to your answer. Transform-only.
-  const hop = useSharedValue(0);
-  useEffect(() => {
-    if (mood === 'react') {
-      hop.value = withSequence(
-        withTiming(1, { duration: 110 }),
-        withTiming(0, { duration: 110 }),
-      );
-    }
-  }, [text, mood, hop]);
-  const hopStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: hop.value * -6 }, { scaleY: 1 - hop.value * 0.06 }],
-  }));
-
   return (
     <View>
-      <View style={styles.row}>
-        <Animated.View style={hopStyle}>
-          <Image
-            source={NEWIE}
-            style={styles.newie}
-            contentFit="contain"
-            accessibilityLabel="Newie, your coach"
-          />
-        </Animated.View>
-        <View style={styles.tail} />
-        <View style={styles.bubbleSlot}>
-          <Bubble text={text} caption={caption} instant={mood === 'react'} />
-        </View>
-      </View>
-      {children ? <View style={styles.answers}>{children}</View> : null}
+      <CoachCard
+        text={text}
+        caption={caption}
+        instant={mood === 'react'}
+        style={styles.stageCard}
+      />
+      {children ? <View>{children}</View> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: spacing.md,
-    marginBottom: spacing.xl,
-  },
-  newie: { width: 86, height: 138 },
-  tail: {
-    width: 14,
-    height: 14,
-    marginLeft: 2,
-    marginRight: -9,
-    backgroundColor: colors.surface,
-    borderLeftWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: colors.border,
-    transform: [{ rotate: '45deg' }],
-    zIndex: 1,
-  },
-  // The row gives the bubble its width; the bubble itself never uses flex,
-  // so it also lays out correctly in column containers (welcome screen).
-  bubbleSlot: { flex: 1 },
-  bubble: {
-    minHeight: 72,
-    justifyContent: 'center',
+  card: {
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
+    paddingVertical: spacing.md,
   },
-  line: { fontSize: 17, lineHeight: 24 },
-  caption: { marginTop: spacing.sm },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm + 2,
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceRaised,
+    overflow: 'hidden',
+  },
+  // Zoomed head-and-shoulders crop of the square bust — reads like a real
+  // profile photo at chip size instead of a tiny full figure.
+  avatarImg: { width: '150%', height: '150%', marginLeft: '-25%' },
+
+  messageSlot: { marginTop: spacing.sm },
+  caption: { marginTop: spacing.xs },
+
   dots: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -202,5 +225,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     backgroundColor: colors.textDim,
   },
-  answers: {},
+
+  // Onboarding rhythm: question card, then answers directly below.
+  stageCard: { marginTop: spacing.md, marginBottom: spacing.lg },
 });

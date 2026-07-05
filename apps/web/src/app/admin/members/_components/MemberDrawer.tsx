@@ -1,7 +1,9 @@
 'use client';
 
+import { canManageRole } from '@gym/shared';
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Badge,
   Button,
   ConfirmButton,
   Drawer,
@@ -9,6 +11,8 @@ import {
   StatusChip,
   TierChip,
 } from '@/components/console';
+import { staffRoleLabel } from '@/app/admin/_lib/staffRoleLabel';
+import type { StaffRole } from '@/lib/auth';
 import type {
   CoachOption,
   MemberDetail,
@@ -36,6 +40,7 @@ export function MemberDrawer({
   memberId,
   fallback,
   coaches,
+  callerRole,
   canSuspend,
   canTier,
   canAssign,
@@ -45,6 +50,7 @@ export function MemberDrawer({
   memberId: string | null;
   fallback: MemberRow | null;
   coaches: CoachOption[];
+  callerRole: StaffRole;
   canSuspend: boolean;
   canTier: boolean;
   canAssign: boolean;
@@ -107,10 +113,19 @@ export function MemberDrawer({
         body: JSON.stringify(body),
       });
       if (!res.ok) {
+        let code: string | null = null;
+        try {
+          const data = (await res.json()) as { error?: unknown };
+          code = typeof data.error === 'string' ? data.error : null;
+        } catch {
+          code = null;
+        }
         setError(
-          res.status === 403
-            ? 'You do not have permission for that action.'
-            : 'That change could not be saved.',
+          code === 'insufficient_rank'
+            ? 'Only a higher-ranked admin can change this staff member’s account status.'
+            : res.status === 403
+              ? 'You do not have permission for that action.'
+              : 'That change could not be saved.',
         );
         return;
       }
@@ -162,6 +177,15 @@ export function MemberDrawer({
   const currentStatus = detail?.member.status ?? fallback?.status ?? 'active';
   const tierDirty = canTier && detail != null && tierChoice !== currentTier;
 
+  // Rank gate on suspend/reactivate: the server rejects status changes on an
+  // account whose staff role the caller cannot manage (insufficient_rank), so
+  // pre-empt it here with a disabled control + reason. Tier changes are NOT
+  // rank-checked, matching the server.
+  const memberStaffRole =
+    detail?.member.staffRole ?? fallback?.staffRole ?? null;
+  const statusLocked =
+    memberStaffRole != null && !canManageRole(callerRole, memberStaffRole);
+
   return (
     <Drawer open={memberId != null} onClose={onClose} title={header} width={460}>
       {error ? (
@@ -195,6 +219,9 @@ export function MemberDrawer({
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
           <TierChip tier={currentTier} />
           <StatusChip status={currentStatus} />
+          {memberStaffRole != null ? (
+            <Badge tone="info">{staffRoleLabel(memberStaffRole)}</Badge>
+          ) : null}
         </div>
         {detail?.member.createdAt ? (
           <div style={{ marginTop: 10, fontSize: 13, color: 'var(--gt-text-dim)' }}>
@@ -327,7 +354,19 @@ export function MemberDrawer({
           {/* Suspend / reactivate */}
           {canSuspend ? (
             <FieldGroup label="Account status">
-              {currentStatus === 'active' ? (
+              {statusLocked ? (
+                <>
+                  <Button variant="ghost" size="sm" disabled>
+                    {currentStatus === 'active'
+                      ? 'Suspend account'
+                      : 'Reactivate account'}
+                  </Button>
+                  <Muted>
+                    This member is staff ({staffRoleLabel(memberStaffRole)}) —
+                    managed by a higher-ranked admin.
+                  </Muted>
+                </>
+              ) : currentStatus === 'active' ? (
                 <>
                   <ConfirmButton
                     label="Suspend account"

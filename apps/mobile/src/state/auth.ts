@@ -1,7 +1,7 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { Tier } from '@gym/shared';
+import { mmkvStorage } from '../lib/mmkvStorage';
 import {
   ApiError,
   getProfileData,
@@ -15,6 +15,7 @@ import {
 } from '../lib/api/client';
 import { signOutGoogle } from '../features/auth/components/NativeGoogleSignIn';
 import { useBuddyStore } from '../features/buddy/store';
+import { clearServerSuggestions } from '../features/progression/hooks';
 import { getMeStaff, type StaffRole } from '../features/staff/api';
 import { unregisterPushNotificationsAsync } from '../lib/notifications';
 import { DEFAULT_PROFILE_FIELDS, useProfile } from './profile';
@@ -134,6 +135,9 @@ async function restoreOrBackupProfile(token: string, accountId: string): Promise
 function clearAccountState(): void {
   useBuddyStore.getState().clear();
   useProfile.getState().resetAccountFields();
+  // Coach-reviewed targets + coach notes are account data — never let them
+  // survive into the next sign-in on this device.
+  clearServerSuggestions();
 }
 
 export const useAuth = create<AuthState>()(
@@ -238,7 +242,7 @@ export const useAuth = create<AuthState>()(
     }),
     {
       name: 'gym-tracker-auth-v1',
-      storage: createJSONStorage(() => AsyncStorage),
+      storage: createJSONStorage(() => mmkvStorage),
     },
   ),
 );

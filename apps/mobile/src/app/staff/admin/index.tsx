@@ -20,12 +20,19 @@ import {
   getAdminOverview,
   toStaffError,
 } from '../../../features/staff/api';
-import { pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { isTopAdmin, pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import {
+  StaffHeaderAction,
+  StaffSignOutDialog,
+  switchToMemberApp,
+  useStaffSignOut,
+} from '../../../features/staff/StaffExit';
 
 /**
  * Admin console home. Loads the overview summary (getAdminOverview) into a small
  * stat grid, then lists the admin sub-consoles. Loading is a quiet spinner;
- * an error is a single retry line — no blocking modal.
+ * an error is a single retry line — no blocking modal. The Roles + Audit rows
+ * only render for super_admin/main_admin (the screens re-gate themselves too).
  */
 
 interface NavRow {
@@ -33,6 +40,8 @@ interface NavRow {
   title: string;
   blurb: string;
   route: string;
+  /** When true the row is only shown to super_admin / main_admin. */
+  topAdminOnly?: boolean;
 }
 
 const NAV_ROWS: NavRow[] = [
@@ -65,17 +74,22 @@ const NAV_ROWS: NavRow[] = [
     title: 'Roles',
     blurb: 'Grant or revoke staff access.',
     route: STAFF_ROUTES.adminStaff,
+    topAdminOnly: true,
   },
   {
     icon: 'receipt',
     title: 'Audit',
     blurb: 'Every privileged action, newest first.',
     route: STAFF_ROUTES.adminAudit,
+    topAdminOnly: true,
   },
 ];
 
 export default function AdminHomeScreen() {
   const token = useAuth((s) => s.token);
+  const staffRole = useAuth((s) => s.staffRole);
+  const signOut = useStaffSignOut();
+  const navRows = NAV_ROWS.filter((row) => !row.topAdminOnly || isTopAdmin(staffRole));
 
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -117,7 +131,20 @@ export default function AdminHomeScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppText variant="heading">Admin</AppText>
+        <AppText variant="heading" style={styles.headerTitle}>
+          Admin
+        </AppText>
+        {/* Leave the console for the member app (stay signed in). */}
+        <StaffHeaderAction
+          icon="phone-portrait-outline"
+          label="Switch to member app"
+          onPress={switchToMemberApp}
+        />
+        <StaffHeaderAction
+          icon="log-out-outline"
+          label="Sign out of the staff console"
+          onPress={signOut.requestSignOut}
+        />
       </Animated.View>
 
       <Animated.View entering={enterUp(0)} style={styles.hero}>
@@ -161,7 +188,7 @@ export default function AdminHomeScreen() {
       </Animated.View>
 
       <SectionLabel>Manage</SectionLabel>
-      {NAV_ROWS.map((row, i) => (
+      {navRows.map((row, i) => (
         <Animated.View key={row.title} entering={enterUp(i + 1)}>
           <PressableScale
             accessibilityRole="button"
@@ -184,6 +211,13 @@ export default function AdminHomeScreen() {
           </PressableScale>
         </Animated.View>
       ))}
+
+      <StaffSignOutDialog
+        confirming={signOut.confirming}
+        signingOut={signOut.signingOut}
+        confirmSignOut={signOut.confirmSignOut}
+        cancelSignOut={signOut.cancelSignOut}
+      />
     </Screen>
   );
 }
@@ -195,6 +229,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingBottom: spacing.lg,
   },
+  headerTitle: { flex: 1 },
   backBtn: {
     width: touch.min,
     height: touch.min,

@@ -1,7 +1,7 @@
 import { accounts, admins, coachProfiles } from '@gym/db';
+import { isStaffRole } from '@gym/shared';
 import { asc, eq } from 'drizzle-orm';
-import type { StaffRole } from '@/lib/auth';
-import { logAudit, requirePermission } from '@/lib/authz';
+import { adminRoleOf, logAudit, requirePermission, requireOutranks } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 
@@ -20,25 +20,18 @@ export const runtime = 'nodejs';
  *           upserts a coach_profiles row so the account immediately shows up in
  *           the coach roster / coach console.
  *
- * Both guarded by requirePermission('roles.grant') — super_admin only — and
- * every mutation is audited. (Revoke lives in [accountId]/route.ts as DELETE.)
+ * Both guarded by requirePermission('roles.grant') — super_admin + main_admin.
+ * POST additionally enforces RANK (requireOutranks): the actor must be allowed
+ * to manage BOTH the role being granted AND the target's current role, and may
+ * never target their own row. Every mutation is audited. (Revoke lives in
+ * [accountId]/route.ts as DELETE.)
  */
 
-// The full set of assignable staff roles (mirrors the admins.role enum in the
-// DB schema). Anything outside this set is rejected 400 so a typo can never
-// write a bogus role that the guard layer would then fail-closed on forever.
-const ASSIGNABLE_ROLES: readonly StaffRole[] = [
-  'super_admin',
-  'member_admin',
-  'nutrition_admin',
-  'content_admin',
-  'support_admin',
-  'coach',
-];
-
-function isAssignableRole(v: unknown): v is StaffRole {
-  return typeof v === 'string' && (ASSIGNABLE_ROLES as readonly string[]).includes(v);
-}
+// Role-name validation now comes from @gym/shared (isStaffRole mirrors the
+// admins.role enum, main_admin included). Anything outside the set is rejected
+// 400 so a typo can never write a bogus role that the guard layer would then
+// fail-closed on forever. WHO may assign WHICH role is a separate rank check
+// (requireOutranks) — invalid name → 400, valid-but-outranking → 403.
 
 export function OPTIONS() {
   return preflight();
@@ -80,9 +73,20 @@ export async function POST(req: Request) {
   if (typeof accountId !== 'string' || accountId.trim().length === 0) {
     return json({ error: 'accountId_required' }, 400);
   }
-  if (!isAssignableRole(role)) {
+  if (!isStaffRole(role)) {
     return json({ error: 'invalid_role' }, 400);
   }
+
+  // Nobody may change their OWN admin row — no self-escalation, no
+  // self-demotion. Applies to super_admin too.
+  if (accountId === principal.id) {
+    return json({ error: 'cannot_target_self' }, 400);
+  }
+
+  // Rank check #1 — the role being handed out: the actor must be allowed to
+  // manage it (main_admin may grant sub-roles only, never main/super).
+  const grantBlock = requireOutranks(principal, role);
+  if (grantBlock) return grantBlock;
 
   const db = getDb();
 
@@ -97,6 +101,13 @@ export async function POST(req: Request) {
   if (target.length === 0) {
     return json({ error: 'account_not_found' }, 404);
   }
+
+  // Rank check #2 — the target's CURRENT role (when already staff): changing a
+  // row is managing its holder, so a main_admin cannot touch an existing
+  // super_admin/main_admin row even to "demote" it.
+  const previousRole = await adminRoleOf(accountId);
+  const changeBlock = requireOutranks(principal, previousRole);
+  if (changeBlock) return changeBlock;
 
   // Upsert the admins row (accountId is the PK → change-in-place on conflict).
   await db
@@ -115,7 +126,7 @@ export async function POST(req: Request) {
   }
 
   const ip = req.headers.get('x-forwarded-for');
-  await logAudit(principal, 'roles.grant', 'account', accountId, { role }, ip);
+  await logAudit(principal, 'roles.grant', 'account', accountId, { role, previousRole }, ip);
 
   return json({ ok: true }, 200);
 }

@@ -16,6 +16,7 @@ export const dynamic = 'force-dynamic';
  */
 const ADMIN_ROLES: readonly StaffRole[] = [
   'super_admin',
+  'main_admin',
   'member_admin',
   'content_admin',
   'support_admin',
@@ -24,26 +25,31 @@ const ADMIN_ROLES: readonly StaffRole[] = [
 /**
  * Per-section role gates mirroring lib/authz.ts roleHasPermission. A nav item
  * renders only when the signed-in role satisfies its predicate; super_admin
- * passes every gate. This only HIDES a link — page agents MUST re-check the
- * same permission server-side (requirePermission) as the real access control.
+ * AND main_admin pass every gate (main_admin holds the full permission set —
+ * its rank limits are enforced per-operation by the API routes, not here).
+ * This only HIDES a link — page agents MUST re-check the same permission
+ * server-side (requirePermission) as the real access control.
  */
+function isTopAdmin(role: StaffRole): boolean {
+  return role === 'super_admin' || role === 'main_admin';
+}
 function canMembers(role: StaffRole): boolean {
-  return role === 'super_admin' || role === 'member_admin' || role === 'support_admin';
+  return isTopAdmin(role) || role === 'member_admin' || role === 'support_admin';
 }
 function canCoaches(role: StaffRole): boolean {
-  return role === 'super_admin' || role === 'member_admin';
+  return isTopAdmin(role) || role === 'member_admin';
 }
 function canContent(role: StaffRole): boolean {
-  return role === 'super_admin' || role === 'content_admin';
+  return isTopAdmin(role) || role === 'content_admin';
 }
 function canSubscriptions(role: StaffRole): boolean {
-  return role === 'super_admin' || role === 'member_admin';
+  return isTopAdmin(role) || role === 'member_admin';
 }
 function canStaff(role: StaffRole): boolean {
-  return role === 'super_admin';
+  return isTopAdmin(role);
 }
 function canAudit(role: StaffRole): boolean {
-  return role === 'super_admin';
+  return isTopAdmin(role);
 }
 
 /** Builds the visible nav for a role. Overview is always present. */
@@ -88,6 +94,7 @@ export default async function AdminLayout({ children }: { children: ReactNode })
       nav={navFor(principal.role)}
       pathname={pathname}
       email={principal.email}
+      loginHref="/admin/login"
     >
       {children}
     </ConsoleShell>

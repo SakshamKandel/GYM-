@@ -21,7 +21,7 @@ export const dynamic = 'force-dynamic';
  * but we re-check here server-side so hitting the URL directly still fails safe
  * — the layout comment explicitly requires each page to re-check its role set.
  */
-const CAN_ASSIGN: readonly StaffRole[] = ['super_admin', 'member_admin'];
+const CAN_ASSIGN: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
 
 /**
  * Loads the coach roster directly via getDb — shape matches GET

@@ -25,6 +25,10 @@ export const STAFF_ROUTES = {
   coachThread: (userId: string): string => `/staff/coach/${userId}`,
   /** The signed-in coach's own editable profile card. */
   coachProfile: '/staff/coach/profile',
+  /** The coach's plan-video library (view counts + tier). */
+  coachVideos: '/staff/coach/videos',
+  /** One client's detail — set/extend their tier + expiry. Pass the user id. */
+  coachClient: (userId: string): string => `/staff/coach/client/${userId}`,
 
   // ── Admin area ──────────────────────────────────────────────
   /** Admin console home — the overview dashboard. */
@@ -35,11 +39,11 @@ export const STAFF_ROUTES = {
   adminMember: (id: string): string => `/staff/admin/members/${id}`,
   /** Coach pool + assignment management. */
   adminCoaches: '/staff/admin/coaches',
-  /** Plan-video library. */
-  adminVideos: '/staff/admin/videos',
-  /** Staff & roles management (super_admin only). */
+  /** Plan-video library (screen file: staff/admin/content.tsx). */
+  adminVideos: '/staff/admin/content',
+  /** Staff & roles management (super_admin + main_admin). */
   adminStaff: '/staff/admin/staff',
-  /** Audit trail (super_admin only). */
+  /** Audit trail (super_admin + main_admin). */
   adminAudit: '/staff/admin/audit',
 } as const;
 
@@ -55,9 +59,18 @@ export function replaceStaff(path: string): void {
 
 // ── Role → visibility helpers (mirror the server role matrix) ──
 
-/** Roles that may open the coach console (coach or super_admin). */
+/**
+ * The two top-rank roles. main_admin holds the full permission set (its only
+ * limits are rank checks on staff mutations), so everywhere super_admin may
+ * go, main_admin goes too — including the Staff & roles and Audit screens.
+ */
+export function isTopAdmin(role: string | null): boolean {
+  return role === 'super_admin' || role === 'main_admin';
+}
+
+/** Roles that may open the coach console (coach, super_admin or main_admin). */
 export function canOpenCoachConsole(role: string | null): boolean {
-  return role === 'coach' || role === 'super_admin';
+  return role === 'coach' || isTopAdmin(role);
 }
 
 /**
@@ -67,7 +80,7 @@ export function canOpenCoachConsole(role: string | null): boolean {
  */
 export function canOpenAdminConsole(role: string | null): boolean {
   return (
-    role === 'super_admin' ||
+    isTopAdmin(role) ||
     role === 'member_admin' ||
     role === 'content_admin' ||
     role === 'support_admin' ||

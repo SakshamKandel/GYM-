@@ -1,5 +1,11 @@
-import { useEffect, useRef } from 'react';
-import { Animated, Easing, Pressable, StyleSheet, View } from 'react-native';
+import { useEffect } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import { AppText, Button } from '../../../components/ui';
 import { formatClock } from '../logic';
@@ -59,23 +65,18 @@ const styles = StyleSheet.create({
 });
 
 export function RestTimerPanel({ rest, onAdjust, onSkip }: Props) {
-  const progress = useRef(new Animated.Value(1)).current;
+  const progress = useSharedValue(1);
 
   useEffect(() => {
     const remainingMs = Math.max(0, rest.endsAt - Date.now());
     const startFraction = rest.totalSec > 0 ? remainingMs / 1000 / rest.totalSec : 0;
-    progress.setValue(Math.min(1, startFraction));
-    const anim = Animated.timing(progress, {
-      toValue: 0,
-      duration: remainingMs,
-      easing: Easing.linear,
-      useNativeDriver: false, // width animation — JS driver on every platform
-    });
-    anim.start();
-    return () => anim.stop();
+    progress.value = Math.min(1, startFraction);
+    progress.value = withTiming(0, { duration: remainingMs, easing: Easing.linear });
     // Restart the depletion line whenever ±15s moves the end time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rest.endsAt, rest.totalSec]);
+
+  const fillStyle = useAnimatedStyle(() => ({ width: `${progress.value * 100}%` }));
 
   return (
     <View style={styles.root}>
@@ -108,17 +109,7 @@ export function RestTimerPanel({ rest, onAdjust, onSkip }: Props) {
         </Pressable>
       </View>
       <View style={styles.track}>
-        <Animated.View
-          style={[
-            styles.fill,
-            {
-              width: progress.interpolate({
-                inputRange: [0, 1],
-                outputRange: ['0%', '100%'],
-              }),
-            },
-          ]}
-        />
+        <Animated.View style={[styles.fill, fillStyle]} />
       </View>
       <Button label="Skip" variant="ghost" onPress={onSkip} accessibilityLabel="Skip rest" />
     </View>

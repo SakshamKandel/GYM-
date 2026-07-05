@@ -1,4 +1,5 @@
 import { accounts } from '@gym/db';
+import { effectiveTier } from '@gym/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { createSession } from '@/lib/auth';
@@ -22,6 +23,7 @@ const publicColumns = {
   email: accounts.email,
   displayName: accounts.displayName,
   tier: accounts.tier,
+  tierExpiresAt: accounts.tierExpiresAt,
 };
 
 export function OPTIONS() {
@@ -90,5 +92,14 @@ export async function POST(req: Request) {
   if (!user) return json({ error: 'bad_credentials' }, 401);
 
   const token = await createSession(user.id);
-  return json({ token, user }, 200);
+  // Strip the internal expiry column and return the EFFECTIVE tier (a lapsed
+  // paid tier signs in as 'starter', matching userForToken — no cron).
+  const { tierExpiresAt, ...publicUser } = user;
+  return json(
+    {
+      token,
+      user: { ...publicUser, tier: effectiveTier(user.tier, tierExpiresAt, new Date()) },
+    },
+    200,
+  );
 }

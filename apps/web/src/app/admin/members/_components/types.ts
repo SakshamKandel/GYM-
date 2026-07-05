@@ -1,3 +1,5 @@
+import type { StaffRole } from '@gym/shared';
+
 export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
 export type MemberStatus = 'active' | 'suspended';
 
@@ -9,6 +11,9 @@ export interface MemberRow {
   tier: Tier;
   status: MemberStatus;
   createdAt: string;
+  /** The account's staff role (admins row), or null for a regular member.
+   * Drives the rank gate on suspend/reactivate in the drawer. */
+  staffRole: StaffRole | null;
 }
 
 /** A coach the admin can assign a member to. */
@@ -35,6 +40,7 @@ export interface MemberDetail {
     tier: Tier;
     status: MemberStatus;
     createdAt: string;
+    staffRole: StaffRole | null;
   };
   profile: Record<string, unknown> | null;
   coach: AssignedCoach | null;

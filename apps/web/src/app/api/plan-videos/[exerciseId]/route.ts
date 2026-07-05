@@ -1,6 +1,6 @@
 import { planVideos } from '@gym/db';
 import { compareTiers } from '@gym/shared';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
@@ -41,6 +41,7 @@ export async function GET(
 
   const rows = await getDb()
     .select({
+      id: planVideos.id,
       providerVideoId: planVideos.providerVideoId,
       title: planVideos.title,
       tierRequired: planVideos.tierRequired,
@@ -60,6 +61,20 @@ export async function GET(
 
   try {
     const url = await getVideoProvider().signedPlaybackUrl(row.providerVideoId);
+
+    // Count a view: exactly one per successful, tier-allowed 200. Atomic SQL
+    // increment (no read-modify-write race). Best-effort — a failed counter
+    // update must NEVER block or fail playback, so we swallow any error and
+    // still return the URL.
+    try {
+      await getDb()
+        .update(planVideos)
+        .set({ views: sql`${planVideos.views} + 1` })
+        .where(eq(planVideos.id, row.id));
+    } catch {
+      // ignore — playback is the contract, the view counter is advisory.
+    }
+
     return json({ url, title: row.title, tierRequired: row.tierRequired }, 200);
   } catch (err) {
     if (err instanceof NotConfiguredError) {

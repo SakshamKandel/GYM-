@@ -1,5 +1,6 @@
 'use client';
 
+import { assignableRolesFor, canManageRole } from '@gym/shared';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
@@ -13,16 +14,22 @@ import {
   SearchField,
   StatusChip,
 } from '@/components/console';
+import { staffRoleLabel } from '@/app/admin/_lib/staffRoleLabel';
 import type { StaffRole } from '@/lib/auth';
 
 /**
- * Staff & roles manager (super_admin only). Master table of current staff with
- * per-row role change + revoke, plus a "Grant role" modal that searches EXISTING
- * accounts by email (GET /api/admin/members?q=) and assigns a role. Every
+ * Staff & roles manager (super_admin + main_admin). Master table of current
+ * staff with per-row role change + revoke, plus a "Grant role" modal that
+ * searches EXISTING accounts by email (GET /api/admin/members?q=) and assigns a
+ * role. Rank-aware: the grantable role list comes from assignableRolesFor
+ * (main_admin sees sub-roles only), and rows the caller cannot manage — equal
+ * or higher rank per canManageRole, or the caller's own row — render locked
+ * with no action controls. The server re-checks every rule (rank, self-target)
+ * independently, so the greying here is a courtesy, not the guard. Every
  * mutation hits our own guarded API with credentials:'include' (httpOnly
  * gt_staff cookie authenticates) and then router.refresh()es the server
  * component so the server stays the single source of truth — no optimistic
- * client cache. Mirrors the CoachRoster / ReplyBox pattern already in the app.
+ * client cache.
  */
 
 export interface StaffMember {
@@ -34,25 +41,12 @@ export interface StaffMember {
   coachName: string | null;
 }
 
-// Assignable roles + human labels. Order matches the DB admins.role enum.
-const ROLES: { value: StaffRole; label: string }[] = [
-  { value: 'super_admin', label: 'Super admin' },
-  { value: 'member_admin', label: 'Member admin' },
-  { value: 'nutrition_admin', label: 'Nutrition admin' },
-  { value: 'content_admin', label: 'Content admin' },
-  { value: 'support_admin', label: 'Support admin' },
-  { value: 'coach', label: 'Coach' },
-];
-
-function roleLabel(role: StaffRole): string {
-  return ROLES.find((r) => r.value === role)?.label ?? role;
-}
-
 interface MemberHit {
   id: string;
   email: string;
   displayName: string;
   tier: string;
+  staffRole?: StaffRole | null;
 }
 
 const selectStyle: React.CSSProperties = {
@@ -66,14 +60,56 @@ const selectStyle: React.CSSProperties = {
   cursor: 'pointer',
 };
 
+/**
+ * Reads the API's `{error}` code out of a failed response so rank/self
+ * rejections can surface as sentences instead of raw codes. Returns null when
+ * the body isn't JSON (or carries no string code).
+ */
+async function errorCodeOf(res: Response): Promise<string | null> {
+  try {
+    const data = (await res.json()) as { error?: unknown };
+    return typeof data.error === 'string' ? data.error : null;
+  } catch {
+    return null;
+  }
+}
+
+function friendlyStaffError(status: number, code: string | null): string {
+  switch (code) {
+    case 'insufficient_rank':
+      return 'Only a super admin can manage this staff member.';
+    case 'cannot_target_self':
+    case 'cannot_revoke_self':
+      return 'You cannot change your own access.';
+    case 'account_not_found':
+      return 'That account no longer exists.';
+    case 'not_staff':
+      return 'That account is no longer staff.';
+    case 'invalid_role':
+      return 'That role cannot be granted.';
+    default:
+      break;
+  }
+  if (status === 403) return 'You are not allowed to manage staff roles.';
+  if (status === 404) return 'That account no longer exists.';
+  if (status === 400) return 'That change is not allowed.';
+  return 'Something went wrong. Try again.';
+}
+
 export function StaffManager({
   staff,
   currentAccountId,
+  callerRole,
 }: {
   staff: StaffMember[];
   currentAccountId: string;
+  callerRole: StaffRole;
 }) {
   const router = useRouter();
+
+  // Roles this operator may hand out / change rows to. super_admin → all 7;
+  // main_admin → sub-roles only. Drives both the per-row select and the modal.
+  const assignable = assignableRolesFor(callerRole);
 
   // Row-level busy + error state, keyed by accountId, so one row's action never
   // freezes the others.
@@ -82,13 +118,6 @@ export function StaffManager({
 
   // Grant-role modal state.
   const [grantOpen, setGrantOpen] = useState(false);
-
-  function friendlyError(status: number): string {
-    if (status === 403) return 'You are not allowed to manage staff roles.';
-    if (status === 404) return 'That account no longer exists.';
-    if (status === 400) return 'That change is not allowed.';
-    return 'Something went wrong. Try again.';
-  }
 
   async function changeRole(accountId: string, role: StaffRole) {
     setBusyId(accountId);
@@ -101,7 +130,8 @@ export function StaffManager({
         body: JSON.stringify({ accountId, role }),
       });
       if (!res.ok) {
-        setRowError({ id: accountId, msg: friendlyError(res.status) });
+        const code = await errorCodeOf(res);
+        setRowError({ id: accountId, msg: friendlyStaffError(res.status, code) });
         setBusyId(null);
         return;
       }
@@ -122,7 +152,8 @@ export function StaffManager({
         { method: 'DELETE', credentials: 'include' },
       );
       if (!res.ok) {
-        setRowError({ id: accountId, msg: friendlyError(res.status) });
+        const code = await errorCodeOf(res);
+        setRowError({ id: accountId, msg: friendlyStaffError(res.status, code) });
         setBusyId(null);
         return;
       }
@@ -161,7 +192,7 @@ export function StaffManager({
               {row.coachName || row.displayName || row.email}
             </span>
             {row.accountId === currentAccountId ? (
-              <Badge tone="info">you</Badge>
+              <Badge tone="info">You</Badge>
             ) : null}
           </div>
           <div
@@ -193,22 +224,41 @@ export function StaffManager({
       width: 200,
       render: (row) => {
         const isSelf = row.accountId === currentAccountId;
+        const manageable = !isSelf && canManageRole(callerRole, row.role);
         const busy = busyId === row.accountId;
+
+        // Locked rows (own row, or equal/higher rank) show the role as plain
+        // text — a disabled dropdown would suggest a control that exists but is
+        // merely off, and this control simply does not exist for the caller.
+        if (!manageable) {
+          return (
+            <span
+              title={isSelf ? 'You cannot change your own role.' : undefined}
+              style={{
+                fontSize: 13,
+                fontFamily: 'var(--font-heading)',
+                color: 'var(--gt-text-dim)',
+              }}
+            >
+              {staffRoleLabel(row.role)}
+            </span>
+          );
+        }
+
         return (
           <select
             value={row.role}
-            disabled={busy || isSelf}
-            title={isSelf ? 'You cannot change your own role.' : undefined}
+            disabled={busy}
             onChange={(e) => changeRole(row.accountId, e.target.value as StaffRole)}
             style={{
               ...selectStyle,
-              opacity: busy || isSelf ? 0.55 : 1,
-              cursor: busy || isSelf ? 'default' : 'pointer',
+              opacity: busy ? 0.55 : 1,
+              cursor: busy ? 'default' : 'pointer',
             }}
           >
-            {ROLES.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
+            {assignable.map((r) => (
+              <option key={r} value={r}>
+                {staffRoleLabel(r)}
               </option>
             ))}
           </select>
@@ -221,6 +271,7 @@ export function StaffManager({
       align: 'right',
       render: (row) => {
         const isSelf = row.accountId === currentAccountId;
+        const manageable = !isSelf && canManageRole(callerRole, row.role);
         const busy = busyId === row.accountId;
         const err = rowError?.id === row.accountId ? rowError.msg : null;
         return (
@@ -233,7 +284,11 @@ export function StaffManager({
             }}
           >
             {isSelf ? (
-              <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>—</span>
+              <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>You</span>
+            ) : !manageable ? (
+              <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                Managed by super admin
+              </span>
             ) : (
               <ConfirmButton
                 label="Revoke"
@@ -277,7 +332,9 @@ export function StaffManager({
       <GrantRoleModal
         open={grantOpen}
         onClose={() => setGrantOpen(false)}
-        existingIds={new Set(staff.map((s) => s.accountId))}
+        callerRole={callerRole}
+        currentAccountId={currentAccountId}
+        assignable={assignable}
         onGranted={() => {
           setGrantOpen(false);
           router.refresh();
@@ -290,28 +347,47 @@ export function StaffManager({
 /**
  * Grant-role dialog. Searches EXISTING accounts by email substring (GET
  * /api/admin/members?q=), lets the operator pick one and a role, then POSTs to
- * /api/admin/staff. Accounts that are already staff are annotated so it's clear
- * a grant will CHANGE their role rather than add a duplicate. onGranted closes
- * the modal and refreshes.
+ * /api/admin/staff. The role list is the caller's assignable set, and picks the
+ * caller cannot act on — their own account, or an account already holding a
+ * role they cannot manage — disable Grant with a plain-language reason instead
+ * of letting the server bounce them. onGranted closes the modal and refreshes.
  */
 function GrantRoleModal({
   open,
   onClose,
-  existingIds,
+  callerRole,
+  currentAccountId,
+  assignable,
   onGranted,
 }: {
   open: boolean;
   onClose: () => void;
-  existingIds: Set<string>;
+  callerRole: StaffRole;
+  currentAccountId: string;
+  assignable: StaffRole[];
   onGranted: () => void;
 }) {
+  // support_admin is the least-privileged default; every role that may open
+  // this page can grant it, but fall back defensively to the last (lowest-rank)
+  // assignable entry.
+  const defaultRole: StaffRole = assignable.includes('support_admin')
+    ? 'support_admin'
+    : (assignable[assignable.length - 1] ?? 'support_admin');
+
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<MemberHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [picked, setPicked] = useState<MemberHit | null>(null);
-  const [role, setRole] = useState<StaffRole>('support_admin');
+  const [role, setRole] = useState<StaffRole>(defaultRole);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const pickedRole = picked?.staffRole ?? null;
+  const pickedIsSelf = picked != null && picked.id === currentAccountId;
+  // Already staff at a rank the caller cannot manage → the server would reject
+  // the grant with insufficient_rank, so say why up front and disable Grant.
+  const pickedLocked =
+    pickedRole != null && !canManageRole(callerRole, pickedRole);
 
   async function runSearch(term: string) {
     setQ(term);
@@ -341,7 +417,7 @@ function GrantRoleModal({
   }
 
   async function submit() {
-    if (!picked) return;
+    if (!picked || pickedIsSelf || pickedLocked) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -352,13 +428,8 @@ function GrantRoleModal({
         body: JSON.stringify({ accountId: picked.id, role }),
       });
       if (!res.ok) {
-        setError(
-          res.status === 403
-            ? 'You are not allowed to manage staff roles.'
-            : res.status === 404
-              ? 'That account no longer exists.'
-              : 'Could not grant the role. Try again.',
-        );
+        const code = await errorCodeOf(res);
+        setError(friendlyStaffError(res.status, code));
         setSubmitting(false);
         return;
       }
@@ -375,7 +446,7 @@ function GrantRoleModal({
     setQ('');
     setHits([]);
     setPicked(null);
-    setRole('support_admin');
+    setRole(defaultRole);
     setError(null);
   }
 
@@ -398,7 +469,7 @@ function GrantRoleModal({
           <Button
             variant="primary"
             onClick={submit}
-            disabled={!picked || submitting}
+            disabled={!picked || pickedIsSelf || pickedLocked || submitting}
           >
             {submitting ? 'Granting…' : 'Grant role'}
           </Button>
@@ -431,53 +502,66 @@ function GrantRoleModal({
           <div
             style={{
               display: 'flex',
-              alignItems: 'center',
-              gap: 10,
+              flexDirection: 'column',
+              gap: 6,
               padding: '10px 12px',
               borderRadius: 10,
               border: '1px solid var(--gt-red)',
             }}
           >
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontFamily: 'var(--font-heading)',
+                    fontWeight: 600,
+                    fontSize: 14,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {picked.displayName || picked.email}
+                </div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: 'var(--gt-text-dim)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {picked.email}
+                  {pickedRole != null && !pickedIsSelf && !pickedLocked
+                    ? ` · already ${staffRoleLabel(pickedRole)} — role will change`
+                    : ''}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPicked(null)}
+                className="gt-nav-item"
                 style={{
-                  fontFamily: 'var(--font-heading)',
-                  fontWeight: 600,
-                  fontSize: 14,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+                  fontSize: 13,
+                  padding: '4px 10px',
+                  background: 'none',
+                  border: '1px solid var(--gt-border)',
+                  cursor: 'pointer',
                 }}
               >
-                {picked.displayName || picked.email}
-              </div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: 'var(--gt-text-dim)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {picked.email}
-                {existingIds.has(picked.id) ? ' · already staff — role will change' : ''}
-              </div>
+                Change
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setPicked(null)}
-              className="gt-nav-item"
-              style={{
-                fontSize: 13,
-                padding: '4px 10px',
-                background: 'none',
-                border: '1px solid var(--gt-border)',
-                cursor: 'pointer',
-              }}
-            >
-              Change
-            </button>
+            {pickedIsSelf ? (
+              <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                This is your own account — you cannot change your own role.
+              </div>
+            ) : pickedLocked ? (
+              <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                Managed by super admin — you cannot change this account’s role.
+              </div>
+            ) : null}
           </div>
         ) : (
           <div
@@ -543,7 +627,9 @@ function GrantRoleModal({
                       {m.email}
                     </div>
                   </div>
-                  {existingIds.has(m.id) ? <Badge tone="info">staff</Badge> : null}
+                  {m.staffRole != null ? (
+                    <Badge tone="info">{staffRoleLabel(m.staffRole)}</Badge>
+                  ) : null}
                 </button>
               ))
             )}
@@ -567,9 +653,9 @@ function GrantRoleModal({
             onChange={(e) => setRole(e.target.value as StaffRole)}
             style={{ ...selectStyle, width: '100%', padding: '9px 10px', fontSize: 14 }}
           >
-            {ROLES.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
+            {assignable.map((r) => (
+              <option key={r} value={r}>
+                {staffRoleLabel(r)}
               </option>
             ))}
           </select>

@@ -1,6 +1,6 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { mmkvStorage } from '../lib/mmkvStorage';
 import type {
   ActivityLevel,
   FontScale,
@@ -128,7 +128,7 @@ export const useProfile = create<ProfileState>()(
     }),
     {
       name: 'gym-tracker-profile-v1',
-      storage: createJSONStorage(() => AsyncStorage),
+      storage: createJSONStorage(() => mmkvStorage),
     },
   ),
 );

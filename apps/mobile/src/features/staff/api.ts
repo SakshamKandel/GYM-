@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { STAFF_ROLES, type StaffRole } from '@gym/shared';
 import { BASE_URL } from '../../lib/api/client';
 
 /**
@@ -15,9 +16,14 @@ import { BASE_URL } from '../../lib/api/client';
  *   'unauthorized' → 401 (no/expired session token)
  *   'forbidden'    → 403 (signed in, but lacks the role/permission, or a coach
  *                    with no active assignment over the target user)
+ *   'insufficient_rank' → 403 {error:'insufficient_rank'} (the caller's role
+ *                    does not outrank the target role — staff grant/change/
+ *                    revoke, or suspending a protected staff account)
  *   'not_found'    → 404 (missing member / assignment / video / profile)
  *   'invalid'      → 400 (validation rejected the request body)
- *   'conflict'     → 409 (self-lockout guard etc.)
+ *   'cannot_target_self' → 400 (grant/change aimed at the caller's OWN row)
+ *   'cannot_revoke_self' → 400 (self-lockout guard on revoke)
+ *   'conflict'     → 409 (state conflicts etc.)
  *   'not_configured' → 503 (e.g. the video host keys are absent)
  *   'network'      → offline, non-JSON, or a malformed/unexpected response
  */
@@ -27,8 +33,11 @@ import { BASE_URL } from '../../lib/api/client';
 export type StaffErrorCode =
   | 'unauthorized'
   | 'forbidden'
+  | 'insufficient_rank'
   | 'not_found'
   | 'invalid'
+  | 'cannot_target_self'
+  | 'cannot_revoke_self'
   | 'conflict'
   | 'not_configured'
   | 'network';
@@ -50,27 +59,17 @@ export function toStaffError(err: unknown): StaffApiError {
 
 // ── Shared enums ──────────────────────────────────────────────
 
-export type StaffRole =
-  | 'super_admin'
-  | 'member_admin'
-  | 'nutrition_admin'
-  | 'content_admin'
-  | 'support_admin'
-  | 'coach';
+// The 7-role hierarchy (incl. main_admin) lives in @gym/shared — the single
+// source of truth also used by the web API guards. Re-exported so existing
+// `import { type StaffRole } from features/staff/api` call sites keep working.
+export type { StaffRole };
 
 export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
 export type MemberStatus = 'active' | 'suspended';
 export type VideoStatus = 'processing' | 'ready' | 'removed';
 export type AssignmentStatus = 'active' | 'ended';
 
-const staffRoleSchema = z.enum([
-  'super_admin',
-  'member_admin',
-  'nutrition_admin',
-  'content_admin',
-  'support_admin',
-  'coach',
-]);
+const staffRoleSchema = z.enum(STAFF_ROLES);
 const tierSchema = z.enum(['starter', 'silver', 'gold', 'elite']);
 const memberStatusSchema = z.enum(['active', 'suspended']);
 const videoStatusSchema = z.enum(['processing', 'ready', 'removed']);
@@ -94,6 +93,17 @@ function statusToCode(status: number): StaffErrorCode {
   if (status === 503) return 'not_configured';
   return 'network';
 }
+
+/**
+ * Server error bodies ({error:'…'}) that carry MORE meaning than their HTTP
+ * status — the rank/self guards on the staff + member routes. Anything not in
+ * this map falls back to the status-derived code.
+ */
+const BODY_ERROR_CODES: Partial<Record<string, StaffErrorCode>> = {
+  insufficient_rank: 'insufficient_rank',
+  cannot_target_self: 'cannot_target_self',
+  cannot_revoke_self: 'cannot_revoke_self',
+};
 
 /** Perform the request; resolve with the parsed JSON (or null) of a 2xx body. */
 async function staffRequest(opts: StaffRequestOptions): Promise<unknown> {
@@ -121,7 +131,19 @@ async function staffRequest(opts: StaffRequestOptions): Promise<unknown> {
     }
   }
 
-  throw new StaffApiError(statusToCode(res.status));
+  // A recognised {error:'…'} body (rank/self guards) beats the bare status.
+  let bodyCode: StaffErrorCode | undefined;
+  try {
+    const body = (await res.json()) as unknown;
+    if (body && typeof body === 'object') {
+      const err = (body as { error?: unknown }).error;
+      if (typeof err === 'string') bodyCode = BODY_ERROR_CODES[err];
+    }
+  } catch {
+    // Non-JSON error body — the status code is all we have.
+  }
+
+  throw new StaffApiError(bodyCode ?? statusToCode(res.status));
 }
 
 /** Validate a payload; a malformed body is indistinguishable from a bad server. */
@@ -268,6 +290,110 @@ export async function updateCoachProfile(
 }
 
 // ════════════════════════════════════════════════════════════════
+// Coach console — videos (read model)
+// ════════════════════════════════════════════════════════════════
+
+// One row of the coach video library. Same shape the web coach console reads:
+// the admin row PLUS a playback `views` count and the attached exercise
+// (id + name, or null for a standalone / plan-level clip).
+const coachVideoRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  tierRequired: tierSchema,
+  status: videoStatusSchema,
+  position: z.number(),
+  thumbnailUrl: z.string().nullable(),
+  views: z.number().catch(0),
+  exercise: z
+    .object({ id: z.string(), name: z.string().nullable() })
+    .nullable()
+    .catch(null),
+  createdAt: z.string(),
+});
+export type CoachVideoRow = z.infer<typeof coachVideoRowSchema>;
+
+/**
+ * Resilient list: a row this build can't parse is dropped, not fatal to the
+ * whole library — same defence the audit/staff/thread lists use. Newest first
+ * (server-ordered); removed rows are included so the coach sees history.
+ */
+const coachVideosSchema = z.object({
+  videos: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): CoachVideoRow[] => {
+      const parsed = coachVideoRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/**
+ * GET /api/coach/videos → the plan-video library with view counts + attached
+ * exercise (content.video.publish-gated, which coach holds). ADD / RETIER /
+ * REMOVE reuse the admin video routes (createVideo / updateVideo / deleteVideo)
+ * — those are gated on the same permission, so a coach may call them too.
+ */
+export async function getCoachVideos(token: string): Promise<CoachVideoRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/videos', token });
+  return parse(coachVideosSchema, data).videos;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — subscriptions (set/extend an OWN client's tier + window)
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * A dated-subscription window. Mirrors apps/web lib/tier.ts `TierDates`:
+ *   - a field ABSENT (undefined)     → leave that column untouched
+ *   - a field set to `null`          → clear it (expiresAt null = permanent)
+ *   - a field set to an ISO string   → set it (a PAST expiresAt lapses now)
+ * We keep ISO strings here (the wire format) rather than Dates; the server
+ * coerces them.
+ */
+export interface SetTierDates {
+  startsAt?: string | null;
+  expiresAt?: string | null;
+}
+
+/** Copy only the date fields that were explicitly provided into the body. */
+function dateBody(dates: SetTierDates | undefined): Record<string, string | null> {
+  const body: Record<string, string | null> = {};
+  if (dates) {
+    if ('startsAt' in dates) body.startsAt = dates.startsAt ?? null;
+    if ('expiresAt' in dates) body.expiresAt = dates.expiresAt ?? null;
+  }
+  return body;
+}
+
+/**
+ * POST /api/coach/subscriptions {userId, tier, reason?, startsAt?, expiresAt?}
+ * → set/extend the tier of one of the coach's OWN active clients. Same
+ * semantics as the admin route (dated window + Greece auto-assign + audit),
+ * but ownership-scoped: 'forbidden' when the client isn't actively assigned to
+ * the caller (super_admin / main_admin bypass ownership). 'not_found' for an
+ * unknown account.
+ */
+export async function setCoachTier(
+  userId: string,
+  tier: Tier,
+  reason: string | undefined,
+  dates: SetTierDates | undefined,
+  token: string,
+): Promise<SetTierResult> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/coach/subscriptions',
+    token,
+    body: {
+      userId,
+      tier,
+      ...(reason !== undefined ? { reason } : {}),
+      ...dateBody(dates),
+    },
+  });
+  return parse(setTierSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
 // Admin console — overview
 // ════════════════════════════════════════════════════════════════
 
@@ -320,6 +446,9 @@ const memberRowSchema = z.object({
   displayName: z.string(),
   tier: tierSchema,
   status: memberStatusSchema,
+  // The account's staff role, or null for a plain member. `.catch(null)` keeps
+  // older/partial server responses from nuking the whole directory parse.
+  staffRole: staffRoleSchema.nullable().catch(null),
 });
 export type MemberRow = z.infer<typeof memberRowSchema>;
 
@@ -346,6 +475,8 @@ const memberDetailAccountSchema = z.object({
   tier: tierSchema,
   status: memberStatusSchema,
   createdAt: z.string(),
+  // Present on GET detail; the PATCH echo may omit it — tolerate as null.
+  staffRole: staffRoleSchema.nullable().catch(null),
 });
 
 const memberDetailCoachSchema = z.object({
@@ -484,6 +615,10 @@ const videoRowSchema = z.object({
   status: videoStatusSchema,
   position: z.number(),
   thumbnailUrl: z.string().nullable(),
+  // Playback count — added to /api/admin/videos alongside the coach-videos
+  // work. `.catch(0)` keeps an older server that omits the field from nuking
+  // the whole row parse.
+  views: z.number().catch(0),
   createdAt: z.string(),
 });
 export type VideoRow = z.infer<typeof videoRowSchema>;
@@ -608,20 +743,29 @@ const setTierSchema = z.object({
 export type SetTierResult = z.infer<typeof setTierSchema>;
 
 /**
- * POST /api/admin/subscriptions {accountId, tier, reason?} → override a
- * member's tier (audited). 'not_found' for an unknown account.
+ * POST /api/admin/subscriptions {accountId, tier, reason?, startsAt?, expiresAt?}
+ * → override a member's tier (audited). `dates` carries the optional dated
+ * window (see SetTierDates: absent = leave, null = clear/permanent, ISO = set;
+ * a past expiresAt lapses the tier immediately). 'not_found' for an unknown
+ * account.
  */
 export async function setTier(
   accountId: string,
   tier: Tier,
   reason: string | undefined,
+  dates: SetTierDates | undefined,
   token: string,
 ): Promise<SetTierResult> {
   const data = await staffRequest({
     method: 'POST',
     path: '/api/admin/subscriptions',
     token,
-    body: { accountId, tier, ...(reason !== undefined ? { reason } : {}) },
+    body: {
+      accountId,
+      tier,
+      ...(reason !== undefined ? { reason } : {}),
+      ...dateBody(dates),
+    },
   });
   return parse(setTierSchema, data);
 }
@@ -641,9 +785,22 @@ const staffRowSchema = z.object({
 });
 export type StaffRow = z.infer<typeof staffRowSchema>;
 
-const staffSchema = z.object({ staff: z.array(staffRowSchema) });
+/**
+ * Resilient roster: a role value this build doesn't know yet must drop that
+ * one row, not blank the whole Staff & Roles screen — an already-shipped
+ * binary meeting its first unknown role taught us the strict-array version
+ * of this parse fails everything at once.
+ */
+const staffSchema = z.object({
+  staff: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): StaffRow[] => {
+      const parsed = staffRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
 
-/** GET /api/admin/staff → every staff account with its role (super_admin only). */
+/** GET /api/admin/staff → every staff account with its role (super_admin + main_admin). */
 export async function getStaff(token: string): Promise<StaffRow[]> {
   const data = await staffRequest({ method: 'GET', path: '/api/admin/staff', token });
   return parse(staffSchema, data).staff;
@@ -653,8 +810,10 @@ const okSchema = z.object({ ok: z.literal(true) });
 
 /**
  * POST /api/admin/staff {accountId, role} → grant or change a role on an
- * existing account (super_admin only). 'not_found' for an unknown account,
- * 'invalid' for a bad role.
+ * existing account (super_admin + main_admin, rank-checked). 'not_found' for
+ * an unknown account, 'invalid' for a bad role name, 'cannot_target_self'
+ * when aimed at the caller's own row, 'insufficient_rank' when the caller
+ * cannot manage the granted role OR the target's current role.
  */
 export async function grantRole(
   accountId: string,
@@ -672,8 +831,9 @@ export async function grantRole(
 
 /**
  * DELETE /api/admin/staff/[accountId] → revoke all staff access + kill live
- * sessions (super_admin only). 'conflict' (409-style) when trying to revoke
- * your OWN role; 'not_found' when the account wasn't staff.
+ * sessions (super_admin + main_admin, rank-checked). 'cannot_revoke_self'
+ * when trying to revoke your OWN role, 'insufficient_rank' when the caller
+ * does not outrank the target, 'not_found' when the account wasn't staff.
  */
 export async function revokeRole(accountId: string, token: string): Promise<void> {
   const data = await staffRequest({
@@ -725,7 +885,7 @@ export interface AuditPage {
 
 /**
  * GET /api/admin/audit?action=&actor=&cursor= → a keyset page of the audit
- * trail, newest first (super_admin only). `nextCursor` is null on the last
+ * trail, newest first (super_admin + main_admin). `nextCursor` is null on the last
  * page.
  */
 export async function getAudit(

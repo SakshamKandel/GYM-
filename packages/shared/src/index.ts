@@ -9,4 +9,6 @@ export * from './logic/greeceReply';
 export * from './logic/projection';
 export * from './logic/streak';
 export * from './logic/plates';
+export * from './logic/progression';
+export * from './logic/staffRoles';
 export * from './logic/units';

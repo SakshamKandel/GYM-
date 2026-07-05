@@ -18,19 +18,22 @@ export const dynamic = 'force-dynamic';
  */
 const CAN_READ: readonly StaffRole[] = [
   'super_admin',
+  'main_admin',
   'member_admin',
   'support_admin',
 ];
 
 /** Which roles may mutate — drives whether the drawer shows action controls. */
-const CAN_SUSPEND: readonly StaffRole[] = ['super_admin', 'member_admin'];
-const CAN_TIER: readonly StaffRole[] = ['super_admin', 'member_admin'];
-const CAN_ASSIGN: readonly StaffRole[] = ['super_admin', 'member_admin'];
+const CAN_SUSPEND: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
+const CAN_TIER: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
+const CAN_ASSIGN: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
 
 /**
  * Loads the member directory directly via getDb — email, name, tier, status,
- * joined date. Capped so the initial render can't be unbounded; the table
- * filters client-side and the API list route (with ?q) backs deeper search.
+ * joined date, plus the account's staff role (left join admins) so the drawer
+ * can rank-gate suspend/reactivate on staff accounts. Capped so the initial
+ * render can't be unbounded; the table filters client-side and the API list
+ * route (with ?q) backs deeper search.
  */
 async function loadMembers(): Promise<MemberRow[]> {
   const db = getDb();
@@ -42,8 +45,10 @@ async function loadMembers(): Promise<MemberRow[]> {
       tier: accounts.tier,
       status: accounts.status,
       createdAt: accounts.createdAt,
+      staffRole: admins.role,
     })
     .from(accounts)
+    .leftJoin(admins, eq(admins.accountId, accounts.id))
     .orderBy(asc(accounts.email))
     .limit(200);
 
@@ -54,6 +59,7 @@ async function loadMembers(): Promise<MemberRow[]> {
     tier: r.tier,
     status: r.status,
     createdAt: r.createdAt.toISOString(),
+    staffRole: r.staffRole ?? null,
   }));
 }
 
@@ -97,6 +103,7 @@ export default async function AdminMembersPage() {
       <MembersDirectory
         members={members}
         coaches={coaches}
+        callerRole={principal.role}
         canSuspend={CAN_SUSPEND.includes(principal.role)}
         canTier={CAN_TIER.includes(principal.role)}
         canAssign={CAN_ASSIGN.includes(principal.role)}

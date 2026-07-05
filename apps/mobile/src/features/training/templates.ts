@@ -1,8 +1,8 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { nowIso } from '../../lib/dates';
 import { uid } from '../../lib/id';
+import { mmkvStorage } from '../../lib/mmkvStorage';
 
 /**
  * Custom workout templates — user-saved rotations that live next to the seed
@@ -62,7 +62,7 @@ export const useTemplates = create<TemplatesStore>()(
     }),
     {
       name: 'gym-tracker-templates-v1',
-      storage: createJSONStorage(() => AsyncStorage),
+      storage: createJSONStorage(() => mmkvStorage),
     },
   ),
 );

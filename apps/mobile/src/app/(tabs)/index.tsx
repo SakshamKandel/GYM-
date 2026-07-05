@@ -25,6 +25,7 @@ import {
 import { posterDate } from '../../lib/dates';
 import { useAiTip } from '../../lib/ai/useAiTip';
 import { useProfile } from '../../state/profile';
+import { CheckInCard } from '../../features/checkin/components/CheckInCard';
 import { FirstWorkoutsQuest } from '../../features/engagement/components/FirstWorkoutsQuest';
 import {
   PrDetail,
@@ -374,6 +375,7 @@ export default function HomeScreen() {
             />
           </Animated.View>
 
+          <CheckInCard stagger={4} />
           <WeeklyCheckIn stagger={4} />
 
           <Animated.View entering={enterUp(5)}>

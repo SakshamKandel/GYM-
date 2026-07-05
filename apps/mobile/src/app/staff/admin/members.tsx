@@ -16,6 +16,7 @@ import {
   Sheet,
   Tag,
 } from '../../../components/ui';
+import { canManageRole } from '@gym/shared';
 import {
   assignClient,
   getCoaches,
@@ -30,6 +31,7 @@ import {
   type Tier,
 } from '../../../features/staff/api';
 import { pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { roleLabel } from '../../../features/staff/roles';
 import { useAuth } from '../../../state/auth';
 
 /**
@@ -96,6 +98,7 @@ function MemberRowCard({
 
 export default function AdminMembersScreen() {
   const token = useAuth((s) => s.token);
+  const staffRole = useAuth((s) => s.staffRole);
 
   // ── List state ───────────────────────────────────────────────
   const [query, setQuery] = useState('');
@@ -248,6 +251,14 @@ export default function AdminMembersScreen() {
 
   const suspended = detail?.member.status === 'suspended';
 
+  // A staff-holding member may only be suspended/reactivated by a caller who
+  // outranks their role (server: 403 insufficient_rank). Tier changes and
+  // coach assignment are NOT rank-checked.
+  const targetStaffRole = detail?.member.staffRole ?? null;
+  const statusLocked =
+    targetStaffRole !== null &&
+    (staffRole === null || !canManageRole(staffRole, targetStaffRole));
+
   return (
     <Screen scroll keyboardAware>
       <Animated.View entering={enterDown()} style={styles.headerRow}>
@@ -349,6 +360,9 @@ export default function AdminMembersScreen() {
                 variant="outline"
                 color={suspended ? colors.error : colors.success}
               />
+              {targetStaffRole !== null ? (
+                <Tag label={roleLabel(targetStaffRole)} variant="dim" />
+              ) : null}
             </View>
 
             {/* Coach line */}
@@ -394,22 +408,47 @@ export default function AdminMembersScreen() {
               <PressableScale
                 accessibilityRole="button"
                 accessibilityLabel={suspended ? 'Reactivate member' : 'Suspend member'}
-                disabled={saving}
+                accessibilityState={{ disabled: saving || statusLocked }}
+                disabled={saving || statusLocked}
                 onPress={() => setStatusConfirm(true)}
-                style={[styles.action, saving && styles.actionDisabled]}
+                style={[styles.action, (saving || statusLocked) && styles.actionDisabled]}
               >
                 <Ionicons
-                  name={suspended ? 'play-circle-outline' : 'pause-circle-outline'}
+                  name={
+                    statusLocked
+                      ? 'lock-closed'
+                      : suspended
+                        ? 'play-circle-outline'
+                        : 'pause-circle-outline'
+                  }
                   size={18}
-                  color={suspended ? colors.success : colors.error}
+                  color={
+                    statusLocked
+                      ? colors.textDim
+                      : suspended
+                        ? colors.success
+                        : colors.error
+                  }
                 />
                 <AppText
                   variant="body"
-                  color={suspended ? colors.success : colors.error}
+                  color={
+                    statusLocked
+                      ? colors.textDim
+                      : suspended
+                        ? colors.success
+                        : colors.error
+                  }
                 >
                   {suspended ? 'Reactivate' : 'Suspend'}
                 </AppText>
               </PressableScale>
+
+              {statusLocked ? (
+                <AppText variant="caption" color={colors.textFaint}>
+                  Staff account — managed by a higher admin.
+                </AppText>
+              ) : null}
             </View>
 
             {saving ? (
@@ -542,6 +581,8 @@ function errorLine(code: string): string {
       return 'Your session expired. Sign in again to continue.';
     case 'forbidden':
       return "You don't have permission for that.";
+    case 'insufficient_rank':
+      return 'Only a higher admin can change this staff account.';
     case 'not_found':
       return 'That member no longer exists.';
     case 'invalid':
@@ -616,7 +657,7 @@ const styles = StyleSheet.create({
     gap: spacing.lg,
   },
   sheetBody: { gap: spacing.md },
-  statusTags: { flexDirection: 'row', gap: spacing.sm },
+  statusTags: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   coachLine: {
     flexDirection: 'row',
     alignItems: 'center',

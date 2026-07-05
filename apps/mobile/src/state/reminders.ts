@@ -1,6 +1,6 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { mmkvStorage } from '../lib/mmkvStorage';
 
 /**
  * Reminder preferences — the small persisted slice behind the Settings
@@ -63,7 +63,7 @@ export const useReminders = create<RemindersState>()(
     }),
     {
       name: 'gym-tracker-reminders-v1',
-      storage: createJSONStorage(() => AsyncStorage),
+      storage: createJSONStorage(() => mmkvStorage),
     },
   ),
 );

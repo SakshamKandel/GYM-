@@ -5,6 +5,28 @@ Verified 2026-07-03: `next build` (web) exit 0 · `expo export` (android bundle)
 
 ---
 
+## 0. Schema migration (dated subscriptions + video views)
+
+Three additive, nullable/defaulted columns ship with the dated-subscriptions /
+video-views work. `pnpm --filter @gym/db db:push` (drizzle-kit push) generates
+and applies them with no prompts and no data loss — every existing row keeps
+working (null dates = no expiry, views default 0). The exact DDL push emits:
+
+```sql
+ALTER TABLE "accounts"     ADD COLUMN "tier_started_at" timestamp with time zone;
+ALTER TABLE "accounts"     ADD COLUMN "tier_expires_at" timestamp with time zone;
+ALTER TABLE "plan_videos"  ADD COLUMN "views" integer DEFAULT 0 NOT NULL;
+```
+
+Semantics: `tier_expires_at` NULL = permanent/free (never lapses). A past
+`tier_expires_at` lapses the paid tier immediately — `effectiveTier()` collapses
+it to `starter` at the auth choke point (`userForToken` / `/api/me` / login), so
+NO cron is required and the stored `tier` is preserved for history/reactivation.
+
+Optional env: `COACH_GREECE_EMAIL` — the coach account that Elite members are
+auto-assigned to. If unset, the auto-coach resolves to the oldest
+`admins.role='coach'` account (Greece, seeded first). See §3.
+
 ## 1. Web + API → Vercel
 
 Project root: `apps/web` (Next 15). DB schema is already pushed to Neon; staff accounts seeded.
@@ -44,6 +66,20 @@ Then deploy. Post-deploy smoke test (2 min):
 | `greecemaharjan@gmail.com` | coach | `/coach` (web) or in-app Staff hub |
 
 **Change both passwords before launch** (current ones were shared in chat). New staff: Admin → Staff → grant role (no SQL needed).
+
+**Elite auto-assign (2026-07):** whenever a member's EFFECTIVE tier becomes
+`elite` (admin override via `/api/admin/subscriptions`, or a coach via
+`/api/coach/subscriptions`), an ACTIVE `coach_assignments` row to the auto-coach
+is ensured (idempotent — an `ended` row is reactivated, never a crash). When the
+effective tier drops below elite (downgrade or expiry-driven override), that
+auto-created row is set `ended` — a MANUAL assignment to a different coach is
+left untouched. The auto-coach is resolved by `COACH_GREECE_EMAIL` (if it maps
+to a `role='coach'` account) else the oldest `role='coach'` account. Coaches may
+set/extend subscriptions for their OWN active clients only via
+`/api/coach/subscriptions` (gated by `content`-level `coach.user.read` +
+`requireCoachOwnsUser`); admins keep the broader `subscription.override` path.
+
+**Role hierarchy (2026-07):** `super_admin` → `main_admin` → sub-roles (`member_admin`, `nutrition_admin`, `content_admin`, `support_admin`, `coach`). `main_admin` holds every permission but may only manage (grant/revoke/suspend) sub-role holders; only a `super_admin` can create or remove `main_admin`/`super_admin` rows, and nobody can change their own row. `admins.role` is a plain text column (the enum is TypeScript-only), so adding `main_admin` required **no SQL migration** — grant it from Admin → Staff. **Deploy order:** ship the updated mobile app before granting the first `main_admin` — installed builds older than 2026-07 don't know the role, so the holder would see no staff console and older Staff screens could show an incomplete roster.
 
 ## 4. Known post-launch follow-ups (from the security sweep — none are deploy blockers)
 

@@ -54,6 +54,18 @@ export async function POST(req: Request) {
     .limit(1);
   if (user.length === 0) return json({ error: 'user_not_found' }, 404);
 
+  // A coach may only be assigned over a TRUE member. Assigning one over a staff
+  // account is what would let that coach rewrite the staff account's tier via
+  // /api/coach/subscriptions — block it at the source. Self-assignment (a coach
+  // owning themselves) is meaningless and also rejected.
+  if (coachId === userId) return json({ error: 'invalid' }, 400);
+  const targetStaff = await db
+    .select({ accountId: admins.accountId })
+    .from(admins)
+    .where(eq(admins.accountId, userId))
+    .limit(1);
+  if (targetStaff.length > 0) return json({ error: 'invalid' }, 400);
+
   const inserted = await db
     .insert(coachAssignments)
     .values({

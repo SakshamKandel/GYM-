@@ -20,16 +20,16 @@ import {
   type AuditEntry,
   toStaffError,
 } from '../../../features/staff/api';
-import { replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { isTopAdmin, replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
 
 /**
- * Admin · Audit trail (super_admin only).
+ * Admin · Audit trail (super_admin + main_admin).
  *
  * Keyset-paginated audit log (getAudit) — newest first, showing time, actor,
  * action and target. A row of quick action filters narrows the feed; the raw
  * filter re-runs from page one. "Load more" appends the next cursor page.
- * Gated: a non-super_admin sees a locked notice.
+ * Gated: sub-roles see a locked notice, never the data.
  */
 
 /** Common audit actions surfaced as one-tap filter chips (server free-text). */
@@ -69,7 +69,7 @@ function humanAction(action: string): string {
 export default function AuditScreen() {
   const token = useAuth((s) => s.token);
   const staffRole = useAuth((s) => s.staffRole);
-  const isSuperAdmin = staffRole === 'super_admin';
+  const canViewAudit = isTopAdmin(staffRole);
 
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -116,8 +116,8 @@ export default function AuditScreen() {
   }, [token, cursor, filter, loadingMore]);
 
   useEffect(() => {
-    if (isSuperAdmin) void load('');
-  }, [isSuperAdmin, load]);
+    if (canViewAudit) void load('');
+  }, [canViewAudit, load]);
 
   function pickFilter(action: string): void {
     setFilter(action);
@@ -129,14 +129,14 @@ export default function AuditScreen() {
     else replaceStaff(STAFF_ROUTES.hub);
   }
 
-  if (!isSuperAdmin) {
+  if (!canViewAudit) {
     return (
       <Screen>
         <BackRow title="Audit trail" onBack={goBack} />
         <Animated.View entering={enterUp(0)} style={styles.locked}>
           <Ionicons name="lock-closed" size={28} color={colors.textFaint} />
           <AppText variant="caption" center color={colors.textFaint}>
-            Only a super admin can view the audit trail.
+            Only a super admin or main admin can view the audit trail.
           </AppText>
         </Animated.View>
       </Screen>

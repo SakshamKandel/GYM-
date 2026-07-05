@@ -9,19 +9,25 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Coach console nav. Fixed for every coach (and super_admin, who may view it):
- * Inbox (message threads), Clients (assigned users), Profile (public coach
- * card). Page agents re-check the coach guards server-side per route.
+ * Coach console nav. Fixed for every coach (and super_admin / main_admin, who
+ * may view it):
+ * Inbox (message threads), Clients (assigned users), Videos (form-check library
+ * — coach holds content.video.publish), Profile (public coach card). Page agents
+ * re-check the coach guards server-side per route.
  */
 const COACH_NAV: NavItem[] = [
   { href: '/coach', label: 'Inbox', match: 'exact' },
   { href: '/coach/clients', label: 'Clients' },
+  { href: '/coach/attention', label: 'Attention' },
+  { href: '/coach/review', label: 'Review' },
+  { href: '/coach/videos', label: 'Videos' },
   { href: '/coach/profile', label: 'Profile' },
 ];
 
 /**
  * Server-component guard for the whole coach console. Resolves the 'gt_staff'
- * cookie to a Principal; only 'coach' and 'super_admin' may enter. Anyone else
+ * cookie to a Principal; only 'coach', 'super_admin' and 'main_admin' may
+ * enter. Anyone else
  * (no cookie, non-staff, wrong role, suspended) is redirected to the login
  * page.
  *
@@ -37,7 +43,10 @@ export default async function CoachLayout({ children }: { children: ReactNode })
   const isLoginRoute = pathname.startsWith('/coach/login');
 
   const principal = await staffFromCookie();
-  const isCoach = principal?.role === 'coach' || principal?.role === 'super_admin';
+  const isCoach =
+    principal?.role === 'coach' ||
+    principal?.role === 'super_admin' ||
+    principal?.role === 'main_admin';
 
   // Login route: never guard, never show the shell (its page owns its own UI).
   if (isLoginRoute) return <>{children}</>;
@@ -50,6 +59,7 @@ export default async function CoachLayout({ children }: { children: ReactNode })
       nav={COACH_NAV}
       pathname={pathname}
       email={principal.email}
+      loginHref="/coach/login"
     >
       {children}
     </ConsoleShell>

@@ -101,15 +101,20 @@ export interface PrefillInput {
   /** Sets from the most recent previous session of this exercise. */
   lastSets: SetLog[];
   repRange: string | null;
+  /** A progression suggestion the user tapped Apply on — canonical kg. */
+  suggested?: { weightKg: number; reps: number } | null;
 }
 
 /**
- * Editor prefill: last set logged this session → matching set from last
- * session → plan default (empty bar × mid rep-range).
+ * Editor prefill: last set logged this session → applied suggestion →
+ * matching set from last session → plan default (empty bar × mid rep-range).
  */
 export function prefillFor(input: PrefillInput): { weightKg: number; reps: number } {
   const lastHere = input.sessionSets[input.sessionSets.length - 1];
   if (lastHere) return { weightKg: lastHere.weightKg, reps: lastHere.reps };
+  if (input.suggested) {
+    return { weightKg: input.suggested.weightKg, reps: input.suggested.reps };
+  }
   const nextSetNo = input.sessionSets.length + 1;
   const fromLast =
     input.lastSets.find((s) => s.setNo === nextSetNo) ??

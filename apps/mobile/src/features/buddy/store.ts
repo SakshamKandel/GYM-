@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type {
@@ -8,6 +7,7 @@ import type {
   Referral,
   Trial,
 } from '../../lib/api/client';
+import { mmkvStorage } from '../../lib/mmkvStorage';
 
 /**
  * Buddy cache — the last successful server snapshot plus the per-day nudge
@@ -70,7 +70,7 @@ export const useBuddyStore = create<BuddyStore>()(
     }),
     {
       name: 'gym-tracker-buddy-v1',
-      storage: createJSONStorage(() => AsyncStorage),
+      storage: createJSONStorage(() => mmkvStorage),
     },
   ),
 );

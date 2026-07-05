@@ -176,6 +176,14 @@ export async function createSqliteRepo(): Promise<Repo> {
     await db.execAsync('ALTER TABLE set_logs ADD COLUMN rpe REAL');
   }
 
+  // Same pattern for workout sync: pre-sync installs lack synced_at. NULL means
+  // "not yet backed up to the server" — existing history is picked up by the
+  // backlog drain on next app start.
+  const workoutCols = await db.getAllAsync<{ name: string }>('PRAGMA table_info(workout_logs)');
+  if (!workoutCols.some((c) => c.name === 'synced_at')) {
+    await db.execAsync('ALTER TABLE workout_logs ADD COLUMN synced_at TEXT');
+  }
+
   return {
     // ── Workouts ────────────────────────────────────────────
     async startWorkout(w) {
@@ -348,6 +356,33 @@ export async function createSqliteRepo(): Promise<Repo> {
           isPr: r.is_pr === 1,
           workoutDate: r.workout_date,
         }),
+      );
+    },
+
+    // ── Sync (one-way server backup) ────────────────────────
+    async getUnsyncedFinishedWorkouts(limit) {
+      const workouts = await db.getAllAsync<WorkoutRow>(
+        `SELECT * FROM workout_logs
+         WHERE finished_at IS NOT NULL AND synced_at IS NULL
+         ORDER BY started_at ASC LIMIT ?`,
+        limit,
+      );
+      const out: { workout: WorkoutLog; sets: SetLog[] }[] = [];
+      for (const w of workouts) {
+        const rows = await db.getAllAsync<SetRow>(
+          'SELECT * FROM set_logs WHERE workout_log_id = ? ORDER BY logged_at ASC',
+          w.id,
+        );
+        out.push({ workout: toWorkout(w), sets: rows.map(toSet) });
+      }
+      return out;
+    },
+    async markWorkoutsSynced(ids, syncedAt) {
+      if (ids.length === 0) return;
+      const placeholders = ids.map(() => '?').join(',');
+      await db.runAsync(
+        `UPDATE workout_logs SET synced_at = ? WHERE id IN (${placeholders})`,
+        syncedAt, ...ids,
       );
     },
 

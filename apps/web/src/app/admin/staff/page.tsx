@@ -9,12 +9,15 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Staff & roles — super_admin only. Lists every account carrying an `admins`
- * row and lets the owner grant, change, or revoke a staff role without ever
- * touching SQL. The layout already hides the nav link for non-super_admins, but
- * we re-check here server-side so hitting the URL directly still fails safe (the
- * admin layout comment explicitly requires each page to re-check its role set),
- * and every mutation route re-checks 'roles.grant' independently.
+ * Staff & roles — super_admin + main_admin. Lists every account carrying an
+ * `admins` row and lets the operator grant, change, or revoke a staff role
+ * without ever touching SQL. What the caller may TARGET is rank-limited: the
+ * client greys out rows per canManageRole (main_admin manages sub-roles only)
+ * and the mutation routes re-check the same rank rules server-side. The layout
+ * already hides the nav link, but we re-check here so hitting the URL directly
+ * still fails safe (the admin layout comment explicitly requires each page to
+ * re-check its role set), and every mutation route re-checks 'roles.grant'
+ * independently.
  */
 
 /**
@@ -52,9 +55,16 @@ async function loadStaff(): Promise<StaffMember[]> {
 export default async function AdminStaffPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (principal.role !== 'super_admin') redirect('/admin');
+  if (principal.role !== 'super_admin' && principal.role !== 'main_admin')
+    redirect('/admin');
 
   const staff = await loadStaff();
 
-  return <StaffManager staff={staff} currentAccountId={principal.id} />;
+  return (
+    <StaffManager
+      staff={staff}
+      currentAccountId={principal.id}
+      callerRole={principal.role}
+    />
+  );
 }

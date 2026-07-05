@@ -6,7 +6,13 @@ import {
 } from '@gym/db';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { logAudit, requirePermission, requireStaff } from '@/lib/authz';
+import {
+  adminRoleOf,
+  logAudit,
+  requirePermission,
+  requireStaff,
+  requireOutranks,
+} from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { type Tier, setAccountTier } from '@/lib/tier';
@@ -89,6 +95,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     )
     .limit(1);
 
+  // The member's staff role (or null) — lets the console render rank-aware
+  // controls (e.g. disable Suspend when the viewer does not outrank the row).
+  const staffRole = await adminRoleOf(id);
+
   const coachRow = coachRows[0];
   const coach = coachRow
     ? {
@@ -111,6 +121,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         tier: member.tier,
         status: member.status,
         createdAt: member.createdAt,
+        staffRole,
       },
       profile: profileRows[0]?.data ?? null,
       coach,
@@ -161,6 +172,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (status !== undefined) {
     const g = await requirePermission(req, 'members.suspend');
     if (g instanceof Response) return g;
+    // Rank guard: suspending (or reactivating) an account that holds an admin
+    // role the actor does not outrank would be a de-facto role takeover —
+    // suspension kills every live session. Non-staff targets always pass.
+    const targetRole = await adminRoleOf(id);
+    const rankBlock = requireOutranks(base, targetRole);
+    if (rankBlock) return rankBlock;
   }
 
   // Apply tier via the shared helper (updates accounts.tier, mirrors the jsonb

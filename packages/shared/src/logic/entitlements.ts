@@ -56,3 +56,35 @@ export function minTierFor(feature: Feature): Tier {
 export function compareTiers(a: Tier, b: Tier): number {
   return TIER_RANK[a] - TIER_RANK[b];
 }
+
+/**
+ * The tier a member ACTUALLY has right now, given a dated subscription.
+ *
+ * Dated subscriptions live on accounts.tier + accounts.tierExpiresAt. Rather
+ * than run a cron that downgrades lapsed rows, the server collapses an expired
+ * paid tier to 'starter' at the auth choke point (userForToken / api/me /
+ * login) by calling this pure helper. The stored `tier` is never mutated —
+ * it stays for history and one-click reactivation.
+ *
+ * Rules:
+ *  - expiresAt null/undefined → no expiry: the stored tier stands (permanent
+ *    or free). 'starter' is always permanent regardless of expiry.
+ *  - expiresAt strictly in the past (< now) → 'starter'.
+ *  - expiresAt exactly === now or in the future → the stored tier stands
+ *    (expiry is inclusive of its final instant).
+ *
+ * `expiresAt` accepts a Date, an ISO string, or null (the shape Drizzle/JSON
+ * hands back); an unparseable string is treated as no-expiry (fail OPEN to the
+ * stored tier — a bad timestamp must not silently strip a paying member).
+ */
+export function effectiveTier(
+  tier: Tier,
+  expiresAt: Date | string | null | undefined,
+  now: Date,
+): Tier {
+  if (tier === 'starter') return 'starter';
+  if (expiresAt === null || expiresAt === undefined) return tier;
+  const expiryMs = expiresAt instanceof Date ? expiresAt.getTime() : Date.parse(expiresAt);
+  if (Number.isNaN(expiryMs)) return tier; // unparseable → fail open to stored tier
+  return expiryMs < now.getTime() ? 'starter' : tier;
+}
