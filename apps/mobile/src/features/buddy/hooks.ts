@@ -14,6 +14,16 @@ import {
   type Referral,
   type Trial,
 } from '../../lib/api/client';
+import {
+  getBuddyLeaderboard,
+  getBuddyQuest,
+  getChallenge,
+  joinChallenge,
+  type Challenge,
+  type ChallengeJoinErrorCode,
+  type LeaderboardRow,
+  type QuestPair,
+} from '../../lib/api/social';
 import { useAuth } from '../../state/auth';
 import { useBuddyStore } from './store';
 
@@ -142,4 +152,142 @@ export function useBuddyData(): BuddyData {
   );
 
   return { list, events, sessions, referrals, trials, trialDays, stale, loading, reload };
+}
+
+// ════════════════════════════════════════════════════════════════
+// Social gamification — leaderboard, co-op quest, coach challenge
+// ════════════════════════════════════════════════════════════════
+
+const SOCIAL_REFRESH_MS = 30_000;
+
+export interface SocialData {
+  leaderboard: LeaderboardRow[];
+  leaderboardMonth: string;
+  questPairs: QuestPair[];
+  questTarget: number;
+  challenge: Challenge | null;
+  /** True when the latest refresh failed and we're showing the last known state. */
+  stale: boolean;
+  /** True only for the very first load with nothing fetched yet. */
+  loading: boolean;
+  reload: () => void;
+  /** Opt into the current challenge; caller reloads on success. */
+  joinCurrentChallenge: () => Promise<ChallengeJoinErrorCode | null>;
+}
+
+/**
+ * Leaderboard + buddy quest + coach challenge, refreshed on focus plus a
+ * light 30s poll while the Buddy tab is focused and foregrounded (slower
+ * than the 12s buddy-list poll — these numbers move once a day, not live).
+ * Not persisted (unlike useBuddyData) — these are read-mostly, cheap to
+ * refetch, and never need to render before the first successful load.
+ */
+export function useSocialData(): SocialData {
+  const status = useAuth((s) => s.status);
+  const token = useAuth((s) => s.token);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
+  const [leaderboardMonth, setLeaderboardMonth] = useState('');
+  const [questPairs, setQuestPairs] = useState<QuestPair[]>([]);
+  const [questTarget, setQuestTarget] = useState(12);
+  const [challenge, setChallenge] = useState<Challenge | null>(null);
+  const [stale, setStale] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const loadedOnce = useRef(false);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (status === 'signedOut') {
+      loadedOnce.current = false;
+      setLeaderboard([]);
+      setLeaderboardMonth('');
+      setQuestPairs([]);
+      setChallenge(null);
+    }
+  }, [status]);
+
+  const reload = useCallback(() => {
+    if (status !== 'signedIn' || token === null) return;
+    void (async () => {
+      if (!loadedOnce.current) setLoading(true);
+      try {
+        const [board, quest, activeChallenge] = await Promise.all([
+          getBuddyLeaderboard(token),
+          getBuddyQuest(token),
+          getChallenge(token).catch(() => null),
+        ]);
+        const current = useAuth.getState();
+        if (current.status !== 'signedIn' || current.token !== token) return;
+        if (!mounted.current) return;
+        setLeaderboard(board.rows);
+        setLeaderboardMonth(board.month);
+        setQuestPairs(quest.pairs);
+        setQuestTarget(quest.target);
+        setChallenge(activeChallenge);
+        loadedOnce.current = true;
+        setStale(false);
+      } catch (err) {
+        toBuddyError(err);
+        if (mounted.current) setStale(true);
+      } finally {
+        if (mounted.current) setLoading(false);
+      }
+    })();
+  }, [status, token]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let timer: ReturnType<typeof setInterval> | null = null;
+
+      const startTimer = () => {
+        if (timer === null) timer = setInterval(reload, SOCIAL_REFRESH_MS);
+      };
+      const stopTimer = () => {
+        if (timer !== null) {
+          clearInterval(timer);
+          timer = null;
+        }
+      };
+
+      reload();
+      startTimer();
+
+      const sub = AppState.addEventListener('change', (state) => {
+        if (state === 'active') {
+          reload();
+          startTimer();
+        } else {
+          stopTimer();
+        }
+      });
+
+      return () => {
+        stopTimer();
+        sub.remove();
+      };
+    }, [reload]),
+  );
+
+  const joinCurrentChallenge = useCallback(async (): Promise<ChallengeJoinErrorCode | null> => {
+    if (token === null || challenge === null) return 'not_found';
+    return joinChallenge(token, challenge.id);
+  }, [token, challenge]);
+
+  return {
+    leaderboard,
+    leaderboardMonth,
+    questPairs,
+    questTarget,
+    challenge,
+    stale,
+    loading,
+    reload,
+    joinCurrentChallenge,
+  };
 }

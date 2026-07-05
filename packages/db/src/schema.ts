@@ -284,6 +284,11 @@ export const accounts = pgTable('accounts', {
   // (userForToken filters on status='active'). Defaulted so existing rows and
   // the mobile GET/POST are unaffected.
   status: text('status', { enum: ['active', 'suspended'] }).notNull().default('active'),
+  // Public-leaderboard opt-out (privacy law): true = never appears on the
+  // public board — not as a row, not as a position, not in buddies' views.
+  // Lives here (not account_profiles) beside the other server-authoritative
+  // identity flags: account_profiles rows only exist after a profile sync.
+  publicBoardHidden: boolean('public_board_hidden').notNull().default(false),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -657,6 +662,9 @@ export const syncedWorkouts = pgTable(
     finishedAt: timestamp('finished_at', { withTimezone: true }).notNull(),
     durationSec: integer('duration_sec'),
     syncedAt: timestamp('synced_at', { withTimezone: true }).notNull().defaultNow(),
+    // Plausibility: false = excluded from leaderboards/badges/quests/challenges/PR credit.
+    ranked: boolean('ranked').notNull().default(true),
+    flagReason: text('flag_reason'), // 'absolute_bounds' | 'velocity' — null when ranked
   },
   (t) => [index('synced_workouts_account_date').on(t.accountId, t.date)],
 );
@@ -757,4 +765,178 @@ export const checkIns = pgTable(
     uniqueIndex('check_ins_account_date').on(t.accountId, t.date),
     index('check_ins_account_created').on(t.accountId, t.createdAt),
   ],
+);
+
+/**
+ * Gamification (Phase 1+2) — one cached profile row per account. XP/streak
+ * math lives in @gym/shared (logic/gamificationXp.ts, logic/weeklyStreak.ts);
+ * this row is a server-side cache recomputed by runAwardEngine on every
+ * sync/check-in/GET so reads stay cheap.
+ */
+export const gamificationProfiles = pgTable('gamification_profiles', {
+  accountId: text('account_id')
+    .primaryKey()
+    .references(() => accounts.id, { onDelete: 'cascade' }),
+  xpTotal: integer('xp_total').notNull().default(0),
+  weeklyTargetDays: integer('weekly_target_days').notNull().default(3), // 2..7
+  streakWeeks: integer('streak_weeks').notNull().default(0), // cached, recomputed
+  bestStreakWeeks: integer('best_streak_weeks').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Bounded XP ledger (DESIGN LAW 1) — sourceKey makes every award idempotent
+ * per (account, kind, sourceKey): a date for daily_workout, a weekStart for
+ * streak_week, a checkInId for checkin, a setId for pr, a badgeId for badge.
+ */
+export const xpEvents = pgTable(
+  'xp_events',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    kind: text('kind', {
+      enum: ['daily_workout', 'streak_week', 'checkin', 'pr', 'badge'],
+    }).notNull(),
+    sourceKey: text('source_key').notNull(),
+    amount: integer('amount').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('xp_events_account_kind_source').on(t.accountId, t.kind, t.sourceKey)],
+);
+
+/**
+ * Earned badges (catalog itself is pure data in @gym/shared). Strength-club
+ * badges start 'logged'; only a coach can flip them to 'verified'. badgeId
+ * also carries synthetic ids of the form `challenge:<challengeId>` for
+ * coach-challenge completions.
+ */
+export const awardedBadges = pgTable(
+  'awarded_badges',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    badgeId: text('badge_id').notNull(), // catalog id, or `challenge:<challengeId>`
+    status: text('status', { enum: ['logged', 'verified'] })
+      .notNull()
+      .default('logged'),
+    verifiedBy: text('verified_by').references(() => accounts.id, { onDelete: 'set null' }),
+    verifiedAt: timestamp('verified_at', { withTimezone: true }),
+    earnedAt: timestamp('earned_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('awarded_badges_account_badge').on(t.accountId, t.badgeId),
+    index('awarded_badges_status').on(t.status, t.earnedAt),
+  ],
+);
+
+/** Rest Shield consumption — one row per shielded week, quota drawn per calendar month. */
+export const restShieldUses = pgTable(
+  'rest_shield_uses',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    weekStart: date('week_start').notNull(), // Monday yyyy-mm-dd of the shielded week
+    monthKey: text('month_key').notNull(), // 'yyyy-mm' the quota is drawn from
+    usedAt: timestamp('used_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('rest_shield_uses_account_week').on(t.accountId, t.weekStart)],
+);
+
+/** Coach-created monthly challenge. ONE active challenge per coach per month. */
+export const coachChallenges = pgTable(
+  'coach_challenges',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    monthKey: text('month_key').notNull(), // 'yyyy-mm'
+    targetDays: integer('target_days').notNull(), // session-days to reach
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('coach_challenges_coach_month').on(t.coachId, t.monthKey)],
+);
+
+export const challengeMembers = pgTable(
+  'challenge_members',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    challengeId: text('challenge_id')
+      .notNull()
+      .references(() => coachChallenges.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    joinedAt: timestamp('joined_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('challenge_members_challenge_account').on(t.challengeId, t.accountId)],
+);
+
+/**
+ * Buddy co-op quest completion marker (push idempotency + "already awarded"
+ * check). accountA < accountB lexicographically so a pair has exactly one row.
+ */
+export const buddyQuestAwards = pgTable(
+  'buddy_quest_awards',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    monthKey: text('month_key').notNull(),
+    accountA: text('account_a')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    accountB: text('account_b')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    completedAt: timestamp('completed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('buddy_quest_awards_month_pair').on(t.monthKey, t.accountA, t.accountB)],
+);
+
+/** Coach acknowledgement of a flagged (unranked) workout — one row per workout. */
+export const workoutFlagAcks = pgTable('workout_flag_acks', {
+  workoutId: text('workout_id')
+    .primaryKey()
+    .references(() => syncedWorkouts.id, { onDelete: 'cascade' }),
+  coachId: text('coach_id')
+    .notNull()
+    .references(() => accounts.id, { onDelete: 'cascade' }),
+  ackedAt: timestamp('acked_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Coach's pick — one manually-awarded spotlight member per coach per month. */
+export const coachPicks = pgTable(
+  'coach_picks',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    monthKey: text('month_key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('coach_picks_coach_month').on(t.coachId, t.monthKey)],
 );

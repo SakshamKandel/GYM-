@@ -12,14 +12,21 @@ export const dynamic = 'force-dynamic';
  * Coach console nav. Fixed for every coach (and super_admin / main_admin, who
  * may view it):
  * Inbox (message threads), Clients (assigned users), Videos (form-check library
- * — coach holds content.video.publish), Profile (public coach card). Page agents
- * re-check the coach guards server-side per route.
+ * — coach holds content.video.publish), Profile (public coach card). Verify
+ * (badge verification queue), Flags (plausibility-flagged workouts) and
+ * Challenges (monthly challenge + Coach's pick) are the gamification
+ * additions — all three read/write the coach-scoped routes under
+ * /api/coach/{verifications,flags,challenges,picks}. Page agents re-check the
+ * coach guards server-side per route.
  */
 const COACH_NAV: NavItem[] = [
   { href: '/coach', label: 'Inbox', match: 'exact' },
   { href: '/coach/clients', label: 'Clients' },
   { href: '/coach/attention', label: 'Attention' },
   { href: '/coach/review', label: 'Review' },
+  { href: '/coach/verify', label: 'Verify' },
+  { href: '/coach/flags', label: 'Flags' },
+  { href: '/coach/challenges', label: 'Challenges' },
   { href: '/coach/videos', label: 'Videos' },
   { href: '/coach/profile', label: 'Profile' },
 ];

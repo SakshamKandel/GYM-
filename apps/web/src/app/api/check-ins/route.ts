@@ -1,8 +1,10 @@
 import { checkIns } from '@gym/db';
 import { and, desc, eq, or } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
+import { runAwardEngine } from '@/lib/gamification';
 import { json, preflight, readJson } from '@/lib/http';
 
 export const runtime = 'nodejs';
@@ -14,7 +16,9 @@ export const runtime = 'nodejs';
  *    the (account, date) unique index via ON CONFLICT DO NOTHING. A fresh
  *    insert returns 201; a replay (retry, or a second submit the same day)
  *    returns 200 with the EXISTING row so the client converges either way.
- *    accountId always comes from the bearer token.
+ *    accountId always comes from the bearer token. A fresh (201) insert also
+ *    runs the gamification award engine (checkin XP + crew badges) —
+ *    best-effort, wrapped in after() so it never blocks or fails the submit.
  *  - GET ?limit=10 → newest first. The mobile store hydrates `lastCheckInAt`
  *    from this on sign-in, so due-state survives a reinstall.
  */
@@ -67,7 +71,10 @@ export async function POST(req: Request) {
     .returning();
 
   const created = inserted[0];
-  if (created) return json({ checkIn: created }, 201);
+  if (created) {
+    after(() => runAwardEngine(user.id).then(() => undefined));
+    return json({ checkIn: created }, 201);
+  }
 
   // Conflict — either the same UUID replayed or a second check-in today.
   // Return the caller's existing row; a foreign UUID collision (someone

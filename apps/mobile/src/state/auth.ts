@@ -15,9 +15,7 @@ import {
 } from '../lib/api/client';
 import { signOutGoogle } from '../features/auth/components/NativeGoogleSignIn';
 import { useBuddyStore } from '../features/buddy/store';
-import { clearServerSuggestions } from '../features/progression/hooks';
 import { getMeStaff, type StaffRole } from '../features/staff/api';
-import { unregisterPushNotificationsAsync } from '../lib/notifications';
 import { DEFAULT_PROFILE_FIELDS, useProfile } from './profile';
 
 /**
@@ -137,6 +135,10 @@ function clearAccountState(): void {
   useProfile.getState().resetAccountFields();
   // Coach-reviewed targets + coach notes are account data — never let them
   // survive into the next sign-in on this device.
+  // Lazy require (not a static import): progression/hooks imports back into
+  // this module, and this only runs at sign-out — long after module init.
+  const { clearServerSuggestions } =
+    require('../features/progression/hooks') as typeof import('../features/progression/hooks');
   clearServerSuggestions();
 }
 
@@ -197,6 +199,10 @@ export const useAuth = create<AuthState>()(
           // Fired before the Google await below so a hung native call can
           // never starve the server-side logout.
           void (async () => {
+            // Lazy require (not a static import): lib/notifications imports
+            // back into this module, so it must not be a top-level import.
+            const { unregisterPushNotificationsAsync } =
+              require('../lib/notifications') as typeof import('../lib/notifications');
             // Push unregister first — it needs the session the logout revokes.
             await unregisterPushNotificationsAsync(token);
             try {

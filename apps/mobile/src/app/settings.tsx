@@ -16,6 +16,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { hasEntitlement, type FontScale, type Tier } from '@gym/shared';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
+  AnimatedTierRing,
   AppText,
   AppTextInput,
   Button,
@@ -37,12 +38,19 @@ import {
   scheduleMorningNudge,
   scheduleWorkoutReminders,
 } from '../lib/notifications';
+import { patchWeeklyTarget, toGamificationError } from '../lib/api/gamification';
+import { getPublicLeaderboard, setPublicBoardHidden } from '../lib/api/social';
 import { getRepo } from '../lib/repo';
 import { SEED_PLANS } from '../lib/seed/plans';
 import { useAuth } from '../state/auth';
+import { publicBoardHiddenFor, useGamificationDisplay } from '../state/gamification';
 import { useProfile } from '../state/profile';
 import { useReminders } from '../state/reminders';
 import { useSecurity } from '../state/security';
+import { ProfileGamification } from '../features/gamification/components/ProfileGamification';
+import { VipCard } from '../features/subscription/components/VipCard';
+import { useGamificationBadges } from '../features/gamification/store';
+import { useWeeklyStreak } from '../features/streak/hooks';
 import { pushPath } from '../features/auth/nav';
 import { pushStaff, STAFF_ROUTES } from '../features/staff/nav';
 import { biometricsAvailable } from '../features/security/AppLock';
@@ -276,12 +284,29 @@ export default function SettingsScreen() {
   const targets = useProfile((s) => s.targets);
   const planId = useProfile((s) => s.planId);
   const tier = useProfile((s) => s.tier);
+  const daysPerWeek = useProfile((s) => s.daysPerWeek);
   const update = useProfile((s) => s.update);
 
   const authStatus = useAuth((s) => s.status);
   const authUser = useAuth((s) => s.user);
+  const authToken = useAuth((s) => s.token);
   const staffRole = useAuth((s) => s.staffRole);
   const signOut = useAuth((s) => s.signOut);
+  // Server-authoritative tier for the identity shield — never useProfile.tier
+  // (local upgrade-only mirror, known to drift above the server's value).
+  const serverTier = useAuth((s) => s.user?.tier ?? 'starter');
+
+  const hideGamification = useGamificationDisplay((s) => s.hideGamification);
+  const setHideGamification = useGamificationDisplay((s) => s.setHideGamification);
+  // Account-scoped read: a mirror persisted by a previous account on this
+  // device must never render as THIS account's visibility (default = shown).
+  const publicBoardHidden = useGamificationDisplay((s) => publicBoardHiddenFor(s, authUser?.id));
+  const setPublicBoardHiddenLocal = useGamificationDisplay((s) => s.setPublicBoardHidden);
+  // Set once the user touches the toggle this visit — an in-flight focus
+  // hydration must not clobber their optimistic flip with a stale read.
+  const publicBoardTouchedRef = useRef(false);
+  const gamification = useWeeklyStreak();
+  const earnedBadgeCount = useGamificationBadges((s) => s.badges.length);
 
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -348,6 +373,43 @@ export default function SettingsScreen() {
   function onCheckInToggle(next: boolean): void {
     setCheckInReminderOn(next);
     void scheduleCheckInReminder(next);
+  }
+
+  /**
+   * Weekly session target — writes the local profile immediately (offline-
+   * first, and the same field the streak/analytics math already reads), then
+   * best-effort mirrors it server-side so shield/streak computation there
+   * uses the same number. A failed PATCH just means the server catches up on
+   * the next successful call — the local value is never rolled back for it.
+   */
+  function onWeeklyTargetChange(next: number): void {
+    update({ daysPerWeek: next });
+    if (authStatus === 'signedIn' && authToken) {
+      patchWeeklyTarget(authToken, next).catch((err) => {
+        toGamificationError(err); // swallow — local value already stands
+      });
+    }
+  }
+
+  /**
+   * "Show me on the public leaderboard" — flips the LOCAL mirror immediately
+   * (same optimistic pattern as the weekly target above), then best-effort
+   * PATCHes the server-side accounts.publicBoardHidden flag. Unlike the
+   * weekly target, the SERVER owns this privacy flag — a failed PATCH reverts
+   * the local flip with a warn haptic instead of letting the toggle lie.
+   */
+  function onPublicBoardToggle(show: boolean): void {
+    // The row only renders when signed in, but guard anyway — the mirror is
+    // account-scoped and must never be stamped without an account id.
+    if (authStatus !== 'signedIn' || !authToken || !authUser) return;
+    const accountId = authUser.id;
+    const hidden = !show;
+    publicBoardTouchedRef.current = true;
+    setPublicBoardHiddenLocal(accountId, hidden);
+    setPublicBoardHidden(authToken, hidden).catch(() => {
+      warnHaptic();
+      setPublicBoardHiddenLocal(accountId, !hidden);
+    });
   }
 
   /** Build the 12-month JSON export and hand it to the OS share sheet. */
@@ -425,6 +487,40 @@ export default function SettingsScreen() {
     }, []),
   );
 
+  // Keep the "N earned" badges count fresh — cheap, idempotent, swallows errors.
+  useFocusEffect(
+    useCallback(() => {
+      if (authStatus === 'signedIn') void useGamificationBadges.getState().hydrate();
+    }, [authStatus]),
+  );
+
+  // Reconcile the public-board opt-out mirror from the server on focus. The
+  // persisted mirror can go stale across account switches on this device or
+  // a toggle flipped on ANOTHER device — the server owns this privacy flag,
+  // so the toggle must never lie about actual visibility. Best-effort:
+  // offline keeps the account-scoped local value (default = shown).
+  useFocusEffect(
+    useCallback(() => {
+      const auth = useAuth.getState();
+      if (auth.status !== 'signedIn' || auth.token === null || auth.user === null) return;
+      const accountId = auth.user.id;
+      void getPublicLeaderboard(auth.token)
+        .then((res) => {
+          // A toggle mid-flight is fresher than this read; a session change
+          // mid-flight means the response belongs to the previous account.
+          if (publicBoardTouchedRef.current) return;
+          const current = useAuth.getState();
+          if (current.status !== 'signedIn' || current.user?.id !== accountId) return;
+          setPublicBoardHiddenLocal(accountId, res.me.hidden);
+        })
+        .catch(() => {
+          // Offline or server hiccup — the server still enforces the real flag.
+        });
+      // authStatus dep: a sign-in while this screen is mounted refires the
+      // reconcile for the new session (getState() reads the fresh values).
+    }, [authStatus, setPublicBoardHiddenLocal]),
+  );
+
   function goBack(): void {
     if (router.canGoBack()) router.back();
     else router.replace('/');
@@ -489,16 +585,24 @@ export default function SettingsScreen() {
         <AppText variant="heading">Settings</AppText>
       </Animated.View>
 
-      {/* ── Profile card ────────────────────────────────────── */}
+      {/* ── VIP membership card (the profile area's luxury island) ── */}
       <Animated.View entering={enterUp(0)}>
-        <View style={styles.profileCard}>
-          <View style={styles.avatar}>
-            <AppText style={styles.avatarInitial} tabular={false}>
-              {nameInitial}
-            </AppText>
-          </View>
-          <View style={styles.profileInfo}>
-            {editingName ? (
+        <VipCard
+          tier={serverTier}
+          avatar={
+            /* Animated metallic ring = subscription identity on the avatar;
+               the earned RankEmblem stays beside the rank text below (never
+               on the avatar) so the two can't be confused. */
+            <AnimatedTierRing tier={serverTier} size={56}>
+              <View style={styles.avatar}>
+                <AppText style={styles.avatarInitial} tabular={false}>
+                  {nameInitial}
+                </AppText>
+              </View>
+            </AnimatedTierRing>
+          }
+          nameSlot={
+            editingName ? (
               <AppTextInput
                 value={nameDraft}
                 onChangeText={setNameDraft}
@@ -527,13 +631,29 @@ export default function SettingsScreen() {
                 </AppText>
                 <Ionicons name="pencil" size={16} color={colors.textDim} />
               </PressableScale>
-            )}
-            <AppText variant="caption" numberOfLines={1}>
-              {signedIn && authUser ? authUser.email : 'Local only — sign in to sync'}
+            )
+          }
+          subtitle={signedIn && authUser ? authUser.email : 'Local only — sign in to sync'}
+          onUpgrade={() => pushPath('/subscribe')}
+        />
+        {signedIn ? (
+          <ProfileGamification hidden={hideGamification} profile={gamification?.profile ?? null} />
+        ) : null}
+        {signedIn && !hideGamification ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Open badges"
+            onPress={() => pushPath('/badges')}
+            style={styles.badgesRow}
+          >
+            <Ionicons name="ribbon-outline" size={20} color={colors.textDim} />
+            <AppText variant="body" style={styles.badgesRowText}>
+              Badges
             </AppText>
-          </View>
-          <Tag label={TIER_LABEL[tier]} variant="dim" />
-        </View>
+            <AppText variant="caption">{earnedBadgeCount} earned</AppText>
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+          </PressableScale>
+        ) : null}
         {!signedIn ? (
           <View style={styles.authRow}>
             <Button
@@ -726,14 +846,14 @@ export default function SettingsScreen() {
         <View style={[styles.group, styles.subscriptionBlock]}>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel={`Subscription — current plan ${TIER_LABEL[tier]}`}
+            accessibilityLabel={`Subscription — current plan ${TIER_LABEL[serverTier]}`}
             onPress={() => pushPath('/subscribe')}
             style={styles.row}
           >
             <IconChip icon="card" size={36} />
             <AppText style={styles.rowLabelGrow} numberOfLines={1}>Subscription</AppText>
             <View style={styles.rowValue}>
-              <AppText color={colors.textDim} numberOfLines={1}>{TIER_LABEL[tier]}</AppText>
+              <AppText color={colors.textDim} numberOfLines={1}>{TIER_LABEL[serverTier]}</AppText>
               <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
             </View>
           </PressableScale>
@@ -906,6 +1026,66 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
+      {/* ── Gamification ────────────────────────────────────── */}
+      <Animated.View entering={enterUp(7)} layout={layoutSpring}>
+        <AppText variant="label" style={styles.sectionLabel}>
+          Gamification
+        </AppText>
+        <View style={styles.group}>
+          <View style={styles.row}>
+            <IconChip icon="calendar-number" size={36} />
+            <AppText style={styles.rowLabelGrow} numberOfLines={1}>
+              Weekly session target
+            </AppText>
+            <MiniStepper
+              value={daysPerWeek}
+              display={`${daysPerWeek}/wk`}
+              onChange={onWeeklyTargetChange}
+              step={1}
+              min={2}
+              max={7}
+              label="weekly session target"
+              valueStyle={styles.timeStepperValue}
+            />
+          </View>
+          <Divider />
+          <View style={styles.row}>
+            <IconChip icon="eye-off" size={36} />
+            <AppText style={styles.rowLabelGrow} numberOfLines={1}>
+              Hide gamification
+            </AppText>
+            <Switch
+              value={hideGamification}
+              onValueChange={setHideGamification}
+              trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
+              thumbColor={hideGamification ? colors.accent : colors.textDim}
+              accessibilityLabel="Hide gamification"
+            />
+          </View>
+          {/* Public-board opt-out — server-side privacy flag, so only shown
+              when signed in. Optimistic flip; a failed PATCH reverts with a
+              warn haptic (the server flag is the source of truth). */}
+          {signedIn ? (
+            <>
+              <Divider />
+              <View style={styles.row}>
+                <IconChip icon="podium" size={36} />
+                <AppText style={styles.rowLabelGrow} numberOfLines={2}>
+                  Show me on the public leaderboard
+                </AppText>
+                <Switch
+                  value={!publicBoardHidden}
+                  onValueChange={onPublicBoardToggle}
+                  trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
+                  thumbColor={!publicBoardHidden ? colors.accent : colors.textDim}
+                  accessibilityLabel="Show me on the public leaderboard"
+                />
+              </View>
+            </>
+          ) : null}
+        </View>
+      </Animated.View>
+
       {/* ── Your data ───────────────────────────────────────── */}
       <Animated.View entering={enterUp(7)} layout={layoutSpring}>
         <AppText variant="label" style={styles.sectionLabel}>
@@ -1065,17 +1245,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
 
-  // Profile card
-  profileCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-  },
+  // Profile card (now VipCard — these style the slots passed into it)
   avatar: {
     width: 56,
     height: 56,
@@ -1085,7 +1255,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarInitial: { fontFamily: type.display, fontSize: 24, color: colors.text },
-  profileInfo: { flex: 1, gap: 2 },
   nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1101,6 +1270,14 @@ const styles = StyleSheet.create({
   },
   authRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
   authBtn: { flex: 1, minHeight: 44 },
+  badgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  badgesRowText: { flex: 1 },
 
   // Bordered group of compact rows
   group: {

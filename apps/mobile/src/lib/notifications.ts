@@ -27,6 +27,9 @@ const WORKOUT_REMINDER_PREFIX = 'workout-rem-';
 const MORNING_NUDGE_ID = 'morning-nudge';
 const CHECK_IN_REMINDER_ID = 'checkin-reminder';
 
+/** Stable id for the weekly streak-saver nudge (cancel-then-reschedule). */
+const STREAK_SAVER_ID = 'streak-saver';
+
 const SECONDS_PER_DAY = 24 * 60 * 60;
 
 /** True only where scheduling actually works (iOS/Android). */
@@ -339,6 +342,73 @@ export async function scheduleMorningNudge(
     return true;
   } catch {
     return false;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// Weekly streak-saver nudge — a same-day, one-shot local reminder when the
+// current week is short on session-days with little time left. Scheduled
+// from features/streak/hooks.ts on app-open focus (no server cron per the
+// gamification contract); cancelled once the week's target is met.
+// ════════════════════════════════════════════════════════════════
+
+/** 19:00 local, or ~2h from now if it's already past 19:00 today. */
+function streakSaverSecondsFromNow(): number {
+  const now = new Date();
+  const target = new Date(now);
+  target.setHours(19, 0, 0, 0);
+  if (target.getTime() <= now.getTime()) {
+    target.setTime(now.getTime() + 2 * 60 * 60 * 1000);
+  }
+  return Math.max(60, Math.round((target.getTime() - now.getTime()) / 1000));
+}
+
+/**
+ * Schedule (or replace) the evening streak-saver reminder: "N sessions left
+ * to keep your M-week streak". Idempotent (cancels any prior copy first).
+ * Callers only invoke this when the week is genuinely short — see
+ * features/streak/hooks.ts for the trigger condition.
+ */
+export async function scheduleStreakSaverReminder(
+  sessionsLeft: number,
+  streakWeeks: number,
+): Promise<boolean> {
+  if (!isSupported()) return false;
+  if (sessionsLeft <= 0) return false;
+  try {
+    await Notifications.cancelScheduledNotificationAsync(STREAK_SAVER_ID);
+
+    const granted = await requestPermission();
+    if (!granted) return false;
+
+    const sessionWord = sessionsLeft === 1 ? 'session' : 'sessions';
+    const body =
+      streakWeeks > 0
+        ? `${sessionsLeft} ${sessionWord} left to keep your ${streakWeeks}-week streak`
+        : `${sessionsLeft} ${sessionWord} left to hit your weekly target`;
+
+    await Notifications.scheduleNotificationAsync({
+      identifier: STREAK_SAVER_ID,
+      content: { title: 'Keep your streak alive', body },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+        seconds: streakSaverSecondsFromNow(),
+        repeats: false,
+      },
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Cancel the streak-saver reminder (e.g. the week's target was already met). */
+export async function cancelStreakSaverReminder(): Promise<void> {
+  if (!isSupported()) return;
+  try {
+    await Notifications.cancelScheduledNotificationAsync(STREAK_SAVER_ID);
+  } catch {
+    // no-op — nothing to cancel or module unavailable.
   }
 }
 

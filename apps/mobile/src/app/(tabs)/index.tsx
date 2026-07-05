@@ -8,6 +8,7 @@ import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AITipCard,
   AnimatedNumber,
+  AnimatedTierRing,
   AppText,
   Button,
   Divider,
@@ -24,6 +25,7 @@ import {
 } from '../../components/ui';
 import { posterDate } from '../../lib/dates';
 import { useAiTip } from '../../lib/ai/useAiTip';
+import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
 import { CheckInCard } from '../../features/checkin/components/CheckInCard';
 import { FirstWorkoutsQuest } from '../../features/engagement/components/FirstWorkoutsQuest';
@@ -38,6 +40,7 @@ import { WeeklyCheckIn } from '../../features/engagement/components/WeeklyCheckI
 import { openLastSession, pushHistory } from '../../features/history/nav';
 import { useHomeData, useQuestProgress, type DoneToday } from '../../features/engagement/hooks';
 import { avatarLetter, formatCompact, greetingForHour, toHref } from '../../features/engagement/logic';
+import { useWeeklyStreak } from '../../features/streak/hooks';
 import { useQuest } from '../../state/quest';
 
 /** Home — answers "what's today?" in one glance. */
@@ -239,7 +242,11 @@ export default function HomeScreen() {
   const startWeightKg = useProfile((s) => s.startWeightKg);
   const targetWeightKg = useProfile((s) => s.targetWeightKg);
   const tier = useProfile((s) => s.tier);
+  // Server-authoritative tier for the greeting ring — never useProfile.tier
+  // (local upgrade-only mirror, known to drift above the server's value).
+  const serverTier = useAuth((s) => s.user?.tier ?? 'starter');
   const data = useHomeData(planId);
+  const weeklyStreak = useWeeklyStreak();
   const quest = useQuestProgress();
   const questDismissed = useQuest((s) => s.dismissed);
 
@@ -248,7 +255,7 @@ export default function HomeScreen() {
   const showQuest = quest !== null && !quest.expired && !questDismissed;
 
   const { state: tipState, refresh } = useAiTip(() => {
-    const streak = data?.streak?.current ?? 0;
+    const streak = weeklyStreak?.weeks ?? 0;
     const weekSessions = data?.weekSessions ?? 0;
     const goal = goalType ?? 'muscle';
     const bodyWeight =
@@ -264,24 +271,28 @@ export default function HomeScreen() {
       },
       {
         role: 'user' as const,
-        content: `My bodyweight is ${bodyWeight}. Goal weight: ${goalWeight}. Goal: ${goal}. This week: ${weekSessions} sessions, ${streak}-day streak. Share one amazing fitness fact, tied to my bodyweight or training when you can.`,
+        content: `My bodyweight is ${bodyWeight}. Goal weight: ${goalWeight}. Goal: ${goal}. This week: ${weekSessions} sessions, ${streak}-week streak. Share one amazing fitness fact, tied to my bodyweight or training when you can.`,
       },
     ];
-  }, [data?.streak?.current, data?.weekSessions, goalType, startWeightKg, targetWeightKg, unitPref, unit]);
+  }, [weeklyStreak?.weeks, data?.weekSessions, goalType, startWeightKg, targetWeightKg, unitPref, unit]);
 
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
       <Animated.View entering={enterDown(0)} style={styles.topRow}>
-        <View style={styles.avatar}>
-          <AppText variant="bodyBold">{avatarLetter(displayName)}</AppText>
-        </View>
+        {/* Home greeting is a premium surface — the animated tier ring runs
+            here too, subtle at 44px (glow escapes the bounds, layout holds). */}
+        <AnimatedTierRing tier={serverTier} size={44}>
+          <View style={styles.avatar}>
+            <AppText variant="bodyBold">{avatarLetter(displayName)}</AppText>
+          </View>
+        </AnimatedTierRing>
         <View style={styles.greet}>
           <AppText variant="caption">{greetingForHour(new Date().getHours())}</AppText>
           <AppText variant="bodyBold" numberOfLines={1}>
             {displayName.trim() || 'Athlete'}
           </AppText>
         </View>
-        {data !== null ? <StreakChip streak={data.streak} /> : null}
+        {weeklyStreak !== null ? <StreakChip streak={weeklyStreak} /> : null}
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Settings"

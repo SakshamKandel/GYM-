@@ -12,3 +12,7 @@ export * from './logic/plates';
 export * from './logic/progression';
 export * from './logic/staffRoles';
 export * from './logic/units';
+export * from './logic/gamificationXp';
+export * from './logic/weeklyStreak';
+export * from './logic/badges';
+export * from './logic/plausibility';

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { StatusChip, TierChip } from '@/components/console';
+import { StatusChip, TierBadge } from '@/components/console';
 
 export interface Client {
   userId: string;
@@ -27,9 +27,10 @@ function relativeTime(date: Date): string {
 
 /**
  * One assigned client. Whole card links to their coach thread. Shows name +
- * email, tier chip, a suspended chip when the account is suspended, last-active
- * relative time, and an unread count. Unread cards get a faint red left accent
- * (the one place red is allowed — an active-state signal).
+ * email, the tier shield (identity mark, shown once), a suspended chip when
+ * the account is suspended, last-active relative time, and an unread count.
+ * Unread cards get a faint red left accent (the one place red is allowed —
+ * an active-state signal).
  */
 export function ClientCard({ client }: { client: Client }) {
   const hasUnread = client.unread > 0;
@@ -62,15 +63,25 @@ export function ClientCard({ client }: { client: Client }) {
         <div style={{ minWidth: 0 }}>
           <div
             style={{
-              fontFamily: 'var(--font-heading)',
-              fontWeight: 600,
-              fontSize: 15,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              maxWidth: '100%',
             }}
           >
-            {name}
+            <span
+              style={{
+                fontFamily: 'var(--font-heading)',
+                fontWeight: 600,
+                fontSize: 15,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {name}
+            </span>
+            <TierBadge tier={client.tier} />
           </div>
           <div
             style={{
@@ -117,7 +128,8 @@ export function ClientCard({ client }: { client: Client }) {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <TierChip tier={client.tier} />
+          {/* Tier is already shown once via the TierBadge shield next to the
+              name above — it's the identity mark; no second text chip here. */}
           {client.status === 'suspended' ? (
             <StatusChip status="suspended" />
           ) : null}

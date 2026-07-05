@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams } from 'expo-router';
 import { displayWeight, unitLabel } from '@gym/shared';
@@ -19,10 +20,48 @@ import {
 import { BackHeader } from '../../features/body/components/BackHeader';
 import { forgetWorkoutStats, useWorkoutDetail } from '../../features/history/hooks';
 import { clockLabel, formatCompact, formatWeightNumber, vsLastLine } from '../../features/history/logic';
+import { getGamificationFlagForWorkout } from '../../lib/api/gamification';
 import { posterDate } from '../../lib/dates';
 import { logHaptic } from '../../lib/haptics';
 import { getRepo } from '../../lib/repo';
+import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
+
+/**
+ * True if this workout is currently unranked (plausibility-flagged). Quiet,
+ * best-effort — see history/index.tsx's identical hook for the rationale;
+ * duplicated rather than shared since neither screen owns a common
+ * feature/history file in the MOBILE-SOCIAL ownership map.
+ *
+ * Uses the single-workout lookup (not the 20-newest list) so an older
+ * flagged workout still shows the notice correctly.
+ */
+function useIsFlagged(workoutId: string | undefined): boolean {
+  const status = useAuth((s) => s.status);
+  const token = useAuth((s) => s.token);
+  const [flagged, setFlagged] = useState(false);
+
+  useEffect(() => {
+    if (workoutId === undefined || status !== 'signedIn' || token === null) {
+      setFlagged(false);
+      return;
+    }
+    let mounted = true;
+    void (async () => {
+      try {
+        const flag = await getGamificationFlagForWorkout(token, workoutId);
+        if (mounted) setFlagged(flag !== null);
+      } catch {
+        // Best-effort — stays unflagged this load.
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [workoutId, status, token]);
+
+  return flagged;
+}
 
 /** Full session detail: header stats, every set per exercise, vs-last-time. */
 
@@ -49,6 +88,16 @@ const styles = StyleSheet.create({
   setNumbers: { fontFamily: type.display, fontSize: 20, color: colors.text, flex: 1 },
   vsLine: { marginTop: spacing.sm },
   deleteBtn: { marginTop: spacing.xxl },
+  flagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  flagText: { flex: 1 },
 });
 
 export default function HistoryDetailScreen() {
@@ -57,6 +106,7 @@ export default function HistoryDetailScreen() {
   const unitPref = useProfile((s) => s.unitPref);
   const unit = unitLabel(unitPref);
   const { workout, loaded, stats, groups, vsLast } = useWorkoutDetail(workoutId);
+  const flagged = useIsFlagged(workoutId);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -105,6 +155,15 @@ export default function HistoryDetailScreen() {
               style={styles.statCol}
             />
           </Animated.View>
+
+          {flagged ? (
+            <Animated.View entering={enterUp(1)} style={styles.flagRow}>
+              <Ionicons name="information-circle-outline" size={18} color={colors.textDim} />
+              <AppText variant="caption" color={colors.textDim} style={styles.flagText}>
+                Not counted toward rankings — fix this entry?
+              </AppText>
+            </Animated.View>
+          ) : null}
 
           {groups.map((g, gi) => {
             const comparison = vsLast[g.exerciseId];

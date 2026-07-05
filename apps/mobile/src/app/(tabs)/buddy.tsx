@@ -28,10 +28,11 @@ import {
   SectionLabel,
   Tag,
 } from '../../components/ui';
+import { pushPath } from '../../features/auth/nav';
 import { todayIso } from '../../lib/dates';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
-import { useBuddyData } from '../../features/buddy/hooks';
+import { useBuddyData, useSocialData } from '../../features/buddy/hooks';
 import {
   endLiveSession,
   joinLiveSession,
@@ -42,6 +43,9 @@ import {
   sendReferral,
   startLiveSession,
 } from '../../features/buddy/actions';
+import { BuddySummarySheet } from '../../features/buddy/components/BuddySummarySheet';
+import { Leaderboard } from '../../features/buddy/components/Leaderboard';
+import { QuestCard } from '../../features/buddy/components/QuestCard';
 import {
   avatarLetter,
   BUDDY_LIMIT,
@@ -53,6 +57,7 @@ import {
   weekDots,
 } from '../../features/buddy/logic';
 import { nudgedToday, useBuddyStore } from '../../features/buddy/store';
+import { ChallengeCard } from '../../features/gamification/components/ChallengeCard';
 import type {
   BuddyErrorCode,
   BuddyEvent,
@@ -67,6 +72,7 @@ export default function BuddyScreen() {
   const status = useAuth((s) => s.status);
   const { list, events, sessions, referrals, stale, reload } =
     useBuddyData();
+  const social = useSocialData();
 
   if (status !== 'signedIn') {
     return <SignedOutView />;
@@ -80,6 +86,7 @@ export default function BuddyScreen() {
       referrals={referrals}
       stale={stale}
       reload={reload}
+      social={social}
     />
   );
 }
@@ -127,6 +134,7 @@ interface ContentProps {
   referrals: Referral[];
   stale: boolean;
   reload: () => void;
+  social: ReturnType<typeof useSocialData>;
 }
 
 function BuddyContent({
@@ -136,9 +144,11 @@ function BuddyContent({
   referrals,
   stale,
   reload,
+  social,
 }: ContentProps) {
   const tier = useProfile((s) => s.tier);
   const myId = useAuth((s) => s.user?.id ?? null);
+  const [summaryBuddy, setSummaryBuddy] = useState<{ id: string; name: string } | null>(null);
   // Join gating must mirror the SERVER's check, which compares the host's
   // account tier against the caller's account tier (both from the DB). The
   // local profile tier can be stale — it only ever upgrades, never downgrades
@@ -257,6 +267,65 @@ function BuddyContent({
         </View>
       ) : null}
 
+      {accepted.length > 0 ? (
+        <>
+          <Divider />
+
+          {/* ── Coach challenge ────────────────────────────────── */}
+          {social.challenge !== null ? (
+            <View>
+              <SectionLabel>Coach challenge</SectionLabel>
+              <ChallengeCard
+                challenge={social.challenge}
+                onJoin={social.joinCurrentChallenge}
+                onJoined={social.reload}
+              />
+            </View>
+          ) : null}
+
+          {/* ── Buddy quest ────────────────────────────────────── */}
+          <View>
+            <SectionLabel>Buddy quest</SectionLabel>
+            <QuestCard pairs={social.questPairs} target={social.questTarget} />
+          </View>
+
+          {/* ── Leaderboard ────────────────────────────────────── */}
+          <View>
+            <SectionLabel>This month&apos;s leaderboard</SectionLabel>
+            <Leaderboard
+              rows={social.leaderboard}
+              month={social.leaderboardMonth}
+              onSelectBuddy={(id) => {
+                const row = social.leaderboard.find((r) => r.accountId === id);
+                setSummaryBuddy({ id, name: row?.displayName || 'Buddy' });
+              }}
+            />
+          </View>
+        </>
+      ) : null}
+
+      {/* ── Public gym leaderboard ────────────────────────────── */}
+      {/* Always visible (works with zero buddies) — the whole-gym board
+          lives on its own pushed screen, ranked by session-days only. */}
+      <View>
+        <SectionLabel>Gym leaderboard</SectionLabel>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Open the gym leaderboard — this month's consistency ranking, whole gym"
+          onPress={() => pushPath('/leaderboard')}
+          style={styles.publicBoardCard}
+        >
+          <View style={styles.publicBoardIcon}>
+            <Ionicons name="podium" size={20} color={colors.accent} />
+          </View>
+          <View style={styles.buddyInfo}>
+            <AppText variant="bodyBold">This month&apos;s consistency ranking</AppText>
+            <AppText variant="caption">Whole gym — session-days, one per day.</AppText>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+        </PressableScale>
+      </View>
+
       <Divider />
 
       {/* ── Live sessions ─────────────────────────────────────── */}
@@ -298,6 +367,15 @@ function BuddyContent({
         />
       </View>
 
+      <BuddySummarySheet
+        visible={summaryBuddy !== null}
+        onClose={() => setSummaryBuddy(null)}
+        displayName={summaryBuddy?.name ?? ''}
+        events={events}
+        buddyId={summaryBuddy?.id ?? ''}
+        todayIso={todayIso()}
+      />
+
     </Screen>
   );
 }
@@ -333,7 +411,7 @@ function InviteForm({ buddyCount, onSent }: { buddyCount: number; onSent: () => 
     <View style={styles.formCard}>
       {atLimit ? (
         <AppText variant="caption" color={colors.warning}>
-          You've hit the {BUDDY_LIMIT}-buddy limit. Remove a buddy to add someone new.
+          You&apos;ve hit the {BUDDY_LIMIT}-buddy limit. Remove a buddy to add someone new.
         </AppText>
       ) : (
         <>
@@ -358,7 +436,7 @@ function InviteForm({ buddyCount, onSent }: { buddyCount: number; onSent: () => 
           {success ? (
             <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
               <AppText variant="caption" color={colors.success} style={styles.formMsg}>
-                Invite sent! They'll appear here once they accept.
+                Invite sent! They&apos;ll appear here once they accept.
               </AppText>
             </Animated.View>
           ) : null}
@@ -763,7 +841,7 @@ function StartSessionForm({
       {error ? (
         <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
           <AppText variant="caption" color={colors.error} style={styles.formMsg}>
-            Couldn't start the session — try again in a bit.
+            Couldn&apos;t start the session — try again in a bit.
           </AppText>
         </Animated.View>
       ) : null}
@@ -843,7 +921,7 @@ function ReferralSection({
         {success ? (
           <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
             <AppText variant="caption" color={colors.success} style={styles.formMsg}>
-              Referral sent! You'll get a discount when they join.
+              Referral sent! You&apos;ll get a discount when they join.
             </AppText>
           </Animated.View>
         ) : null}
@@ -984,6 +1062,26 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
   },
   weekDotOn: { backgroundColor: colors.accent },
+
+  // Public leaderboard entry card
+  publicBoardCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+  },
+  publicBoardIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accentFaint,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // Empty state
   emptyState: {

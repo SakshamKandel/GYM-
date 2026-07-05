@@ -1,5 +1,6 @@
 export { AITipCard } from './AITipCard';
 export { AnimatedNumber } from './AnimatedNumber';
+export { AnimatedTierRing } from './AnimatedTierRing';
 export { AppText } from './AppText';
 export { AppTextInput } from './AppTextInput';
 export { Button } from './Button';
@@ -25,4 +26,7 @@ export { SectionLabel } from './SectionLabel';
 export { StatBlock } from './StatBlock';
 export { Stepper } from './Stepper';
 export { StreakFlame } from './StreakFlame';
+export { TierAvatarFrame } from './TierAvatarFrame';
+export { TierBadge } from './TierBadge';
+export { TIER_FRAME, TIER_PALETTE } from './tierPalette';
 export { UpgradePrompt } from './UpgradePrompt';

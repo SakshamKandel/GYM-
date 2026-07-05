@@ -4,7 +4,7 @@ import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import type { BuddyEvent, BuddyLink } from '../../../lib/api/client';
-import { AppText, Button, enterFade, PressableScale } from '../../../components/ui';
+import { AppText, Button, enterFade, PressableScale, TierAvatarFrame } from '../../../components/ui';
 import { todayIso } from '../../../lib/dates';
 import { removeLink, sendNudge } from '../actions';
 import { avatarLetter, lastTrainedLabel, weekDots } from '../logic';
@@ -43,6 +43,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   who: { flex: 1 },
+  whoNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
+  whoNameText: { flexShrink: 1 },
   dotRow: { flexDirection: 'row', gap: 4 },
   dot: {
     width: DOT,
@@ -112,13 +114,19 @@ export function BuddyCard({ link, events, nudged, onChanged }: Props) {
       style={styles.card}
     >
       <View style={styles.topRow}>
-        <View style={styles.avatar}>
-          <AppText variant="bodyBold">{avatarLetter(link.buddy.displayName)}</AppText>
-        </View>
+        {/* Tier identity on avatar rows = the STATIC ring on the avatar ONLY
+            (design law) — list surface, so no glow/animation, no shield. */}
+        <TierAvatarFrame tier={link.buddy.tier} size={48}>
+          <View style={styles.avatar}>
+            <AppText variant="bodyBold">{avatarLetter(link.buddy.displayName)}</AppText>
+          </View>
+        </TierAvatarFrame>
         <View style={styles.who}>
-          <AppText variant="bodyBold" numberOfLines={1}>
-            {link.buddy.displayName}
-          </AppText>
+          <View style={styles.whoNameRow}>
+            <AppText variant="bodyBold" numberOfLines={1} style={styles.whoNameText}>
+              {link.buddy.displayName}
+            </AppText>
+          </View>
           <AppText variant="caption">{trained}</AppText>
         </View>
         <View

@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { AppState, Platform } from 'react-native';
 import { hydrateCheckIns } from '../checkin/store';
+import { useGamificationBadges } from '../gamification/store';
 import { refreshServerSuggestions } from '../progression/hooks';
 import { useAuth } from '../../state/auth';
 
@@ -23,6 +24,11 @@ import { useAuth } from '../../state/auth';
  *    (always re-fetches; the only guard is an in-flight dedupe).
  *  - 'checkin_reply' / 'coach_checkin_reply' → hydrateCheckIns()
  *    (the route ships the former; the latter is legacy wire-compat only).
+ *  - 'badge_verified' / 'badge_earned' → useGamificationBadges.hydrate()
+ *    (coach verified a strength-club badge, or the award engine granted a new
+ *    one — e.g. buddy quest, coach's pick, challenge complete). Re-fetching
+ *    also refreshes newlyEarnedIds so the Badges screen's celebration can
+ *    fire next time it's focused.
  *  - 'coach_message' → no store to refresh. The chat thread lives in
  *    useCoachThread's component state and reloads on screen focus, so the
  *    thread is already fresh whenever the member can actually see it. The
@@ -69,6 +75,10 @@ function refreshForEvent(type: string): void {
     case 'checkin_reply':
     case 'coach_checkin_reply':
       void hydrateCheckIns();
+      break;
+    case 'badge_verified':
+    case 'badge_earned':
+      void useGamificationBadges.getState().hydrate();
       break;
     default:
       // coach_message / buddy_* / future types — no store refresh needed

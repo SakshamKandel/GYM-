@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router } from 'expo-router';
@@ -28,8 +28,42 @@ import {
   type WorkoutStats,
 } from '../../features/history/logic';
 import { openWorkout } from '../../features/history/nav';
+import { getGamificationFlags } from '../../lib/api/gamification';
 import { posterDate } from '../../lib/dates';
+import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
+
+/**
+ * Flagged workout ids for the quiet "not counted toward rankings" row —
+ * best-effort, never blocks the list (design law 4: flagged sessions stay
+ * fully visible in history, they just quietly note they're unranked).
+ */
+function useFlaggedWorkoutIds(): Set<string> {
+  const status = useAuth((s) => s.status);
+  const token = useAuth((s) => s.token);
+  const [flagged, setFlagged] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (status !== 'signedIn' || token === null) {
+      setFlagged(new Set());
+      return;
+    }
+    let mounted = true;
+    void (async () => {
+      try {
+        const flags = await getGamificationFlags(token);
+        if (mounted) setFlagged(new Set(flags.map((f) => f.workoutId)));
+      } catch {
+        // Best-effort — an empty set just means no quiet notes show this load.
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [status, token]);
+
+  return flagged;
+}
 
 /** Every finished session, newest first, sectioned by month. */
 
@@ -94,10 +128,12 @@ function WorkoutRow({
   workout,
   stats,
   unitPref,
+  flagged,
 }: {
   workout: WorkoutLog;
   stats: WorkoutStats | undefined;
   unitPref: UnitPref;
+  flagged: boolean;
 }) {
   const unit = unitLabel(unitPref);
   const duration = minutesLabel(workout.durationSec);
@@ -116,6 +152,11 @@ function WorkoutRow({
           <AppText variant="caption" numberOfLines={1}>
             {`${posterDate(workout.date)}${duration ? ` · ${duration}` : ''}`}
           </AppText>
+          {flagged ? (
+            <AppText variant="caption" color={colors.textFaint} numberOfLines={1}>
+              Not counted toward rankings — fix this entry?
+            </AppText>
+          ) : null}
         </View>
         {stats !== undefined && stats.prCount > 0 ? (
           <Tag label={stats.prCount === 1 ? 'PR' : `${stats.prCount} PRS`} variant="outline" />
@@ -179,6 +220,7 @@ function buildRows(
 export default function HistoryScreen() {
   const unitPref = useProfile((s) => s.unitPref);
   const { months, stats } = useHistory();
+  const flaggedIds = useFlaggedWorkoutIds();
   const rows = useMemo(() => buildRows(months, stats), [months, stats]);
 
   return (
@@ -199,7 +241,12 @@ export default function HistoryScreen() {
             item.kind === 'month' ? (
               <MonthHeader row={item} unitPref={unitPref} />
             ) : (
-              <WorkoutRow workout={item.workout} stats={stats[item.workout.id]} unitPref={unitPref} />
+              <WorkoutRow
+                workout={item.workout}
+                stats={stats[item.workout.id]}
+                unitPref={unitPref}
+                flagged={flaggedIds.has(item.workout.id)}
+              />
             )
           }
           showsVerticalScrollIndicator={false}

@@ -13,7 +13,9 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { colors, radius, spacing } from '@gym/ui-tokens';
-import { AppText, enterUp, PressableScale } from './index';
+import { AppText } from './AppText';
+import { enterUp } from './motion';
+import { PressableScale } from './PressableScale';
 
 /**
  * Card that displays a short AI-generated tip. Shows a loading state while

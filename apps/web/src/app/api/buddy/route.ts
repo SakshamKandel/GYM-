@@ -1,4 +1,5 @@
 import { accounts, buddyLinks } from '@gym/db';
+import { effectiveTier, type Tier } from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
@@ -8,7 +9,9 @@ export const runtime = 'nodejs';
 
 interface BuddyEntry {
   linkId: string;
-  buddy: { id: string; displayName: string; email: string };
+  // `tier` is membership identity only (server-authoritative effective tier,
+  // for the tier shield next to the buddy's name) — never gameplay/rank data.
+  buddy: { id: string; displayName: string; email: string; tier: Tier };
 }
 
 export function OPTIONS() {
@@ -29,6 +32,8 @@ export async function GET(req: Request) {
       buddyId: accounts.id,
       displayName: accounts.displayName,
       email: accounts.email,
+      tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
     })
     .from(buddyLinks)
     .innerJoin(accounts, eq(buddyLinks.addresseeId, accounts.id))
@@ -42,14 +47,22 @@ export async function GET(req: Request) {
       buddyId: accounts.id,
       displayName: accounts.displayName,
       email: accounts.email,
+      tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
     })
     .from(buddyLinks)
     .innerJoin(accounts, eq(buddyLinks.requesterId, accounts.id))
     .where(eq(buddyLinks.addresseeId, me.id));
 
+  const now = new Date();
   const toEntry = (r: (typeof outgoing)[number]): BuddyEntry => ({
     linkId: r.linkId,
-    buddy: { id: r.buddyId, displayName: r.displayName, email: r.email },
+    buddy: {
+      id: r.buddyId,
+      displayName: r.displayName,
+      email: r.email,
+      tier: effectiveTier(r.tier, r.tierExpiresAt, now),
+    },
   });
 
   const accepted: BuddyEntry[] = [

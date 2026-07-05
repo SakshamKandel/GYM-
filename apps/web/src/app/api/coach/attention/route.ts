@@ -5,6 +5,7 @@ import {
   progressionSuggestions,
   syncedWorkouts,
 } from '@gym/db';
+import { effectiveTier } from '@gym/shared';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -78,6 +79,8 @@ export async function GET(req: Request) {
       id: accounts.id,
       displayName: accounts.displayName,
       email: accounts.email,
+      tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
       lastWorkoutAt,
       lastCheckInAt,
       pendingSuggestions,
@@ -108,6 +111,9 @@ export async function GET(req: Request) {
         id: r.id,
         displayName: r.displayName,
         email: r.email,
+        // Membership identity for the tier shield — server-authoritative
+        // effective tier, never a gameplay/scoring input.
+        tier: effectiveTier(r.tier, r.tierExpiresAt, new Date(now)),
         lastWorkoutAt: workoutIso,
         lastCheckInAt: checkInIso,
         daysSinceWorkout: daysSince(workoutIso, now),

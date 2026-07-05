@@ -1,4 +1,5 @@
 import { accounts, coachAssignments, coachMessages } from '@gym/db';
+import { effectiveTier } from '@gym/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
@@ -44,6 +45,7 @@ async function loadClients(coachId: string): Promise<Client[]> {
       displayName: accounts.displayName,
       email: accounts.email,
       tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
       status: accounts.status,
       unread,
       lastActiveAt,
@@ -54,11 +56,15 @@ async function loadClients(coachId: string): Promise<Client[]> {
       and(eq(coachAssignments.coachId, coachId), eq(coachAssignments.status, 'active')),
     );
 
+  const now = new Date();
   const clients: Client[] = rows.map((r) => ({
     userId: r.userId,
     displayName: r.displayName,
     email: r.email,
-    tier: r.tier,
+    // Effective tier — a lapsed dated subscription must show as 'starter'
+    // here, same as everywhere else tier is auth-gated (raw accounts.tier
+    // would drift for expired members).
+    tier: effectiveTier(r.tier, r.tierExpiresAt, now),
     status: r.status,
     unread: Number(r.unread ?? 0),
     lastActiveAt: r.lastActiveAt ? new Date(r.lastActiveAt) : null,

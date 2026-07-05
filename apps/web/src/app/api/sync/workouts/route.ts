@@ -1,8 +1,11 @@
-import { syncedSets, syncedWorkouts } from '@gym/db';
-import { and, eq, inArray } from 'drizzle-orm';
+import { checkIns, syncedSets, syncedWorkouts } from '@gym/db';
+import { checkWorkoutPlausibility, epley1Rm, type PriorBestE1Rm } from '@gym/shared';
+import { and, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
+import { runAwardEngine } from '@/lib/gamification';
 import { json, preflight, readJson } from '@/lib/http';
 
 export const runtime = 'nodejs';
@@ -17,6 +20,17 @@ export const runtime = 'nodejs';
  *    payload, and sets are only inserted for workouts this account owns: a
  *    batch that replays someone else's workout id can never attach rows to
  *    another user (the foreign id is silently excluded from syncedWorkoutIds).
+ *  - Each NEWLY inserted workout then runs the shared plausibility check
+ *    (bodyweight from the latest check-in that has one, rolling 90-day best
+ *    e1RM per exercise from prior synced sets — ranked and unranked both feed
+ *    the baseline per the plausibility spec). A tripped workout is marked
+ *    ranked=false + flagReason and excluded from leaderboards/badges/quests/
+ *    challenges/PR-XP (query-side join on ranked), but stays in the user's
+ *    own log/history/streak (design law 4). Response gains `flaggedWorkoutIds`
+ *    (additive — mobile ignores unknown keys today).
+ *  - After the batch lands, the gamification award engine runs (XP, weekly
+ *    streak cache, badges, quest/challenge completion) — best-effort, wrapped
+ *    in after() so it never blocks or fails the sync response.
  *
  * The mobile client marks local workouts synced ONLY for ids echoed back in
  * `syncedWorkoutIds`. No download, no merge — v1 is backup only.
@@ -44,9 +58,20 @@ const setSchema = z.object({
   loggedAt: isoTimestamp,
 });
 
+/**
+ * Reject dates more than 2 days in the future of server time — enough slack
+ * for any real client timezone, not enough to let a farmed batch (e.g. a
+ * '2099-01-01' workout) count toward every future month's leaderboard/quest/
+ * challenge window forever (those queries only bound the past side).
+ */
+function isNotFarFuture(dateIso: string): boolean {
+  const maxIso = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+  return dateIso <= maxIso;
+}
+
 const workoutSchema = z.object({
   id: z.string().min(1).max(64),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isNotFarFuture, 'date too far in the future'),
   name: z.string().max(200),
   templateId: z.string().max(64).nullish(),
   templateName: z.string().max(200).nullish(),
@@ -58,7 +83,11 @@ const workoutSchema = z.object({
     .min(0)
     .max(7 * 86_400)
     .nullish(),
-  sets: z.array(setSchema).max(MAX_SETS),
+  // At least one set required — a zero-set workout has nothing for the
+  // plausibility layer to inspect (it vacuously passes) and would otherwise
+  // let a session-day be farmed onto the leaderboard/streak/quests/challenges
+  // with no lifting data behind it at all.
+  sets: z.array(setSchema).min(1).max(MAX_SETS),
 });
 
 const bodySchema = z
@@ -86,7 +115,7 @@ export async function POST(req: Request) {
 
   const db = getDb();
 
-  await db
+  const newlyInserted = await db
     .insert(syncedWorkouts)
     .values(
       workouts.map((w) => ({
@@ -101,7 +130,9 @@ export async function POST(req: Request) {
         durationSec: w.durationSec ?? null,
       })),
     )
-    .onConflictDoNothing({ target: syncedWorkouts.id });
+    .onConflictDoNothing({ target: syncedWorkouts.id })
+    .returning({ id: syncedWorkouts.id });
+  const newlyInsertedIds = new Set(newlyInserted.map((r) => r.id));
 
   // Ownership gate for the set rows: only workouts that now exist AND belong
   // to the caller accept sets. A replayed foreign workout id conflicts above
@@ -113,8 +144,16 @@ export async function POST(req: Request) {
     .where(and(eq(syncedWorkouts.accountId, user.id), inArray(syncedWorkouts.id, batchIds)));
   const ownedIds = new Set(ownedRows.map((r) => r.id));
 
+  // Sets are only inserted for workouts NEWLY inserted in THIS request — not
+  // merely "owned" — matching the documented append-only contract ("a
+  // replayed workout is a full no-op"). Gating on ownedIds alone would let a
+  // client re-POST an existing workout id with an extra set appended: the
+  // workout insert conflicts (do-nothing, so it's not "fresh") but the new
+  // set id would still insert and NEVER pass through the plausibility check
+  // below (which only iterates newlyInserted/freshWorkouts), permanently
+  // laundering an implausible set into an already-ranked=true workout.
   const setValues = workouts
-    .filter((w) => ownedIds.has(w.id))
+    .filter((w) => ownedIds.has(w.id) && newlyInsertedIds.has(w.id))
     .flatMap((w) =>
       w.sets.map((s) => ({
         id: s.id,
@@ -137,5 +176,95 @@ export async function POST(req: Request) {
   }
 
   const syncedWorkoutIds = batchIds.filter((id) => ownedIds.has(id));
-  return json({ ok: true, syncedWorkoutIds }, 200);
+
+  // ── Plausibility layer: only NEWLY inserted workouts (a replayed workout
+  //    already got its verdict the first time — re-checking a replay against
+  //    a baseline that now includes its own sets would be circular). ────────
+  const freshWorkouts = workouts.filter((w) => ownedIds.has(w.id) && newlyInsertedIds.has(w.id));
+  const flaggedWorkoutIds: string[] = [];
+
+  if (freshWorkouts.length > 0) {
+    // Latest check-in with a recorded bodyweight, if any.
+    const bwRows = await db
+      .select({ bodyweightKg: checkIns.bodyweightKg })
+      .from(checkIns)
+      .where(and(eq(checkIns.accountId, user.id), isNotNull(checkIns.bodyweightKg)))
+      .orderBy(desc(checkIns.date))
+      .limit(1);
+    const bodyweightKg = bwRows[0]?.bodyweightKg ?? null;
+
+    // Rolling 90-day best e1RM + prior session count per exercise, from
+    // RANKED prior synced sets ONLY. Unranked (flagged) workouts must NOT
+    // feed the baseline: otherwise a flagged implausible number becomes the
+    // new "rolling best" immediately, and re-submitting the exact same
+    // number in a fresh workout passes the velocity check on the very next
+    // sync — laundering the anti-cheat flag in one resubmission. A
+    // legitimately-progressed number instead re-earns rank once enough
+    // ranked sessions confirm it (VELOCITY_MIN_PRIOR_SESSIONS), same as any
+    // other new plateau.
+    const cutoff90 = new Date();
+    cutoff90.setUTCDate(cutoff90.getUTCDate() - 90);
+    const priorSetRows = await db
+      .select({
+        exerciseId: syncedSets.exerciseId,
+        weightKg: syncedSets.weightKg,
+        reps: syncedSets.reps,
+        workoutId: syncedSets.workoutId,
+        loggedAt: syncedSets.loggedAt,
+      })
+      .from(syncedSets)
+      .innerJoin(syncedWorkouts, eq(syncedWorkouts.id, syncedSets.workoutId))
+      .where(
+        and(
+          eq(syncedSets.accountId, user.id),
+          gte(syncedSets.loggedAt, cutoff90),
+          eq(syncedWorkouts.ranked, true),
+        ),
+      );
+
+    const perExerciseSessions = new Map<string, Map<string, number>>(); // exerciseId -> workoutId -> bestE1rm
+    for (const s of priorSetRows) {
+      if (freshWorkouts.some((w) => w.id === s.workoutId)) continue; // exclude the batch's own sets
+      const e1rm = epley1Rm(s.weightKg, s.reps);
+      let byWorkout = perExerciseSessions.get(s.exerciseId);
+      if (!byWorkout) {
+        byWorkout = new Map();
+        perExerciseSessions.set(s.exerciseId, byWorkout);
+      }
+      const prevBest = byWorkout.get(s.workoutId) ?? 0;
+      if (e1rm > prevBest) byWorkout.set(s.workoutId, e1rm);
+    }
+    const priorBestE1Rm: Record<string, PriorBestE1Rm> = {};
+    for (const [exerciseId, byWorkout] of perExerciseSessions) {
+      const sessions = byWorkout.size;
+      const best = Math.max(0, ...byWorkout.values());
+      priorBestE1Rm[exerciseId] = { best, sessions };
+    }
+
+    for (const w of freshWorkouts) {
+      const result = checkWorkoutPlausibility({
+        sets: w.sets.map((s) => ({
+          weightKg: s.weightKg,
+          reps: s.reps,
+          exerciseId: s.exerciseId,
+          exerciseName: s.exerciseName,
+        })),
+        bodyweightKg,
+        priorBestE1Rm,
+      });
+      if (!result.ranked) {
+        flaggedWorkoutIds.push(w.id);
+        await db
+          .update(syncedWorkouts)
+          .set({ ranked: false, flagReason: result.reason })
+          .where(and(eq(syncedWorkouts.id, w.id), eq(syncedWorkouts.accountId, user.id)));
+      }
+    }
+  }
+
+  // Best-effort gamification pass (XP, weekly streak cache, badges, quest/
+  // challenge completion) — never blocks or fails the sync response.
+  after(() => runAwardEngine(user.id).then(() => undefined));
+
+  return json({ ok: true, syncedWorkoutIds, flaggedWorkoutIds }, 200);
 }

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { Badge, Button, EmptyState } from '@/components/console';
+import { Badge, Button, EmptyState, TierBadge } from '@/components/console';
 import { SkeletonBars } from '../../_components/SkeletonBars';
 
 /**
@@ -46,6 +46,9 @@ interface AttentionClient {
   id: string;
   displayName: string;
   email: string;
+  // Membership identity — server-authoritative effective tier, for the tier
+  // shield beside the name. Not gamification; never affects this list's order.
+  tier: 'starter' | 'silver' | 'gold' | 'elite';
   lastWorkoutAt: string | null;
   lastCheckInAt: string | null;
   daysSinceWorkout: number | null;
@@ -269,18 +272,21 @@ export function AttentionList() {
               }}
             >
               <div style={{ minWidth: 0 }}>
-                <Link
-                  href={`/coach/threads/${client.id}`}
-                  style={{
-                    fontFamily: 'var(--font-heading)',
-                    fontWeight: 600,
-                    fontSize: 15,
-                    color: 'inherit',
-                    textDecoration: 'none',
-                  }}
-                >
-                  {name}
-                </Link>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <Link
+                    href={`/coach/threads/${client.id}`}
+                    style={{
+                      fontFamily: 'var(--font-heading)',
+                      fontWeight: 600,
+                      fontSize: 15,
+                      color: 'inherit',
+                      textDecoration: 'none',
+                    }}
+                  >
+                    {name}
+                  </Link>
+                  <TierBadge tier={client.tier} />
+                </span>
                 <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 2 }}>
                   {client.email}
                 </div>

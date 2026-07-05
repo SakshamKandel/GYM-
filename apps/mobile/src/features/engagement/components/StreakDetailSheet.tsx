@@ -8,7 +8,6 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
-import { streakAlive, type Streak } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import {
   AnimatedNumber,
@@ -18,41 +17,34 @@ import {
   StatBlock,
   StreakFlame,
 } from '../../../components/ui';
-import { addDays, dayLabel, lastNDays, posterDate, todayIso } from '../../../lib/dates';
+import { addDays, dayLabel, lastNDays, todayIso } from '../../../lib/dates';
 import { getRepo } from '../../../lib/repo';
+import type { WeeklyStreakData } from '../../streak/hooks';
 
 /**
  * Rich detail for the home streak chip, shown inside a <Sheet>. Celebrates the
- * current count (Oswald count-up), the personal best, the last session, and a
- * 7-day activity strip. All movement is either user-driven (the sheet itself)
- * or a quiet fade (dots settling in) — passive content never slides.
+ * current WEEKLY streak count (Oswald count-up), this week's progress toward
+ * the target, Rest Shield status (paid tiers), the personal best, and a 7-day
+ * activity strip. All movement is either user-driven (the sheet itself) or a
+ * quiet fade (dots settling in) — passive content never slides.
  */
 
-// Grace matches @gym/shared streak math (train every ~3rd day keeps it alive).
-const GRACE_DAYS = 2;
-const DAY_MS = 86_400_000;
 const EASE_OUT = Easing.bezier(0.25, 0.8, 0.4, 1);
 const WEEK_DAYS = 7;
 
-// Mirror the pure daysBetween in @gym/shared/logic/streak so the grace copy
-// and streakAlive() can never disagree.
-function daysBetween(a: string, b: string): number {
-  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / DAY_MS);
-}
-
-export function StreakDetailSheet({ streak }: { streak: Streak }) {
+export function StreakDetailSheet({ streak }: { streak: WeeklyStreakData }) {
   const reduceMotion = useReducedMotion();
   const today = todayIso();
-  const alive = streakAlive(streak, today);
+  const alive = streak.weeks > 0 || streak.thisWeekDays > 0;
   const tint = alive ? colors.accent : colors.textDim;
 
   // Count up from zero on open; land immediately when motion is reduced.
-  const [count, setCount] = useState(reduceMotion ? streak.current : 0);
+  const [count, setCount] = useState(reduceMotion ? streak.weeks : 0);
   useEffect(() => {
     if (reduceMotion) return;
-    const id = requestAnimationFrame(() => setCount(streak.current));
+    const id = requestAnimationFrame(() => setCount(streak.weeks));
     return () => cancelAnimationFrame(id);
-  }, [streak.current, reduceMotion]);
+  }, [streak.weeks, reduceMotion]);
 
   // Which of the last 7 dates had a finished workout. null = still loading.
   const week = lastNDays(WEEK_DAYS, today);
@@ -73,31 +65,27 @@ export function StreakDetailSheet({ streak }: { streak: Streak }) {
     };
   }, [today]);
 
-  const statusText = alive
-    ? "You're on a roll — keep it burning."
-    : 'Ready when you are. One session restarts it.';
+  const onTrack = streak.thisWeekDays >= streak.weeklyTarget;
+  const statusText = onTrack
+    ? "This week's in the bag — keep it burning."
+    : "You're on a roll — keep it burning.";
 
-  const unit = streak.current === 1 ? 'Day' : 'Days';
-  const lastLabel = streak.lastWorkoutDate ? posterDate(streak.lastWorkoutDate) : '—';
+  const unit = streak.weeks === 1 ? 'Week' : 'Weeks';
+  const thisWeekText = `${streak.thisWeekDays} of ${streak.weeklyTarget} this week`;
 
-  // Rest days you can still take before the streak lapses (only shown alive).
-  const gap = streak.lastWorkoutDate ? daysBetween(streak.lastWorkoutDate, today) : 0;
-  const restDaysLeft = GRACE_DAYS + 1 - gap;
-  const graceText =
-    restDaysLeft <= 0
-      ? 'Train today to keep it alive.'
-      : restDaysLeft === 1
-        ? '1 rest day left before it cools off.'
-        : `${restDaysLeft} rest days left before it cools off.`;
+  const shieldText =
+    streak.shields !== null && streak.shields.quota > 0
+      ? `${streak.shields.remaining} shield${streak.shields.remaining === 1 ? '' : 's'} left this month`
+      : null;
 
   return (
     <View>
       <View
         style={styles.hero}
         accessible
-        accessibilityLabel={`Current streak: ${streak.current} ${
-          streak.current === 1 ? 'day' : 'days'
-        }. ${statusText}`}
+        accessibilityLabel={`Current streak: ${streak.weeks} ${
+          streak.weeks === 1 ? 'week' : 'weeks'
+        }. ${thisWeekText}. ${statusText}`}
       >
         <StreakFlame active={alive} size={56} />
         <View style={styles.heroNum}>
@@ -112,11 +100,18 @@ export function StreakDetailSheet({ streak }: { streak: Streak }) {
         {statusText}
       </AppText>
 
-      {alive ? (
-        <View style={styles.gracePill} accessible accessibilityLabel={graceText}>
-          <Ionicons name="time-outline" size={16} color={colors.textDim} />
+      <View style={styles.gracePill} accessible accessibilityLabel={thisWeekText}>
+        <Ionicons name="calendar-outline" size={16} color={colors.textDim} />
+        <AppText variant="body" color={colors.textDim} style={styles.graceText}>
+          {thisWeekText}
+        </AppText>
+      </View>
+
+      {shieldText ? (
+        <View style={styles.gracePill} accessible accessibilityLabel={shieldText}>
+          <Ionicons name="shield-checkmark-outline" size={16} color={colors.textDim} />
           <AppText variant="body" color={colors.textDim} style={styles.graceText}>
-            {graceText}
+            {shieldText}
           </AppText>
         </View>
       ) : null}
@@ -128,17 +123,17 @@ export function StreakDetailSheet({ streak }: { streak: Streak }) {
       <View style={styles.statRow}>
         <StatBlock
           label="Best"
-          value={streak.best}
-          unit={streak.best === 1 ? 'day' : 'days'}
+          value={streak.bestWeeks}
+          unit={streak.bestWeeks === 1 ? 'week' : 'weeks'}
           size="display"
           style={styles.statHalf}
         />
         <View style={styles.statHalf}>
           <AppText variant="label" numberOfLines={1}>
-            Last workout
+            Weekly target
           </AppText>
           <AppText variant="title" numberOfLines={1} style={styles.lastVal}>
-            {lastLabel}
+            {streak.weeklyTarget} days
           </AppText>
         </View>
       </View>

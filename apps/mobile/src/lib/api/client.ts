@@ -219,6 +219,9 @@ const buddyUserSchema = z.object({
   id: z.string(),
   displayName: z.string(),
   email: z.string(),
+  // Membership identity for the TierBadge — not gamification (design law 5
+  // still holds: no xp/rank here). .catch tolerates older server responses.
+  tier: tierSchema.catch('starter'),
 });
 
 export type BuddyUser = z.infer<typeof buddyUserSchema>;
