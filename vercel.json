@@ -1,4 +1,4 @@
 {
-  "buildCommand": "pnpm build",
-  "installCommand": "pnpm install --no-frozen-lockfile"
+  "buildCommand": "npx pnpm@10.33.2 run build",
+  "installCommand": "npx pnpm@10.33.2 install --no-frozen-lockfile"
 }
