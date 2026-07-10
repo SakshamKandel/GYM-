@@ -7,104 +7,26 @@ import type { PlanWorkout } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import { AppText, Chip, PressableScale, Tag } from '../../../components/ui';
 import { allExercises, MUSCLE_GROUPS } from '../../../lib/exercises';
+import {
+  isMuscleGroup,
+  MUSCLE_LABELS,
+  PREFERRED_SIDE,
+  SOURCE_MUSCLES,
+  SOURCE_TO_APP_MUSCLE,
+  VISUAL_ONLY_SLUGS,
+  type MuscleGroup,
+} from '../../../lib/muscleMap';
 import { pushPath } from '../nav';
-import { MALE_MUSCLE_MAP, MUSCLE_MAP_VIEW_BOX, type MuscleMapSide } from './muscleMapData';
+import { MALE_MUSCLE_MAP, MUSCLE_MAP_VIEW_BOX, type MuscleMapSide } from '../../../lib/muscleMapData';
 
 /**
  * Interactive workout muscle selector. The visual paths are adapted from the
  * MIT-licensed MuscleMapJS project so they render natively on iOS, Android,
- * and web without a browser canvas or network request.
+ * and web without a browser canvas or network request. Muscle vocabulary and
+ * slug mappings live in lib/muscleMap.ts, shared with the anatomy explorer.
  */
 
-export type MuscleGroup = (typeof MUSCLE_GROUPS)[number];
-
-const MUSCLE_LABELS: Record<MuscleGroup, string> = {
-  chest: 'Chest',
-  lats: 'Lats',
-  'middle back': 'Middle back',
-  'lower back': 'Lower back',
-  shoulders: 'Shoulders',
-  traps: 'Traps',
-  biceps: 'Biceps',
-  triceps: 'Triceps',
-  forearms: 'Forearms',
-  quadriceps: 'Quadriceps',
-  hamstrings: 'Hamstrings',
-  glutes: 'Glutes',
-  calves: 'Calves',
-  abdominals: 'Abdominals',
-  adductors: 'Adductors',
-  abductors: 'Abductors',
-  neck: 'Neck',
-};
-
-/** App exercise labels map onto MuscleMapJS's anatomy names. */
-const SOURCE_MUSCLES: Record<MuscleGroup, readonly string[]> = {
-  chest: ['chest'],
-  lats: ['upper-back'],
-  // MuscleMapJS's male body model does not include a separate rhomboid path;
-  // its upper-back region covers the mid-back visual area.
-  'middle back': ['upper-back'],
-  'lower back': ['lower-back'],
-  shoulders: ['deltoids', 'rotator-cuff'],
-  traps: ['trapezius'],
-  biceps: ['biceps'],
-  triceps: ['triceps'],
-  forearms: ['forearm'],
-  quadriceps: ['quadriceps', 'hip-flexors'],
-  hamstrings: ['hamstring'],
-  glutes: ['gluteal'],
-  calves: ['calves'],
-  abdominals: ['abs', 'obliques', 'serratus'],
-  adductors: ['adductors'],
-  abductors: ['hip-flexors', 'gluteal'],
-  neck: ['neck'],
-};
-
-const PREFERRED_SIDE: Record<MuscleGroup, MuscleMapSide> = {
-  chest: 'front',
-  lats: 'back',
-  'middle back': 'back',
-  'lower back': 'back',
-  shoulders: 'front',
-  traps: 'back',
-  biceps: 'front',
-  triceps: 'back',
-  forearms: 'front',
-  quadriceps: 'front',
-  hamstrings: 'back',
-  glutes: 'back',
-  calves: 'back',
-  abdominals: 'front',
-  adductors: 'front',
-  abductors: 'front',
-  neck: 'back',
-};
-
-const SOURCE_TO_APP_MUSCLE: Record<string, MuscleGroup> = {
-  chest: 'chest',
-  'upper-back': 'lats',
-  rhomboids: 'middle back',
-  'lower-back': 'lower back',
-  deltoids: 'shoulders',
-  'rotator-cuff': 'shoulders',
-  trapezius: 'traps',
-  biceps: 'biceps',
-  triceps: 'triceps',
-  forearm: 'forearms',
-  quadriceps: 'quadriceps',
-  'hip-flexors': 'abductors',
-  hamstring: 'hamstrings',
-  gluteal: 'glutes',
-  calves: 'calves',
-  abs: 'abdominals',
-  obliques: 'abdominals',
-  serratus: 'abdominals',
-  adductors: 'adductors',
-  neck: 'neck',
-};
-
-const VISUAL_ONLY_SLUGS = new Set(['head', 'hair', 'hands', 'feet', 'knees', 'tibialis', 'ankles']);
+export type { MuscleGroup } from '../../../lib/muscleMap';
 
 const styles = StyleSheet.create({
   // Borderless charcoal color-block (radius.block) — separation by fill only.
@@ -148,6 +70,19 @@ const styles = StyleSheet.create({
     right: spacing.md,
     bottom: spacing.md,
     alignItems: 'flex-end',
+  },
+  /** Pill in the map's top-left → full anatomy explorer (/anatomy). */
+  exploreBtn: {
+    position: 'absolute',
+    left: spacing.md,
+    top: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minHeight: 36,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
   },
   mapLabelText: { marginTop: 1 },
   sideSwitch: {
@@ -195,10 +130,6 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
 });
-
-function isMuscleGroup(value: string): value is MuscleGroup {
-  return MUSCLE_GROUPS.some((group) => group === value);
-}
 
 export function muscleFocusForWorkout(workout: PlanWorkout | null | undefined): MuscleGroup {
   const firstExercise = workout?.exercises[0];
@@ -300,6 +231,18 @@ export function MuscleFocusSection({ initialMuscle }: { initialMuscle: MuscleGro
             {label}
           </AppText>
         </View>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel={`Explore ${label} anatomy: rotate the body, read how to train it`}
+          onPress={() => pushPath(`/anatomy?muscle=${encodeURIComponent(selected)}`)}
+          hitSlop={{ top: 6, bottom: 6 }}
+          style={styles.exploreBtn}
+        >
+          <Ionicons name="body-outline" size={16} color={colors.text} />
+          <AppText variant="label" color={colors.text}>
+            Explore
+          </AppText>
+        </PressableScale>
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipStrip}>

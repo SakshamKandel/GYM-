@@ -511,7 +511,7 @@ export default function AdminContentScreen() {
   );
 
   return (
-    <Screen scroll>
+    <Screen scroll keyboardAware>
       <Animated.View entering={enterDown()} style={styles.headerRow}>
         <PressableScale
           accessibilityRole="button"

@@ -396,29 +396,39 @@ function StepsSheetBody({
         />
       </View>
 
-      <View style={styles.controlRow}>
-        <View style={styles.controlText}>
-          <AppText variant="bodyBold">Add steps</AppText>
-          <AppText variant="caption">manual entry</AppText>
-        </View>
-        <Stepper
-          label="Steps"
-          value={manual}
-          step={250}
-          min={250}
-          max={20000}
-          format={grouped}
-          onChange={setManual}
-        />
-      </View>
-      <Button
-        label={`Add ${grouped(manual)} steps`}
-        variant="secondary"
-        onPress={() => {
-          void activity.addManualSteps(manual);
-        }}
-        style={styles.sheetButton}
-      />
+      {activity.stepsSource === 'health-connect' ? (
+        // HC's full-day aggregate overwrites the stored total, so a manual add
+        // would silently revert — hide the control instead of faking it.
+        <AppText variant="caption" color={colors.textDim} style={styles.explainer}>
+          Steps are tracked automatically by Health Connect.
+        </AppText>
+      ) : (
+        <>
+          <View style={styles.controlRow}>
+            <View style={styles.controlText}>
+              <AppText variant="bodyBold">Add steps</AppText>
+              <AppText variant="caption">manual entry</AppText>
+            </View>
+            <Stepper
+              label="Steps"
+              value={manual}
+              step={250}
+              min={250}
+              max={20000}
+              format={grouped}
+              onChange={setManual}
+            />
+          </View>
+          <Button
+            label={`Add ${grouped(manual)} steps`}
+            variant="secondary"
+            onPress={() => {
+              void activity.addManualSteps(manual);
+            }}
+            style={styles.sheetButton}
+          />
+        </>
+      )}
 
       {activity.supported && activity.permission !== 'granted' ? (
         <Button

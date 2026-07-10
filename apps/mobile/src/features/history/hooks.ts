@@ -37,55 +37,71 @@ export interface HistoryData {
   months: MonthSection[] | null;
   /** workoutId → stats; rows fill in month-by-month from the top. */
   stats: Record<string, WorkoutStats>;
+  /** True when the initial load rejected — the screen shows a retry state. */
+  error: boolean;
+  /** Re-run the load; wired to the error-state retry button. */
+  reload: () => void;
 }
 
 /**
- * All finished workouts grouped by month, refreshed on focus. Row stats load
- * in per-month batches (newest month first) instead of one query per visible
- * row, and merge into state as each month resolves.
+ * All finished workouts grouped by month, refreshed on focus. Owns its load so
+ * the screen can show explicit loading and error states: a slow or failing
+ * SQLite read no longer leaves the list permanently blank with no feedback.
+ * Row stats load in per-month batches (newest first) and merge in as they
+ * resolve.
  */
 export function useHistory(): HistoryData {
   const [months, setMonths] = useState<MonthSection[] | null>(null);
   const [stats, setStats] = useState<Record<string, WorkoutStats>>({});
+  const [error, setError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const reload = useCallback(() => setReloadKey((n) => n + 1), []);
 
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
+      setError(false);
       void (async () => {
-        const repo = await getRepo();
-        const workouts = await repo.getRecentWorkouts(HISTORY_LIMIT);
-        if (!mounted) return;
-
-        const sections = groupByMonth(workouts);
-        const seeded: Record<string, WorkoutStats> = {};
-        for (const w of workouts) {
-          const cached = statsCache.get(w.id);
-          if (cached) seeded[w.id] = cached;
-        }
-        setMonths(sections);
-        setStats(seeded);
-
-        for (const section of sections) {
-          const missing = section.workouts.filter((w) => !statsCache.has(w.id));
-          if (missing.length === 0) continue;
-          const setLists = await Promise.all(missing.map((w) => repo.getSetsForWorkout(w.id)));
+        try {
+          const repo = await getRepo();
+          const workouts = await repo.getRecentWorkouts(HISTORY_LIMIT);
           if (!mounted) return;
-          const patch: Record<string, WorkoutStats> = {};
-          missing.forEach((w, i) => {
-            const s = statsOfSets(setLists[i] ?? []);
-            statsCache.set(w.id, s);
-            patch[w.id] = s;
-          });
-          setStats((prev) => ({ ...prev, ...patch }));
+
+          const sections = groupByMonth(workouts);
+          const seeded: Record<string, WorkoutStats> = {};
+          for (const w of workouts) {
+            const cached = statsCache.get(w.id);
+            if (cached) seeded[w.id] = cached;
+          }
+          setMonths(sections);
+          setStats(seeded);
+
+          for (const section of sections) {
+            const missing = section.workouts.filter((w) => !statsCache.has(w.id));
+            if (missing.length === 0) continue;
+            const setLists = await Promise.all(missing.map((w) => repo.getSetsForWorkout(w.id)));
+            if (!mounted) return;
+            const patch: Record<string, WorkoutStats> = {};
+            missing.forEach((w, i) => {
+              const s = statsOfSets(setLists[i] ?? []);
+              statsCache.set(w.id, s);
+              patch[w.id] = s;
+            });
+            setStats((prev) => ({ ...prev, ...patch }));
+          }
+        } catch {
+          // A rejected read (DB locked, migration error) surfaces as a retry
+          // state instead of a permanently blank list.
+          if (mounted) setError(true);
         }
       })();
       return () => {
         mounted = false;
       };
-    }, []),
+    }, [reloadKey]),
   );
 
-  return { months, stats };
+  return { months, stats, error, reload };
 }
 
 export type Comparison = { kind: 'first' } | ({ kind: 'compared' } & VsLast);

@@ -1,5 +1,7 @@
-import { coachProfiles } from '@gym/db';
+import { coachProfiles, type CoachCertification } from '@gym/db';
+import { isCoachSpecialty } from '@gym/shared';
 import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
@@ -7,11 +9,13 @@ import { json, preflight, readJson } from '@/lib/http';
 export const runtime = 'nodejs';
 
 /**
- * The signed-in coach's own public profile card.
+ * The signed-in coach's own public profile card + portfolio.
  *
  *  - GET   → the caller's coach_profiles row (created lazily if missing so a
  *            freshly-promoted coach always has an editable row).
- *  - PATCH → update displayName / bio / acceptingClients / replyWindowHours on
+ *  - PATCH → update the card (displayName / bio / acceptingClients /
+ *            replyWindowHours) and the portfolio (headline / specialties /
+ *            certifications / achievements / yearsExperience / capacity) on
  *            the caller's OWN row only. Ownership is intrinsic: the row is keyed
  *            on accountId = principal.id, so a coach can never address anyone
  *            else's profile. Audited.
@@ -26,6 +30,43 @@ const MAX_REPLY_HOURS = 168; // one week
 const MAX_DISPLAY_NAME = 80;
 const MAX_BIO = 2000;
 
+/** Portfolio fields — everything here is member-visible via /api/coaches. */
+const portfolioSchema = z.object({
+  headline: z.string().trim().max(120).optional(),
+  // Fixed catalog (COACH_SPECIALTIES) keeps discovery filters meaningful.
+  specialties: z.array(z.string().refine(isCoachSpecialty)).max(6).optional(),
+  certifications: z
+    .array(
+      z.object({
+        title: z.string().trim().min(1).max(80),
+        issuer: z.string().trim().max(80),
+        year: z.number().int().min(1950).max(2100).nullable(),
+      }),
+    )
+    .max(10)
+    .optional(),
+  achievements: z.array(z.string().trim().min(1).max(120)).max(10).optional(),
+  yearsExperience: z.number().int().min(0).max(60).optional(),
+  capacity: z.number().int().min(1).max(200).optional(),
+});
+
+/** One column list shared by every select/returning so GET and PATCH agree. */
+const PROFILE_COLUMNS = {
+  accountId: coachProfiles.accountId,
+  displayName: coachProfiles.displayName,
+  bio: coachProfiles.bio,
+  avatarUrl: coachProfiles.avatarUrl,
+  headline: coachProfiles.headline,
+  specialties: coachProfiles.specialties,
+  certifications: coachProfiles.certifications,
+  achievements: coachProfiles.achievements,
+  yearsExperience: coachProfiles.yearsExperience,
+  capacity: coachProfiles.capacity,
+  acceptingClients: coachProfiles.acceptingClients,
+  replyWindowHours: coachProfiles.replyWindowHours,
+  isActive: coachProfiles.isActive,
+} as const;
+
 export function OPTIONS() {
   return preflight();
 }
@@ -34,15 +75,7 @@ export function OPTIONS() {
 async function loadOrCreateProfile(accountId: string) {
   const db = getDb();
   const existing = await db
-    .select({
-      accountId: coachProfiles.accountId,
-      displayName: coachProfiles.displayName,
-      bio: coachProfiles.bio,
-      avatarUrl: coachProfiles.avatarUrl,
-      acceptingClients: coachProfiles.acceptingClients,
-      replyWindowHours: coachProfiles.replyWindowHours,
-      isActive: coachProfiles.isActive,
-    })
+    .select(PROFILE_COLUMNS)
     .from(coachProfiles)
     .where(eq(coachProfiles.accountId, accountId))
     .limit(1);
@@ -54,29 +87,13 @@ async function loadOrCreateProfile(accountId: string) {
     .insert(coachProfiles)
     .values({ accountId })
     .onConflictDoNothing()
-    .returning({
-      accountId: coachProfiles.accountId,
-      displayName: coachProfiles.displayName,
-      bio: coachProfiles.bio,
-      avatarUrl: coachProfiles.avatarUrl,
-      acceptingClients: coachProfiles.acceptingClients,
-      replyWindowHours: coachProfiles.replyWindowHours,
-      isActive: coachProfiles.isActive,
-    });
+    .returning(PROFILE_COLUMNS);
 
   if (inserted.length > 0) return inserted[0];
 
   // A concurrent insert won the race — re-read.
   const reread = await db
-    .select({
-      accountId: coachProfiles.accountId,
-      displayName: coachProfiles.displayName,
-      bio: coachProfiles.bio,
-      avatarUrl: coachProfiles.avatarUrl,
-      acceptingClients: coachProfiles.acceptingClients,
-      replyWindowHours: coachProfiles.replyWindowHours,
-      isActive: coachProfiles.isActive,
-    })
+    .select(PROFILE_COLUMNS)
     .from(coachProfiles)
     .where(eq(coachProfiles.accountId, accountId))
     .limit(1);
@@ -108,6 +125,12 @@ export async function PATCH(req: Request) {
     bio?: string;
     acceptingClients?: boolean;
     replyWindowHours?: number;
+    headline?: string;
+    specialties?: string[];
+    certifications?: CoachCertification[];
+    achievements?: string[];
+    yearsExperience?: number;
+    capacity?: number;
   } = {};
 
   if ('displayName' in body) {
@@ -149,6 +172,21 @@ export async function PATCH(req: Request) {
     update.replyWindowHours = n;
   }
 
+  // Portfolio fields validate as one zod pass (unknown keys are stripped, so
+  // the legacy fields above never collide with it).
+  const portfolio = portfolioSchema.safeParse(body);
+  if (!portfolio.success) return json({ error: 'invalid' }, 400);
+  if (portfolio.data.headline !== undefined) update.headline = portfolio.data.headline;
+  if (portfolio.data.specialties !== undefined) update.specialties = portfolio.data.specialties;
+  if (portfolio.data.certifications !== undefined) {
+    update.certifications = portfolio.data.certifications;
+  }
+  if (portfolio.data.achievements !== undefined) update.achievements = portfolio.data.achievements;
+  if (portfolio.data.yearsExperience !== undefined) {
+    update.yearsExperience = portfolio.data.yearsExperience;
+  }
+  if (portfolio.data.capacity !== undefined) update.capacity = portfolio.data.capacity;
+
   if (Object.keys(update).length === 0) {
     return json({ error: 'no_editable_fields' }, 400);
   }
@@ -162,14 +200,7 @@ export async function PATCH(req: Request) {
     .update(coachProfiles)
     .set(update)
     .where(eq(coachProfiles.accountId, principal.id))
-    .returning({
-      accountId: coachProfiles.accountId,
-      displayName: coachProfiles.displayName,
-      bio: coachProfiles.bio,
-      acceptingClients: coachProfiles.acceptingClients,
-      replyWindowHours: coachProfiles.replyWindowHours,
-      isActive: coachProfiles.isActive,
-    });
+    .returning(PROFILE_COLUMNS);
 
   if (updated.length === 0) return json({ error: 'not_found' }, 404);
 

@@ -101,6 +101,9 @@ export interface Measurement {
   thighCm: number | null;
 }
 
+/** Nutri-Score front-of-pack grade (Open Food Facts). */
+export type NutriScore = 'a' | 'b' | 'c' | 'd' | 'e';
+
 export interface FoodItem {
   id: string;
   name: string;
@@ -114,6 +117,17 @@ export interface FoodItem {
   fatPer100: number;
   servingGrams: number | null;
   servingLabel: string | null;
+  // Food-quality extras (optional — OFF/USDA provide them, custom/seed don't).
+  /** Fiber g per 100 g. */
+  fiberPer100?: number | null;
+  /** Total sugars g per 100 g. */
+  sugarPer100?: number | null;
+  /** Sodium mg per 100 g. */
+  sodiumPer100?: number | null;
+  /** Nutri-Score a–e (OFF only). */
+  nutriScore?: NutriScore | null;
+  /** NOVA processing group 1–4 (OFF only; 4 = ultra-processed). */
+  novaGroup?: 1 | 2 | 3 | 4 | null;
 }
 
 export interface FoodLog {

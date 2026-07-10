@@ -116,7 +116,8 @@ const styles = StyleSheet.create({
   setNo: { width: 20 },
   setNumbers: { fontFamily: type.display, fontSize: 20, color: colors.text, flex: 1 },
   vsLine: { marginTop: spacing.sm },
-  deleteBtn: { marginTop: spacing.xxl },
+  deleteWrap: { marginTop: spacing.xxl },
+  deleteError: { marginBottom: spacing.sm },
   flagRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -139,15 +140,23 @@ export default function HistoryDetailScreen() {
   const flagged = useIsFlagged(workoutId);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(false);
 
   async function doDelete(): Promise<void> {
     if (workout === null || deleting) return;
     setDeleting(true);
-    const repo = await getRepo();
-    await repo.deleteWorkout(workout.id);
-    forgetWorkoutStats(workout.id);
-    logHaptic();
-    router.back();
+    setDeleteError(false);
+    try {
+      const repo = await getRepo();
+      await repo.deleteWorkout(workout.id);
+      forgetWorkoutStats(workout.id);
+      logHaptic();
+      router.back();
+    } catch {
+      setDeleteError(true);
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const prCount = stats?.prCount ?? 0;
@@ -258,13 +267,20 @@ export default function HistoryDetailScreen() {
             );
           })}
 
-          <Animated.View entering={enterUp(Math.min(groups.length + 2, 7))}>
+          <Animated.View
+            entering={enterUp(Math.min(groups.length + 2, 7))}
+            style={styles.deleteWrap}
+          >
+            {deleteError ? (
+              <AppText variant="caption" color={colors.error} center style={styles.deleteError}>
+                {"Couldn't delete — try again."}
+              </AppText>
+            ) : null}
             <Button
               label="Delete workout"
               variant="danger"
               loading={deleting}
               onPress={() => setConfirmingDelete(true)}
-              style={styles.deleteBtn}
             />
           </Animated.View>
         </>

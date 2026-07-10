@@ -1,4 +1,5 @@
 import { checkIns, coachMessages } from '@gym/db';
+import { maskPii } from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
@@ -55,7 +56,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { body } = parsed.data;
+  // Masked BEFORE storage — the in-app-contact policy binds coaches too.
+  const body = maskPii(parsed.data.body);
 
   const inserted = await db
     .insert(coachMessages)

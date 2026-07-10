@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS foods (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, brand TEXT, source TEXT NOT NULL,
   barcode TEXT, kcal_per_100 REAL NOT NULL, protein_per_100 REAL NOT NULL,
   carbs_per_100 REAL NOT NULL, fat_per_100 REAL NOT NULL,
-  serving_grams REAL, serving_label TEXT
+  serving_grams REAL, serving_label TEXT,
+  fiber_per_100 REAL, sugar_per_100 REAL, sodium_per_100 REAL,
+  nutri_score TEXT, nova_group INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_foods_barcode ON foods(barcode);
 CREATE TABLE IF NOT EXISTS food_logs (
@@ -92,6 +94,11 @@ interface FoodRow {
   fat_per_100: number;
   serving_grams: number | null;
   serving_label: string | null;
+  fiber_per_100: number | null;
+  sugar_per_100: number | null;
+  sodium_per_100: number | null;
+  nutri_score: string | null;
+  nova_group: number | null;
 }
 
 interface FoodLogRow {
@@ -135,6 +142,14 @@ function toSet(r: SetRow): SetLog {
   };
 }
 
+function toNutriScore(raw: string | null): FoodItem['nutriScore'] {
+  return raw === 'a' || raw === 'b' || raw === 'c' || raw === 'd' || raw === 'e' ? raw : null;
+}
+
+function toNovaGroup(raw: number | null): FoodItem['novaGroup'] {
+  return raw === 1 || raw === 2 || raw === 3 || raw === 4 ? raw : null;
+}
+
 function toFood(r: FoodRow): FoodItem {
   return {
     id: r.id,
@@ -148,6 +163,11 @@ function toFood(r: FoodRow): FoodItem {
     fatPer100: r.fat_per_100,
     servingGrams: r.serving_grams,
     servingLabel: r.serving_label,
+    fiberPer100: r.fiber_per_100,
+    sugarPer100: r.sugar_per_100,
+    sodiumPer100: r.sodium_per_100,
+    nutriScore: toNutriScore(r.nutri_score),
+    novaGroup: toNovaGroup(r.nova_group),
   };
 }
 
@@ -183,6 +203,19 @@ export async function createSqliteRepo(): Promise<Repo> {
   const workoutCols = await db.getAllAsync<{ name: string }>('PRAGMA table_info(workout_logs)');
   if (!workoutCols.some((c) => c.name === 'synced_at')) {
     await db.execAsync('ALTER TABLE workout_logs ADD COLUMN synced_at TEXT');
+  }
+
+  // Food-quality columns (Nutri-Score / NOVA / fiber / sugar / sodium) landed
+  // after launch — older installs' foods table lacks them.
+  const foodCols = await db.getAllAsync<{ name: string }>('PRAGMA table_info(foods)');
+  if (!foodCols.some((c) => c.name === 'fiber_per_100')) {
+    await db.execAsync(`
+      ALTER TABLE foods ADD COLUMN fiber_per_100 REAL;
+      ALTER TABLE foods ADD COLUMN sugar_per_100 REAL;
+      ALTER TABLE foods ADD COLUMN sodium_per_100 REAL;
+      ALTER TABLE foods ADD COLUMN nutri_score TEXT;
+      ALTER TABLE foods ADD COLUMN nova_group INTEGER;
+    `);
   }
 
   return {
@@ -412,7 +445,9 @@ export async function createSqliteRepo(): Promise<Repo> {
       const rows = await db.getAllAsync<{
         id: string; date: string; waist_cm: number | null; chest_cm: number | null;
         arm_cm: number | null; hip_cm: number | null; thigh_cm: number | null;
-      }>('SELECT * FROM measurements ORDER BY date DESC LIMIT ?', limit);
+        // rowid tiebreak: a same-day correction (newer insert) must outrank
+        // the row it replaces everywhere "latest per field" is derived.
+      }>('SELECT * FROM measurements ORDER BY date DESC, rowid DESC LIMIT ?', limit);
       return rows.map(
         (r): Measurement => ({
           id: r.id,
@@ -478,15 +513,21 @@ export async function createSqliteRepo(): Promise<Repo> {
     },
     async saveFood(item) {
       await db.runAsync(
-        `INSERT INTO foods (id, name, brand, source, barcode, kcal_per_100, protein_per_100, carbs_per_100, fat_per_100, serving_grams, serving_label)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        `INSERT INTO foods (id, name, brand, source, barcode, kcal_per_100, protein_per_100, carbs_per_100, fat_per_100, serving_grams, serving_label,
+           fiber_per_100, sugar_per_100, sodium_per_100, nutri_score, nova_group)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, brand=excluded.brand,
            kcal_per_100=excluded.kcal_per_100, protein_per_100=excluded.protein_per_100,
            carbs_per_100=excluded.carbs_per_100, fat_per_100=excluded.fat_per_100,
-           serving_grams=excluded.serving_grams, serving_label=excluded.serving_label`,
+           serving_grams=excluded.serving_grams, serving_label=excluded.serving_label,
+           fiber_per_100=excluded.fiber_per_100, sugar_per_100=excluded.sugar_per_100,
+           sodium_per_100=excluded.sodium_per_100, nutri_score=excluded.nutri_score,
+           nova_group=excluded.nova_group`,
         item.id, item.name, item.brand, item.source, item.barcode,
         item.kcalPer100, item.proteinPer100, item.carbsPer100, item.fatPer100,
         item.servingGrams, item.servingLabel,
+        item.fiberPer100 ?? null, item.sugarPer100 ?? null, item.sodiumPer100 ?? null,
+        item.nutriScore ?? null, item.novaGroup ?? null,
       );
     },
     async getFoodByBarcode(barcode) {

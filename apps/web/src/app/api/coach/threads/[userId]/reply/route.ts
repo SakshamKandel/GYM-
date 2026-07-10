@@ -1,4 +1,5 @@
 import { coachMessages } from '@gym/db';
+import { maskPii } from '@gym/shared';
 import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
@@ -44,7 +45,8 @@ export async function POST(
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { body } = parsed.data;
+  // Masked BEFORE storage — the in-app-contact policy binds coaches too.
+  const body = maskPii(parsed.data.body);
 
   const db = getDb();
 

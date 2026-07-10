@@ -18,3 +18,4 @@ export * from './logic/weeklyStreak';
 export * from './logic/badges';
 export * from './logic/leaderboard';
 export * from './logic/plausibility';
+export * from './logic/mentorship';

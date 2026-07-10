@@ -150,15 +150,33 @@ async function establishSession(
 }
 
 /**
+ * Accounts whose cloud-profile restore attempt RESOLVED this app run (found a
+ * blob, found nothing, or backed the local profile up — any settled outcome).
+ * Until an account is in here, the continuous backup (lib/profileSync) must
+ * not CLAIM the device profile for it: a transient restore failure at sign-in
+ * followed by an eager push would overwrite the account's cloud blob with
+ * this device's local profile. refresh() retries the restore until it lands.
+ */
+const profileRestoreSettled = new Set<string>();
+
+export function hasProfileRestoreSettled(accountId: string): boolean {
+  return profileRestoreSettled.has(accountId);
+}
+
+/**
  * Cloud profile restore — the fix for "signed in but sent back to setup".
  * If the account has a saved profile, hydrate the local store from it
  * (onboarded included) so returning users land straight in the app.
  * If the server has nothing but this device finished onboarding, back the
- * local profile up instead. Best-effort: network failure keeps local state.
+ * local profile up instead. Best-effort: network failure keeps local state
+ * (and leaves the account un-settled so refresh() retries).
  */
 async function restoreOrBackupProfile(token: string, accountId: string): Promise<void> {
   try {
     const remote = await getProfileData(token);
+    // The session changed while the fetch was in flight — a late blob must
+    // not hydrate the new session's profile.
+    if (useAuth.getState().token !== token) return;
     const local = useProfile.getState();
     if (remote && remote['onboarded'] === true) {
       // Server wins for setup/preferences; local tier keeps its upgrade rule.
@@ -208,8 +226,12 @@ async function restoreOrBackupProfile(token: string, accountId: string): Promise
       await putProfileData(token, data as unknown as Record<string, unknown>);
       useProfile.getState().update({ syncAccountId: accountId });
     }
+    // Every branch above is a settled outcome — the continuous backup may now
+    // claim/push for this account.
+    profileRestoreSettled.add(accountId);
   } catch {
-    // Offline or server hiccup — the local profile stays authoritative.
+    // Offline or server hiccup — the local profile stays authoritative and
+    // the account stays un-settled; refresh() retries on the next foreground.
   }
 }
 
@@ -300,6 +322,13 @@ export const useAuth = create<AuthState>()(
           if (get().token !== token) return;
           set({ status: 'signedIn', user });
           adoptServerUser(user);
+          // Sign-in's restore attempt failed (offline blip)? Retry until one
+          // settles — the continuous backup is claim-locked until then, so a
+          // fresh device can't overwrite the account's cloud profile with an
+          // empty local one after a single timeout.
+          if (!profileRestoreSettled.has(user.id)) {
+            void restoreOrBackupProfile(token, user.id);
+          }
           // Re-probe staff role so a mid-session grant/revoke is reflected.
           // Probe directly (not via fetchStaffRole, which collapses failures to
           // null): a transient error must leave the persisted staffRole

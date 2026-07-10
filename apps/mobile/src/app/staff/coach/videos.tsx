@@ -510,7 +510,7 @@ export default function CoachVideosScreen() {
   );
 
   return (
-    <Screen scroll>
+    <Screen scroll keyboardAware>
       <Animated.View entering={enterDown()} style={styles.backRow}>
         <PressableScale
           accessibilityRole="button"

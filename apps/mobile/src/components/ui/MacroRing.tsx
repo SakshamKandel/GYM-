@@ -1,5 +1,5 @@
 import { StyleSheet, View } from 'react-native';
-import { colors } from '@gym/ui-tokens';
+import { colors, spacing } from '@gym/ui-tokens';
 import { AppText } from './AppText';
 import { Ring } from './Ring';
 
@@ -24,7 +24,7 @@ interface Props {
 }
 
 const styles = StyleSheet.create({
-  wrap: { alignItems: 'center', gap: 6 },
+  wrap: { alignItems: 'center', gap: spacing.xs },
   center: { alignItems: 'center' },
   value: { fontSize: 18, lineHeight: 20 },
 });

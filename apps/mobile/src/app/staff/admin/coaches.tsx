@@ -55,6 +55,7 @@ const ERR_TEXT: Record<StaffErrorCode, string> = {
   invalid: "That didn't work.",
   cannot_target_self: "You can't change your own role.",
   cannot_revoke_self: "You can't revoke your own access.",
+  full: "That coach's roster is at capacity.",
   conflict: 'That conflicts with the current state.',
   not_configured: 'This feature is not set up yet.',
   network: "Couldn't reach the server.",

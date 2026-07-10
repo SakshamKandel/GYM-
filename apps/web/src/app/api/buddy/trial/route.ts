@@ -80,12 +80,30 @@ export async function POST(req: Request) {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + TRIAL_DAYS * 86_400_000);
 
-  await db.insert(trialUsage).values({
-    accountId: me.id,
-    tier,
-    startedAt: now,
-    expiresAt,
-  });
+  // CONCURRENCY: the pre-check above is check-then-insert (TOCTOU) — two
+  // concurrent POSTs would both pass the SELECT and collide on the
+  // trial_usage_account_tier unique index as an uncaught 500. onConflictDoNothing
+  // maps the loser to the same trial_used 409 as the pre-check, and only the
+  // winner (the request that actually created the row) applies the tier.
+  const inserted = await db
+    .insert(trialUsage)
+    .values({
+      accountId: me.id,
+      tier,
+      startedAt: now,
+      expiresAt,
+    })
+    .onConflictDoNothing({ target: [trialUsage.accountId, trialUsage.tier] })
+    .returning({ id: trialUsage.id });
+
+  if (inserted.length === 0) {
+    const raced = await db
+      .select({ expiresAt: trialUsage.expiresAt })
+      .from(trialUsage)
+      .where(and(eq(trialUsage.accountId, me.id), eq(trialUsage.tier, tier)))
+      .limit(1);
+    return json({ error: 'trial_used', expiresAt: raced[0]?.expiresAt ?? null }, 409);
+  }
 
   // Apply the tier THROUGH the audited writer, with the SAME expiry window as
   // the trial_usage row — effectiveTier() collapses it back to 'starter' at

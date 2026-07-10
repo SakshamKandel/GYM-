@@ -11,6 +11,7 @@ import type { AnalyticsSet } from '../../lib/repo/types';
 import { getGreeceVideo } from '../../lib/seed/greeceVideos';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
+import { useEffectiveTier } from '../../lib/tier';
 
 /** Small data hooks — refresh on focus so tabs update after logging. */
 
@@ -232,7 +233,7 @@ export type PlanVideoState =
  */
 export function usePlanVideo(exerciseId: string): PlanVideoState {
   const token = useAuth((s) => s.token);
-  const tier = useProfile((s) => s.tier);
+  const tier = useEffectiveTier();
   const [state, setState] = useState<PlanVideoState>({ status: 'loading' });
 
   useEffect(() => {

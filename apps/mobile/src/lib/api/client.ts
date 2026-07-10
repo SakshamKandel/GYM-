@@ -24,7 +24,9 @@ export type ApiErrorCode =
   | 'invalid'
   | 'network'
   | 'unauthorized'
-  | 'not_configured';
+  | 'not_configured'
+  /** Live billing: paid tiers require a store purchase, not a self-serve pick. */
+  | 'billing_required';
 
 export class ApiError extends Error {
   readonly code: ApiErrorCode;
@@ -76,7 +78,8 @@ function serverErrorCode(raw: string): ApiErrorCode | null {
     raw === 'bad_credentials' ||
     raw === 'link_required' ||
     raw === 'invalid' ||
-    raw === 'not_configured'
+    raw === 'not_configured' ||
+    raw === 'billing_required'
     ? raw
     : null;
 }
@@ -268,6 +271,7 @@ export type BuddyErrorCode =
   | 'nudge_limit'
   | 'tier_mismatch'
   | 'trial_used'
+  | 'not_an_upgrade'
   | 'forbidden'
   | 'unauthorized'
   | 'network';
@@ -361,7 +365,8 @@ function buddyServerErrorCode(raw: string): BuddyErrorCode | null {
     raw === 'buddy_limit' ||
     raw === 'nudge_limit' ||
     raw === 'tier_mismatch' ||
-    raw === 'trial_used'
+    raw === 'trial_used' ||
+    raw === 'not_an_upgrade'
     ? (raw as BuddyErrorCode)
     : null;
 }

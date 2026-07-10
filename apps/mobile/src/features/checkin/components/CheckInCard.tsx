@@ -53,7 +53,7 @@ const FIELDS: ScaleField[] = [
 const EMPTY_SUMMARY: CheckInSummary = { sessions: 0, volumeKg: 0, prCount: 0 };
 
 const styles = StyleSheet.create({
-  wrap: { marginBottom: spacing.lg },
+  wrap: { marginBottom: spacing.md },
   form: { gap: spacing.md },
   field: { gap: spacing.xs },
   hintRow: {

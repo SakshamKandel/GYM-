@@ -22,6 +22,7 @@ import {
 } from '../components/ui';
 import { CoachThread } from '../features/coach/components/CoachThread';
 import { useProfile } from '../state/profile';
+import { useEffectiveTier } from '../lib/tier';
 
 /**
  * /support — Elite priority support in the color-blocked language: back pill →
@@ -169,7 +170,7 @@ function SupportFaq() {
 }
 
 export default function SupportScreen() {
-  const tier = useProfile((s) => s.tier);
+  const tier = useEffectiveTier();
   const unlocked = hasEntitlement({ tier }, 'coach_chat');
 
   if (!unlocked) {
@@ -202,7 +203,7 @@ export default function SupportScreen() {
             Elite priority
           </AppText>
           <AppText variant="title" color={colors.onBlock}>
-            You're at the front of the line
+            {"You're at the front of the line"}
           </AppText>
           <AppText variant="body" color={colors.onBlock} style={styles.heroBody}>
             Send us anything — billing, plans, or a stuck feature. The GM team gets back within a

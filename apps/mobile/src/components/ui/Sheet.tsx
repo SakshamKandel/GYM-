@@ -6,7 +6,15 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Dimensions, Modal, Platform, Pressable, StyleSheet, View } from 'react-native';
+import {
+  Dimensions,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Gesture,
@@ -69,6 +77,9 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     width: '100%',
     maxWidth: 640,
+    // Contain tall content on small phones: the sheet never covers the whole
+    // screen; overflowing children must scroll inside their own ScrollView.
+    maxHeight: '88%',
     backgroundColor: colors.surface,
     borderTopLeftRadius: radius.block,
     borderTopRightRadius: radius.block,
@@ -208,15 +219,22 @@ export function Sheet({ visible, onClose, title, children }: SheetProps) {
       onRequestClose={close}
     >
       <GestureHandlerRootView style={styles.root}>
-        <View style={styles.fill}>
-          <AnimatedPressable
-            accessibilityRole="button"
-            accessibilityLabel="Dismiss"
-            onPress={close}
-            style={[styles.backdrop, backdropStyle]}
-          />
-          {isNative ? <GestureDetector gesture={pan}>{panel}</GestureDetector> : panel}
-        </View>
+        {/* iOS needs explicit avoidance inside a Modal; Android's adjustResize
+            already resizes the window, so behavior stays undefined there. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.root}
+        >
+          <View style={styles.fill}>
+            <AnimatedPressable
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss"
+              onPress={close}
+              style={[styles.backdrop, backdropStyle]}
+            />
+            {isNative ? <GestureDetector gesture={pan}>{panel}</GestureDetector> : panel}
+          </View>
+        </KeyboardAvoidingView>
       </GestureHandlerRootView>
     </Modal>
   );

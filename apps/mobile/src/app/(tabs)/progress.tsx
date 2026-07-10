@@ -5,9 +5,11 @@ import { hasEntitlement, minTierFor } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import {
   AppText,
+  Button,
   Chip,
   enterDown,
   enterFade,
+  enterUp,
   FLOATING_TAB_SPACE,
   FractionStat,
   ProgressBar,
@@ -23,6 +25,7 @@ import { NutritionSection } from '../../features/analytics/components/NutritionS
 import { OverviewSection } from '../../features/analytics/components/OverviewSection';
 import { useAnalytics } from '../../features/analytics/hooks';
 import { MeasurementsSection } from '../../features/body/components/MeasurementsSection';
+import { MilestonesSection } from '../../features/mentorship/components/MilestonesSection';
 import { StrengthSection } from '../../features/body/components/StrengthSection';
 import { WeightSection } from '../../features/body/components/WeightSection';
 import { todayIso } from '../../lib/dates';
@@ -76,6 +79,7 @@ const styles = StyleSheet.create({
     marginHorizontal: -spacing.gutter,
   },
   error: { marginTop: spacing.lg },
+  retryBtn: { marginTop: spacing.md, alignSelf: 'flex-start' },
   skeletons: { marginTop: spacing.xl, gap: spacing.md },
 });
 
@@ -107,10 +111,11 @@ function SectionSkeleton() {
 
 export default function ProgressScreen() {
   const [section, setSection] = useState<Section>('overview');
+  const [retryKey, setRetryKey] = useState(0);
   const tier = useEffectiveTier();
   const unitPref = useProfile((s) => s.unitPref);
   const daysPerWeek = useProfile((s) => s.daysPerWeek);
-  const analytics = useAnalytics();
+  const analytics = useAnalytics(retryKey);
   const data = analytics.status === 'ready' ? analytics.data : null;
 
   const muscleUnlocked = hasEntitlement({ tier }, 'adaptive_progression');
@@ -179,9 +184,17 @@ export default function ProgressScreen() {
       </Animated.View>
 
       {analytics.status === 'error' ? (
-        <AppText variant="body" style={styles.error}>
-          {"Couldn't load your stats — pull to refresh or try again in a moment."}
-        </AppText>
+        <View style={styles.error}>
+          <AppText variant="body">
+            {"Couldn't load your stats."}
+          </AppText>
+          <Button
+            label="Try again"
+            variant="secondary"
+            onPress={() => setRetryKey((n) => n + 1)}
+            style={styles.retryBtn}
+          />
+        </View>
       ) : null}
 
       {/* Keyed wrappers so chip switches cross-fade instead of popping. */}
@@ -249,6 +262,12 @@ export default function ProgressScreen() {
           ) : null}
         </Animated.View>
       ) : null}
+
+      {/* Coach milestones — self-fetching; renders nothing when signed out
+          or the member's coach hasn't logged any yet. */}
+      <Animated.View entering={enterUp(1)}>
+        <MilestonesSection />
+      </Animated.View>
     </Screen>
   );
 }

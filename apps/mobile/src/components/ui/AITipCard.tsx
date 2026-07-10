@@ -98,7 +98,7 @@ export function AITipCard({ title, tip, loading, error, onRefresh }: Props) {
         accessibilityRole="button"
         accessibilityLabel="Refresh tip"
         onPress={onRefresh}
-        hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}
+        hitSlop={{ top: 16, bottom: 16, left: 8, right: 8 }}
         style={styles.refreshRow}
       >
         <Ionicons name="refresh" size={13} color={colors.textDim} />

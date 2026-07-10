@@ -150,6 +150,8 @@ export function trialErrorLine(code: BuddyErrorCode): string {
   switch (code) {
     case 'trial_used':
       return "You've already used your trial for this plan.";
+    case 'not_an_upgrade':
+      return 'Your current plan already includes this.';
     case 'invalid':
       return 'Something went wrong — try again.';
     case 'unauthorized':

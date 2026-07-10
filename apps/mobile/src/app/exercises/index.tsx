@@ -271,7 +271,10 @@ export default function ExerciseLibraryScreen() {
   );
 
   const handlePick = (exercise: Exercise): void => {
-    if (selectMode) {
+    // Picker taps only "add and pop back" while a session is live — addExercise
+    // no-ops when idle (e.g. the session ended behind this screen), and popping
+    // back then would fake success. Fall through to the detail screen instead.
+    if (selectMode && useSession.getState().status === 'active') {
       useSession.getState().addExercise(exercise.id);
       router.back();
     } else {

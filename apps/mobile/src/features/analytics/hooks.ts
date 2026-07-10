@@ -22,6 +22,7 @@ import { addDays, lastNDays, todayIso } from '../../lib/dates';
 import { getExercise } from '../../lib/exercises';
 import { getRepo } from '../../lib/repo';
 import { useProfile } from '../../state/profile';
+import { useEffectiveTier } from '../../lib/tier';
 import {
   ANALYTICS_WEEKS,
   avgSessionMinutes,
@@ -90,8 +91,9 @@ export type AnalyticsState =
   | { status: 'error' }
   | { status: 'ready'; data: AnalyticsData };
 
-export function useAnalytics(): AnalyticsState {
-  const tier = useProfile((s) => s.tier);
+/** @param reloadKey bump to force a refetch outside focus changes (error-state retry). */
+export function useAnalytics(reloadKey = 0): AnalyticsState {
+  const tier = useEffectiveTier();
   const daysPerWeek = useProfile((s) => s.daysPerWeek);
   const targets = useProfile((s) => s.targets);
   const [state, setState] = useState<AnalyticsState>({ status: 'loading' });
@@ -182,7 +184,7 @@ export function useAnalytics(): AnalyticsState {
       return () => {
         mounted = false;
       };
-    }, [daysPerWeek, muscleUnlocked, nutritionUnlocked, targets.kcal, targets.protein]),
+    }, [daysPerWeek, muscleUnlocked, nutritionUnlocked, targets.kcal, targets.protein, reloadKey]),
   );
 
   return state;

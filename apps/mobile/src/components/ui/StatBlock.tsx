@@ -1,5 +1,5 @@
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import { colors } from '@gym/ui-tokens';
+import { colors, spacing } from '@gym/ui-tokens';
 import { AppText } from './AppText';
 
 /**
@@ -19,7 +19,7 @@ interface Props {
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'baseline', gap: 6, minWidth: 0 },
+  row: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs, minWidth: 0 },
   center: { alignItems: 'center' },
   value: { flexShrink: 1 },
 });

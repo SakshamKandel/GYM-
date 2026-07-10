@@ -28,6 +28,7 @@ import { addDays, todayIso } from '../../../lib/dates';
 import { successHaptic } from '../../../lib/haptics';
 import { getRepo } from '../../../lib/repo';
 import { useProfile } from '../../../state/profile';
+import { useEffectiveTier } from '../../../lib/tier';
 
 /**
  * GM weekly check-in (Feature Blueprint §01, Gold's adaptive progression).
@@ -146,7 +147,7 @@ function QuestionRow({
 }
 
 export function WeeklyCheckIn({ stagger = 0 }: { stagger?: number }) {
-  const tier = useProfile((s) => s.tier);
+  const tier = useEffectiveTier();
   const goalType = useProfile((s) => s.goalType);
   const targets = useProfile((s) => s.targets);
   const baseKcal = useProfile((s) => s.baseKcal);
@@ -287,7 +288,7 @@ export function WeeklyCheckIn({ stagger = 0 }: { stagger?: number }) {
     return (
       <Animated.View entering={enterUp(stagger)} style={styles.wrap}>
         <HeroCard mascot variant="charcoal">
-          <AppText variant="label">Greece's reply</AppText>
+          <AppText variant="label">{"Greece's reply"}</AppText>
           <Animated.View entering={enterFade(0)}>
             <AppText variant="title">{reply.headline}</AppText>
             <View style={styles.replyLines}>

@@ -106,6 +106,7 @@ const styles = StyleSheet.create({
   mismatchText: { flexShrink: 1 },
   // paddingBottom keeps the button off the screen edge when insets.bottom is 0 (web).
   pinned: { marginTop: 'auto', paddingTop: spacing.md, paddingBottom: spacing.md },
+  error: { marginBottom: spacing.sm },
 });
 
 interface MacroField {
@@ -130,6 +131,7 @@ export default function CustomFoodScreen() {
   const [macros, setMacros] = useState({ protein: 0, carbs: 0, fat: 0 });
   const [serving, setServing] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(false);
 
   const implied = impliedKcalMismatch(kcal, macros.protein, macros.carbs, macros.fat);
   const canSave = name.trim().length > 0 && kcal > 0;
@@ -137,6 +139,7 @@ export default function CustomFoodScreen() {
   async function save(): Promise<void> {
     if (!canSave || saving) return;
     setSaving(true);
+    setError(false);
     try {
       const item: FoodItem = {
         id: uid(),
@@ -156,6 +159,7 @@ export default function CustomFoodScreen() {
       tapHaptic();
       router.replace(portionHref(item.id, meal, date));
     } catch {
+      setError(true);
       setSaving(false);
     }
   }
@@ -273,6 +277,11 @@ export default function CustomFoodScreen() {
       </ScrollView>
 
       <Animated.View entering={enterUp(7)} style={styles.pinned}>
+        {error ? (
+          <AppText variant="caption" color={colors.error} center style={styles.error}>
+            {"Couldn't save — try again."}
+          </AppText>
+        ) : null}
         <Button
           label="Save food"
           onPress={() => void save()}

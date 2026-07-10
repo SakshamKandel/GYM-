@@ -111,6 +111,8 @@ export const MEASUREMENT_DEFAULTS: Record<MeasurementKey, number> = {
 export function latestMeasurementValues(
   entries: Measurement[],
 ): Record<MeasurementKey, number | null> {
+  // Stable sort: same-day ties keep the repo's newest-insertion-first order,
+  // so a same-day correction wins over the row it replaced.
   const sorted = [...entries].sort((a, b) => b.date.localeCompare(a.date));
   const out: Record<MeasurementKey, number | null> = {
     waistCm: null,
@@ -133,14 +135,22 @@ export function measurementFieldsLabel(entry: Measurement): string {
   return names.length > 0 ? names.join(' · ') : '—';
 }
 
+/** ChartPoint plus its source entry id — same-day corrections make dates non-unique keys. */
+export interface MeasurementPoint extends ChartPoint {
+  id: string;
+}
+
 /**
  * Chronological (oldest→newest) series for one measurement field, skipping
  * the entries that didn't record it. Values in cm. Feeds the detail sheet.
+ * The repo returns newest-first (date, then insertion); reversing before the
+ * stable date sort keeps a same-day correction AFTER the row it supersedes.
  */
-export function measurementSeries(entries: Measurement[], key: MeasurementKey): ChartPoint[] {
-  return entries
+export function measurementSeries(entries: Measurement[], key: MeasurementKey): MeasurementPoint[] {
+  return [...entries]
+    .reverse()
     .filter((e) => e[key] !== null)
-    .map((e) => ({ date: e.date, value: e[key] as number }))
+    .map((e) => ({ id: e.id, date: e.date, value: e[key] as number }))
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 

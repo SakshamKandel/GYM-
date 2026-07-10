@@ -9,7 +9,7 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
-import type { Tier } from '@gym/shared';
+import { compareTiers, type Tier } from '@gym/shared';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
@@ -24,6 +24,7 @@ import {
 } from '../../components/ui';
 import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { syncProfileNow } from '../../lib/profileSync';
+import { useEffectiveTier } from '../../lib/tier';
 import { applyServerUser, useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
 import { activateTrial } from '../buddy/actions';
@@ -32,6 +33,7 @@ import { useBuddyStore } from '../buddy/store';
 import {
   getTrialStatus,
   setSubscriptionTier,
+  toApiError,
   type Trial,
   type TrialTier,
 } from '../../lib/api/client';
@@ -57,7 +59,9 @@ const EASE_OUT = Easing.bezier(0.25, 0.8, 0.4, 1);
  */
 
 export function SubscribeScreen() {
-  const currentTier = useProfile((s) => s.tier);
+  // Effective tier (server wins while signed in): a lapsed trial/dated tier
+  // must show its old tier as choosable again, not as a CTA-less "Current".
+  const currentTier = useEffectiveTier();
   const update = useProfile((s) => s.update);
   const [previewActive, setPreviewActive] = useState(false);
   const [trials, setTrials] = useState<Trial[]>([]);
@@ -92,8 +96,11 @@ export function SubscribeScreen() {
   }
 
   function choose(tier: Tier): void {
-    // TODO: RevenueCat purchase flow — until then the pick applies locally
-    // as a preview so the whole app can be exercised on any tier.
+    // Store purchase flow (RevenueCat) is pending store accounts. Until then
+    // the pick applies locally as a preview so the whole app can be exercised
+    // on any tier. When the server runs BILLING_MODE=live it answers paid
+    // picks with 'billing_required' — handled below with a specific message —
+    // so a live backend can never be talked into a free paid tier.
     const previousTier = useProfile.getState().tier;
     // Optimistic local apply for instant UI; the profile blob backup keeps
     // preferences in sync (the server ignores its tier field — the account
@@ -115,7 +122,7 @@ export function SubscribeScreen() {
       try {
         const user = await setSubscriptionTier(token, tier);
         applyServerUser(user, token);
-      } catch {
+      } catch (err) {
         // Roll back the optimistic write — but never clobber a NEWER pick
         // (rapid re-taps) or another account's state (signed out mid-flight).
         if (useAuth.getState().token !== token) return;
@@ -124,7 +131,11 @@ export function SubscribeScreen() {
           syncProfileNow();
         }
         setPreviewActive(false);
-        setPlanError("Couldn't update your plan on the server — check your connection and try again.");
+        setPlanError(
+          toApiError(err).code === 'billing_required'
+            ? 'Paid plans are activated through the app store purchase — the free preview is closed on this server.'
+            : "Couldn't update your plan on the server — check your connection and try again.",
+        );
         warnHaptic();
       }
     })();
@@ -450,7 +461,9 @@ function TierCard({
             variant={onRed ? 'onBlock' : 'secondary'}
             onPress={() => onChoose(gmTier.tier)}
           />
-          {canTrial && signedIn ? (
+          {/* Trials only make sense on tiers ABOVE the current one — the
+              server refuses the rest with 'not_an_upgrade'. */}
+          {canTrial && signedIn && compareTiers(gmTier.tier, currentTier) > 0 ? (
             onRed ? (
               <OnRedGhostButton
                 label={trialLabel}

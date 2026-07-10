@@ -1,4 +1,4 @@
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import type { PlanWorkout } from '@gym/shared';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import { AppText, Button, SectionLabel, StatBlock } from '../../../components/ui';
@@ -18,6 +18,9 @@ interface Props {
 }
 
 const styles = StyleSheet.create({
+  // flexShrink lets the sheet's 88% height cap compress the scroll area on
+  // small phones instead of pushing "Start workout" off-screen.
+  body: { flexShrink: 1 },
   // Inner tile inside the sheet block — nested elements take radius.md.
   statsRow: {
     flexDirection: 'row',
@@ -65,47 +68,49 @@ export function WorkoutPreviewSheet({ workout, onStart }: Props) {
   const minutes = estimateWorkoutMinutes(workout);
 
   return (
-    <View>
-      <View style={styles.statsRow}>
-        <StatBlock label="exercises" value={workout.exercises.length} align="center" style={styles.statCol} />
-        <StatBlock label="sets" value={totalSets} align="center" style={styles.statCol} />
-        <StatBlock label="est. min" value={`~${minutes}`} align="center" style={styles.statCol} />
-      </View>
+    <View style={styles.body}>
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <View style={styles.statsRow}>
+          <StatBlock label="exercises" value={workout.exercises.length} align="center" style={styles.statCol} />
+          <StatBlock label="sets" value={totalSets} align="center" style={styles.statCol} />
+          <StatBlock label="est. min" value={`~${minutes}`} align="center" style={styles.statCol} />
+        </View>
 
-      <SectionLabel>Exercises</SectionLabel>
-      <View style={styles.list}>
-        {workout.exercises.map((e, i) => {
-          const info = getExercise(e.exerciseId);
-          const meta = info ? `${info.muscleGroup} · ${info.equipment ?? 'bodyweight'}` : null;
-          return (
-            <View
-              key={e.id}
-              style={styles.exRow}
-              accessible
-              accessibilityLabel={`${e.exerciseName}, ${e.sets} sets of ${e.repRange} reps`}
-            >
-              <View style={styles.numBlock}>
-                <AppText style={styles.numText} tabular>
-                  {i + 1}
-                </AppText>
-              </View>
-              <View style={styles.exText}>
-                <AppText variant="bodyBold" numberOfLines={1}>
-                  {e.exerciseName}
-                </AppText>
-                {meta ? (
-                  <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
-                    {meta}
+        <SectionLabel>Exercises</SectionLabel>
+        <View style={styles.list}>
+          {workout.exercises.map((e, i) => {
+            const info = getExercise(e.exerciseId);
+            const meta = info ? `${info.muscleGroup} · ${info.equipment ?? 'bodyweight'}` : null;
+            return (
+              <View
+                key={e.id}
+                style={styles.exRow}
+                accessible
+                accessibilityLabel={`${e.exerciseName}, ${e.sets} sets of ${e.repRange} reps`}
+              >
+                <View style={styles.numBlock}>
+                  <AppText style={styles.numText} tabular>
+                    {i + 1}
                   </AppText>
-                ) : null}
+                </View>
+                <View style={styles.exText}>
+                  <AppText variant="bodyBold" numberOfLines={1}>
+                    {e.exerciseName}
+                  </AppText>
+                  {meta ? (
+                    <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+                      {meta}
+                    </AppText>
+                  ) : null}
+                </View>
+                <AppText style={styles.exNumbers} tabular numberOfLines={1}>
+                  {`${e.sets} × ${e.repRange}`}
+                </AppText>
               </View>
-              <AppText style={styles.exNumbers} tabular numberOfLines={1}>
-                {`${e.sets} × ${e.repRange}`}
-              </AppText>
-            </View>
-          );
-        })}
-      </View>
+            );
+          })}
+        </View>
+      </ScrollView>
 
       <Button
         label="Start workout"

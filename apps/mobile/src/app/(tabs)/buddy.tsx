@@ -233,8 +233,9 @@ function BuddyContent({
               key={link.linkId}
               link={link}
               onRespond={async (accept) => {
-                await respondInvite(link.linkId, accept);
+                const ok = await respondInvite(link.linkId, accept);
                 reload();
+                return ok;
               }}
             />
           ))}
@@ -264,12 +265,14 @@ function BuddyContent({
               subtitle={lastTrainedLabel(events, link.buddy.id, todayIso())}
               tier={tier}
               onNudge={async () => {
-                await sendNudge(link.linkId);
+                const ok = await sendNudge(link.linkId);
                 reload();
+                return ok;
               }}
               onRemove={async () => {
-                await removeLink(link.linkId);
+                const ok = await removeLink(link.linkId);
                 reload();
+                return ok;
               }}
             />
           ))}
@@ -292,8 +295,9 @@ function BuddyContent({
               key={link.linkId}
               link={link}
               onCancel={async () => {
-                await removeLink(link.linkId);
+                const ok = await removeLink(link.linkId);
                 reload();
+                return ok;
               }}
             />
           ))}
@@ -373,8 +377,9 @@ function BuddyContent({
             return session !== null;
           }}
           onEnd={async (sessionId) => {
-            await endLiveSession(sessionId);
+            const ok = await endLiveSession(sessionId);
             reload();
+            return ok;
           }}
           mySession={mySession}
         />
@@ -494,10 +499,14 @@ function BuddyRow({
   events: BuddyEvent[];
   subtitle: string;
   tier: string;
-  onNudge: () => void;
-  onRemove: () => void;
+  onNudge: () => Promise<boolean>;
+  onRemove: () => Promise<boolean>;
 }) {
   const [showActions, setShowActions] = useState(false);
+  // One in-flight action per row: both buttons disable together so a slow
+  // network can't queue duplicate nudges/removes from double-taps.
+  const [busy, setBusy] = useState<'nudge' | 'remove' | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const today = todayIso();
   const nudged = nudgedToday(
     useBuddyStore.getState().nudgedByLink,
@@ -509,6 +518,25 @@ function BuddyRow({
     [events, link.buddy.id, today],
   );
   const trainedDays = dots.filter(Boolean).length;
+
+  async function handleNudge() {
+    if (busy !== null) return;
+    setBusy('nudge');
+    setError(null);
+    const ok = await onNudge();
+    setBusy(null);
+    if (!ok) setError(inviteErrorLine('network'));
+  }
+
+  async function handleRemove() {
+    if (busy !== null) return;
+    setBusy('remove');
+    setError(null);
+    const ok = await onRemove();
+    setBusy(null);
+    if (ok) setShowActions(false);
+    else setError(inviteErrorLine('network'));
+  }
 
   return (
     <Animated.View style={styles.buddyCard} layout={layoutSpring}>
@@ -561,22 +589,29 @@ function BuddyRow({
           </View>
           <View style={styles.buddyActions}>
             <Button
-              label={nudged ? 'Nudged today' : 'Nudge'}
+              label={nudged ? 'Nudged today' : busy === 'nudge' ? 'Nudging…' : 'Nudge'}
               variant="secondary"
-              disabled={nudged}
-              onPress={onNudge}
+              disabled={nudged || busy !== null}
+              loading={busy === 'nudge'}
+              onPress={handleNudge}
               style={styles.actionBtn}
             />
             <Button
-              label="Remove"
+              label={busy === 'remove' ? 'Removing…' : 'Remove'}
               variant="danger"
-              onPress={() => {
-                onRemove();
-                setShowActions(false);
-              }}
+              disabled={busy !== null}
+              loading={busy === 'remove'}
+              onPress={handleRemove}
               style={styles.actionBtn}
             />
           </View>
+          {error ? (
+            <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
+              <AppText variant="body" color={colors.error} style={styles.formMsg}>
+                {error}
+              </AppText>
+            </Animated.View>
+          ) : null}
         </Animated.View>
       ) : null}
     </Animated.View>
@@ -592,8 +627,22 @@ function PendingInviteRow({
   onRespond,
 }: {
   link: BuddyLink;
-  onRespond: (accept: boolean) => void;
+  onRespond: (accept: boolean) => Promise<boolean>;
 }) {
+  // Both buttons disable while EITHER response is in flight — a double-tap
+  // (or Accept-then-Decline) must not fire two conflicting responses.
+  const [responding, setResponding] = useState<'accept' | 'decline' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleRespond(accept: boolean) {
+    if (responding !== null) return;
+    setResponding(accept ? 'accept' : 'decline');
+    setError(null);
+    const ok = await onRespond(accept);
+    setResponding(null);
+    if (!ok) setError(inviteErrorLine('network'));
+  }
+
   return (
     <View style={styles.buddyCard}>
       <View style={styles.buddyTop}>
@@ -610,9 +659,30 @@ function PendingInviteRow({
         </View>
       </View>
       <View style={styles.buddyActions}>
-        <Button label="Accept" variant="primary" onPress={() => onRespond(true)} style={styles.actionBtn} />
-        <Button label="Decline" variant="secondary" onPress={() => onRespond(false)} style={styles.actionBtn} />
+        <Button
+          label="Accept"
+          variant="primary"
+          onPress={() => handleRespond(true)}
+          disabled={responding !== null}
+          loading={responding === 'accept'}
+          style={styles.actionBtn}
+        />
+        <Button
+          label="Decline"
+          variant="secondary"
+          onPress={() => handleRespond(false)}
+          disabled={responding !== null}
+          loading={responding === 'decline'}
+          style={styles.actionBtn}
+        />
       </View>
+      {error ? (
+        <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
+          <AppText variant="body" color={colors.error} style={styles.formMsg}>
+            {error}
+          </AppText>
+        </Animated.View>
+      ) : null}
     </View>
   );
 }
@@ -621,7 +691,19 @@ function PendingInviteRow({
 // Pending outgoing row
 // ════════════════════════════════════════════════════════════════
 
-function PendingOutRow({ link, onCancel }: { link: BuddyLink; onCancel: () => void }) {
+function PendingOutRow({ link, onCancel }: { link: BuddyLink; onCancel: () => Promise<boolean> }) {
+  const [canceling, setCanceling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleCancel() {
+    if (canceling) return;
+    setCanceling(true);
+    setError(null);
+    const ok = await onCancel();
+    setCanceling(false);
+    if (!ok) setError(inviteErrorLine('network'));
+  }
+
   return (
     <View style={styles.buddyCard}>
       <View style={styles.buddyTop}>
@@ -639,12 +721,21 @@ function PendingOutRow({ link, onCancel }: { link: BuddyLink; onCancel: () => vo
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Cancel invite"
-          onPress={onCancel}
+          accessibilityState={{ disabled: canceling }}
+          disabled={canceling}
+          onPress={handleCancel}
           style={styles.iconBtn}
         >
           <Ionicons name="close" size={20} color={colors.textDim} />
         </PressableScale>
       </View>
+      {error ? (
+        <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
+          <AppText variant="body" color={colors.error} style={styles.formMsg}>
+            {error}
+          </AppText>
+        </Animated.View>
+      ) : null}
     </View>
   );
 }
@@ -771,12 +862,23 @@ function StartSessionForm({
   mySession,
 }: {
   onStart: (workoutName: string) => Promise<boolean>;
-  onEnd: (sessionId: string) => Promise<void>;
+  onEnd: (sessionId: string) => Promise<boolean>;
   mySession: BuddySession | null;
 }) {
   const [workoutName, setWorkoutName] = useState('');
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const [endError, setEndError] = useState<string | null>(null);
+
+  async function handleEnd(sessionId: string) {
+    if (ending) return;
+    setEnding(true);
+    setEndError(null);
+    const ok = await onEnd(sessionId);
+    setEnding(false);
+    if (!ok) setEndError(inviteErrorLine('network'));
+  }
 
   async function handleStart() {
     if (!workoutName.trim() || starting) return;
@@ -804,11 +906,20 @@ function StartSessionForm({
           {mySession.workoutName}
         </AppText>
         <Button
-          label="End session"
+          label={ending ? 'Ending…' : 'End session'}
           variant="danger"
-          onPress={() => onEnd(mySession.id)}
+          disabled={ending}
+          loading={ending}
+          onPress={() => handleEnd(mySession.id)}
           style={styles.formBtn}
         />
+        {endError ? (
+          <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
+            <AppText variant="body" color={colors.error} style={styles.formMsg}>
+              {endError}
+            </AppText>
+          </Animated.View>
+        ) : null}
       </View>
     );
   }

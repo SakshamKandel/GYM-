@@ -23,6 +23,8 @@ import { BASE_URL } from '../../lib/api/client';
  *   'invalid'      → 400 (validation rejected the request body)
  *   'cannot_target_self' → 400 (grant/change aimed at the caller's OWN row)
  *   'cannot_revoke_self' → 400 (self-lockout guard on revoke)
+ *   'full'         → 409 {error:'full'} (accepting a mentorship request would
+ *                    exceed the coach's roster capacity)
  *   'conflict'     → 409 (state conflicts etc.)
  *   'not_configured' → 503 (e.g. the video host keys are absent)
  *   'network'      → offline, non-JSON, or a malformed/unexpected response
@@ -38,6 +40,7 @@ export type StaffErrorCode =
   | 'invalid'
   | 'cannot_target_self'
   | 'cannot_revoke_self'
+  | 'full'
   | 'conflict'
   | 'not_configured'
   | 'network';
@@ -103,6 +106,7 @@ const BODY_ERROR_CODES: Partial<Record<string, StaffErrorCode>> = {
   insufficient_rank: 'insufficient_rank',
   cannot_target_self: 'cannot_target_self',
   cannot_revoke_self: 'cannot_revoke_self',
+  full: 'full',
 };
 
 /** Perform the request; resolve with the parsed JSON (or null) of a 2xx body. */
@@ -176,7 +180,6 @@ export async function getMeStaff(token: string): Promise<StaffRole | null> {
 const coachInboxRowSchema = z.object({
   id: z.string(),
   displayName: z.string(),
-  email: z.string(),
   tier: tierSchema,
   unreadForCoach: z.number(),
 });
@@ -250,6 +253,14 @@ export async function replyToClient(
   return parse(coachReplySchema, data).message;
 }
 
+// One portfolio certification row: {title ≤80, issuer ≤80, year number|null}.
+const coachCertificationSchema = z.object({
+  title: z.string(),
+  issuer: z.string(),
+  year: z.number().nullable(),
+});
+export type CoachCertification = z.infer<typeof coachCertificationSchema>;
+
 const coachProfileSchema = z.object({
   accountId: z.string(),
   displayName: z.string().nullable(),
@@ -257,6 +268,14 @@ const coachProfileSchema = z.object({
   acceptingClients: z.boolean(),
   replyWindowHours: z.number(),
   isActive: z.boolean(),
+  // ── Portfolio fields (mentorship work). `.catch` defaults keep an older
+  // server that doesn't return them yet from nuking the whole profile parse.
+  headline: z.string().nullable().catch(null),
+  specialties: z.array(z.string()).catch([]),
+  certifications: z.array(coachCertificationSchema).catch([]),
+  achievements: z.array(z.string()).catch([]),
+  yearsExperience: z.number().catch(0),
+  capacity: z.number().catch(1),
 });
 export type CoachProfile = z.infer<typeof coachProfileSchema>;
 
@@ -273,6 +292,18 @@ export interface CoachProfilePatch {
   bio?: string;
   acceptingClients?: boolean;
   replyWindowHours?: number;
+  /** ≤120 chars. */
+  headline?: string;
+  /** ≤6 entries, each from COACH_SPECIALTIES in @gym/shared. */
+  specialties?: string[];
+  /** ≤10 rows; title/issuer ≤80 chars each, year numeric or null. */
+  certifications?: CoachCertification[];
+  /** ≤10 entries, each ≤120 chars. */
+  achievements?: string[];
+  /** 0..60. */
+  yearsExperience?: number;
+  /** 1..200 — the roster cap enforced when accepting requests. */
+  capacity?: number;
 }
 
 /** PATCH /api/coach/profile → update the caller's own profile; returns it fresh. */
@@ -287,6 +318,153 @@ export async function updateCoachProfile(
     body: { ...patch },
   });
   return parse(coachProfileEnvelope, data).profile;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — mentorship requests + roster
+// ════════════════════════════════════════════════════════════════
+
+const coachRequestSchema = z.object({
+  id: z.string(),
+  userId: z.string(),
+  displayName: z.string(),
+  tier: tierSchema,
+  message: z.string().catch(''),
+  createdAt: z.string(),
+});
+export type CoachRequest = z.infer<typeof coachRequestSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole queue. */
+const coachRequestsSchema = z.object({
+  requests: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): CoachRequest[] => {
+      const parsed = coachRequestSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/** GET /api/coach/requests → pending mentorship requests, oldest first. */
+export async function getCoachRequests(token: string): Promise<CoachRequest[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/requests', token });
+  return parse(coachRequestsSchema, data).requests;
+}
+
+export type CoachRequestAction = 'accept' | 'decline';
+
+/**
+ * POST /api/coach/requests/[id] {action:'accept'|'decline'} → resolve one
+ * pending request. 'full' (409 {error:'full'}) when accepting would exceed the
+ * coach's roster capacity; 'not_found' when the request is gone.
+ */
+export async function decideCoachRequest(
+  id: string,
+  action: CoachRequestAction,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/coach/requests/${encodeURIComponent(id)}`,
+    token,
+    body: { action },
+  });
+  parse(okSchema, data);
+}
+
+/**
+ * DELETE /api/coach/users/[userId] → end the caller's OWN coaching assignment
+ * over that client (the client keeps their logs; the thread closes for the
+ * coach). 'forbidden' when the client isn't actively assigned to the caller.
+ */
+export async function endCoaching(userId: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/coach/users/${encodeURIComponent(userId)}`,
+    token,
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — client milestones
+// ════════════════════════════════════════════════════════════════
+
+const clientMilestoneSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  note: z.string().nullable().catch(null),
+  achievedAt: z.string(),
+  createdAt: z.string(),
+});
+export type ClientMilestone = z.infer<typeof clientMilestoneSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole list. */
+const clientMilestonesSchema = z.object({
+  milestones: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): ClientMilestone[] => {
+      const parsed = clientMilestoneSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/**
+ * GET /api/coach/clients/[userId]/milestones → that client's coach-logged
+ * milestones. 'forbidden' when the caller has no active assignment.
+ */
+export async function getClientMilestones(
+  userId: string,
+  token: string,
+): Promise<ClientMilestone[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/milestones`,
+    token,
+  });
+  return parse(clientMilestonesSchema, data).milestones;
+}
+
+const clientMilestoneEnvelope = z.object({ milestone: clientMilestoneSchema });
+
+export interface MilestoneInput {
+  /** 1..120 chars. */
+  title: string;
+  /** ≤500 chars. */
+  note?: string;
+  /** 'YYYY-MM-DD'; the server defaults to today when omitted. */
+  achievedAt?: string;
+}
+
+/**
+ * POST /api/coach/clients/[userId]/milestones {title, note?, achievedAt?} →
+ * log a milestone for one of the caller's OWN clients; returns the fresh row.
+ */
+export async function addClientMilestone(
+  userId: string,
+  input: MilestoneInput,
+  token: string,
+): Promise<ClientMilestone> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/milestones`,
+    token,
+    body: {
+      title: input.title,
+      ...(input.note !== undefined ? { note: input.note } : {}),
+      ...(input.achievedAt !== undefined ? { achievedAt: input.achievedAt } : {}),
+    },
+  });
+  return parse(clientMilestoneEnvelope, data).milestone;
+}
+
+/** DELETE /api/coach/milestones/[id] → remove a milestone the caller logged. */
+export async function deleteMilestone(id: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/coach/milestones/${encodeURIComponent(id)}`,
+    token,
+  });
+  parse(okSchema, data);
 }
 
 // ════════════════════════════════════════════════════════════════

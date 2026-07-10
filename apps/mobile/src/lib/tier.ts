@@ -19,3 +19,12 @@ export function useEffectiveTier(): Tier {
   const localTier = useProfile((s) => s.tier);
   return serverTier ?? localTier;
 }
+
+/**
+ * Non-hook twin for logic paths (store actions, hooks' load functions).
+ * Same rule: the server tier wins while signed in, the local preview tier
+ * otherwise. Callers that need reactivity must use useEffectiveTier.
+ */
+export function effectiveTierNow(): Tier {
+  return useAuth.getState().user?.tier ?? useProfile.getState().tier;
+}

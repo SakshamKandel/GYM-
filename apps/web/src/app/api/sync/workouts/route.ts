@@ -7,6 +7,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { runAwardEngine } from '@/lib/gamification';
 import { json, preflight, readJson } from '@/lib/http';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -108,6 +109,17 @@ export async function POST(req: Request) {
   if (!token) return json({ error: 'unauthorized' }, 401);
   const user = await userForToken(token);
   if (!user) return json({ error: 'unauthorized' }, 401);
+
+  // Generous ceiling — real sync cadence is a handful of batches per day; this
+  // only damps scripted hammering (each batch costs several DB round-trips).
+  const limited = rateLimit({
+    route: 'sync/workouts',
+    limit: 60,
+    windowMs: 60 * 60 * 1000,
+    accountId: user.id,
+    ip: clientIp(req),
+  });
+  if (limited) return limited;
 
   const parsed = bodySchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
@@ -280,8 +292,12 @@ export async function POST(req: Request) {
   }
 
   // Best-effort gamification pass (XP, weekly streak cache, badges, quest/
-  // challenge completion) — never blocks or fails the sync response.
-  after(() => runAwardEngine(user.id).then(() => undefined));
+  // challenge completion) — never blocks or fails the sync response. Skipped
+  // when the batch inserted nothing new (pure replay): the engine is
+  // idempotent, so re-running it over unchanged data only burns DB round-trips.
+  if (newlyInsertedIds.size > 0) {
+    after(() => runAwardEngine(user.id).then(() => undefined));
+  }
 
   return json({ ok: true, syncedWorkoutIds, flaggedWorkoutIds }, 200);
 }

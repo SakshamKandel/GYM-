@@ -15,7 +15,6 @@ import {
 } from '../../lib/api/client';
 import { todayIso } from '../../lib/dates';
 import { useAuth } from '../../state/auth';
-import { useProfile } from '../../state/profile';
 import { useBuddyStore } from './store';
 
 /**
@@ -147,8 +146,11 @@ export async function activateTrial(tier: TrialTier): Promise<BuddyErrorCode | n
   if (token === null) return 'unauthorized';
   try {
     await startTrial(token, tier);
-    // Apply the trial tier locally so the app unlocks immediately.
-    useProfile.getState().update({ tier });
+    // Do NOT mirror the trial tier into the local profile: the local tier is
+    // upgrade-only and nothing reverts it, so a 2-day trial would permanently
+    // unlock locally-gated surfaces. The server owns the trial (with expiry) —
+    // refresh the session so useEffectiveTier picks it up everywhere now.
+    await useAuth.getState().refresh();
     return null;
   } catch (err) {
     return toBuddyError(err).code;

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { SetLog, WorkoutLog } from '@gym/shared';
-import { checkPr, updateStreak } from '@gym/shared';
+import { checkPr, epley1Rm, updateStreak } from '@gym/shared';
 import { publishWorkoutActivity } from '../../lib/api/client';
 import { nowIso, secondsBetween, todayIso } from '../../lib/dates';
 import { getExercise } from '../../lib/exercises';
@@ -82,6 +82,16 @@ function stopRestTimer(): void {
     clearInterval(restTimer);
     restTimer = null;
   }
+}
+
+/**
+ * Fold a session-local best into a repo baseline. Null only when BOTH are
+ * absent, so checkPr's "first ever set" PR semantics stay intact.
+ */
+function raiseBaseline(repoBest: number | null, sessionBest: number | null): number | null {
+  if (repoBest === null) return sessionBest;
+  if (sessionBest === null) return repoBest;
+  return Math.max(repoBest, sessionBest);
 }
 
 function planExerciseToSession(pe: {
@@ -323,11 +333,21 @@ export const useSession = create<SessionState>()((set, get) => {
         repo.getBestE1Rm(ex.exerciseId, s.workoutId),
         repo.getBestWeight(ex.exerciseId, s.workoutId),
       ]);
+      // The repo baselines exclude the WHOLE current workout, so raise them
+      // with this session's already-logged sets — otherwise repeating a new
+      // best (3×100kg over an old 95) would stamp a PR on every set.
+      const e1rmEligible = ex.loggedSets.filter((x) => x.reps <= 12); // mirrors getBestE1Rm
+      const sessionBestE1Rm =
+        e1rmEligible.length > 0
+          ? Math.max(...e1rmEligible.map((x) => epley1Rm(x.weightKg, x.reps)))
+          : null;
+      const sessionBestWeight =
+        ex.loggedSets.length > 0 ? Math.max(...ex.loggedSets.map((x) => x.weightKg)) : null;
       const pr = checkPr({
         weightKg,
         reps,
-        previousBestE1Rm: bestE1Rm,
-        previousBestWeightKg: bestWeight,
+        previousBestE1Rm: raiseBaseline(bestE1Rm, sessionBestE1Rm),
+        previousBestWeightKg: raiseBaseline(bestWeight, sessionBestWeight),
       });
       const setLog: SetLog = {
         id: uid(),

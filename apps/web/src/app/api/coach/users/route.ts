@@ -45,7 +45,6 @@ export async function GET(req: Request) {
     .select({
       id: accounts.id,
       displayName: accounts.displayName,
-      email: accounts.email,
       tier: accounts.tier,
       unreadForCoach,
     })

@@ -30,8 +30,10 @@ interface Props {
   lastInGroup?: boolean;
   /** Coach avatar renders only on the last bubble of a coach run. */
   showAvatar?: boolean;
-  /** Render the animated "Greece is typing" indicator instead of body text. */
+  /** Render the animated "coach is typing" indicator instead of body text. */
   typing?: boolean;
+  /** The coach's display name (assigned human coach); defaults to Greece. */
+  coachName?: string;
 }
 
 /** "3:42 PM" — local wall-clock, deterministic (no Intl dependency). */
@@ -84,6 +86,7 @@ export function MessageBubble({
   lastInGroup = true,
   showAvatar = true,
   typing = false,
+  coachName = 'Greece',
 }: Props) {
   const isUser = message.sender === 'user';
   const time = typing ? '' : clockLabel(message.createdAt);
@@ -103,7 +106,7 @@ export function MessageBubble({
             style={styles.avatar}
             contentFit="cover"
             contentPosition="top"
-            accessibilityLabel="Greece"
+            accessibilityLabel={coachName}
           />
         ) : (
           <View style={styles.avatarSpacer} />
@@ -113,7 +116,7 @@ export function MessageBubble({
       <View style={[styles.col, isUser ? styles.colUser : styles.colCoach]}>
         <View
           accessible={typing || undefined}
-          accessibilityLabel={typing ? 'Greece is typing' : undefined}
+          accessibilityLabel={typing ? `${coachName} is typing` : undefined}
           style={[
             styles.bubble,
             isUser ? styles.userBubble : styles.coachBubble,

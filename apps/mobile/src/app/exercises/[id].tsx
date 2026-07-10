@@ -23,6 +23,7 @@ import { ExerciseVideo } from '../../features/training/components/ExerciseVideo'
 import { useExerciseHistory, usePlanVideo } from '../../features/training/hooks';
 import { formatWeightNumber } from '../../features/training/logic';
 import { getExercise } from '../../lib/exercises';
+import { isMuscleGroup } from '../../lib/muscleMap';
 import { SEED_PLAN_WORKOUTS } from '../../lib/seed/plans';
 import { posterDate } from '../../lib/dates';
 import { useProfile } from '../../state/profile';
@@ -111,6 +112,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  /** The muscle pill IS interactive — it opens the anatomy explorer. Filled
+   * (not outlined) + icon so it reads as tappable next to the fact pills,
+   * and tall enough for a ≥48dp target. */
+  anatomyPill: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minHeight: touch.min,
+    borderColor: colors.surfaceRaised,
+    backgroundColor: colors.surfaceRaised,
   },
   step: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
   stepLast: { marginBottom: 0 },
@@ -245,8 +256,10 @@ export default function ExerciseDetailScreen() {
   const facts = [
     exercise.level,
     exercise.equipment ?? 'bodyweight',
-    exercise.muscleGroup,
   ].filter((f): f is string => f !== null && f.length > 0);
+  // The muscle pill deep-links into the anatomy explorer when the group is
+  // one the body map knows (some rare groups aren't mapped — plain pill then).
+  const anatomyMuscle = isMuscleGroup(exercise.muscleGroup) ? exercise.muscleGroup : null;
 
   // Greece's coach demo. The gated playback API is the source of truth (it mints
   // a signed, per-tier stream); usePlanVideo falls back to the bundled seed clip
@@ -333,6 +346,21 @@ export default function ExerciseDetailScreen() {
           {facts.map((f) => (
             <MetaPill key={f} label={f} />
           ))}
+          {anatomyMuscle ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel={`Learn ${anatomyMuscle} anatomy and how to train it`}
+              onPress={() => router.push(`/anatomy?muscle=${encodeURIComponent(anatomyMuscle)}` as Href)}
+              style={[styles.metaPill, styles.anatomyPill]}
+            >
+              <Ionicons name="body-outline" size={14} color={colors.accent} />
+              <AppText variant="label" color={colors.text} numberOfLines={1}>
+                {exercise.muscleGroup}
+              </AppText>
+            </PressableScale>
+          ) : (
+            <MetaPill label={exercise.muscleGroup} />
+          )}
         </View>
       </Animated.View>
 
@@ -352,7 +380,7 @@ export default function ExerciseDetailScreen() {
           >
             <IconChip icon="videocam" color={colors.surfaceRaised} iconColor={colors.accent} />
             <View style={styles.lockedText}>
-              <AppText variant="bodyBold">Greece's demo</AppText>
+              <AppText variant="bodyBold">{"Greece's demo"}</AppText>
               <AppText variant="caption" color={colors.textDim}>
                 {`Watch the GM technique — ${lockedTierLabel} plan.`}
               </AppText>
@@ -364,7 +392,7 @@ export default function ExerciseDetailScreen() {
         <Animated.View entering={enterUp(2)} style={styles.pillRow}>
           <View style={styles.comingSoonChip}>
             <AppText variant="caption" color={colors.textDim}>
-              🎥 Greece's demo — coming soon
+              {"🎥 Greece's demo — coming soon"}
             </AppText>
           </View>
         </Animated.View>

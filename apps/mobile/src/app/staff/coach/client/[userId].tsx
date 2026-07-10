@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
@@ -19,8 +19,13 @@ import {
   Tag,
 } from '../../../../components/ui';
 import {
+  addClientMilestone,
+  deleteMilestone,
+  endCoaching,
+  getClientMilestones,
   setCoachTier,
   toStaffError,
+  type ClientMilestone,
   type StaffErrorCode,
   type Tier,
 } from '../../../../features/staff/api';
@@ -59,6 +64,13 @@ import { useAuth } from '../../../../state/auth';
  * dated payload. The current stored expiry is NOT exposed by any coach endpoint,
  * so this screen sets a FRESH window rather than pretending to edit an unknown
  * one; the effective tier passed from the thread is shown as context.
+ *
+ * Mentorship additions:
+ *  - Milestones: the client's coach-logged wins (delete via ✕ + confirm) and a
+ *    simple log form (title + optional note, dated today).
+ *  - End coaching: the danger action at the very bottom — ends the caller's
+ *    OWN assignment (the client keeps their logs; the thread closes) and
+ *    returns to the previous screen.
  */
 
 const TIER_ORDER: Tier[] = ['starter', 'silver', 'gold', 'elite'];
@@ -105,6 +117,24 @@ function daysInMonth(year: number, month1to12: number): number {
   return new Date(year, month1to12, 0).getDate();
 }
 
+/** Local calendar date as 'YYYY-MM-DD' — the wire format for achievedAt. */
+function todayIso(): string {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/** 'YYYY-MM-DD' (or a full ISO stamp) → "12 Mar 2026". */
+function formatDay(iso: string): string {
+  const parts = iso.slice(0, 10).split('-');
+  const y = Number.parseInt(parts[0] ?? '', 10);
+  const m = Number.parseInt(parts[1] ?? '', 10);
+  const d = Number.parseInt(parts[2] ?? '', 10);
+  if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(d)) return iso;
+  return `${d} ${MONTHS[m - 1] ?? m} ${y}`;
+}
+
 export default function CoachClientScreen() {
   const token = useAuth((s) => s.token);
   const params = useLocalSearchParams<{ userId: string; name?: string; tier?: string }>();
@@ -126,6 +156,22 @@ export default function CoachClientScreen() {
   const [year, setYear] = useState(() => defaultCustomDateParts().year);
   const [month, setMonth] = useState(() => defaultCustomDateParts().month);
   const [day, setDay] = useState(() => defaultCustomDateParts().day);
+
+  // ── Milestones ────────────────────────────────────────────────
+  const [milestones, setMilestones] = useState<ClientMilestone[]>([]);
+  const [milestonesLoading, setMilestonesLoading] = useState(true);
+  const [milestonesError, setMilestonesError] = useState<string | null>(null);
+  const [milestoneTitle, setMilestoneTitle] = useState('');
+  const [milestoneNote, setMilestoneNote] = useState('');
+  const [addingMilestone, setAddingMilestone] = useState(false);
+  const [milestoneAddError, setMilestoneAddError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ClientMilestone | null>(null);
+  const [deletingMilestone, setDeletingMilestone] = useState(false);
+
+  // ── End coaching ──────────────────────────────────────────────
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const [endError, setEndError] = useState<string | null>(null);
 
   const allowsExpiry = tierAllowsExpiry(tier);
   const usingCustom = allowsExpiry && duration === 'custom';
@@ -177,6 +223,85 @@ export default function CoachClientScreen() {
       setSaving(false);
     }
   }, [token, userId, saving, tier, reason, allowsExpiry, resolvedExpiresAt, clientName]);
+
+  // ── Milestones — load on mount, log, delete ──────────────────
+
+  const loadMilestones = useCallback(async () => {
+    if (!token || !userId) {
+      setMilestonesLoading(false);
+      return;
+    }
+    setMilestonesLoading(true);
+    setMilestonesError(null);
+    try {
+      setMilestones(await getClientMilestones(userId, token));
+    } catch (err) {
+      setMilestonesError(errorLine(toStaffError(err).code));
+    } finally {
+      setMilestonesLoading(false);
+    }
+  }, [token, userId]);
+
+  useEffect(() => {
+    void loadMilestones();
+  }, [loadMilestones]);
+
+  const addMilestone = useCallback(async () => {
+    const title = milestoneTitle.trim();
+    if (!token || !userId || !title || addingMilestone) return;
+    setAddingMilestone(true);
+    setMilestoneAddError(null);
+    try {
+      const note = milestoneNote.trim();
+      const created = await addClientMilestone(
+        userId,
+        { title, ...(note ? { note } : {}), achievedAt: todayIso() },
+        token,
+      );
+      successHaptic();
+      // Server lists newest achievedAt first — a today-dated add goes on top.
+      setMilestones((prev) => [created, ...prev]);
+      setMilestoneTitle('');
+      setMilestoneNote('');
+    } catch (err) {
+      setMilestoneAddError(errorLine(toStaffError(err).code));
+    } finally {
+      setAddingMilestone(false);
+    }
+  }, [token, userId, milestoneTitle, milestoneNote, addingMilestone]);
+
+  const confirmDeleteMilestone = useCallback(async () => {
+    if (!token || !deleteTarget || deletingMilestone) return;
+    setDeletingMilestone(true);
+    try {
+      await deleteMilestone(deleteTarget.id, token);
+      setMilestones((prev) => prev.filter((m) => m.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (err) {
+      setDeleteTarget(null);
+      setMilestonesError(errorLine(toStaffError(err).code));
+    } finally {
+      setDeletingMilestone(false);
+    }
+  }, [token, deleteTarget, deletingMilestone]);
+
+  // ── End coaching (release the client from MY roster) ─────────
+
+  const endNow = useCallback(async () => {
+    if (!token || !userId || ending) return;
+    setEnding(true);
+    setEndError(null);
+    try {
+      await endCoaching(userId, token);
+      setConfirmEnd(false);
+      goBack();
+    } catch (err) {
+      setConfirmEnd(false);
+      setEndError(errorLine(toStaffError(err).code));
+    } finally {
+      setEnding(false);
+    }
+  }, [token, userId, ending, goBack]);
 
   return (
     <>
@@ -339,6 +464,107 @@ export default function CoachClientScreen() {
           disabled={saving}
           style={styles.applyBtn}
         />
+
+        {/* ── Milestones — the client's coach-logged wins. ── */}
+        <SectionLabel>Milestones</SectionLabel>
+        {milestonesLoading ? (
+          <View style={styles.milestoneQuiet}>
+            <ActivityIndicator color={colors.accent} />
+          </View>
+        ) : milestonesError ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading milestones"
+            onPress={() => void loadMilestones()}
+            style={styles.milestoneQuiet}
+          >
+            <AppText variant="caption" color={colors.textDim}>
+              {milestonesError} · tap to retry
+            </AppText>
+          </PressableScale>
+        ) : milestones.length === 0 ? (
+          <AppText variant="caption" color={colors.textDim}>
+            No milestones yet — log the first below.
+          </AppText>
+        ) : (
+          <View style={styles.milestoneList}>
+            {milestones.map((m) => (
+              <View key={m.id} style={styles.milestoneRow}>
+                <View style={styles.milestoneText}>
+                  <AppText variant="bodyBold" numberOfLines={2}>
+                    {m.title}
+                  </AppText>
+                  {m.note ? (
+                    <AppText variant="caption" numberOfLines={3}>
+                      {m.note}
+                    </AppText>
+                  ) : null}
+                  <AppText variant="label" color={colors.textFaint}>
+                    {formatDay(m.achievedAt)}
+                  </AppText>
+                </View>
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel={`Delete milestone: ${m.title}`}
+                  onPress={() => setDeleteTarget(m)}
+                  style={styles.milestoneRemove}
+                >
+                  <Ionicons name="close" size={18} color={colors.textDim} />
+                </PressableScale>
+              </View>
+            ))}
+          </View>
+        )}
+
+        <SectionLabel>Log milestone</SectionLabel>
+        <View style={styles.milestoneForm}>
+          <AppTextInput
+            value={milestoneTitle}
+            onChangeText={setMilestoneTitle}
+            placeholder="e.g. First 100 kg squat"
+            maxLength={120}
+            returnKeyType="done"
+            accessibilityLabel="Milestone title"
+          />
+          <AppTextInput
+            value={milestoneNote}
+            onChangeText={setMilestoneNote}
+            placeholder="Note (optional)"
+            maxLength={500}
+            multiline
+            style={styles.milestoneNoteInput}
+            accessibilityLabel="Milestone note (optional)"
+          />
+          <AppText variant="caption" color={colors.textFaint}>
+            Dated today · {formatDay(todayIso())}
+          </AppText>
+          {milestoneAddError ? (
+            <AppText variant="caption" color={colors.error}>
+              {milestoneAddError}
+            </AppText>
+          ) : null}
+          <Button
+            label={addingMilestone ? 'Logging…' : 'Log milestone'}
+            variant="secondary"
+            onPress={() => void addMilestone()}
+            loading={addingMilestone}
+            disabled={!milestoneTitle.trim()}
+          />
+        </View>
+
+        {/* ── End coaching — the one destructive action, at the very bottom. ── */}
+        {endError ? (
+          <AppText variant="caption" color={colors.error} style={styles.errorLine}>
+            {endError}
+          </AppText>
+        ) : null}
+        <Button
+          label={ending ? 'Ending…' : 'End coaching'}
+          variant="danger"
+          onPress={() => setConfirmEnd(true)}
+          loading={ending}
+          style={styles.endBtn}
+        />
       </Screen>
 
       {/* Success confirmation — dismiss returns to the thread. */}
@@ -353,6 +579,38 @@ export default function CoachClientScreen() {
           goBack();
         }}
         onCancel={() => setDone(null)}
+      />
+
+      {/* Milestone delete confirmation. */}
+      <ConfirmDialog
+        visible={deleteTarget !== null}
+        title="Delete milestone?"
+        message={
+          deleteTarget
+            ? `“${deleteTarget.title}” will be removed from ${clientName}'s record.`
+            : undefined
+        }
+        confirmLabel={deletingMilestone ? 'Deleting…' : 'Delete'}
+        cancelLabel="Keep"
+        danger
+        onConfirm={() => void confirmDeleteMilestone()}
+        onCancel={() => {
+          if (!deletingMilestone) setDeleteTarget(null);
+        }}
+      />
+
+      {/* End-coaching confirmation. */}
+      <ConfirmDialog
+        visible={confirmEnd}
+        title="End coaching"
+        message={`End coaching with ${clientName}? They keep their logs; the chat thread closes for you.`}
+        confirmLabel={ending ? 'Ending…' : 'End coaching'}
+        cancelLabel="Keep coaching"
+        danger
+        onConfirm={() => void endNow()}
+        onCancel={() => {
+          if (!ending) setConfirmEnd(false);
+        }}
       />
     </>
   );
@@ -442,4 +700,37 @@ const styles = StyleSheet.create({
   },
   errorLine: { marginTop: spacing.md },
   applyBtn: { marginTop: spacing.xl },
+  // Milestones — borderless charcoal rows with a trailing ✕, list gap by fill.
+  milestoneQuiet: {
+    minHeight: touch.min,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  milestoneList: { gap: spacing.sm },
+  milestoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.xs,
+    minHeight: touch.min,
+  },
+  milestoneText: { flex: 1, gap: 3 },
+  milestoneRemove: {
+    width: touch.min,
+    height: touch.min,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  milestoneForm: { gap: spacing.sm },
+  milestoneNoteInput: {
+    minHeight: 64,
+    paddingTop: 16,
+    textAlignVertical: 'top',
+  },
+  endBtn: { marginTop: spacing.xl, marginBottom: spacing.lg },
 });

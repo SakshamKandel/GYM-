@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
+import { billingMode } from '@/lib/billing';
 import { json, preflight, readJson } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { setAccountTier } from '@/lib/tier';
@@ -15,12 +16,13 @@ export const runtime = 'nodejs';
  * mirrored onto the profile blob, and the Greece elite auto-assignment stays
  * in sync.
  *
- * TODO(billing): this endpoint currently grants whatever tier the client asks
- * for, because tiers are a preview selection with no money attached. Before
- * charging real money it MUST be replaced with RevenueCat/Stripe receipt
- * validation — the client sends a purchase receipt, the SERVER verifies it
- * with the provider and derives {tier, expiresAt} from the entitlement. Never
- * ship a paid build with this trust-the-client version.
+ * Billing (lib/billing.ts): in 'preview' mode (default, no store accounts
+ * yet) tiers are a free preview selection and this endpoint grants what the
+ * user picks. In 'live' mode (BILLING_MODE=live) money is attached: this
+ * endpoint only accepts 'starter' (downgrade/cancel) and returns 402
+ * { error: 'billing_required' } for paid tiers — those are granted solely by
+ * the verified RevenueCat webhook (/api/subscription/revenuecat). The mobile
+ * paywall treats 402 as "route through the store purchase flow".
  *
  * Response: 200 { user } — the exact same shape GET /api/me returns (the
  * token is re-resolved through userForToken, the shared serializer, so the
@@ -53,6 +55,12 @@ export async function POST(req: Request) {
   const parsed = bodySchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
   const { tier } = parsed.data;
+
+  // Live billing: paid tiers come only from verified store receipts (the
+  // RevenueCat webhook). Self-serve keeps exactly one power — cancel.
+  if (billingMode() === 'live' && tier !== 'starter') {
+    return json({ error: 'billing_required' }, 402);
+  }
 
   // Self-serve selection starts now and carries NO expiry (billing will own
   // real windows). Clearing expiresAt matters: a stale past tierExpiresAt

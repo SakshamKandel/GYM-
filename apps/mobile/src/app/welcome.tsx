@@ -407,7 +407,9 @@ const styles = StyleSheet.create({
   badgeMascot: { width: '150%', height: '150%', marginTop: '18%' },
 
   headline: { marginTop: spacing.xl },
-  hRow: { flexDirection: 'row', alignItems: 'center' },
+  // Wrap so large font scales drop the pill/chip to a new line instead of
+  // clipping against the root's overflow:hidden on narrow phones.
+  hRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
   hText: {
     fontSize: type.size.heroTitle,
     lineHeight: Math.round(type.size.heroTitle * 1.12),

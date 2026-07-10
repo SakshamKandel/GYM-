@@ -36,6 +36,7 @@ import { posterDate } from '../../lib/dates';
 import { getRepo } from '../../lib/repo';
 import { getPlanWorkout } from '../../lib/seed/plans';
 import { useProfile } from '../../state/profile';
+import { useEffectiveTier } from '../../lib/tier';
 
 /**
  * Celebration recap in the block language (REVAMP-BRIEF): one red hero block
@@ -127,7 +128,7 @@ const styles = StyleSheet.create({
 export default function WorkoutCompleteScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const unitPref = useProfile((s) => s.unitPref);
-  const tier = useProfile((s) => s.tier);
+  const tier = useEffectiveTier();
   const [workout, setWorkout] = useState<WorkoutLog | null>(null);
   const [sets, setSets] = useState<SetLog[]>([]);
   const [previous, setPrevious] = useState<PreviousRun | null>(null);

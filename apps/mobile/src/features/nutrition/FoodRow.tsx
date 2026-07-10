@@ -2,7 +2,7 @@ import type { ComponentProps } from 'react';
 import { StyleSheet, View } from 'react-native';
 import type { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
-import type { FoodItem } from '@gym/shared';
+import type { FoodItem, NutriScore } from '@gym/shared';
 import { AppText } from '../../components/ui/AppText';
 import { IconChip } from '../../components/ui/IconChip';
 import { PressableScale } from '../../components/ui/PressableScale';
@@ -44,7 +44,30 @@ const styles = StyleSheet.create({
   name: { flexShrink: 1 },
   kcalCol: { alignItems: 'flex-end', flexShrink: 0, gap: 2 },
   kcal: { fontFamily: type.display, fontSize: 18, color: colors.text },
+  /** Tiny Nutri-Score marker beside the name — color + letter, no chrome. */
+  scoreDot: {
+    width: 18,
+    height: 18,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  scoreLetter: {
+    fontFamily: type.bodyBold,
+    fontSize: 11,
+    lineHeight: 14,
+    color: colors.onBlock,
+  },
 });
+
+const NUTRI_COLORS: Record<NutriScore, string> = {
+  a: colors.success,
+  b: colors.success,
+  c: colors.warning,
+  d: colors.error,
+  e: colors.error,
+};
 
 export function FoodRow({ item, onPress }: Props) {
   const sub = `${item.brand ? `${item.brand} · ` : ''}${Math.round(item.kcalPer100)} kcal/100g`;
@@ -63,6 +86,16 @@ export function FoodRow({ item, onPress }: Props) {
           <AppText variant="bodyBold" numberOfLines={1} style={styles.name}>
             {item.name}
           </AppText>
+          {item.nutriScore ? (
+            <View
+              style={[styles.scoreDot, { backgroundColor: NUTRI_COLORS[item.nutriScore] }]}
+              accessibilityLabel={`Nutri-Score ${item.nutriScore.toUpperCase()}`}
+            >
+              <AppText style={styles.scoreLetter} tabular={false}>
+                {item.nutriScore.toUpperCase()}
+              </AppText>
+            </View>
+          ) : null}
           {tag !== null ? <Tag label={tag} variant="dim" /> : null}
         </View>
         <AppText variant="caption" numberOfLines={1} tabular>

@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Tier } from '@gym/shared';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
@@ -60,7 +60,9 @@ function Body({ detail }: { detail: TierDetail }) {
   const features = resolveFeatures(gmTier.tier);
 
   return (
-    <View>
+    // Up to 15 cumulative feature rows can outgrow the sheet's 88% height cap
+    // on small phones — scroll (no CTA here, so everything scrolls together).
+    <ScrollView showsVerticalScrollIndicator={false}>
       {isRecommended || isCurrent ? (
         <View style={styles.tags}>
           {isRecommended ? <Tag label="Most popular" variant="filled" /> : null}
@@ -123,7 +125,7 @@ function Body({ detail }: { detail: TierDetail }) {
           </View>
         ))}
       </View>
-    </View>
+    </ScrollView>
   );
 }
 

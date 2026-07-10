@@ -293,14 +293,21 @@ export const accounts = pgTable('accounts', {
 });
 
 /** Opaque 64-char hex session tokens, 30-day expiry. */
-export const sessions = pgTable('sessions', {
-  token: text('token').primaryKey(),
-  accountId: text('account_id')
-    .notNull()
-    .references(() => accounts.id, { onDelete: 'cascade' }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-});
+export const sessions = pgTable(
+  'sessions',
+  {
+    token: text('token').primaryKey(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index('sessions_account').on(t.accountId), // cascade-delete + per-account session ops
+    index('sessions_expires').on(t.expiresAt), // hourly expired-session sweep (lib/auth)
+  ],
+);
 
 /**
  * Gym Buddy Sync — pairs of accounts (auth-backed, unlike the legacy
@@ -324,7 +331,12 @@ export const buddyLinks = pgTable(
       .default('pending'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('buddy_links_requester_addressee').on(t.requesterId, t.addresseeId)],
+  (t) => [
+    uniqueIndex('buddy_links_requester_addressee').on(t.requesterId, t.addresseeId),
+    // The unique index only serves requester-side lookups; incoming-invite and
+    // either-direction queries scan on addressee.
+    index('buddy_links_addressee').on(t.addresseeId),
+  ],
 );
 
 /**
@@ -464,7 +476,10 @@ export const devicePushTokens = pgTable(
     platform: text('platform', { enum: ['ios', 'android'] }),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex('device_push_tokens_token').on(t.token)],
+  (t) => [
+    uniqueIndex('device_push_tokens_token').on(t.token),
+    index('device_push_tokens_account').on(t.accountId), // push fan-out is by account
+  ],
 );
 
 /**
@@ -559,7 +574,19 @@ export const coachAssignments = pgTable(
   ],
 );
 
-/** Public-facing coach identity + capacity settings. */
+/** One certification line on a coach's public portfolio. */
+export interface CoachCertification {
+  title: string;
+  issuer: string;
+  year: number | null;
+}
+
+/**
+ * Public-facing coach identity + capacity settings + portfolio. The portfolio
+ * columns (headline, specialties, certifications, achievements, years) feed
+ * the member-facing coach discovery hub — everything here is intentionally
+ * publishable; nothing private ever goes in this table.
+ */
 export const coachProfiles = pgTable('coach_profiles', {
   accountId: text('account_id')
     .primaryKey()
@@ -567,11 +594,82 @@ export const coachProfiles = pgTable('coach_profiles', {
   displayName: text('display_name').notNull().default(''),
   bio: text('bio').notNull().default(''),
   avatarUrl: text('avatar_url'),
+  /** One-line pitch under the name ("Hypertrophy coach · 8 yrs"). */
+  headline: text('headline').notNull().default(''),
+  /** Training specialties from the shared COACH_SPECIALTIES catalog. */
+  specialties: jsonb('specialties').$type<string[]>().notNull().default([]),
+  certifications: jsonb('certifications').$type<CoachCertification[]>().notNull().default([]),
+  /** Free-form achievement lines ("2023 Nationals — 3rd, 93kg"). */
+  achievements: jsonb('achievements').$type<string[]>().notNull().default([]),
+  yearsExperience: integer('years_experience').notNull().default(0),
+  /** Max active clients; requests are refused at/over this. */
+  capacity: integer('capacity').notNull().default(50),
   acceptingClients: boolean('accepting_clients').notNull().default(true),
   replyWindowHours: integer('reply_window_hours').notNull().default(24),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Member-initiated coaching requests (the matching flow). One PENDING request
+ * per member at a time (enforced in the route — a member shops one coach at a
+ * time). Accepting upserts the coachAssignments row and ends the member's
+ * other active assignments so "my coach" stays singular.
+ */
+export const coachRequests = pgTable(
+  'coach_requests',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text('user_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: ['pending', 'accepted', 'declined', 'canceled'] })
+      .notNull()
+      .default('pending'),
+    /** Optional intro from the member ("goal: first pull-up"). PII-masked. */
+    message: text('message').notNull().default(''),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('coach_requests_user_created').on(t.userId, t.createdAt),
+    index('coach_requests_coach_status').on(t.coachId, t.status),
+  ],
+);
+
+/**
+ * Coach-logged client milestones — the trainee's coach-built portfolio
+ * ("First 100kg squat", "-8kg in 12 weeks"). Written only by the client's own
+ * coach; readable by the member as their verified progress story.
+ */
+export const coachMilestones = pgTable(
+  'coach_milestones',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    note: text('note').notNull().default(''),
+    /** Local date the milestone was achieved (YYYY-MM-DD). */
+    achievedAt: date('achieved_at', { mode: 'string' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('coach_milestones_account_achieved').on(t.accountId, t.achievedAt),
+    index('coach_milestones_coach').on(t.coachId),
+  ],
+);
 
 /**
  * Append-only audit trail for staff actions. actorId is SET NULL on account
@@ -594,6 +692,8 @@ export const auditLog = pgTable(
   (t) => [
     index('audit_log_actor_created').on(t.actorId, t.createdAt),
     index('audit_log_target').on(t.targetType, t.targetId),
+    index('audit_log_created').on(t.createdAt), // console's default recent-first feed
+    index('audit_log_action_created').on(t.action, t.createdAt), // action-filtered feed
   ],
 );
 
@@ -666,7 +766,11 @@ export const syncedWorkouts = pgTable(
     ranked: boolean('ranked').notNull().default(true),
     flagReason: text('flag_reason'), // 'absolute_bounds' | 'velocity' — null when ranked
   },
-  (t) => [index('synced_workouts_account_date').on(t.accountId, t.date)],
+  (t) => [
+    index('synced_workouts_account_date').on(t.accountId, t.date),
+    // Public leaderboard: whole-gym ranked=true scan bounded by a month window.
+    index('synced_workouts_ranked_date').on(t.ranked, t.date),
+  ],
 );
 
 export const syncedSets = pgTable(
@@ -690,7 +794,10 @@ export const syncedSets = pgTable(
     isPr: boolean('is_pr').notNull().default(false),
     loggedAt: timestamp('logged_at', { withTimezone: true }).notNull(),
   },
-  (t) => [index('synced_sets_account_exercise_logged').on(t.accountId, t.exerciseId, t.loggedAt)],
+  (t) => [
+    index('synced_sets_account_exercise_logged').on(t.accountId, t.exerciseId, t.loggedAt),
+    index('synced_sets_workout').on(t.workoutId), // per-workout set fetch + FK cascade
+  ],
 );
 
 /**

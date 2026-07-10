@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
 import { displayWeight, unitLabel, type UnitPref, type WorkoutLog } from '@gym/shared';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
@@ -18,103 +18,19 @@ import {
   Tag,
 } from '../../components/ui';
 import { BackHeader } from '../../features/body/components/BackHeader';
+import { useHistory } from '../../features/history/hooks';
 import {
   formatCompact,
-  groupByMonth,
   minutesLabel,
   monthTonnageKg,
-  statsOfSets,
   type MonthSection,
   type WorkoutStats,
 } from '../../features/history/logic';
-import { getRepo } from '../../lib/repo';
 import { openWorkout } from '../../features/history/nav';
 import { getGamificationFlags } from '../../lib/api/gamification';
 import { posterDate } from '../../lib/dates';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
-
-/** Generous ceiling — ~3 sessions/week for 3 years. */
-const HISTORY_LIMIT = 500;
-
-/**
- * Per-workout stats survive navigation so rows never re-load. Safe to cache
- * forever: sets are immutable once a workout is finished, and deleted workouts
- * simply stop being asked for.
- */
-const statsCache = new Map<string, WorkoutStats>();
-
-interface HistoryData {
-  /** Month sections, newest first; null while the first load is in flight. */
-  months: MonthSection[] | null;
-  /** workoutId → stats; rows fill in month-by-month from the top. */
-  stats: Record<string, WorkoutStats>;
-  /** True when the initial load rejected — the screen shows a retry state. */
-  error: boolean;
-  /** Re-run the load; wired to the error-state retry button. */
-  reload: () => void;
-}
-
-/**
- * All finished workouts grouped by month, refreshed on focus. Owns its load so
- * the screen can show explicit loading and error states: a slow or failing
- * SQLite read no longer leaves the list permanently blank with no feedback.
- * Row stats load in per-month batches (newest first) and merge in as they
- * resolve.
- */
-function useHistory(): HistoryData {
-  const [months, setMonths] = useState<MonthSection[] | null>(null);
-  const [stats, setStats] = useState<Record<string, WorkoutStats>>({});
-  const [error, setError] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
-  const reload = useCallback(() => setReloadKey((n) => n + 1), []);
-
-  useFocusEffect(
-    useCallback(() => {
-      let mounted = true;
-      setError(false);
-      void (async () => {
-        try {
-          const repo = await getRepo();
-          const workouts = await repo.getRecentWorkouts(HISTORY_LIMIT);
-          if (!mounted) return;
-
-          const sections = groupByMonth(workouts);
-          const seeded: Record<string, WorkoutStats> = {};
-          for (const w of workouts) {
-            const cached = statsCache.get(w.id);
-            if (cached) seeded[w.id] = cached;
-          }
-          setMonths(sections);
-          setStats(seeded);
-
-          for (const section of sections) {
-            const missing = section.workouts.filter((w) => !statsCache.has(w.id));
-            if (missing.length === 0) continue;
-            const setLists = await Promise.all(missing.map((w) => repo.getSetsForWorkout(w.id)));
-            if (!mounted) return;
-            const patch: Record<string, WorkoutStats> = {};
-            missing.forEach((w, i) => {
-              const s = statsOfSets(setLists[i] ?? []);
-              statsCache.set(w.id, s);
-              patch[w.id] = s;
-            });
-            setStats((prev) => ({ ...prev, ...patch }));
-          }
-        } catch {
-          // A rejected read (DB locked, migration error) surfaces as a retry
-          // state instead of a permanently blank list.
-          if (mounted) setError(true);
-        }
-      })();
-      return () => {
-        mounted = false;
-      };
-    }, [reloadKey]),
-  );
-
-  return { months, stats, error, reload };
-}
 
 /**
  * Flagged workout ids for the quiet "not counted toward rankings" row —
@@ -372,7 +288,7 @@ function EmptyState() {
         No sessions yet
       </AppText>
       <AppText variant="body" color={colors.textDim} center>
-        Finish your first workout and it'll show up here.
+        {"Finish your first workout and it'll show up here."}
       </AppText>
       <Button
         label="Start training"
@@ -399,7 +315,7 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
     <Animated.View entering={enterFade(0)} style={styles.emptyWrap}>
       <IconChip icon="alert-circle" color={colors.surface} iconColor={colors.textFaint} size={52} />
       <AppText variant="bodyBold" center style={styles.emptyTitle}>
-        Couldn't load your history
+        {"Couldn't load your history"}
       </AppText>
       <AppText variant="body" color={colors.textDim} center>
         Something went wrong reading your saved sessions.

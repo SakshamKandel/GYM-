@@ -271,7 +271,13 @@ export async function createMemoryRepo(): Promise<Repo> {
       persist();
     },
     async getMeasurements(limit) {
-      return [...state.measurements].sort((a, b) => b.date.localeCompare(a.date)).slice(0, limit);
+      // Insertion-index tiebreak mirrors sqlite's `date DESC, rowid DESC`:
+      // same-day corrections (newer inserts) come first.
+      return state.measurements
+        .map((m, i) => ({ m, i }))
+        .sort((a, b) => b.m.date.localeCompare(a.m.date) || b.i - a.i)
+        .slice(0, limit)
+        .map(({ m }) => m);
     },
 
     // ── Food ────────────────────────────────────────────────

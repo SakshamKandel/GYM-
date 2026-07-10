@@ -148,7 +148,7 @@ function DayChip({
       accessibilityState={{ selected }}
       accessibilityLabel={name}
       onPress={onPress}
-      hitSlop={4}
+      hitSlop={8}
       style={[styles.dayChip, selected && styles.dayChipSelected]}
     >
       <AppText
@@ -1511,7 +1511,7 @@ export default function SettingsScreen() {
       {/* ── About ───────────────────────────────────────────── */}
       <Animated.View layout={layoutSpring}>
         <AppText variant="caption" color={colors.textFaint} center style={styles.about}>
-          v0.1.0 · Food data: Open Food Facts · Exercises: free-exercise-db
+          v0.1.0 · Food data: Open Food Facts · Exercises: free-exercise-db · Anatomy art: MuscleMapJS (MIT)
         </AppText>
       </Animated.View>
     </Screen>

@@ -13,8 +13,10 @@ import {
   coachAssignments,
   coachChallenges,
   coachMessages,
+  coachMilestones,
   coachPicks,
   coachProfiles,
+  coachRequests,
   devicePushTokens,
   gamificationProfiles,
   progressionSuggestions,
@@ -144,6 +146,14 @@ export async function DELETE(req: Request) {
     db.delete(referrals).where(or(eq(referrals.referrerId, uid), eq(referrals.inviteeId, uid))),
     db.delete(trialUsage).where(eq(trialUsage.accountId, uid)),
     db.delete(devicePushTokens).where(eq(devicePushTokens.accountId, uid)),
+    // Mentorship rows on BOTH sides: mine as the member AND (if I was a coach)
+    // rows where I am the coach on someone else's data.
+    db
+      .delete(coachMilestones)
+      .where(or(eq(coachMilestones.accountId, uid), eq(coachMilestones.coachId, uid))),
+    db
+      .delete(coachRequests)
+      .where(or(eq(coachRequests.userId, uid), eq(coachRequests.coachId, uid))),
     db
       .delete(coachAssignments)
       .where(

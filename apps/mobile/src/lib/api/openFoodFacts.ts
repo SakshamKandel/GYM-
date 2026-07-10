@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 import { z } from 'zod';
-import type { FoodItem } from '@gym/shared';
+import type { FoodItem, NutriScore } from '@gym/shared';
 
 /**
  * Free public food APIs — no paid keys (verified 2026-07-03).
@@ -26,6 +26,10 @@ const nutrimentsSchema = z
     proteins_100g: z.number().optional(),
     carbohydrates_100g: z.number().optional(),
     fat_100g: z.number().optional(),
+    fiber_100g: z.number().optional(),
+    sugars_100g: z.number().optional(),
+    /** OFF reports sodium in GRAMS per 100 g. */
+    sodium_100g: z.number().optional(),
   })
   .passthrough();
 
@@ -37,6 +41,8 @@ const searchHitSchema = z
     nutriments: nutrimentsSchema.nullish(),
     serving_quantity: z.union([z.number(), z.string()]).nullish(),
     serving_size: z.string().nullish(),
+    nutriscore_grade: z.string().nullish(),
+    nova_group: z.number().nullish(),
   })
   .passthrough();
 
@@ -58,6 +64,18 @@ function firstBrand(brands: SearchHit['brands']): string | null {
   return s?.trim() || null;
 }
 
+function round1(v: number): number {
+  return Math.round(v * 10) / 10;
+}
+
+function toNutriScore(raw: string | null | undefined): NutriScore | null {
+  return raw === 'a' || raw === 'b' || raw === 'c' || raw === 'd' || raw === 'e' ? raw : null;
+}
+
+function toNovaGroup(raw: number | null | undefined): 1 | 2 | 3 | 4 | null {
+  return raw === 1 || raw === 2 || raw === 3 || raw === 4 ? raw : null;
+}
+
 function toFoodItem(hit: SearchHit): FoodItem | null {
   const n = hit.nutriments;
   const kcal = n?.['energy-kcal_100g'];
@@ -73,16 +91,23 @@ function toFoodItem(hit: SearchHit): FoodItem | null {
     brand: firstBrand(hit.brands),
     source: 'off',
     barcode: hit.code,
-    kcalPer100: Math.round(kcal * 10) / 10,
-    proteinPer100: Math.round((n?.proteins_100g ?? 0) * 10) / 10,
-    carbsPer100: Math.round((n?.carbohydrates_100g ?? 0) * 10) / 10,
-    fatPer100: Math.round((n?.fat_100g ?? 0) * 10) / 10,
+    kcalPer100: round1(kcal),
+    proteinPer100: round1(n?.proteins_100g ?? 0),
+    carbsPer100: round1(n?.carbohydrates_100g ?? 0),
+    fatPer100: round1(n?.fat_100g ?? 0),
     servingGrams: servingGrams && Number.isFinite(servingGrams) ? servingGrams : null,
     servingLabel: hit.serving_size ?? null,
+    fiberPer100: n?.fiber_100g !== undefined ? round1(n.fiber_100g) : null,
+    sugarPer100: n?.sugars_100g !== undefined ? round1(n.sugars_100g) : null,
+    // OFF sodium is grams — the app stores mg.
+    sodiumPer100: n?.sodium_100g !== undefined ? Math.round(n.sodium_100g * 1000) : null,
+    nutriScore: toNutriScore(hit.nutriscore_grade),
+    novaGroup: toNovaGroup(hit.nova_group),
   };
 }
 
-const FIELDS = 'code,product_name,brands,nutriments,serving_quantity,serving_size';
+const FIELDS =
+  'code,product_name,brands,nutriments,serving_quantity,serving_size,nutriscore_grade,nova_group';
 
 async function searchOpenFoodFacts(query: string, signal?: AbortSignal): Promise<FoodItem[]> {
   const url = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(query)}&page_size=25&fields=${FIELDS}`;
@@ -118,7 +143,16 @@ const usdaFoodSchema = z
 
 const usdaResponseSchema = z.object({ foods: z.array(usdaFoodSchema).default([]) }).passthrough();
 
-const USDA_IDS = { kcal: 1008, protein: 1003, carbs: 1005, fat: 1004 } as const;
+const USDA_IDS = {
+  kcal: 1008,
+  protein: 1003,
+  carbs: 1005,
+  fat: 1004,
+  fiber: 1079,
+  sugars: 2000,
+  /** USDA sodium is already mg per 100 g. */
+  sodium: 1093,
+} as const;
 
 function titleCase(s: string): string {
   return s.toLowerCase().replace(/(^|[\s(])[a-z]/g, (m) => m.toUpperCase());
@@ -131,18 +165,26 @@ function usdaToFoodItem(f: z.infer<typeof usdaFoodSchema>): FoodItem | null {
   if (kcal === undefined) return null;
   const servingGrams =
     f.servingSize && f.servingSizeUnit?.toLowerCase().startsWith('g') ? f.servingSize : null;
+  const fiber = nutrient(USDA_IDS.fiber);
+  const sugars = nutrient(USDA_IDS.sugars);
+  const sodium = nutrient(USDA_IDS.sodium);
   return {
     id: `usda-${f.fdcId}`,
     name: titleCase(f.description),
     brand: f.brandName?.trim() || f.brandOwner?.trim() || null,
     source: 'usda',
     barcode: f.gtinUpc ?? null,
-    kcalPer100: Math.round(kcal * 10) / 10,
-    proteinPer100: Math.round((nutrient(USDA_IDS.protein) ?? 0) * 10) / 10,
-    carbsPer100: Math.round((nutrient(USDA_IDS.carbs) ?? 0) * 10) / 10,
-    fatPer100: Math.round((nutrient(USDA_IDS.fat) ?? 0) * 10) / 10,
+    kcalPer100: round1(kcal),
+    proteinPer100: round1(nutrient(USDA_IDS.protein) ?? 0),
+    carbsPer100: round1(nutrient(USDA_IDS.carbs) ?? 0),
+    fatPer100: round1(nutrient(USDA_IDS.fat) ?? 0),
     servingGrams,
     servingLabel: servingGrams ? `${servingGrams} g serving` : null,
+    fiberPer100: fiber !== undefined ? round1(fiber) : null,
+    sugarPer100: sugars !== undefined ? round1(sugars) : null,
+    sodiumPer100: sodium !== undefined ? Math.round(sodium) : null,
+    nutriScore: null,
+    novaGroup: null,
   };
 }
 

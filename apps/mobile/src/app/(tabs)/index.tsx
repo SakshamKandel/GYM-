@@ -39,6 +39,7 @@ import {
 import { StreakChip } from '../../features/engagement/components/StreakChip';
 import { WeeklyCheckIn } from '../../features/engagement/components/WeeklyCheckIn';
 import { openLastSession, pushHistory } from '../../features/history/nav';
+import { useMyCoach } from '../../features/mentorship/hooks';
 import { useHomeData, useQuestProgress, type DoneToday } from '../../features/engagement/hooks';
 import { avatarLetter, formatCompact, greetingForHour, toHref } from '../../features/engagement/logic';
 import { useWeeklyStreak } from '../../features/streak/hooks';
@@ -93,14 +94,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headingCopy: { marginTop: spacing.md, marginBottom: spacing.xl },
-  questWrap: { marginBottom: spacing.lg },
+  questWrap: { marginBottom: spacing.md },
   // Coach entry row: Card supplies surface/radius/padding; this only
   // lays out the avatar + text + trailing affordance.
   coachCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.lg,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   coachAvatar: {
     width: 48,
@@ -109,8 +110,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
   },
   coachText: { flex: 1, gap: 2 },
-  // Trailing lock affordance for the gated (non-Elite) state: Elite tag + lock.
-  coachLocked: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   /**
    * THE red hero block (brief §11b) — the screen's one energetic center.
    * Flat blockRed fill, chunky corners, black ink, black pill CTA. Extra air
@@ -128,8 +127,8 @@ const styles = StyleSheet.create({
   skelHero: { marginBottom: spacing.xl + spacing.xs },
   tileRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
   tileCell: { flex: 1 },
-  tileWide: { marginBottom: spacing.lg },
-  tipCard: { marginBottom: spacing.lg },
+  tileWide: { marginBottom: spacing.md },
+  tipCard: { marginBottom: spacing.md },
   // Last-session zone: gap-separated rounded charcoal rows replace Divider
   // hairlines (brief §11c).
   rowStack: { gap: spacing.sm },
@@ -298,36 +297,79 @@ function HomeSkeleton() {
 }
 
 /**
- * Prominent Home entry into the 1-on-1 coach chat. Elite unlocks the thread and
- * taps through to /coach-chat; lower tiers see an Elite lock and route to plans.
+ * Prominent Home entry into 1-on-1 coaching, data-driven via useMyCoach():
+ * an ASSIGNED coach always wins (any tier) and taps through to the chat;
+ * otherwise Elite keeps the classic Greece thread; everyone else gets the
+ * coach directory — discovery, not a paywall.
  */
 function CoachEntry({ tier }: { tier: Tier }) {
-  const unlocked = hasEntitlement({ tier }, 'coach_chat');
+  const { coach } = useMyCoach();
+  const elite = hasEntitlement({ tier }, 'coach_chat');
+
+  if (coach !== null) {
+    return (
+      <Card
+        accessibilityLabel={`Your coach, ${coach.displayName}. Open chat`}
+        onPress={() => router.push(toHref('/coach-chat'))}
+        style={styles.coachCard}
+      >
+        <Image
+          source={coach.avatarUrl !== null ? { uri: coach.avatarUrl } : NEWIE}
+          style={styles.coachAvatar}
+          contentFit="cover"
+          contentPosition="top"
+          accessibilityElementsHidden
+        />
+        <View style={styles.coachText}>
+          <AppText variant="bodyBold" numberOfLines={1}>
+            Your coach
+          </AppText>
+          <AppText variant="caption" numberOfLines={1}>
+            {coach.displayName}
+          </AppText>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+      </Card>
+    );
+  }
+
+  if (elite) {
+    return (
+      <Card
+        accessibilityLabel="Chat with Greece, your one on one coach"
+        onPress={() => router.push(toHref('/coach-chat'))}
+        style={styles.coachCard}
+      >
+        <Image source={NEWIE} style={styles.coachAvatar} contentFit="cover" contentPosition="top" accessibilityElementsHidden />
+        <View style={styles.coachText}>
+          <AppText variant="bodyBold" numberOfLines={1}>
+            Chat with Greece
+          </AppText>
+          <AppText variant="caption" numberOfLines={1}>
+            Your 1-on-1 coach, ready when you are
+          </AppText>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+      </Card>
+    );
+  }
+
   return (
     <Card
-      accessibilityLabel={
-        unlocked ? 'Chat with Greece, your one on one coach' : 'Chat with Greece — Elite plan'
-      }
-      onPress={() => router.push(unlocked ? toHref('/coach-chat') : toHref('/subscribe'))}
+      accessibilityLabel="Find a coach. Browse coach profiles"
+      onPress={() => router.push(toHref('/coaches'))}
       style={styles.coachCard}
     >
-      <Image source={NEWIE} style={styles.coachAvatar} contentFit="cover" contentPosition="top" accessibilityElementsHidden />
+      <IconChip icon="people" size={48} />
       <View style={styles.coachText}>
         <AppText variant="bodyBold" numberOfLines={1}>
-          Chat with Greece
+          Find a coach
         </AppText>
         <AppText variant="caption" numberOfLines={1}>
-          Your 1-on-1 coach, ready when you are
+          Browse coach profiles
         </AppText>
       </View>
-      {unlocked ? (
-        <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
-      ) : (
-        <View style={styles.coachLocked}>
-          <Tag label="Elite" variant="dim" />
-          <Ionicons name="lock-closed" size={14} color={colors.textFaint} />
-        </View>
-      )}
+      <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
     </Card>
   );
 }

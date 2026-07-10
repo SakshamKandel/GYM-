@@ -1,4 +1,5 @@
 import { coachAssignments, coachMessages } from '@gym/db';
+import { maskPii } from '@gym/shared';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
@@ -87,15 +88,27 @@ export async function POST(req: Request) {
   });
   if (limited) return limited;
 
+  const db = getDb();
+
+  // One lookup serves the send gate AND the AI-suppression below: an active
+  // human-coach assignment (any coach) lets the member chat regardless of tier.
+  const assigned = await db
+    .select({ id: coachAssignments.id })
+    .from(coachAssignments)
+    .where(and(eq(coachAssignments.userId, user.id), eq(coachAssignments.status, 'active')))
+    .limit(1);
+  const hasCoach = assigned.length > 0;
+
   // Sending is the Elite promise made real — gate it server-side (client
-  // checks are UI-only, PROJECT_PLAN §8).
-  if (user.tier !== 'elite') return json({ error: 'forbidden' }, 403);
+  // checks are UI-only, PROJECT_PLAN §8). Assigned members also pass: their
+  // coach relationship, not their tier, is what earns the thread.
+  if (user.tier !== 'elite' && !hasCoach) return json({ error: 'forbidden' }, 403);
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { kind, body } = parsed.data;
-
-  const db = getDb();
+  const { kind } = parsed.data;
+  // Masked BEFORE storage — contact details never reach the database.
+  const body = maskPii(parsed.data.body);
 
   // Insert the user's message, then the auto-ack, so createdAt orders them
   // correctly (defaultNow() on the second row is strictly later).
@@ -121,17 +134,8 @@ export async function POST(req: Request) {
   // "Greece" message). The 'support' thread is a separate channel handled by
   // support staff, so it KEEPS its auto-ack regardless of coach assignment.
   // With no assignment, today's AI behavior is preserved exactly below.
-  if (kind === 'coach_chat') {
-    const assigned = await db
-      .select({ id: coachAssignments.id })
-      .from(coachAssignments)
-      .where(
-        and(eq(coachAssignments.userId, user.id), eq(coachAssignments.status, 'active')),
-      )
-      .limit(1);
-    if (assigned.length > 0) {
-      return json({ messages: [userMsg] }, 201);
-    }
+  if (kind === 'coach_chat' && hasCoach) {
+    return json({ messages: [userMsg] }, 201);
   }
 
   // The coach reply is AI-generated in Greece's voice, SERVER-SIDE (the key

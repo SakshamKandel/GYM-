@@ -53,6 +53,10 @@ export function useWeeklyStreak(): WeeklyStreakData | null {
   // Guards against a slow server response landing after a newer focus already
   // recomputed local state (stale-write race across re-focuses).
   const requestSeq = useRef(0);
+  // Account the current `data` belongs to — carried shields/profile must not
+  // survive an account switch or sign-out, or account B briefly renders
+  // account A's shields and rank.
+  const dataAccountId = useRef<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -73,15 +77,19 @@ export function useWeeklyStreak(): WeeklyStreakData | null {
         // last-known snapshot so the rank emblem never flashes out while the
         // (slow) server snapshot is in flight — it renders instantly with the
         // last confirmed values and the merge below updates them in place.
+        // Carryover is account-scoped: after a switch or sign-out `prev`
+        // holds the OLD account's server data, so it must be dropped.
         const cachedProfile = profileSnapshotFor(useGamificationDisplay.getState(), accountId);
+        const carryOver = accountId !== null && dataAccountId.current === accountId;
+        dataAccountId.current = accountId;
         setData((prev) => ({
           weeks: local.weeks,
           bestWeeks: local.bestWeeks,
           thisWeekDays: local.thisWeekDays,
           weeklyTarget: target,
           weekStart: local.weekStart,
-          shields: prev?.shields ?? null,
-          profile: prev?.profile ?? cachedProfile,
+          shields: carryOver ? (prev?.shields ?? null) : null,
+          profile: (carryOver ? prev?.profile : null) ?? cachedProfile,
         }));
 
         // Streak-saver: schedule only when the week is genuinely short and

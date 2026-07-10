@@ -42,6 +42,8 @@ interface Props {
   placeholder: string;
   /** Optional tap-to-fill prompts shown in the empty state. */
   starters?: string[];
+  /** The coach's display name for bubbles/labels; defaults to Greece. */
+  coachName?: string;
 }
 
 const MAX_LEN = 2000;
@@ -148,7 +150,14 @@ function DayDivider({ iso }: { iso: string }) {
   );
 }
 
-export function CoachThread({ kind, emptyTitle, emptyBody, placeholder, starters }: Props) {
+export function CoachThread({
+  kind,
+  emptyTitle,
+  emptyBody,
+  placeholder,
+  starters,
+  coachName,
+}: Props) {
   const { messages, loading, stale, sending, reload, send, sendError } = useCoachThread(kind);
   const [draft, setDraft] = useState('');
   const listRef = useRef<FlatList<CoachMessage>>(null);
@@ -198,11 +207,12 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder, starters
             lastInGroup={lastInGroup}
             showAvatar={item.sender === 'coach' && lastInGroup}
             typing={isTypingMessage(item)}
+            coachName={coachName}
           />
         </Animated.View>
       );
     },
-    [messages],
+    [messages, coachName],
   );
 
   const showEmpty = !loading && messages.length === 0;

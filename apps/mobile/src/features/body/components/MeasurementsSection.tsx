@@ -184,7 +184,11 @@ export function MeasurementsSection() {
         {openKey !== null && openField ? (
           <MeasurementDetailSheet
             label={openField.label}
-            series={measurementSeries(entries, openKey)}
+            unit={lengthUnitLabel(unitPref)}
+            series={measurementSeries(entries, openKey).map((p) => ({
+              ...p,
+              value: displayLength(p.value, unitPref),
+            }))}
           />
         ) : null}
       </Sheet>

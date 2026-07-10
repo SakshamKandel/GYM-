@@ -5,6 +5,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { runAwardEngineOrThrow } from '@/lib/gamification';
 import { json, preflight, readJson } from '@/lib/http';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -35,6 +36,17 @@ export async function GET(req: Request) {
   if (!token) return json({ error: 'unauthorized' }, 401);
   const user = await userForToken(token);
   if (!user) return json({ error: 'unauthorized' }, 401);
+
+  // The award engine does several DB round-trips per run — cap polling so a
+  // stuck/looping client can't turn this GET into a write amplifier.
+  const limited = rateLimit({
+    route: 'gamification',
+    limit: 30,
+    windowMs: 60_000,
+    accountId: user.id,
+    ip: clientIp(req),
+  });
+  if (limited) return limited;
 
   // Uses the throwing variant so a transient failure returns a real HTTP
   // error instead of a fabricated all-zero snapshot served as 200 — mobile

@@ -105,8 +105,9 @@ export default function PublicLeaderboardScreen() {
 
   function switchScope(next: LeaderboardScope): void {
     if (next === scope) return;
+    // No manual reload: setScope changes the focus effect's dep, which
+    // re-runs it while focused — fetching here too would double-fetch.
     setScope(next);
-    if (!results[next]) reload(next);
   }
 
   function goBack(): void {

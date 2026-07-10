@@ -155,16 +155,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   const db = getDb();
   const ip = getIp(req);
 
-  // Target must exist. (Also the tier mirror/status update below no-op silently
-  // on a missing id, so we fail early with 404 for a clean UI.)
-  const existing = await db
-    .select({ id: accounts.id, status: accounts.status, tier: accounts.tier })
-    .from(accounts)
-    .where(eq(accounts.id, id))
-    .limit(1);
-  if (existing.length === 0) return json({ error: 'not_found' }, 404);
-
-  // Per-field permission checks (fail closed, independent).
+  // Per-field permission checks (fail closed, independent) — run BEFORE the
+  // existence lookup so a staffer lacking the relevant permission gets the
+  // same 403 for real and made-up ids alike (no member-id existence oracle).
   if (tier !== undefined) {
     const g = await requirePermission(req, 'subscription.override');
     if (g instanceof Response) return g;
@@ -186,6 +179,16 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const rankBlock = requireOutranks(base, targetRole);
     if (rankBlock) return rankBlock;
   }
+
+  // Target must exist. (Also the tier mirror/status update below no-op silently
+  // on a missing id, so we fail early with 404 for a clean UI.) Only reachable
+  // by staff who hold the permission for every supplied field.
+  const existing = await db
+    .select({ id: accounts.id, status: accounts.status, tier: accounts.tier })
+    .from(accounts)
+    .where(eq(accounts.id, id))
+    .limit(1);
+  if (existing.length === 0) return json({ error: 'not_found' }, 404);
 
   // Apply tier via the shared helper (updates accounts.tier, mirrors the jsonb
   // blob, and writes its own 'subscription.override' audit row).

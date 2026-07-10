@@ -43,6 +43,7 @@ import {
   STRIP_DAYS_BACK,
   STRIP_DAYS_FORWARD,
   cloneLogsToDate,
+  defaultMealForHour,
   groupByMeal,
   kcalRingState,
   litres,
@@ -201,15 +202,6 @@ function macroLine(protein: number, carbs: number, fat: number): string {
   return `P ${Math.round(protein)} · C ${Math.round(carbs)} · F ${Math.round(fat)}`;
 }
 
-/** Sensible meal for the generic "log your first meal" CTA, by time of day. */
-function mealForNow(): Meal {
-  const hour = new Date().getHours();
-  if (hour < 11) return 'breakfast';
-  if (hour < 15) return 'lunch';
-  if (hour < 21) return 'dinner';
-  return 'snacks';
-}
-
 export default function FoodScreen() {
   const [selected, setSelected] = useState(todayIso());
   const [copying, setCopying] = useState(false);
@@ -296,7 +288,7 @@ export default function FoodScreen() {
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel="Search food"
-            onPress={() => addTo(mealForNow())}
+            onPress={() => addTo(defaultMealForHour(new Date().getHours()))}
             style={styles.headerAction}
           >
             <Ionicons name="search" size={22} color={colors.text} />
@@ -420,7 +412,7 @@ export default function FoodScreen() {
             title="Nothing logged yet"
             body="Search a food or tap a meal below to start the day."
             actionLabel="Log your first meal"
-            onAction={() => addTo(mealForNow())}
+            onAction={() => addTo(defaultMealForHour(new Date().getHours()))}
           />
           <View style={styles.ghostWrap}>
             {MEALS.map(({ key, label }) => (

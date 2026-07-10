@@ -1,7 +1,16 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
@@ -83,6 +92,7 @@ const ERR_TEXT: Record<StaffErrorCode, string> = {
   invalid: "That didn't work.",
   cannot_target_self: "You can't change your own role.",
   cannot_revoke_self: "You can't revoke your own access.",
+  full: "That coach's roster is at capacity.",
   conflict: 'That conflicts with the current state.',
   not_configured: 'This feature is not set up yet.',
   network: "Couldn't reach the server.",
@@ -274,147 +284,160 @@ function OverrideSheet({
   return (
     <Modal visible transparent animationType="none" onRequestClose={onClose}>
       <Animated.View entering={FadeIn.duration(120)} style={styles.sheetRoot}>
-        <Pressable style={styles.sheetBackdrop} onPress={onClose} accessibilityLabel="Dismiss" />
-        <Animated.View entering={enterUp(0)} style={styles.sheetCard}>
-          <AppText variant="label">Override tier</AppText>
-          <AppText variant="title" numberOfLines={1}>
-            {memberName(member)}
-          </AppText>
-          <AppText variant="caption" numberOfLines={1}>
-            Currently {TIER_LABEL[member.tier]}
-            {currentExpiry !== undefined ? ` · ${expiryLabel(currentExpiry)}` : ''}
-          </AppText>
-
-          <View style={styles.tierGrid}>
-            {TIERS.map((t) => {
-              const on = picked === t;
-              return (
-                <PressableScale
-                  key={t}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: on }}
-                  accessibilityLabel={TIER_LABEL[t]}
-                  onPress={() => chooseTier(t)}
-                  style={[
-                    styles.tierPill,
-                    on && { borderColor: TIER_COLOR[t], backgroundColor: colors.surfaceRaised },
-                  ]}
-                >
-                  <View style={[styles.tierDot, { backgroundColor: TIER_COLOR[t] }]} />
-                  <AppText
-                    variant="bodyBold"
-                    color={on ? colors.text : colors.textDim}
-                    tabular={false}
-                  >
-                    {TIER_LABEL[t]}
-                  </AppText>
-                </PressableScale>
-              );
-            })}
-          </View>
-
-          {allowsExpiry ? (
-            <>
-              <AppText variant="label" style={styles.durationLabel}>
-                Duration
+        {/* iOS needs explicit avoidance for the Reason input inside a Modal;
+            Android's adjustResize already handles it. */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.sheetRoot}
+        >
+          <Pressable style={styles.sheetBackdrop} onPress={onClose} accessibilityLabel="Dismiss" />
+          <Animated.View entering={enterUp(0)} style={styles.sheetCard}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.sheetScroll}
+            >
+              <AppText variant="label">Override tier</AppText>
+              <AppText variant="title" numberOfLines={1}>
+                {memberName(member)}
               </AppText>
-              <View style={styles.durationGrid}>
-                {DURATION_OPTIONS.map((opt) => {
-                  const on = windowTouched && duration === opt.key;
+              <AppText variant="caption" numberOfLines={1}>
+                Currently {TIER_LABEL[member.tier]}
+                {currentExpiry !== undefined ? ` · ${expiryLabel(currentExpiry)}` : ''}
+              </AppText>
+
+              <View style={styles.tierGrid}>
+                {TIERS.map((t) => {
+                  const on = picked === t;
                   return (
                     <PressableScale
-                      key={opt.key}
+                      key={t}
                       accessibilityRole="button"
                       accessibilityState={{ selected: on }}
-                      accessibilityLabel={opt.label}
-                      onPress={() => chooseDuration(opt.key)}
-                      style={[styles.durationPill, on && styles.durationPillOn]}
+                      accessibilityLabel={TIER_LABEL[t]}
+                      onPress={() => chooseTier(t)}
+                      style={[
+                        styles.tierPill,
+                        on && { borderColor: TIER_COLOR[t], backgroundColor: colors.surfaceRaised },
+                      ]}
                     >
+                      <View style={[styles.tierDot, { backgroundColor: TIER_COLOR[t] }]} />
                       <AppText
-                        variant="body"
+                        variant="bodyBold"
                         color={on ? colors.text : colors.textDim}
                         tabular={false}
                       >
-                        {opt.label}
+                        {TIER_LABEL[t]}
                       </AppText>
                     </PressableScale>
                   );
                 })}
               </View>
 
-              {usingCustom ? (
-                <View style={styles.stepperRow}>
-                  <Stepper
-                    label="Year"
-                    value={year}
-                    onChange={setYear}
-                    step={1}
-                    min={new Date().getFullYear()}
-                    max={new Date().getFullYear() + 5}
-                  />
-                  <Stepper
-                    label="Month"
-                    value={month}
-                    onChange={setMonth}
-                    step={1}
-                    min={1}
-                    max={12}
-                    format={(v) => MONTHS[Math.min(Math.max(v, 1), 12) - 1] ?? String(v)}
-                  />
-                  <Stepper
-                    label="Day"
-                    value={safeDay}
-                    onChange={setDay}
-                    step={1}
-                    min={1}
-                    max={maxDay}
-                  />
-                </View>
+              {allowsExpiry ? (
+                <>
+                  <AppText variant="label" style={styles.durationLabel}>
+                    Duration
+                  </AppText>
+                  <View style={styles.durationGrid}>
+                    {DURATION_OPTIONS.map((opt) => {
+                      const on = windowTouched && duration === opt.key;
+                      return (
+                        <PressableScale
+                          key={opt.key}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: on }}
+                          accessibilityLabel={opt.label}
+                          onPress={() => chooseDuration(opt.key)}
+                          style={[styles.durationPill, on && styles.durationPillOn]}
+                        >
+                          <AppText
+                            variant="body"
+                            color={on ? colors.text : colors.textDim}
+                            tabular={false}
+                          >
+                            {opt.label}
+                          </AppText>
+                        </PressableScale>
+                      );
+                    })}
+                  </View>
+
+                  {usingCustom ? (
+                    <View style={styles.stepperRow}>
+                      <Stepper
+                        label="Year"
+                        value={year}
+                        onChange={setYear}
+                        step={1}
+                        min={new Date().getFullYear()}
+                        max={new Date().getFullYear() + 5}
+                      />
+                      <Stepper
+                        label="Month"
+                        value={month}
+                        onChange={setMonth}
+                        step={1}
+                        min={1}
+                        max={12}
+                        format={(v) => MONTHS[Math.min(Math.max(v, 1), 12) - 1] ?? String(v)}
+                      />
+                      <Stepper
+                        label="Day"
+                        value={safeDay}
+                        onChange={setDay}
+                        step={1}
+                        min={1}
+                        max={maxDay}
+                      />
+                    </View>
+                  ) : null}
+                </>
               ) : null}
-            </>
-          ) : null}
 
-          <View style={styles.previewRow}>
-            <Ionicons
-              name={allowsExpiry && windowTouched ? 'calendar-outline' : 'infinite-outline'}
-              size={15}
-              color={colors.accent}
-            />
-            <AppText variant="caption" color={colors.text}>
-              {previewLine}
-            </AppText>
-          </View>
+              <View style={styles.previewRow}>
+                <Ionicons
+                  name={allowsExpiry && windowTouched ? 'calendar-outline' : 'infinite-outline'}
+                  size={15}
+                  color={colors.accent}
+                />
+                <AppText variant="caption" color={colors.text}>
+                  {previewLine}
+                </AppText>
+              </View>
 
-          <AppTextInput
-            value={reason}
-            onChangeText={setReason}
-            placeholder="Reason (optional, audited)"
-            style={styles.reasonInput}
-            multiline
-          />
+              <AppTextInput
+                value={reason}
+                onChangeText={setReason}
+                placeholder="Reason (optional, audited)"
+                style={styles.reasonInput}
+                multiline
+              />
 
-          {error ? (
-            <AppText variant="caption" color={colors.error}>
-              {error}
-            </AppText>
-          ) : null}
+              {error ? (
+                <AppText variant="caption" color={colors.error}>
+                  {error}
+                </AppText>
+              ) : null}
 
-          <View style={styles.sheetButtons}>
-            <Button
-              label="Cancel"
-              variant="secondary"
-              style={styles.sheetBtn}
-              onPress={onClose}
-            />
-            <Button
-              label={dirty ? 'Apply' : 'No change'}
-              style={styles.sheetBtn}
-              onPress={() => void save()}
-              disabled={saving || !dirty}
-              loading={saving}
-            />
-          </View>
-        </Animated.View>
+              <View style={styles.sheetButtons}>
+                <Button
+                  label="Cancel"
+                  variant="secondary"
+                  style={styles.sheetBtn}
+                  onPress={onClose}
+                />
+                <Button
+                  label={dirty ? 'Apply' : 'No change'}
+                  style={styles.sheetBtn}
+                  onPress={() => void save()}
+                  disabled={saving || !dirty}
+                  loading={saving}
+                />
+              </View>
+            </ScrollView>
+          </Animated.View>
+        </KeyboardAvoidingView>
       </Animated.View>
     </Modal>
   );
@@ -682,10 +705,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
   // Borderless charcoal panel with block corners (no-border card law).
+  // Capped so tall content (custom-date steppers) scrolls instead of pushing
+  // the top rows off-screen; padding + gap live on the scroll content.
   sheetCard: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: radius.block,
     borderTopRightRadius: radius.block,
+    maxHeight: '88%',
+  },
+  sheetScroll: {
     padding: spacing.xl,
     paddingBottom: spacing.xxl,
     gap: spacing.sm,

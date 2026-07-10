@@ -27,7 +27,7 @@ interface Props {
   variant?: CardVariant;
   /** Makes the whole card a tap target (PressableScale spring). */
   onPress?: () => void;
-  /** Inner padding — defaults to spacing.lg (charcoal) / spacing.gutter (color blocks). */
+  /** Inner padding — defaults to spacing.gutter (brief §3: card inner padding). */
   padding?: number;
   /** Corner radius — defaults to radius.block (26). */
   radius?: number;
@@ -58,7 +58,7 @@ export function Card({
 }: Props) {
   const cardStyle: StyleProp<ViewStyle> = [
     {
-      padding: padding ?? (variant === 'charcoal' ? spacing.lg : spacing.gutter),
+      padding: padding ?? spacing.gutter,
       borderRadius: radius,
       backgroundColor: backgroundColor ?? VARIANT_BG[variant],
     },

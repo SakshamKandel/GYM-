@@ -190,6 +190,17 @@ export default function TrainScreen() {
   const [deleteTarget, setDeleteTarget] = useState<CustomTemplate | null>(null);
   const startingTemplate = useRef(false);
 
+  // Starting anything while another session is open would silently resume the
+  // OLD workout (session.start resumes; the tap would no-op with no feedback).
+  // Ask first: discard the open one, or keep it. `pendingAction` holds what
+  // the user tried to start until they decide.
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+
+  const guardStart = (run: () => void): void => {
+    if (activeWorkout) setPendingAction(() => run);
+    else run();
+  };
+
   const startTemplate = (t: CustomTemplate): void => {
     if (startingTemplate.current) return;
     startingTemplate.current = true;
@@ -376,7 +387,7 @@ export default function TrainScreen() {
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel={`${t.name} template, ${t.exercises.length} exercises. Tap to start, long press to delete.`}
-            onPress={() => startTemplate(t)}
+            onPress={() => guardStart(() => startTemplate(t))}
             onLongPress={() => setDeleteTarget(t)}
             pressScale={0.985}
             style={styles.planRow}
@@ -399,7 +410,7 @@ export default function TrainScreen() {
         <Button
           label="Quick start"
           variant="secondary"
-          onPress={() => pushPath('/workout/start')}
+          onPress={() => guardStart(() => pushPath('/workout/start'))}
           style={styles.quickStart}
           accessibilityLabel="Quick start an empty workout"
         />
@@ -453,7 +464,7 @@ export default function TrainScreen() {
           setPreviewOpen(false);
           const id = pendingStartId.current;
           pendingStartId.current = null;
-          if (id) pushPath(`/workout/start?planWorkoutId=${id}`);
+          if (id) guardStart(() => pushPath(`/workout/start?planWorkoutId=${id}`));
         }}
         title={preview?.name}
       >
@@ -467,6 +478,30 @@ export default function TrainScreen() {
           />
         ) : null}
       </Sheet>
+
+      {/* Another workout is open — starting a new one would silently resume
+          the old session. Make the trade explicit. */}
+      <ConfirmDialog
+        visible={pendingAction !== null}
+        title="Workout in progress"
+        message={
+          activeWorkout
+            ? `"${activeWorkout.name}" is still open. Starting a new workout discards it — sets you logged stay in history only after you finish a workout.`
+            : undefined
+        }
+        confirmLabel="Discard & start new"
+        cancelLabel="Keep current"
+        danger
+        onConfirm={() => {
+          const run = pendingAction;
+          setPendingAction(null);
+          void (async () => {
+            await useSession.getState().discard();
+            run?.();
+          })();
+        }}
+        onCancel={() => setPendingAction(null)}
+      />
 
       {/* Template delete confirm — long-press is destructive, so ask first. */}
       <ConfirmDialog

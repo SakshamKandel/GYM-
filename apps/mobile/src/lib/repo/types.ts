@@ -2,7 +2,6 @@ import type {
   DailyMacros,
   FoodItem,
   FoodLog,
-  Meal,
   Measurement,
   PrRecord,
   SetLog,
@@ -99,7 +98,7 @@ export interface Repo {
   /** Increment a day's steps (Android watch deltas, manual adds); returns the new total. */
   addSteps(date: string, delta: number): Promise<number>;
   /** Logged days within [startDate, endDate], ascending by date; missing days omitted. */
-  getStepsBetween(startDate: string, endDate: string): Promise<Array<{ date: string; steps: number }>>;
+  getStepsBetween(startDate: string, endDate: string): Promise<{ date: string; steps: number }[]>;
 
   // ── Streak ──────────────────────────────────────────────────
   getStreak(): Promise<Streak>;

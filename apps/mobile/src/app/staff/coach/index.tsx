@@ -12,6 +12,7 @@ import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
+  Button,
   enterDown,
   enterUp,
   FractionStat,
@@ -20,13 +21,18 @@ import {
   PressableScale,
   Screen,
   ScreenHeader,
+  SectionLabel,
   Tag,
 } from '../../../components/ui';
 import { useAuth } from '../../../state/auth';
 import {
+  decideCoachRequest,
   getCoachInbox,
+  getCoachRequests,
   toStaffError,
   type CoachInboxRow,
+  type CoachRequest,
+  type CoachRequestAction,
   type StaffErrorCode,
   type Tier,
 } from '../../../features/staff/api';
@@ -69,12 +75,34 @@ function errorLine(code: StaffErrorCode): string {
   return "Couldn't load your clients.";
 }
 
-/** First name only, falling back to the email local-part, then a placeholder. */
+function requestErrorLine(code: StaffErrorCode): string {
+  if (code === 'full') return 'Your roster is at capacity — raise it in your profile.';
+  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'not_found') return 'This request is no longer pending — pull to refresh.';
+  return "Couldn't update this request — try again.";
+}
+
+/** Short relative age ("3m", "2h", "5d") with an absolute fallback. */
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const diff = Date.now() - then;
+  if (diff < 0) return 'now';
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'now';
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d`;
+  return new Date(iso).toLocaleDateString();
+}
+
+/** First name only, then a placeholder — client emails never reach the
+ * console (contact stays inside the app, mirroring the chat PII mask). */
 function shortName(row: CoachInboxRow): string {
   const name = row.displayName.trim();
-  if (name) return name;
-  const local = row.email.split('@')[0]?.trim();
-  return local && local.length > 0 ? local : 'Client';
+  return name || 'Client';
 }
 
 /** Outlined meta pill for the header row (counts, status). Not a tap target. */
@@ -132,7 +160,9 @@ function ClientRow({ row, index }: { row: CoachInboxRow; index: number }) {
             />
           </View>
           <AppText variant="caption" numberOfLines={1}>
-            {row.email}
+            {row.unreadForCoach > 0
+              ? `${row.unreadForCoach} unread message${row.unreadForCoach === 1 ? '' : 's'}`
+              : 'All caught up'}
           </AppText>
         </View>
 
@@ -153,11 +183,85 @@ function ClientRow({ row, index }: { row: CoachInboxRow; index: number }) {
   );
 }
 
+/** One pending mentorship request — name + tier, the intro message, age, and
+ * the accept/decline pair. Borderless charcoal block like the roster rows. */
+function RequestRow({
+  row,
+  index,
+  busyAction,
+  error,
+  onDecide,
+}: {
+  row: CoachRequest;
+  index: number;
+  /** Which action is in flight for THIS row (disables both buttons). */
+  busyAction: CoachRequestAction | null;
+  error: string | null;
+  onDecide: (action: CoachRequestAction) => void;
+}) {
+  const name = row.displayName.trim() || 'Member';
+  const message = row.message.trim();
+  const busy = busyAction !== null;
+
+  return (
+    <Animated.View entering={enterUp(index)} layout={layoutSpring} style={styles.requestRow}>
+      <View style={styles.nameLine}>
+        <AppText variant="bodyBold" numberOfLines={1} style={styles.name}>
+          {name}
+        </AppText>
+        <Tag label={TIER_LABEL[row.tier]} variant="outline" color={TIER_COLOR[row.tier]} />
+        <View style={styles.requestSpacer} />
+        <AppText variant="caption" color={colors.textFaint}>
+          {relativeTime(row.createdAt)}
+        </AppText>
+      </View>
+
+      {message ? (
+        <AppText variant="caption" numberOfLines={2}>
+          {message}
+        </AppText>
+      ) : null}
+
+      {error ? (
+        <AppText variant="caption" color={colors.error}>
+          {error}
+        </AppText>
+      ) : null}
+
+      <View style={styles.requestActions}>
+        <Button
+          label="Accept"
+          accessibilityLabel={`Accept request from ${name}`}
+          onPress={() => onDecide('accept')}
+          loading={busyAction === 'accept'}
+          disabled={busy}
+          style={styles.requestBtn}
+        />
+        <Button
+          label="Decline"
+          variant="secondary"
+          accessibilityLabel={`Decline request from ${name}`}
+          onPress={() => onDecide('decline')}
+          loading={busyAction === 'decline'}
+          disabled={busy}
+          style={styles.requestBtn}
+        />
+      </View>
+    </Animated.View>
+  );
+}
+
 export default function CoachInboxScreen() {
   const token = useAuth((s) => s.token);
   const signOut = useStaffSignOut();
 
   const [rows, setRows] = useState<CoachInboxRow[]>([]);
+  const [requests, setRequests] = useState<CoachRequest[]>([]);
+  const [busyRequest, setBusyRequest] = useState<{
+    id: string;
+    action: CoachRequestAction;
+  } | null>(null);
+  const [requestErrors, setRequestErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<StaffErrorCode | null>(null);
@@ -172,7 +276,13 @@ export default function CoachInboxScreen() {
       if (mode === 'refresh') setRefreshing(true);
       else setLoading(true);
       try {
-        const inbox = await getCoachInbox(token);
+        // The pending-request queue is secondary — a failure there must never
+        // blank the roster, so it resolves to null and keeps the last value.
+        const [inbox, pending] = await Promise.all([
+          getCoachInbox(token),
+          getCoachRequests(token).catch(() => null),
+        ]);
+        if (pending) setRequests(pending);
         // Unread first, then by name so the list is stable between refreshes.
         inbox.sort((a, b) => {
           if ((b.unreadForCoach > 0 ? 1 : 0) !== (a.unreadForCoach > 0 ? 1 : 0)) {
@@ -198,6 +308,32 @@ export default function CoachInboxScreen() {
   useEffect(() => {
     void load('initial');
   }, [load]);
+
+  /** Accept/decline one pending request. Per-row busy; success removes the
+   * row (and an accept reloads the roster so the new client appears). */
+  const decide = useCallback(
+    async (req: CoachRequest, action: CoachRequestAction) => {
+      if (!token || busyRequest) return;
+      setBusyRequest({ id: req.id, action });
+      setRequestErrors((prev) => {
+        if (!(req.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[req.id];
+        return next;
+      });
+      try {
+        await decideCoachRequest(req.id, action, token);
+        setRequests((prev) => prev.filter((r) => r.id !== req.id));
+        if (action === 'accept') void load('refresh');
+      } catch (err) {
+        const code = toStaffError(err).code;
+        setRequestErrors((prev) => ({ ...prev, [req.id]: requestErrorLine(code) }));
+      } finally {
+        setBusyRequest(null);
+      }
+    },
+    [token, busyRequest, load],
+  );
 
   const renderItem = useCallback<ListRenderItem<CoachInboxRow>>(
     ({ item, index }) => <ClientRow row={item} index={index} />,
@@ -294,7 +430,7 @@ export default function CoachInboxScreen() {
         <View style={styles.centre}>
           <ActivityIndicator color={colors.accent} />
         </View>
-      ) : error && rows.length === 0 ? (
+      ) : error && rows.length === 0 && requests.length === 0 ? (
         <View style={styles.centre}>
           <Ionicons name="cloud-offline-outline" size={28} color={colors.textFaint} />
           <AppText variant="caption" center color={colors.textDim}>
@@ -311,7 +447,7 @@ export default function CoachInboxScreen() {
             </AppText>
           </PressableScale>
         </View>
-      ) : rows.length === 0 ? (
+      ) : rows.length === 0 && requests.length === 0 ? (
         <View style={styles.centre}>
           <Ionicons name="people-outline" size={32} color={colors.textFaint} />
           <AppText variant="title" center>
@@ -337,17 +473,46 @@ export default function CoachInboxScreen() {
             />
           }
           ListHeaderComponent={
-            error ? (
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityLabel="Retry loading clients"
-                onPress={() => void load('initial')}
-                style={styles.staleRow}
-              >
-                <Ionicons name="cloud-offline-outline" size={14} color={colors.textDim} />
-                <AppText variant="caption">Couldn&apos;t refresh · tap to retry</AppText>
-              </PressableScale>
-            ) : null
+            <>
+              {error ? (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel="Retry loading clients"
+                  onPress={() => void load('initial')}
+                  style={styles.staleRow}
+                >
+                  <Ionicons name="cloud-offline-outline" size={14} color={colors.textDim} />
+                  <AppText variant="caption">Couldn&apos;t refresh · tap to retry</AppText>
+                </PressableScale>
+              ) : null}
+              {/* Pending mentorship requests — ABOVE the roster, only when
+                  someone is actually asking. Oldest first (server order). */}
+              {requests.length > 0 ? (
+                <View>
+                  <SectionLabel>Requests</SectionLabel>
+                  <View style={styles.requestList}>
+                    {requests.map((req, i) => (
+                      <RequestRow
+                        key={req.id}
+                        row={req}
+                        index={i}
+                        busyAction={busyRequest?.id === req.id ? busyRequest.action : null}
+                        error={requestErrors[req.id] ?? null}
+                        onDecide={(action) => void decide(req, action)}
+                      />
+                    ))}
+                  </View>
+                  {rows.length > 0 ? <SectionLabel>Clients</SectionLabel> : null}
+                </View>
+              ) : null}
+            </>
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyRoster}>
+              <AppText variant="caption" center color={colors.textDim}>
+                No active clients yet — members you accept appear here.
+              </AppText>
+            </View>
           }
         />
       )}
@@ -465,5 +630,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 6,
+  },
+  // Pending-request block — same borderless charcoal language as the roster.
+  requestList: { gap: spacing.sm },
+  requestRow: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  requestSpacer: { flex: 1 },
+  requestActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
+  // Compact pair — still ≥48dp (touch.min beats the Button's 56dp default).
+  requestBtn: { flex: 1, minHeight: touch.min, paddingHorizontal: spacing.lg },
+  emptyRoster: {
+    alignItems: 'center',
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.lg,
   },
 });

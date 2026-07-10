@@ -1,5 +1,5 @@
 import { putProfileData } from './api/client';
-import { useAuth } from '../state/auth';
+import { hasProfileRestoreSettled, useAuth } from '../state/auth';
 import { useProfile } from '../state/profile';
 
 /**
@@ -21,6 +21,12 @@ function push(): void {
   // never be uploaded into this one (mirrors restoreOrBackupProfile).
   if (profile.syncAccountId !== null && profile.syncAccountId !== auth.user.id) return;
   if (profile.syncAccountId === null) {
+    // Claim-lock: never claim an unclaimed device profile until the account's
+    // cloud restore attempt has settled. A restore that merely timed out at
+    // sign-in must not be followed by a push that overwrites the account's
+    // real cloud blob with this device's local state (auth retries the
+    // restore on refresh; the claim happens on the next push after it lands).
+    if (!hasProfileRestoreSettled(auth.user.id)) return;
     // First backup for this account — claim the local profile for it.
     profile.update({ syncAccountId: auth.user.id });
   }

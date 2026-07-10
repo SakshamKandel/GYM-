@@ -4,7 +4,7 @@ import { Image } from 'expo-image';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { hasEntitlement } from '@gym/shared';
-import { colors, radius, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
   Button,
@@ -14,14 +14,17 @@ import {
   UpgradePrompt,
 } from '../components/ui';
 import { CoachThread } from '../features/coach/components/CoachThread';
-import { useProfile } from '../state/profile';
+import { useMyCoach } from '../features/mentorship/hooks';
+import { useEffectiveTier } from '../lib/tier';
 
 /**
- * /coach-chat — Elite 1-on-1 coach chat. Message Greece directly; the thread
- * is gated to Elite via hasEntitlement. Lower tiers see the upgrade sell.
+ * /coach-chat — 1-on-1 coach chat. Unlocked for Elite (the classic Greece
+ * thread) AND for any member with an ASSIGNED coach (the server allows
+ * assigned members regardless of tier). Everyone else sees the upgrade sell
+ * plus a route into the coach directory.
  *
  * Header is the compact chat pattern (not the huge poster header): back
- * circle → Greece's avatar → title + caption, so the thread owns the screen.
+ * circle → coach avatar → title + caption, so the thread owns the screen.
  */
 
 const NEWIE = require('../../assets/images/newie.png');
@@ -36,8 +39,8 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   backBtn: {
-    width: 44,
-    height: 44,
+    width: touch.min,
+    height: touch.min,
     borderRadius: radius.full,
     backgroundColor: colors.surface,
     alignItems: 'center',
@@ -53,7 +56,17 @@ const styles = StyleSheet.create({
   gateWrap: { gap: spacing.lg, paddingTop: spacing.xl },
 });
 
-function Header({ title, caption }: { title: string; caption?: string }) {
+function Header({
+  title,
+  caption,
+  coachName = 'Greece',
+  avatarUrl = null,
+}: {
+  title: string;
+  caption?: string;
+  coachName?: string;
+  avatarUrl?: string | null;
+}) {
   return (
     <Animated.View entering={enterDown()} style={styles.header}>
       <PressableScale
@@ -69,11 +82,11 @@ function Header({ title, caption }: { title: string; caption?: string }) {
         <Ionicons name="chevron-back" size={22} color={colors.text} />
       </PressableScale>
       <Image
-        source={NEWIE}
+        source={avatarUrl !== null ? { uri: avatarUrl } : NEWIE}
         style={styles.coachAvatar}
         contentFit="cover"
         contentPosition="top"
-        accessibilityLabel="Greece"
+        accessibilityLabel={coachName}
       />
       <View style={styles.headerText}>
         <AppText variant="title">{title}</AppText>
@@ -84,8 +97,12 @@ function Header({ title, caption }: { title: string; caption?: string }) {
 }
 
 export default function CoachChatScreen() {
-  const tier = useProfile((s) => s.tier);
-  const unlocked = hasEntitlement({ tier }, 'coach_chat');
+  const tier = useEffectiveTier();
+  const { coach } = useMyCoach();
+  // An ASSIGNED coach unlocks the thread for ANY tier — the server now
+  // accepts assigned members; the Elite entitlement stays the other door in.
+  const unlocked = coach !== null || hasEntitlement({ tier }, 'coach_chat');
+  const coachName = coach?.displayName ?? 'Greece';
 
   if (!unlocked) {
     return (
@@ -98,6 +115,11 @@ export default function CoachChatScreen() {
             description="Message Greece directly and get personal guidance."
           />
           <Button label="See plans" onPress={() => router.push('/subscribe' as Href)} />
+          <Button
+            label="Browse coaches"
+            variant="secondary"
+            onPress={() => router.push('/coaches' as Href)}
+          />
         </View>
       </Screen>
     );
@@ -105,12 +127,18 @@ export default function CoachChatScreen() {
 
   return (
     <Screen edges={{ bottom: true }}>
-      <Header title="Coach chat" caption="Message Greece directly" />
+      <Header
+        title="Coach chat"
+        caption={`Message ${coachName} directly`}
+        coachName={coachName}
+        avatarUrl={coach?.avatarUrl ?? null}
+      />
       <CoachThread
         kind="coach_chat"
-        emptyTitle="Say hello to Greece"
-        emptyBody="Ask about your training, form, or nutrition — Greece reviews these personally and replies within 24h."
-        placeholder="Message Greece…"
+        coachName={coachName}
+        emptyTitle={`Say hello to ${coachName}`}
+        emptyBody={`Ask about your training, form, or nutrition — ${coachName} reviews these personally and replies within 24h.`}
+        placeholder={`Message ${coachName}…`}
         starters={[
           "How's my training looking?",
           'Any tips for my squat form?',

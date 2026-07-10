@@ -8,7 +8,7 @@ import Animated, {
   withDelay,
   withTiming,
 } from 'react-native-reanimated';
-import { colors, radius } from '@gym/ui-tokens';
+import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText } from './AppText';
 
 /**
@@ -31,8 +31,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'baseline',
-    marginBottom: 6,
-    gap: 8,
+    marginBottom: spacing.xs,
+    gap: spacing.sm,
   },
   label: { flexShrink: 1, minWidth: 0 },
   amount: { flexShrink: 0 },

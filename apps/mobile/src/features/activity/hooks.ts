@@ -76,6 +76,8 @@ interface Snapshot {
   steps: number;
   eatenKcal: number;
   workoutSec: number;
+  /** Most recent weigh-in; null when the user never logged one. */
+  latestWeightKg: number | null;
   supported: boolean;
   permission: StepPermission;
   source: StepsSource;
@@ -94,11 +96,12 @@ export function useActivityToday(): ActivityToday {
   const load = useCallback(async (): Promise<Snapshot> => {
     const repo = await getRepo();
     const today = todayIso();
-    const [steps, kcalByDate, todaysWorkouts, sensorSupported, sensorPermission, source] =
+    const [steps, kcalByDate, todaysWorkouts, weights, sensorSupported, sensorPermission, source] =
       await Promise.all([
         repo.getSteps(today),
         repo.getKcalByDate([today]),
         repo.getWorkoutsBetween(today, today),
+        repo.getWeights(1),
         isPedometerAvailable(),
         getStepPermission(),
         getStepsSource(),
@@ -111,6 +114,7 @@ export function useActivityToday(): ActivityToday {
       steps,
       eatenKcal: Math.round(kcalByDate[today] ?? 0),
       workoutSec,
+      latestWeightKg: weights[weights.length - 1]?.kg ?? null,
       // HC can be active on devices whose raw sensor is unusable, and it
       // supersedes the sensor permission — steps flow either way, so the
       // "enable step tracking" CTA must not show while HC is the source.
@@ -178,16 +182,19 @@ export function useActivityToday(): ActivityToday {
     const workoutSec = snap?.workoutSec ?? 0;
 
     const age = birthYear !== null ? Math.max(0, Number(todayIso().slice(0, 4)) - birthYear) : null;
+    // Burn estimates track the latest weigh-in; the onboarding weight only
+    // seeds users who never logged one (it goes stale as weight changes).
+    const currentWeightKg = snap?.latestWeightKg ?? weightKg;
     // restingKcal's contract is male/female; bmr's midpoint handles 'other'.
     // Missing profile data → 0 (out is then just steps + workouts).
     const restingKcal =
-      sex !== null && weightKg !== null && heightCm !== null && age !== null
+      sex !== null && currentWeightKg !== null && heightCm !== null && age !== null
         ? sex === 'other'
-          ? Math.max(0, bmr('other', weightKg, heightCm, age))
-          : restingKcalOf({ sex, weightKg, heightCm, age })
+          ? Math.max(0, bmr('other', currentWeightKg, heightCm, age))
+          : restingKcalOf({ sex, weightKg: currentWeightKg, heightCm, age })
         : 0;
-    const stepsKcal = stepsKcalOf(steps, weightKg ?? 0, heightCm ?? 0);
-    const workoutKcal = workoutKcalOf(workoutSec, weightKg ?? 0);
+    const stepsKcal = stepsKcalOf(steps, currentWeightKg ?? 0, heightCm ?? 0);
+    const workoutKcal = workoutKcalOf(workoutSec, currentWeightKg ?? 0);
     const caloriesOut = activityCaloriesOut({ resting: restingKcal, stepsKcal, workoutKcal });
 
     return {

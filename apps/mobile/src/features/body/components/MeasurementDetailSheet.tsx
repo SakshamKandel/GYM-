@@ -3,19 +3,20 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing } from '@gym/ui-tokens';
 import { AppText, Divider, SectionLabel } from '../../../components/ui';
 import { posterDate } from '../../../lib/dates';
-import { deltaIcon, signedDelta, type ChartPoint } from '../logic';
+import { deltaIcon, signedDelta, type MeasurementPoint } from '../logic';
 import { WeightChart } from './WeightChart';
 
 /**
  * One measurement field's history in a <Sheet>: latest tape value, the trend
  * chart (draws in), net change since the first entry, and the recent readings
- * with per-entry deltas. Everything in cm; direction stays textDim.
+ * with per-entry deltas. Values arrive in display units; direction stays textDim.
  */
 
 interface Props {
   label: string;
-  /** Field readings in cm, oldest→newest. */
-  series: ChartPoint[];
+  /** Field readings in display units, oldest→newest. */
+  series: MeasurementPoint[];
+  unit: string;
 }
 
 const MAX_ROWS = 8;
@@ -41,7 +42,7 @@ const styles = StyleSheet.create({
   delta: { minWidth: 40, textAlign: 'right' },
 });
 
-export function MeasurementDetailSheet({ label, series }: Props) {
+export function MeasurementDetailSheet({ label, series, unit }: Props) {
   if (series.length === 0) {
     return (
       <AppText variant="body" color={colors.textDim}>
@@ -61,7 +62,7 @@ export function MeasurementDetailSheet({ label, series }: Props) {
       <View
         style={styles.hero}
         accessible
-        accessibilityLabel={`Latest ${label} ${latest.value.toFixed(1)} centimetres, ${posterDate(
+        accessibilityLabel={`Latest ${label} ${latest.value.toFixed(1)} ${unit}, ${posterDate(
           latest.date,
         )}`}
       >
@@ -69,7 +70,7 @@ export function MeasurementDetailSheet({ label, series }: Props) {
           <AppText variant="display" tabular>
             {latest.value.toFixed(1)}
           </AppText>
-          <AppText variant="caption">cm</AppText>
+          <AppText variant="caption">{unit}</AppText>
         </View>
         <AppText variant="label" style={styles.heroLabel}>
           Latest · {posterDate(latest.date)}
@@ -100,7 +101,7 @@ export function MeasurementDetailSheet({ label, series }: Props) {
         <View
           style={styles.statHalf}
           accessible
-          accessibilityLabel={`Change ${signedDelta(change)} centimetres since the first entry`}
+          accessibilityLabel={`Change ${signedDelta(change)} ${unit} since the first entry`}
         >
           <AppText variant="label" numberOfLines={1}>
             Change
@@ -115,7 +116,7 @@ export function MeasurementDetailSheet({ label, series }: Props) {
             <AppText variant="display" tabular>
               {signedDelta(change)}
             </AppText>
-            <AppText variant="caption">cm</AppText>
+            <AppText variant="caption">{unit}</AppText>
           </View>
         </View>
       </View>
@@ -125,14 +126,14 @@ export function MeasurementDetailSheet({ label, series }: Props) {
         const prev = recent[i + 1];
         const d = prev ? Math.round((p.value - prev.value) * 10) / 10 : null;
         return (
-          <View key={p.date}>
+          <View key={p.id}>
             <View style={styles.row}>
               <AppText variant="bodyBold" numberOfLines={1}>
                 {posterDate(p.date)}
               </AppText>
               <View style={styles.rowRight}>
                 <AppText variant="body" tabular>
-                  {p.value.toFixed(1)} cm
+                  {p.value.toFixed(1)} {unit}
                 </AppText>
                 {d !== null ? (
                   <AppText variant="caption" style={styles.delta}>

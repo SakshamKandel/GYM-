@@ -4,7 +4,7 @@ import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
-import type { FoodItem, Meal } from '@gym/shared';
+import type { FoodItem, Meal, NutriScore } from '@gym/shared';
 import {
   AnimatedNumber,
   AppText,
@@ -76,7 +76,83 @@ const styles = StyleSheet.create({
   pinned: { marginTop: 'auto', paddingTop: spacing.md, paddingBottom: spacing.md },
   error: { marginBottom: spacing.sm },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.lg },
+  /** Food-quality chips (Nutri-Score / NOVA) under the name. */
+  qualityRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  qualityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minHeight: 34,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+  },
+  qualityDot: { width: 8, height: 8, borderRadius: radius.full },
+  /** Fiber/sugar/sodium line inside the cream macro panel. */
+  microRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignSelf: 'stretch',
+  },
+  microCol: { alignItems: 'center', gap: 2 },
 });
+
+const NUTRI_COLORS: Record<NutriScore, string> = {
+  a: colors.success,
+  b: colors.success,
+  c: colors.warning,
+  d: colors.error,
+  e: colors.error,
+};
+
+const NOVA_LABELS: Record<1 | 2 | 3 | 4, string> = {
+  1: 'Whole food',
+  2: 'Culinary ingredient',
+  3: 'Processed',
+  4: 'Ultra-processed',
+};
+
+function novaColor(group: 1 | 2 | 3 | 4): string {
+  return group === 4 ? colors.error : group === 3 ? colors.warning : colors.success;
+}
+
+/** Nutri-Score + NOVA chips — rendered only when the source knows them. */
+function QualityChips({ food }: { food: FoodItem }) {
+  const score = food.nutriScore ?? null;
+  const nova = food.novaGroup ?? null;
+  if (!score && !nova) return null;
+  return (
+    <View style={styles.qualityRow}>
+      {score ? (
+        <View
+          style={styles.qualityChip}
+          accessibilityLabel={`Nutri-Score ${score.toUpperCase()}`}
+        >
+          <View style={[styles.qualityDot, { backgroundColor: NUTRI_COLORS[score] }]} />
+          <AppText variant="label" color={colors.text}>
+            {`Nutri-Score ${score.toUpperCase()}`}
+          </AppText>
+        </View>
+      ) : null}
+      {nova ? (
+        <View
+          style={styles.qualityChip}
+          accessibilityLabel={`Processing level: ${NOVA_LABELS[nova]}`}
+        >
+          <View style={[styles.qualityDot, { backgroundColor: novaColor(nova) }]} />
+          <AppText variant="label" color={colors.text}>
+            {NOVA_LABELS[nova]}
+          </AppText>
+        </View>
+      ) : null}
+    </View>
+  );
+}
 
 export default function PortionScreen() {
   const params = useLocalSearchParams<{ foodId?: string; meal?: string; date?: string }>();
@@ -97,6 +173,11 @@ export default function PortionScreen() {
         if (!active) return;
         setFood(item);
         if (item) setGrams(Math.max(5, Math.round(item.servingGrams ?? 100)));
+      })
+      .catch(() => {
+        // A rejected lookup renders the explicit "Food not found" branch
+        // instead of stranding the screen blank with an unhandled rejection.
+        if (active) setFood(null);
       });
     return () => {
       active = false;
@@ -166,6 +247,19 @@ export default function PortionScreen() {
     { label: 'Carbs', value: macros.carbs, color: colors.carbs },
     { label: 'Fat', value: macros.fat, color: colors.fat },
   ] as const;
+  // Scaled micro-nutrients — only the ones this food's source actually knows.
+  const scale = grams / 100;
+  const microBlocks = [
+    food.fiberPer100 != null
+      ? { label: 'Fiber', text: `${Math.round(food.fiberPer100 * scale * 10) / 10} g` }
+      : null,
+    food.sugarPer100 != null
+      ? { label: 'Sugar', text: `${Math.round(food.sugarPer100 * scale * 10) / 10} g` }
+      : null,
+    food.sodiumPer100 != null
+      ? { label: 'Sodium', text: `${Math.round(food.sodiumPer100 * scale)} mg` }
+      : null,
+  ].filter((m): m is { label: string; text: string } => m !== null);
 
   return (
     <Screen>
@@ -182,6 +276,7 @@ export default function PortionScreen() {
           <AppText variant="display" numberOfLines={2} style={styles.name}>
             {food.name}
           </AppText>
+          <QualityChips food={food} />
         </Animated.View>
 
         <Animated.View entering={enterUp(1)}>
@@ -246,6 +341,24 @@ export default function PortionScreen() {
                 </View>
               ))}
             </View>
+            {microBlocks.length > 0 ? (
+              <View style={styles.microRow}>
+                {microBlocks.map((m) => (
+                  <View
+                    key={m.label}
+                    style={styles.microCol}
+                    accessibilityLabel={`${m.label}: ${m.text}`}
+                  >
+                    <AppText variant="bodyBold" color={colors.onBlock} tabular>
+                      {m.text}
+                    </AppText>
+                    <AppText variant="label" color={colors.creamDim}>
+                      {m.label}
+                    </AppText>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </Card>
         </Animated.View>
 
@@ -259,7 +372,7 @@ export default function PortionScreen() {
       <Animated.View entering={enterUp(4)} style={styles.pinned}>
         {error ? (
           <AppText variant="caption" color={colors.error} center style={styles.error}>
-            Couldn't save — try again.
+            {"Couldn't save — try again."}
           </AppText>
         ) : null}
         <Button
