@@ -44,8 +44,13 @@ export interface AuthState {
 
   /** Throws ApiError ('bad_credentials' | 'invalid' | 'network'). */
   signIn: (email: string, password: string) => Promise<void>;
-  /** Throws ApiError ('bad_credentials' | 'not_configured' | 'invalid' | 'network'). */
-  signInWithGoogle: (idToken: string) => Promise<void>;
+  /**
+   * Throws ApiError ('bad_credentials' | 'link_required' | 'not_configured' |
+   * 'invalid' | 'network'). 'link_required' means the Google email already has
+   * a password account — retry with that account's `password` to link Google
+   * onto it, so both sign-in methods open the SAME account (and data).
+   */
+  signInWithGoogle: (idToken: string, password?: string) => Promise<void>;
   /** Throws ApiError ('email_taken' | 'invalid' | 'network'). */
   signUp: (email: string, password: string, displayName: string) => Promise<void>;
   /** Best-effort server logout; local state always clears. Never throws. */
@@ -241,8 +246,8 @@ export const useAuth = create<AuthState>()(
         await establishSession(session, set, get);
       },
 
-      signInWithGoogle: async (idToken) => {
-        const session = await loginWithGoogle(idToken);
+      signInWithGoogle: async (idToken, password) => {
+        const session = await loginWithGoogle(idToken, password);
         await establishSession(session, set, get);
       },
 

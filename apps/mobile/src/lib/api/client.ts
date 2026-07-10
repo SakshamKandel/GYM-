@@ -19,6 +19,8 @@ export const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:300
 export type ApiErrorCode =
   | 'email_taken'
   | 'bad_credentials'
+  /** Google sign-in hit an email that already has a password account — retry with `password` to link. */
+  | 'link_required'
   | 'invalid'
   | 'network'
   | 'unauthorized'
@@ -72,6 +74,7 @@ interface RequestOptions {
 function serverErrorCode(raw: string): ApiErrorCode | null {
   return raw === 'email_taken' ||
     raw === 'bad_credentials' ||
+    raw === 'link_required' ||
     raw === 'invalid' ||
     raw === 'not_configured'
     ? raw
@@ -163,9 +166,19 @@ export async function login(input: { email: string; password: string }): Promise
 /**
  * Exchange a Google ID token (from expo-auth-session) for a session.
  * Throws 'not_configured' until the server has GOOGLE_CLIENT_ID set.
+ * Throws 'link_required' when the email already belongs to a password
+ * account — retry with that account's `password` to link Google onto it
+ * (both sign-in methods then open the SAME account).
  */
-export async function loginWithGoogle(idToken: string): Promise<AuthSession> {
-  const data = await request({ method: 'POST', path: '/api/auth/google', body: { idToken } });
+export async function loginWithGoogle(
+  idToken: string,
+  password?: string,
+): Promise<AuthSession> {
+  const data = await request({
+    method: 'POST',
+    path: '/api/auth/google',
+    body: password === undefined ? { idToken } : { idToken, password },
+  });
   return parseAs(sessionSchema, data);
 }
 

@@ -9,7 +9,7 @@ import { toApiError } from '../../../lib/api/client';
 import { successHaptic, warnHaptic } from '../../../lib/haptics';
 import { useAuth } from '../../../state/auth';
 import { enterApp } from '../nav';
-import { describeGoogleError, GooglePill, googleStyles } from './googleShared';
+import { describeGoogleError, GoogleLinkPrompt, GooglePill, googleStyles } from './googleShared';
 import { NativeGoogleSignIn } from './NativeGoogleSignIn';
 
 /**
@@ -33,6 +33,9 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
   const signInWithGoogle = useAuth((s) => s.signInWithGoogle);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The Google ID token held while the link-password prompt is open (409
+  // link_required: the email already has a password account).
+  const [linkToken, setLinkToken] = useState<string | null>(null);
 
   const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
     webClientId,
@@ -54,6 +57,7 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
     let cancelled = false;
     setBusy(true);
     setError(null);
+    setLinkToken(null);
     signInWithGoogle(idToken)
       .then(() => {
         successHaptic();
@@ -64,7 +68,14 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
       .catch((err: unknown) => {
         if (cancelled) return;
         warnHaptic();
-        setError(describeGoogleError(toApiError(err).code));
+        const code = toApiError(err).code;
+        if (code === 'link_required') {
+          // Same email, existing password account — ask for that password to
+          // link Google onto it instead of surfacing an error.
+          setLinkToken(idToken);
+          return;
+        }
+        setError(describeGoogleError(code));
       })
       .finally(() => {
         if (!cancelled) setBusy(false);
@@ -79,6 +90,7 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
       <GooglePill
         onPress={() => {
           setError(null);
+          setLinkToken(null);
           void promptAsync();
         }}
         disabled={request === null}
@@ -90,6 +102,9 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
             {error}
           </AppText>
         </Animated.View>
+      ) : null}
+      {linkToken ? (
+        <GoogleLinkPrompt idToken={linkToken} onCancel={() => setLinkToken(null)} />
       ) : null}
     </View>
   );
