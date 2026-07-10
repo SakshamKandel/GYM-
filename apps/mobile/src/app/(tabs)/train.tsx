@@ -21,6 +21,7 @@ import {
   Tag,
 } from '../../components/ui';
 import { WorkoutPreviewSheet } from '../../features/training/components/WorkoutPreviewSheet';
+import { MuscleFocusSection, muscleFocusForWorkout } from '../../features/training/components/MuscleFocusSection';
 import { useTrainData } from '../../features/training/hooks';
 import { estimateMinutesForExercises, estimateWorkoutMinutes } from '../../features/training/logic';
 import { pushPath } from '../../features/training/nav';
@@ -136,6 +137,7 @@ export default function TrainScreen() {
   const plan = getPlan(planId);
   const workouts = getPlanWorkouts(planId);
   const exerciseCount = allExercises().length;
+  const initialMuscleFocus = muscleFocusForWorkout(nextWorkout);
 
   // Tap a rotation row to peek before committing; the sheet's "Start" navigates
   // once its exit finishes (so the modal never lingers over the pushed screen).
@@ -214,10 +216,16 @@ export default function TrainScreen() {
         </HeroCard>
       </Animated.View>
 
+      {/* Native, touchable anatomy map. The selected muscle immediately filters
+          the bundled offline exercise library below it. */}
+      <Animated.View entering={enterUp(1)}>
+        <MuscleFocusSection key={initialMuscleFocus} initialMuscle={initialMuscleFocus} />
+      </Animated.View>
+
       {/* This plan's weekly rotation */}
       {workouts.length > 0 ? (
         <>
-          <Animated.View entering={enterUp(1)}>
+          <Animated.View entering={enterUp(2)}>
             <SectionLabel>This plan</SectionLabel>
           </Animated.View>
           {workouts.map((w, i) => {
