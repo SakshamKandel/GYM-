@@ -17,7 +17,8 @@ interface Props {
 
 const styles = StyleSheet.create({
   chip: {
-    borderRadius: radius.sm,
+    // radius.md — the nested-tile radius of the block language (brief §3).
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -232,7 +232,8 @@ const styles = StyleSheet.create({
     borderRadius: Math.max(0, radius.lg - 1.5),
     overflow: 'hidden',
   },
-  // Elite's second, inset gold hairline — the lacquer-box detail.
+  // Elite's second, inset gold hairline — the lacquer-box detail. Color comes
+  // from the tier palette (no raw hex outside palette modules).
   eliteHairline: {
     position: 'absolute',
     top: 3,
@@ -240,7 +241,7 @@ const styles = StyleSheet.create({
     right: 3,
     bottom: 3,
     borderWidth: 1,
-    borderColor: '#D9B25A',
+    borderColor: VIP_CARD.elite.border,
     borderRadius: Math.max(0, radius.lg - 4),
     opacity: 0.35,
   },

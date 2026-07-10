@@ -4,11 +4,11 @@ import { BADGE_STOP_OFFSETS, TIER_PALETTE, type MetallicTier } from './tierPalet
 
 /**
  * Subscription-tier identity emblem — a small metallic shield rendered from a
- * static SVG gradient (no filters, no animation, no drop-shadow). This is the
- * ONLY glossy element in the app besides the rank ring (RankEmblem) and the
- * avatar tier frame (TierAvatarFrame); earned achievement badges stay flat
- * red/charcoal on purpose — the metallic treatment is exclusive to paid-tier
- * identity so it reads as scarce.
+ * static SVG gradient (no filters, no animation, no drop-shadow). Earned
+ * surfaces (RankEmblem rings, BadgeMedal achievement medals) use their OWN
+ * shared ramps in badges/achievementMetals.ts; this shield keeps the separate
+ * tierPalette.ts finishes and its distinct silhouette so paid-tier identity
+ * and earned progression never read as the same currency.
  *
  * Pure identity, not gamification: renders regardless of the "hide
  * gamification" toggle, and carries no XP/rank/leaderboard effect anywhere

@@ -12,6 +12,8 @@ import {
   enterDown,
   enterUp,
   PressableScale,
+  Screen,
+  ScreenHeader,
   SectionLabel,
   Stepper,
   Tag,
@@ -178,13 +180,8 @@ export default function CoachClientScreen() {
 
   return (
     <>
-      <Animated.ScrollView
-        style={styles.root}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
-        <Animated.View entering={enterDown()} style={styles.headerRow}>
+      <Screen scroll keyboardAware>
+        <Animated.View entering={enterDown()} style={styles.backRow}>
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel="Back"
@@ -193,26 +190,20 @@ export default function CoachClientScreen() {
           >
             <Ionicons name="chevron-back" size={24} color={colors.text} />
           </PressableScale>
-          <View style={styles.headerText}>
-            <AppText variant="heading" numberOfLines={1}>
-              Subscription
-            </AppText>
-            <AppText variant="caption" numberOfLines={1}>
-              {clientName}
-            </AppText>
-          </View>
         </Animated.View>
 
+        <ScreenHeader eyebrow={clientName} title="Subscription" style={styles.header} />
+
+        {/* Current tier — the screen's ONE cream counterpoint block; the tier
+            rides a near-black pill (never colored/red text on cream). */}
         {currentTier ? (
           <Animated.View entering={enterUp(0)} style={styles.currentCard}>
-            <AppText variant="label">Current tier</AppText>
+            <AppText variant="label" color={colors.creamDim}>
+              Current tier
+            </AppText>
             <View style={styles.currentRow}>
-              <Tag
-                label={TIER_LABEL[currentTier]}
-                variant="outline"
-                color={TIER_COLOR[currentTier]}
-              />
-              <AppText variant="caption" color={colors.textFaint}>
+              <Tag label={TIER_LABEL[currentTier]} variant="onBlock" />
+              <AppText variant="caption" color={colors.creamDim}>
                 Effective now
               </AppText>
             </View>
@@ -348,7 +339,7 @@ export default function CoachClientScreen() {
           disabled={saving}
           style={styles.applyBtn}
         />
-      </Animated.ScrollView>
+      </Screen>
 
       {/* Success confirmation — dismiss returns to the thread. */}
       <ConfirmDialog
@@ -367,24 +358,8 @@ export default function CoachClientScreen() {
   );
 }
 
-const GUTTER = 20;
-
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  content: {
-    paddingHorizontal: GUTTER,
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.xxl,
-    width: '100%',
-    maxWidth: 640,
-    alignSelf: 'center',
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingBottom: spacing.lg,
-  },
+  backRow: { marginBottom: spacing.lg },
   backBtn: {
     width: touch.min,
     height: touch.min,
@@ -393,13 +368,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerText: { flex: 1, gap: 2 },
+  header: { marginBottom: spacing.gutter },
+  // Cream counterpoint block — borderless, chunky radius, black/cream-dim ink.
   currentCard: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
+    backgroundColor: colors.blockCream,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     gap: spacing.sm,
   },
   currentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
@@ -408,12 +382,13 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
+  // Interactive pills keep their strokes — the no-border law is for cards.
   tierPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     borderWidth: 1.5,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     borderRadius: radius.full,
     paddingHorizontal: 16,
     height: touch.min,
@@ -421,7 +396,7 @@ const styles = StyleSheet.create({
   tierDot: { width: 8, height: 8, borderRadius: radius.full },
   durationPill: {
     borderWidth: 1.5,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     borderRadius: radius.full,
     paddingHorizontal: 18,
     height: touch.min,
@@ -429,12 +404,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   durationPillOn: { borderColor: colors.text, backgroundColor: colors.surfaceRaised },
+  // Borderless charcoal tiles — separation by fill contrast, never strokes.
   customCard: {
     marginTop: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
     gap: spacing.md,
   },
@@ -449,10 +423,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
     borderRadius: radius.md,
     padding: spacing.md,
+    minHeight: touch.min,
   },
   permanentText: { flex: 1 },
   previewRow: {

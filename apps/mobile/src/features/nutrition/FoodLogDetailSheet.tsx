@@ -3,15 +3,16 @@ import { StyleSheet, View } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 import type { FoodLog } from '@gym/shared';
 import { colors, spacing } from '@gym/ui-tokens';
-import { AnimatedNumber, AppText, Button, Divider, MacroRing } from '../../components/ui';
+import { AnimatedNumber, AppText, Button, MacroRing } from '../../components/ui';
 import { mealLabel } from './logic';
 
 /**
  * Rich breakdown for one logged food, shown inside a <Sheet> from the Food tab.
- * Tapping a log row reveals its meal + portion, a kcal count-up, the three
- * macros as rings, and a Remove action — matching the StreakDetailSheet bar of
- * detail. All motion is either user-driven (the sheet) or a quiet count-up that
- * lands instantly under reduced motion; passive content never slides.
+ * Block language: Oswald eyebrow (meal · grams) over the big kcal count-up,
+ * the three macro rings, then the Remove action — sections separated by air,
+ * never hairline dividers. All motion is either user-driven (the sheet) or a
+ * quiet count-up that lands instantly under reduced motion; passive content
+ * never slides.
  */
 
 interface Props {
@@ -20,14 +21,14 @@ interface Props {
 }
 
 const styles = StyleSheet.create({
-  meta: { marginBottom: spacing.sm },
-  kcalRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, marginTop: 2 },
-  macroRow: {
-    marginTop: spacing.xl,
+  wrap: { gap: spacing.xl },
+  kcalRow: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    alignItems: 'baseline',
+    gap: spacing.xs,
+    marginTop: 2,
   },
-  dividerWrap: { marginTop: spacing.xl, marginBottom: spacing.lg },
+  macroRow: { flexDirection: 'row', justifyContent: 'space-around' },
 });
 
 export function FoodLogDetailSheet({ log, onRemove }: Props) {
@@ -45,8 +46,8 @@ export function FoodLogDetailSheet({ log, onRemove }: Props) {
   const meal = mealLabel(log.meal);
 
   return (
-    <View>
-      <View style={styles.meta}>
+    <View style={styles.wrap}>
+      <View>
         <AppText variant="label" tabular>
           {meal} · {Math.round(log.grams)} g
         </AppText>
@@ -66,10 +67,6 @@ export function FoodLogDetailSheet({ log, onRemove }: Props) {
         <MacroRing label="Protein" current={log.protein} color={colors.protein} delay={120} />
         <MacroRing label="Carbs" current={log.carbs} color={colors.carbs} delay={190} />
         <MacroRing label="Fat" current={log.fat} color={colors.fat} delay={260} />
-      </View>
-
-      <View style={styles.dividerWrap}>
-        <Divider />
       </View>
 
       <Button

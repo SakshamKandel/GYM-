@@ -12,7 +12,6 @@ import {
   AppText,
   AppTextInput,
   Chip,
-  Divider,
   enterDown,
   enterFade,
   enterUp,
@@ -27,6 +26,10 @@ import { MUSCLE_GROUPS, searchExercises } from '../../lib/exercises';
 /**
  * Exercise library — 873 bundled exercises, fully offline.
  * ?select=1 → picker mode: tapping adds to the active session and returns.
+ *
+ * Revamp (REVAMP-BRIEF): eyebrow + big Oswald title, pill search, pill filter
+ * chips, and charcoal block rows (no hairline dividers — rounded rows with a
+ * gap, separation by fill contrast).
  */
 
 /** Breathing room above the header — matches Screen's TOP_AIR so the back
@@ -41,40 +44,47 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   /** Center the content column on wide viewports (web/tablet). FlashList's
    * contentContainerStyle only supports padding, so the cap goes on the
-   * header, the chip strip, and each row/separator instead. */
+   * header, the chip strip, and each row wrapper instead. */
   contentCap: {
     width: '100%',
     maxWidth: MAX_CONTENT_WIDTH,
     alignSelf: 'center',
   },
-  header: { paddingHorizontal: 20 },
+  header: { paddingHorizontal: spacing.gutter },
   topRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
   backBtn: {
-    width: 44,
-    height: 44,
+    width: touch.min,
+    height: touch.min,
     borderRadius: radius.full,
     backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // Pill search field: the wrap carries the surface/border, the AppTextInput
-  // inside goes transparent (it still kills the web focus ring internally).
+  // Header block (brief §5): eyebrow → huge Oswald title.
+  title: {
+    textTransform: 'uppercase',
+    lineHeight: 44,
+    marginTop: spacing.xs,
+  },
+  // Pill search field: the wrap carries the surface, the AppTextInput inside
+  // goes transparent (it still kills the web focus ring internally). Pills may
+  // carry strokes — the no-border law is for cards.
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     backgroundColor: colors.surface,
     borderWidth: 1.5,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     borderRadius: radius.full,
     paddingHorizontal: spacing.lg,
     height: touch.primary,
-    marginTop: spacing.md,
+    marginTop: spacing.lg,
   },
   searchWrapFocused: { borderColor: colors.accent },
   searchInput: {
@@ -86,9 +96,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     paddingVertical: 0,
   },
-  chipsRow: { gap: spacing.sm, paddingVertical: spacing.md, paddingHorizontal: 20 },
-  recentLabel: { paddingHorizontal: 20, marginBottom: spacing.sm },
-  recentStrip: { gap: spacing.sm, paddingHorizontal: 20, paddingBottom: spacing.md },
+  chipsRow: { gap: spacing.sm, paddingVertical: spacing.md, paddingHorizontal: spacing.gutter },
+  recentLabel: { paddingHorizontal: spacing.gutter, marginBottom: spacing.sm },
+  recentStrip: { gap: spacing.sm, paddingHorizontal: spacing.gutter, paddingBottom: spacing.md },
   recentTile: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -99,33 +109,44 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     minHeight: touch.min,
   },
-  // Same white-chip treatment as the row thumbs, just smaller.
+  // Same quiet-placeholder treatment as the row thumbs, just smaller.
   recentThumb: {
     width: 36,
     height: 36,
-    borderRadius: radius.sm - 4,
-    backgroundColor: colors.onAccent,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceRaised,
+    overflow: 'hidden',
   },
   recentName: { maxWidth: 140 },
   list: { flex: 1 },
+  /** Gutter for each block row — margins can't live on contentCap (width%). */
+  rowPad: { paddingHorizontal: spacing.gutter },
+  // Charcoal block row (brief §11c): rounded surface fill, no borders; rows in
+  // a stack separate with a gap instead of Divider hairlines.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     paddingVertical: spacing.md,
-    paddingHorizontal: 20,
+    paddingHorizontal: spacing.md,
     minHeight: 72,
   },
-  // The bundled exercise photos have white backgrounds — a white rounded
-  // chip makes them read as intentional icon tiles, not pasted images.
+  rowPressed: { backgroundColor: colors.surfacePressed },
+  rowGap: { height: spacing.sm },
+  // Thumbs sit in a rounded frame on a quiet surfaceRaised placeholder (no
+  // white flash while the CDN photo streams in); the photo's own white
+  // background covers the tile once loaded, so it reads as a deliberate
+  // light tile inside the charcoal row.
   thumb: {
     width: 56,
     height: 56,
-    borderRadius: radius.sm,
-    backgroundColor: colors.onAccent, // pure white, matching the image bg
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+    overflow: 'hidden',
   },
   rowText: { flex: 1 },
-  separatorPad: { paddingHorizontal: 20 },
   emptyWrap: {
     alignItems: 'center',
     paddingTop: spacing.xxl,
@@ -135,14 +156,9 @@ const styles = StyleSheet.create({
   emptyTitle: { marginTop: spacing.sm },
 });
 
-/** Hairline between rows, inset to the content gutters and width-capped so it
- * tracks the centered column on wide viewports. */
-function RowSeparator() {
-  return (
-    <View style={[styles.contentCap, styles.separatorPad]}>
-      <Divider />
-    </View>
-  );
+/** Gap between block rows — replaces the old Divider hairline. */
+function RowGap() {
+  return <View style={styles.rowGap} />;
 }
 
 function RecentTile({
@@ -169,7 +185,7 @@ function RecentTile({
       <Image
         source={exercise.imageUrls[0] ? { uri: exercise.imageUrls[0] } : undefined}
         style={styles.recentThumb}
-        contentFit="contain"
+        contentFit="cover"
         transition={100}
       />
       <View>
@@ -196,39 +212,37 @@ function ExerciseRow({
   selectMode: boolean;
 }) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={
-        selectMode ? `Add ${exercise.name} to workout` : `Open ${exercise.name}`
-      }
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.contentCap,
-        styles.row,
-        pressed && { backgroundColor: colors.surface },
-      ]}
-    >
-      <Image
-        source={exercise.imageUrls[0] ? { uri: exercise.imageUrls[0] } : undefined}
-        style={styles.thumb}
-        contentFit="contain"
-        transition={100}
-        recyclingKey={exercise.id}
-      />
-      <View style={styles.rowText}>
-        <AppText variant="bodyBold" numberOfLines={1}>
-          {exercise.name}
-        </AppText>
-        <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
-          {`${exercise.muscleGroup} · ${exercise.equipment ?? 'bodyweight'}`}
-        </AppText>
-      </View>
-      <Ionicons
-        name={selectMode ? 'add' : 'chevron-forward'}
-        size={20}
-        color={colors.textFaint}
-      />
-    </Pressable>
+    <View style={[styles.contentCap, styles.rowPad]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={
+          selectMode ? `Add ${exercise.name} to workout` : `Open ${exercise.name}`
+        }
+        onPress={onPress}
+        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+      >
+        <Image
+          source={exercise.imageUrls[0] ? { uri: exercise.imageUrls[0] } : undefined}
+          style={styles.thumb}
+          contentFit="cover"
+          transition={100}
+          recyclingKey={exercise.id}
+        />
+        <View style={styles.rowText}>
+          <AppText variant="bodyBold" numberOfLines={1}>
+            {exercise.name}
+          </AppText>
+          <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+            {`${exercise.muscleGroup} · ${exercise.equipment ?? 'bodyweight'}`}
+          </AppText>
+        </View>
+        <Ionicons
+          name={selectMode ? 'add' : 'chevron-forward'}
+          size={20}
+          color={colors.textFaint}
+        />
+      </Pressable>
+    </View>
   );
 }
 
@@ -245,6 +259,7 @@ export default function ExerciseLibraryScreen() {
   const [searchFocused, setSearchFocused] = useState(false);
   const recent = useRecentExercises(RECENT_LIMIT);
   const showRecent = query.trim().length === 0 && muscle === null && recent.length > 0;
+  const totalCount = useMemo(() => searchExercises({}).length, []);
 
   const results = useMemo(
     () =>
@@ -271,18 +286,23 @@ export default function ExerciseLibraryScreen() {
     >
     <View style={[styles.root, { paddingTop: insets.top + TOP_AIR }]}>
       <View style={[styles.contentCap, styles.header]}>
-        <Animated.View entering={enterDown(0)} style={styles.topRow}>
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel="Go back"
-            onPress={() => router.back()}
-            style={styles.backBtn}
-          >
-            <Ionicons name="chevron-back" size={22} color={colors.text} />
-          </PressableScale>
-          <View>
-            <AppText variant="heading">{selectMode ? 'Add exercise' : 'Exercises'}</AppText>
+        <Animated.View entering={enterDown(0)}>
+          <View style={styles.topRow}>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+              onPress={() => router.back()}
+              style={styles.backBtn}
+            >
+              <Ionicons name="chevron-back" size={22} color={colors.text} />
+            </PressableScale>
           </View>
+          <AppText variant="label">
+            {selectMode ? 'Tap to add to your workout' : `Library · ${totalCount} exercises`}
+          </AppText>
+          <AppText variant="display" style={styles.title}>
+            {selectMode ? 'Add exercise' : 'Exercises'}
+          </AppText>
         </Animated.View>
         <Animated.View
           entering={enterDown(1)}
@@ -292,7 +312,7 @@ export default function ExerciseLibraryScreen() {
           <AppTextInput
             value={query}
             onChangeText={setQuery}
-            placeholder={`Search ${searchExercises({}).length} exercises`}
+            placeholder={`Search ${totalCount} exercises`}
             style={styles.searchInput}
             returnKeyType="search"
             autoCorrect={false}
@@ -305,7 +325,7 @@ export default function ExerciseLibraryScreen() {
               accessibilityRole="button"
               accessibilityLabel="Clear search"
               onPress={() => setQuery('')}
-              hitSlop={12}
+              hitSlop={16}
             >
               <Ionicons name="close-circle" size={18} color={colors.textDim} />
             </Pressable>
@@ -361,7 +381,7 @@ export default function ExerciseLibraryScreen() {
           renderItem={({ item }) => (
             <ExerciseRow exercise={item} selectMode={selectMode} onPress={() => handlePick(item)} />
           )}
-          ItemSeparatorComponent={RowSeparator}
+          ItemSeparatorComponent={RowGap}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}
           ListEmptyComponent={

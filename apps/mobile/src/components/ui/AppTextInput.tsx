@@ -6,11 +6,12 @@ import {
   type TextInputProps,
   type TextStyle,
 } from 'react-native';
-import { colors, radius, type } from '@gym/ui-tokens';
+import { colors, radius, spacing, type } from '@gym/ui-tokens';
 
 /**
- * The app's only text input. Minimal by design: surface block, hairline
- * border that turns accent on focus — and the browser's default focus ring
+ * The app's only text input. Block language: filled charcoal
+ * (`surfaceRaised`) rounded field, NO border at rest — a 2px accent ring
+ * appears only on focus. 56dp tall. The browser's default focus ring
  * (the golden outline) is explicitly disabled on web.
  */
 
@@ -21,14 +22,15 @@ const killWebOutline =
 
 const styles = StyleSheet.create({
   input: {
-    backgroundColor: colors.surface,
-    borderWidth: 1.5,
-    borderColor: colors.border,
+    backgroundColor: colors.surfaceRaised,
+    // Constant 2px border (transparent at rest) so focus never shifts layout.
+    borderWidth: 2,
+    borderColor: 'transparent',
     borderRadius: radius.lg,
     minHeight: 56,
-    paddingHorizontal: 18,
+    paddingHorizontal: spacing.lg,
     fontFamily: type.body,
-    fontSize: 16,
+    fontSize: type.size.body,
     color: colors.text,
   },
   focused: { borderColor: colors.accent },

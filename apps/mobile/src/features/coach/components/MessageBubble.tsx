@@ -6,9 +6,11 @@ import type { CoachMessage } from '../../../lib/api/client';
 import { TypingDots } from './TypingDots';
 
 /**
- * One chat bubble. User messages sit right-aligned in a solid red bubble;
- * coach messages sit left-aligned in a surface bubble with a small Newie
- * (mascot) avatar so a reply reads as "from Greece", not the system.
+ * One chat bubble (block language). User messages sit right-aligned in a
+ * solid red block with BLACK ink (black-on-red brand law); coach messages
+ * sit left-aligned in a borderless charcoal block — separation by fill
+ * contrast, never strokes — with a small Newie (mascot) avatar so a reply
+ * reads as "from Greece", not the system.
  *
  * Consecutive messages from one sender are grouped: the avatar + tail corner +
  * a quiet timestamp show only on the last of a run, and inner messages tuck in
@@ -65,19 +67,15 @@ const styles = StyleSheet.create({
   colUser: { alignItems: 'flex-end' },
   colCoach: { alignItems: 'flex-start' },
   bubble: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     borderRadius: radius.lg,
   },
-  userBubble: { backgroundColor: colors.accent },
-  coachBubble: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
+  userBubble: { backgroundColor: colors.blockRed },
+  coachBubble: { backgroundColor: colors.surface },
   userTail: { borderBottomRightRadius: radius.sm },
   coachTail: { borderBottomLeftRadius: radius.sm },
-  time: { marginTop: 4, marginHorizontal: 4 },
+  time: { marginTop: spacing.xs, marginHorizontal: spacing.xs },
 });
 
 export function MessageBubble({
@@ -125,7 +123,7 @@ export function MessageBubble({
           {typing ? (
             <TypingDots />
           ) : (
-            <AppText color={isUser ? colors.onAccent : colors.text}>{message.body}</AppText>
+            <AppText color={isUser ? colors.onBlock : colors.text}>{message.body}</AppText>
           )}
         </View>
 

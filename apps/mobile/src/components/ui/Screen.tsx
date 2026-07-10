@@ -1,17 +1,18 @@
-import type { ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   StyleSheet,
   View,
+  type RefreshControlProps,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors } from '@gym/ui-tokens';
+import { colors, spacing } from '@gym/ui-tokens';
 
-/** Screen shell: pure black, 20px gutters, safe-area aware. */
+/** Screen shell: near-black canvas (`colors.bg`), 20px gutters, safe-area aware. */
 
 interface Props {
   children: ReactNode;
@@ -20,11 +21,12 @@ interface Props {
   keyboardAware?: boolean;
   /** Extra bottom padding so content clears a pinned action bar. */
   bottomInset?: number;
+  /** Pull-to-refresh control (RefreshControl) — scroll screens only. */
+  refreshControl?: ReactElement<RefreshControlProps>;
   style?: StyleProp<ViewStyle>;
   edges?: { top?: boolean; bottom?: boolean };
 }
 
-const GUTTER = 20;
 /** Breathing room above the first element — even when safe-area insets are 0
  * (web, devtools) content must never kiss the top edge. */
 const TOP_AIR = 16;
@@ -32,7 +34,7 @@ const TOP_AIR = 16;
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   content: {
-    paddingHorizontal: GUTTER,
+    paddingHorizontal: spacing.gutter,
     // Keep phone-first line lengths on wide viewports (web/tablet).
     width: '100%',
     maxWidth: 640,
@@ -45,6 +47,7 @@ export function Screen({
   scroll = false,
   keyboardAware = false,
   bottomInset = 0,
+  refreshControl,
   style,
   edges,
 }: Props) {
@@ -63,6 +66,7 @@ export function Screen({
         ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps={keyboardAware ? 'handled' : undefined}
+        refreshControl={refreshControl}
       >
         {children}
       </ScrollView>

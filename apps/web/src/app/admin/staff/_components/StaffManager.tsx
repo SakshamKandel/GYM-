@@ -2,7 +2,7 @@
 
 import { assignableRolesFor, canManageRole } from '@gym/shared';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Badge,
   Button,
@@ -389,32 +389,54 @@ function GrantRoleModal({
   const pickedLocked =
     pickedRole != null && !canManageRole(callerRole, pickedRole);
 
-  async function runSearch(term: string) {
+  // Typing only updates the query + clears any prior pick; the network search
+  // itself is debounced and ordering-guarded by the effect below.
+  function onQueryChange(term: string) {
     setQ(term);
     setPicked(null);
-    const trimmed = term.trim();
+  }
+
+  // Debounce (~250ms) so a burst of keystrokes issues one request, and abort the
+  // in-flight request whenever the term changes so a slow "jo" response can never
+  // land after — and overwrite — the newer "john" results (stale-result guard).
+  useEffect(() => {
+    const trimmed = q.trim();
     if (trimmed.length < 2) {
       setHits([]);
+      setSearching(false);
       return;
     }
+    const controller = new AbortController();
     setSearching(true);
-    try {
-      const res = await fetch(
-        `/api/admin/members?q=${encodeURIComponent(trimmed)}`,
-        { credentials: 'include' },
-      );
-      if (!res.ok) {
-        setHits([]);
-        setSearching(false);
-        return;
-      }
-      const data = (await res.json()) as { members?: MemberHit[] };
-      setHits(data.members ?? []);
-    } catch {
-      setHits([]);
-    }
-    setSearching(false);
-  }
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/admin/members?q=${encodeURIComponent(trimmed)}`,
+            { credentials: 'include', signal: controller.signal },
+          );
+          if (!res.ok) {
+            setHits([]);
+            setSearching(false);
+            return;
+          }
+          const data = (await res.json()) as { members?: MemberHit[] };
+          setHits(data.members ?? []);
+          setSearching(false);
+        } catch {
+          // Aborted calls are superseded by a newer term — leave state to the
+          // newer effect run and don't clobber it here.
+          if (controller.signal.aborted) return;
+          setHits([]);
+          setSearching(false);
+        }
+      })();
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [q]);
 
   async function submit() {
     if (!picked || pickedIsSelf || pickedLocked) return;
@@ -492,7 +514,7 @@ function GrantRoleModal({
           </div>
           <SearchField
             value={q}
-            onChange={(e) => runSearch(e.target.value)}
+            onChange={(e) => onQueryChange(e.target.value)}
             placeholder="Search by email…"
             autoFocus
           />

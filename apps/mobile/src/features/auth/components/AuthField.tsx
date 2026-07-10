@@ -19,13 +19,14 @@ import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import { AppText, enterFade, PressableScale } from '../../../components/ui';
 
 /**
- * Form field per the brief: surface background, radius.lg, 16px Poppins,
- * red border on focus, inline error caption. `secure` adds a 48dp
- * show/hide toggle so passwords are checkable before submitting.
- *
- * The border eases from the resting hairline to the accent on focus (a
- * direct response to the user tapping in), and the error caption fades in
- * rather than popping. Reduced motion snaps to the final state.
+ * Form field in the block language (REVAMP-BRIEF §1/§2): filled charcoal
+ * (`surfaceRaised`) rounded field with NO stroke at rest — separation comes
+ * from fill contrast. A 2px accent ring eases in on focus (a direct response
+ * to the user tapping in; the constant transparent border means focus never
+ * shifts layout), errors swap it for the error colour, and the error text
+ * fades in rather than popping. Reduced motion snaps to the final state.
+ * `secure` adds a 48dp show/hide toggle so passwords are checkable before
+ * submitting.
  */
 
 interface Props extends Omit<TextInputProps, 'style' | 'secureTextEntry'> {
@@ -43,10 +44,11 @@ const styles = StyleSheet.create({
   frame: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceRaised,
     borderRadius: radius.lg,
-    borderWidth: 1.5,
-    borderColor: colors.border,
+    // Constant 2px border (transparent at rest) so focus never shifts layout.
+    borderWidth: 2,
+    borderColor: 'transparent',
   },
   frameError: { borderColor: colors.error },
   input: {
@@ -71,16 +73,16 @@ export function AuthField({ label, error, secure = false, ...inputProps }: Props
   const [hidden, setHidden] = useState(true);
   const reduceMotion = useReducedMotion();
 
-  // 0 = resting hairline, 1 = accent. Eases on focus. An error border is a
-  // static style used INSTEAD of the animated one (never layered on top) so
-  // reanimated's UI-thread writes can't fight the error colour.
+  // 0 = resting (invisible ring), 1 = accent. Eases on focus. An error border
+  // is a static style used INSTEAD of the animated one (never layered on top)
+  // so reanimated's UI-thread writes can't fight the error colour.
   const focus = useSharedValue(0);
   useEffect(() => {
     const to = focused ? 1 : 0;
     focus.value = reduceMotion ? to : withTiming(to, { duration: 150 });
   }, [focused, reduceMotion, focus]);
   const borderStyle = useAnimatedStyle(() => ({
-    borderColor: interpolateColor(focus.value, [0, 1], [colors.border, colors.accent]),
+    borderColor: interpolateColor(focus.value, [0, 1], ['transparent', colors.accent]),
   }));
 
   return (
@@ -120,7 +122,7 @@ export function AuthField({ label, error, secure = false, ...inputProps }: Props
       </Animated.View>
       {error ? (
         <Animated.View entering={enterFade()}>
-          <AppText variant="caption" color={colors.error}>
+          <AppText variant="body" color={colors.error}>
             {error}
           </AppText>
         </Animated.View>

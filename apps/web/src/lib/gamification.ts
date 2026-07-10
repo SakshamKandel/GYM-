@@ -28,6 +28,7 @@ import {
   restShieldQuota,
   weekStartIso,
   type BadgeComputeInput,
+  type BadgeProgressStats,
   type Rank,
 } from '@gym/shared';
 import { and, eq, gte, inArray, lt, or } from 'drizzle-orm';
@@ -328,24 +329,7 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
     .where(eq(syncedSets.accountId, accountId));
   const rankedSets = rankedSetRows.filter((s) => rankedWorkoutIds.has(s.workoutId));
 
-  // PRs are derived SERVER-SIDE, never trusted from the client's `isPr` flag:
-  // a set only counts as a PR if its e1RM strictly exceeds the account's
-  // running best e1RM for that exerciseId at the time it was logged. Walking
-  // ranked sets in chronological order and tracking a running best per
-  // exercise makes this exact and un-farmable (the client flag has no
-  // bearing on badge/XP credit at all).
-  const realPrSets: { id: string; loggedAt: Date }[] = [];
-  {
-    const runningBestByExercise = new Map<string, number>();
-    for (const s of [...rankedSets].sort((a, b) => a.loggedAt.getTime() - b.loggedAt.getTime())) {
-      const e1rm = epley1Rm(s.weightKg, s.reps);
-      const prevBest = runningBestByExercise.get(s.exerciseId) ?? 0;
-      if (e1rm > prevBest) {
-        runningBestByExercise.set(s.exerciseId, e1rm);
-        if (prevBest > 0) realPrSets.push({ id: s.id, loggedAt: s.loggedAt });
-      }
-    }
-  }
+  const realPrSets = walkRealPrSets(rankedSets);
 
   // PRs → XP, capped PR_XP_WEEKLY_CAP per ISO week (sourceKey = setId)
   const prCountByWeek = new Map<string, number>();
@@ -379,15 +363,7 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
       .onConflictDoNothing({ target: [xpEvents.accountId, xpEvents.kind, xpEvents.sourceKey] });
   }
 
-  const bestE1RmByLift: BadgeComputeInput['bestE1RmByLift'] = {};
-  let lifetimeTonnageKg = 0;
-  for (const s of rankedSets) {
-    lifetimeTonnageKg += s.weightKg * s.reps;
-    const lift = canonicalLift(s.exerciseId, s.exerciseName);
-    if (!lift) continue;
-    const e1rm = epley1Rm(s.weightKg, s.reps);
-    if (e1rm > (bestE1RmByLift[lift] ?? 0)) bestE1RmByLift[lift] = e1rm;
-  }
+  const { bestE1RmByLift, lifetimeTonnageKg } = liftBestsAndTonnage(rankedSets);
 
   const prCount = realPrSets.length;
 
@@ -558,6 +534,123 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
       total: BADGE_CATALOG.length,
     },
     newBadgeIds,
+  };
+}
+
+// ── Stat derivations shared by the award engine and the badge-progress
+//    snapshot below — ONE implementation so "earned" and "progress" can
+//    never disagree about what counts. ─────────────────────────────────────
+
+interface RankedSetRow {
+  id: string;
+  exerciseId: string;
+  exerciseName: string;
+  weightKg: number;
+  reps: number;
+  loggedAt: Date;
+}
+
+/**
+ * PRs are derived SERVER-SIDE, never trusted from the client's `isPr` flag:
+ * a set only counts as a PR if its e1RM strictly exceeds the account's
+ * running best e1RM for that exerciseId at the time it was logged. Walking
+ * ranked sets in chronological order and tracking a running best per
+ * exercise makes this exact and un-farmable (the client flag has no
+ * bearing on badge/XP credit at all).
+ */
+function walkRealPrSets(rankedSets: readonly RankedSetRow[]): { id: string; loggedAt: Date }[] {
+  const realPrSets: { id: string; loggedAt: Date }[] = [];
+  const runningBestByExercise = new Map<string, number>();
+  for (const s of [...rankedSets].sort((a, b) => a.loggedAt.getTime() - b.loggedAt.getTime())) {
+    const e1rm = epley1Rm(s.weightKg, s.reps);
+    const prevBest = runningBestByExercise.get(s.exerciseId) ?? 0;
+    if (e1rm > prevBest) {
+      runningBestByExercise.set(s.exerciseId, e1rm);
+      if (prevBest > 0) realPrSets.push({ id: s.id, loggedAt: s.loggedAt });
+    }
+  }
+  return realPrSets;
+}
+
+/** Best e1RM per canonical big lift + lifetime volume, RANKED sets only. */
+function liftBestsAndTonnage(rankedSets: readonly RankedSetRow[]): {
+  bestE1RmByLift: BadgeComputeInput['bestE1RmByLift'];
+  lifetimeTonnageKg: number;
+} {
+  const bestE1RmByLift: BadgeComputeInput['bestE1RmByLift'] = {};
+  let lifetimeTonnageKg = 0;
+  for (const s of rankedSets) {
+    lifetimeTonnageKg += s.weightKg * s.reps;
+    const lift = canonicalLift(s.exerciseId, s.exerciseName);
+    if (!lift) continue;
+    const e1rm = epley1Rm(s.weightKg, s.reps);
+    if (e1rm > (bestE1RmByLift[lift] ?? 0)) bestE1RmByLift[lift] = e1rm;
+  }
+  return { bestE1RmByLift, lifetimeTonnageKg };
+}
+
+/**
+ * Read-only stats snapshot for the badge-progress UI (locked-badge progress
+ * bars on the caller's OWN badges screen — personal-only surface). Derived
+ * with the exact same helpers the award engine uses, so a progress bar that
+ * reads 100% is always an earned badge and vice versa.
+ *
+ * `streakWeeksBest` reads the cached profile value the engine maintains on
+ * every run instead of recomputing the weekly walk — the badges screen loads
+ * after home/settings has already run the engine, so the cache is fresh in
+ * practice and only ever lags by one engine run at worst.
+ *
+ * Writes nothing — safe to call from any GET without award side effects.
+ */
+export async function computeBadgeStatsForAccount(
+  db: Db,
+  accountId: string,
+): Promise<BadgeProgressStats> {
+  const [workoutRows, setRows, checkInRows, profileRows, buddyIds] = await Promise.all([
+    db
+      .select({ id: syncedWorkouts.id, date: syncedWorkouts.date, ranked: syncedWorkouts.ranked })
+      .from(syncedWorkouts)
+      .where(eq(syncedWorkouts.accountId, accountId)),
+    db
+      .select({
+        id: syncedSets.id,
+        exerciseId: syncedSets.exerciseId,
+        exerciseName: syncedSets.exerciseName,
+        weightKg: syncedSets.weightKg,
+        reps: syncedSets.reps,
+        workoutId: syncedSets.workoutId,
+        loggedAt: syncedSets.loggedAt,
+      })
+      .from(syncedSets)
+      .where(eq(syncedSets.accountId, accountId)),
+    db.select({ date: checkIns.date }).from(checkIns).where(eq(checkIns.accountId, accountId)),
+    db
+      .select({ bestStreakWeeks: gamificationProfiles.bestStreakWeeks })
+      .from(gamificationProfiles)
+      .where(eq(gamificationProfiles.accountId, accountId))
+      .limit(1),
+    acceptedBuddyIds(db, accountId),
+  ]);
+
+  // Lifetime session-days count ALL finished workouts (ranked + unranked),
+  // mirroring the engine's badge input (design law 4); everything strength/
+  // tonnage/PR-shaped is ranked-only.
+  const lifetimeSessionDays = new Set(workoutRows.map((w) => w.date)).size;
+  const rankedWorkoutIds = new Set(workoutRows.filter((w) => w.ranked).map((w) => w.id));
+  const rankedSets = setRows.filter((s) => rankedWorkoutIds.has(s.workoutId));
+
+  const { bestE1RmByLift, lifetimeTonnageKg } = liftBestsAndTonnage(rankedSets);
+
+  return {
+    bestE1RmByLift,
+    lifetimeSessionDays,
+    lifetimeTonnageKg,
+    prCount: walkRealPrSets(rankedSets).length,
+    streakWeeksBest: profileRows[0]?.bestStreakWeeks ?? 0,
+    // Distinct ISO weeks with a check-in — same weekly bounding as the
+    // engine's checkin_* badge input (design law 1).
+    checkInCount: new Set(checkInRows.map((c) => weekStartIso(c.date))).size,
+    hasBuddy: buddyIds.length > 0,
   };
 }
 

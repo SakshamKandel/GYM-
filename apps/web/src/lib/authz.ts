@@ -19,6 +19,16 @@ export interface Principal {
   role: StaffRole;
 }
 
+/**
+ * Minimal actor identity accepted by the audit/tier helpers. A staff Principal
+ * satisfies it structurally; SELF-SERVE member routes (POST /api/subscription/
+ * tier, buddy trial, DELETE /api/me, logout-all) pass `{ id: user.id }` — only
+ * the id is ever persisted (audit_log.actor_id, coach_assignments.assigned_by).
+ */
+export interface AuditActor {
+  id: string;
+}
+
 /** Every permission the console understands. Extend the switch below to grant. */
 export type Permission =
   | 'coach.message.user' // author a 'coach' reply into a user's thread
@@ -148,7 +158,7 @@ export function requireOutranks(
 
 /** Appends an audit row. Best-effort context; never throws to the caller path. */
 export async function logAudit(
-  actor: Principal | null,
+  actor: AuditActor | null,
   action: string,
   targetType: string,
   targetId: string | null,

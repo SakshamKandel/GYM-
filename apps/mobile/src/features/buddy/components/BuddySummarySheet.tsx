@@ -1,6 +1,6 @@
 import { StyleSheet, View } from 'react-native';
-import { colors, spacing } from '@gym/ui-tokens';
-import { AppText, Divider, Sheet } from '../../../components/ui';
+import { colors, radius, spacing } from '@gym/ui-tokens';
+import { AppText, Sheet } from '../../../components/ui';
 import type { BuddyEvent } from '../../../lib/api/client';
 import { eventDateIso, formatCompact, formatDuration, relativeDayLabel } from '../logic';
 
@@ -43,31 +43,28 @@ export function BuddySummarySheet({ visible, onClose, displayName, events, buddy
             const volumeKg = event.payload?.volumeKg;
             const prCount = event.payload?.prCount ?? 0;
             return (
-              <View key={event.id}>
-                <View style={styles.row}>
-                  <View style={styles.info}>
-                    <AppText variant="bodyBold" numberOfLines={1}>
-                      {name}
-                    </AppText>
-                    <AppText variant="caption">
-                      {dateIso ? relativeDayLabel(dateIso, todayIso) : ''}
-                      {durationSec !== undefined ? ` · ${formatDuration(durationSec)}` : ''}
-                    </AppText>
-                  </View>
-                  <View style={styles.stats}>
-                    {volumeKg !== undefined ? (
-                      <AppText variant="caption" tabular>
-                        {formatCompact(volumeKg)} kg
-                      </AppText>
-                    ) : null}
-                    {prCount > 0 ? (
-                      <AppText variant="caption" color={colors.accent}>
-                        {prCount} PR{prCount === 1 ? '' : 's'}
-                      </AppText>
-                    ) : null}
-                  </View>
+              <View key={event.id} style={styles.row}>
+                <View style={styles.info}>
+                  <AppText variant="bodyBold" numberOfLines={1}>
+                    {name}
+                  </AppText>
+                  <AppText variant="caption">
+                    {dateIso ? relativeDayLabel(dateIso, todayIso) : ''}
+                    {durationSec !== undefined ? ` · ${formatDuration(durationSec)}` : ''}
+                  </AppText>
                 </View>
-                <Divider />
+                <View style={styles.stats}>
+                  {volumeKg !== undefined ? (
+                    <AppText variant="caption" tabular>
+                      {formatCompact(volumeKg)} kg
+                    </AppText>
+                  ) : null}
+                  {prCount > 0 ? (
+                    <AppText variant="caption" color={colors.accent}>
+                      {prCount} PR{prCount === 1 ? '' : 's'}
+                    </AppText>
+                  ) : null}
+                </View>
               </View>
             );
           })}
@@ -79,12 +76,17 @@ export function BuddySummarySheet({ visible, onClose, displayName, events, buddy
 
 const styles = StyleSheet.create({
   empty: { paddingVertical: spacing.lg },
-  list: { gap: spacing.xs },
+  // Rounded raised rows on gaps — the block language's replacement for
+  // Divider hairlines inside lists (brief §11c).
+  list: { gap: spacing.sm },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingVertical: spacing.sm,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
   },
   info: { flex: 1, gap: 1, minWidth: 0 },
   stats: { alignItems: 'flex-end', gap: 1 },

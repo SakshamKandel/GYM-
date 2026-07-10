@@ -16,20 +16,22 @@ import type { FoodLog, Meal } from '@gym/shared';
 import {
   AnimatedNumber,
   AppText,
-  CategoryTile,
+  Card,
   ConfirmDialog,
   DayStrip,
+  EmptyState,
   enterDown,
   enterUp,
   FLOATING_TAB_SPACE,
-  HeroCard,
   IconChip,
   layoutSpring,
-  MacroRing,
+  MacroBar,
   PRESS_SPRING,
   PressableScale,
+  ProgressBar,
   Ring,
   Screen,
+  ScreenHeader,
   Sheet,
 } from '../../components/ui';
 import { logHaptic, tapHaptic } from '../../lib/haptics';
@@ -62,10 +64,29 @@ const MEAL_ICONS: Record<Meal, ComponentProps<typeof Ionicons>['name']> = {
 };
 
 const styles = StyleSheet.create({
-  // Screen already adds insets.top + 16 of air — keep the extra nudge tiny.
-  headerLabel: { marginTop: spacing.xs },
+  // Outlined meta pill under the header title (brief §6 — chips may carry
+  // borders; the no-border law is for cards only).
+  metaChip: {
+    minHeight: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    paddingHorizontal: spacing.lg,
+  },
+  // 48dp round search action beside the huge title (same nav as before).
+  headerAction: {
+    width: 48,
+    height: 48,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   strip: { marginTop: spacing.md },
-  hero: { marginTop: spacing.lg },
+  // Extra air around the hero block (brief §3: up to 28 around the hero).
+  hero: { marginTop: spacing.xl + spacing.xs },
   heroRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -75,29 +96,25 @@ const styles = StyleSheet.create({
   heroLeft: { flexShrink: 1, minWidth: 0 },
   ringCenter: { alignItems: 'center' },
   ringValue: { fontSize: 24, lineHeight: 28 },
-  // Consumed label + macro-ring trio.
-  heroMacrosWrap: { marginTop: spacing.xl },
-  heroMacrosLabel: { marginBottom: spacing.md },
-  heroMacros: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
+  // Thick macro bars on their own charcoal block, sibling of the hero.
+  macroCard: { marginTop: spacing.md, gap: spacing.lg },
   copyRow: {
     marginTop: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
+    minHeight: 64,
   },
   copyInfo: { flex: 1 },
-  waterWrap: { marginTop: spacing.xl },
-  waterCaption: { marginTop: spacing.sm },
-  mealBlock: { marginTop: spacing.xl },
+  // Meal sections: one charcoal block per meal, rows separated by gaps —
+  // no hairline dividers anywhere (brief §11c).
+  mealBlock: { marginTop: spacing.md },
+  mealBlockFirst: { marginTop: spacing.xl },
+  mealCard: { gap: spacing.md },
   mealHeader: {
-    marginBottom: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
@@ -107,51 +124,55 @@ const styles = StyleSheet.create({
   mealKcal: { fontFamily: type.display, fontSize: 20, color: colors.text },
   mealKcalUnit: { fontFamily: type.display, fontSize: 12, letterSpacing: 1 },
   mealKcalRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4, flexShrink: 0 },
-  // Logged items sit on their own surface card, one rounded block per meal.
-  logCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    paddingHorizontal: spacing.lg,
-    overflow: 'hidden',
-  },
+  logList: { gap: spacing.sm },
+  // Logged items are raised nested tiles inside the meal block (radius.md —
+  // the sanctioned nested-tile radius), fill contrast instead of dividers.
   logRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     minHeight: 56,
   },
-  logDivider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
   logInfo: { flex: 1, minWidth: 0 },
   logMacro: { marginTop: 1 },
   logKcalRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4, flexShrink: 0 },
   logKcal: { fontFamily: type.display, fontSize: 18, color: colors.text },
   addRow: {
-    marginTop: spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     minHeight: 48,
     borderRadius: radius.full,
     borderWidth: 1.5,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     paddingHorizontal: spacing.lg,
     alignSelf: 'flex-start',
   },
   addRowPressed: { borderColor: colors.text },
-  // Ghost meal cards for the empty state.
-  ghostWrap: { marginTop: spacing.xl, gap: spacing.md },
+  // Ghost meal rows for the empty state (EmptyState above brings its own air).
+  ghostWrap: { gap: spacing.md },
   ghostRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
     minHeight: 72,
   },
   ghostText: { flex: 1 },
-  emptyIntro: { marginTop: spacing.xl, alignItems: 'center', gap: spacing.xs },
+  // Water: compact charcoal block — icon anchor + litres, red fill bar below.
+  waterWrap: { marginTop: spacing.xl },
+  waterCard: { gap: spacing.md },
+  waterTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  waterInfo: { flex: 1, minWidth: 0 },
+  waterValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs },
+  waterValue: { fontFamily: type.display, fontSize: 24, lineHeight: 28, color: colors.text },
+  waterCaption: { marginTop: spacing.sm },
   waterPressed: { opacity: 0.9, transform: [{ scale: 0.98 }] },
   waterTileInner: { pointerEvents: 'none' },
 });
@@ -159,9 +180,34 @@ const styles = StyleSheet.create({
 // Ease for the water tile's add-confirmation pop (a user-driven settle).
 const EASE_OUT = Easing.bezier(0.25, 0.8, 0.4, 1);
 
+/** Outlined meta pill (brief §6): Oswald caps or mixed-case caption label. */
+function MetaChip({ label, caps = false }: { label: string; caps?: boolean }) {
+  return (
+    <View style={styles.metaChip}>
+      <AppText
+        variant={caps ? 'label' : 'caption'}
+        color={colors.text}
+        tabular={false}
+        numberOfLines={1}
+      >
+        {label}
+      </AppText>
+    </View>
+  );
+}
+
 /** Compact "P XX · C XX · F XX" macro line shared by meal headers and rows. */
 function macroLine(protein: number, carbs: number, fat: number): string {
   return `P ${Math.round(protein)} · C ${Math.round(carbs)} · F ${Math.round(fat)}`;
+}
+
+/** Sensible meal for the generic "log your first meal" CTA, by time of day. */
+function mealForNow(): Meal {
+  const hour = new Date().getHours();
+  if (hour < 11) return 'breakfast';
+  if (hour < 15) return 'lunch';
+  if (hour < 21) return 'dinner';
+  return 'snacks';
 }
 
 export default function FoodScreen() {
@@ -235,12 +281,28 @@ export default function FoodScreen() {
 
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
-      <Animated.View entering={enterDown(0)}>
-        <AppText variant="label" style={styles.headerLabel}>
-          {posterDate(selected)}
-        </AppText>
-        <AppText variant="heading">Food</AppText>
-      </Animated.View>
+      {/* Standard revamp header: eyebrow → huge Oswald title → meta chips.
+          The round search action keeps the header's old "Search food" nav. */}
+      <ScreenHeader
+        title="Food"
+        eyebrow="Nutrition"
+        meta={
+          <>
+            <MetaChip label={posterDate(selected)} />
+            <MetaChip caps label={selected === todayIso() ? 'Today' : 'Log'} />
+          </>
+        }
+        action={
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Search food"
+            onPress={() => addTo(mealForNow())}
+            style={styles.headerAction}
+          >
+            <Ionicons name="search" size={22} color={colors.text} />
+          </PressableScale>
+        }
+      />
 
       <Animated.View entering={enterDown(1)} style={styles.strip}>
         <DayStrip
@@ -252,73 +314,77 @@ export default function FoodScreen() {
         />
       </Animated.View>
 
-      {/* Hero: eaten kcal counts up next to an adherence-neutral ring; below,
-          the three macros as parallel rings so "consumed" reads at a glance. */}
-      <Animated.View entering={enterUp(0)}>
-        <HeroCard style={styles.hero}>
+      {/* Cream hero block — today's calories in black ink: big Oswald eaten
+          number beside the adherence-neutral kcal ring (onBlock arc over the
+          sanctioned rgba track on colored blocks). */}
+      <Animated.View entering={enterUp(0)} style={styles.hero}>
+        <Card variant="cream">
           <View style={styles.heroRow}>
             <View style={styles.heroLeft}>
-              <AppText variant="label">Calories</AppText>
-              <AnimatedNumber value={eaten} variant="stat" />
-              <AppText variant="caption" color={colors.textDim}>
+              <AppText variant="label" color={colors.creamDim}>
+                Calories
+              </AppText>
+              <AnimatedNumber value={eaten} variant="stat" color={colors.onBlock} />
+              <AppText variant="caption" color={colors.creamDim} tabular>
                 of {targets.kcal} kcal
               </AppText>
             </View>
             <Ring
-              size={88}
-              strokeWidth={8}
+              size={96}
+              strokeWidth={10}
               progress={targets.kcal > 0 ? eaten / targets.kcal : 0}
-              color={colors.kcal}
+              color={colors.onBlock}
+              trackColor="rgba(0,0,0,0.15)"
             >
               <View style={styles.ringCenter}>
                 <AppText
                   variant="display"
                   style={styles.ringValue}
-                  color={ring.over ? colors.textDim : colors.text}
+                  color={ring.over ? colors.creamDim : colors.onBlock}
                 >
                   {ring.value}
                 </AppText>
-                <AppText variant="caption" color={colors.textDim}>
+                <AppText variant="caption" color={colors.creamDim}>
                   {ring.caption}
                 </AppText>
               </View>
             </Ring>
           </View>
+        </Card>
+      </Animated.View>
 
-          <View style={styles.heroMacrosWrap}>
-            <AppText variant="label" style={styles.heroMacrosLabel}>
-              Consumed
-            </AppText>
-            <View style={styles.heroMacros}>
-              <MacroRing
-                label="Protein"
-                current={totals.protein}
-                target={targets.protein}
-                color={colors.protein}
-                delay={120}
-              />
-              <MacroRing
-                label="Carbs"
-                current={totals.carbs}
-                target={targets.carbs}
-                color={colors.carbs}
-                delay={200}
-              />
-              <MacroRing
-                label="Fat"
-                current={totals.fat}
-                target={targets.fat}
-                color={colors.fat}
-                delay={280}
-              />
-            </View>
-          </View>
-        </HeroCard>
+      {/* Consumed macros: thick rounded bars on a charcoal block (fixed
+          app-wide macro colors over the raised track). */}
+      <Animated.View entering={enterUp(1)}>
+        <Card style={styles.macroCard}>
+          <AppText variant="label">Consumed</AppText>
+          <MacroBar
+            label="Protein"
+            current={totals.protein}
+            target={targets.protein}
+            color={colors.protein}
+            delay={120}
+          />
+          <MacroBar
+            label="Carbs"
+            current={totals.carbs}
+            target={targets.carbs}
+            color={colors.carbs}
+            delay={200}
+          />
+          <MacroBar
+            label="Fat"
+            current={totals.fat}
+            target={targets.fat}
+            color={colors.fat}
+            delay={280}
+          />
+        </Card>
       </Animated.View>
 
       {/* Copy yesterday — a full day of logging in one tap */}
       {showCopyYesterday ? (
-        <Animated.View entering={enterUp(1)} layout={layoutSpring}>
+        <Animated.View entering={enterUp(2)} layout={layoutSpring}>
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel={`Copy yesterday's meals: ${yesterdayLogs.length} items, ${yesterdayKcal} calories`}
@@ -341,55 +407,21 @@ export default function FoodScreen() {
 
       {/* GM suggestions (Gold+, today only) */}
       {loaded ? (
-        <Animated.View entering={enterUp(2)}>
+        <Animated.View entering={enterUp(3)}>
           <SuggestionsSection remaining={remaining} date={selected} />
         </Animated.View>
       ) : null}
 
-      {/* Water */}
-      <Animated.View entering={enterUp(3)} style={styles.waterWrap}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Water: ${litres(waterMl)} litres. Tap to add 250 millilitres, long press to remove 250.`}
-          onPress={addWaterTap}
-          onLongPress={() => {
-            if (waterMl <= 0) return;
-            tapHaptic();
-            void addWater(-250);
-          }}
-          style={({ pressed }) => (pressed ? styles.waterPressed : null)}
-        >
-          <Animated.View
-            style={[styles.waterTileInner, waterPopStyle]}
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
-          >
-            <CategoryTile
-              title="Water"
-              value={litres(waterMl)}
-              unit="L"
-              icon="water"
-              color={colors.blue}
-              deepColor={colors.blueDeep}
-            />
-          </Animated.View>
-        </Pressable>
-        <AppText variant="caption" color={colors.textDim} style={styles.waterCaption} tabular>
-          target {litres(targets.waterMl)}L · tap +250ml · hold −250ml
-        </AppText>
-      </Animated.View>
-
-      {/* Meals */}
+      {/* Meals — one charcoal block per meal, log rows as raised tiles */}
       {!loaded ? null : logs.length === 0 ? (
         <Animated.View entering={enterUp(4)}>
-          <View style={styles.emptyIntro}>
-            <AppText variant="title" center>
-              Nothing logged yet
-            </AppText>
-            <AppText variant="caption" color={colors.textDim} center>
-              Tap a meal to add your first food of the day
-            </AppText>
-          </View>
+          <EmptyState
+            icon="restaurant-outline"
+            title="Nothing logged yet"
+            body="Search a food or tap a meal below to start the day."
+            actionLabel="Log your first meal"
+            onAction={() => addTo(mealForNow())}
+          />
           <View style={styles.ghostWrap}>
             {MEALS.map(({ key, label }) => (
               <PressableScale
@@ -420,97 +452,145 @@ export default function FoodScreen() {
               key={key}
               entering={enterUp(4 + mealIndex)}
               layout={layoutSpring}
-              style={styles.mealBlock}
+              style={[styles.mealBlock, mealIndex === 0 && styles.mealBlockFirst]}
             >
-              <View style={styles.mealHeader}>
-                <IconChip icon={MEAL_ICONS[key]} />
-                <View style={styles.mealHeaderText}>
-                  <AppText variant="bodyBold" numberOfLines={1}>
-                    {label}
-                  </AppText>
+              <Card style={styles.mealCard}>
+                <View style={styles.mealHeader}>
+                  <IconChip icon={MEAL_ICONS[key]} />
+                  <View style={styles.mealHeaderText}>
+                    <AppText variant="bodyBold" numberOfLines={1}>
+                      {label}
+                    </AppText>
+                    {items.length > 0 ? (
+                      <AppText
+                        variant="caption"
+                        color={colors.textDim}
+                        style={styles.mealMacroLine}
+                        tabular
+                        numberOfLines={1}
+                      >
+                        {macroLine(mealTotals.protein, mealTotals.carbs, mealTotals.fat)}
+                      </AppText>
+                    ) : (
+                      <AppText variant="caption" color={colors.textDim}>
+                        Nothing yet
+                      </AppText>
+                    )}
+                  </View>
                   {items.length > 0 ? (
-                    <AppText
-                      variant="caption"
-                      color={colors.textDim}
-                      style={styles.mealMacroLine}
-                      tabular
-                      numberOfLines={1}
-                    >
-                      {macroLine(mealTotals.protein, mealTotals.carbs, mealTotals.fat)}
-                    </AppText>
-                  ) : (
-                    <AppText variant="caption" color={colors.textFaint}>
-                      Nothing yet
-                    </AppText>
-                  )}
+                    <View style={styles.mealKcalRow}>
+                      <AppText style={styles.mealKcal} tabular>
+                        {sumKcal(items)}
+                      </AppText>
+                      <AppText style={styles.mealKcalUnit} color={colors.textDim} tabular={false}>
+                        KCAL
+                      </AppText>
+                    </View>
+                  ) : null}
                 </View>
+
                 {items.length > 0 ? (
-                  <View style={styles.mealKcalRow}>
-                    <AppText style={styles.mealKcal} tabular>
-                      {sumKcal(items)}
-                    </AppText>
-                    <AppText style={styles.mealKcalUnit} color={colors.textFaint} tabular={false}>
-                      KCAL
-                    </AppText>
+                  <View style={styles.logList}>
+                    {items.map((log) => (
+                      <Animated.View key={log.id} entering={enterUp(0)} layout={layoutSpring}>
+                        <PressableScale
+                          accessibilityRole="button"
+                          accessibilityLabel={`${log.foodName}, ${Math.round(log.grams)} grams, ${Math.round(log.kcal)} calories. Tap for details, long press to remove.`}
+                          onPress={() => openDetail(log)}
+                          onLongPress={() => requestDelete(log)}
+                          style={styles.logRow}
+                        >
+                          <View style={styles.logInfo}>
+                            <AppText variant="body" numberOfLines={1}>
+                              {log.foodName}
+                            </AppText>
+                            <AppText
+                              variant="caption"
+                              color={colors.textDim}
+                              style={styles.logMacro}
+                              tabular
+                              numberOfLines={1}
+                            >
+                              {Math.round(log.grams)} g ·{' '}
+                              {macroLine(log.protein, log.carbs, log.fat)}
+                            </AppText>
+                          </View>
+                          <View style={styles.logKcalRow}>
+                            <AppText style={styles.logKcal} tabular>
+                              {Math.round(log.kcal)}
+                            </AppText>
+                            <AppText variant="caption" color={colors.textDim}>
+                              kcal
+                            </AppText>
+                          </View>
+                        </PressableScale>
+                      </Animated.View>
+                    ))}
                   </View>
                 ) : null}
-              </View>
 
-              {items.length > 0 ? (
-                <View style={styles.logCard}>
-                  {items.map((log, i) => (
-                    <Animated.View key={log.id} entering={enterUp(0)} layout={layoutSpring}>
-                      {i > 0 ? <View style={styles.logDivider} /> : null}
-                      <PressableScale
-                        accessibilityRole="button"
-                        accessibilityLabel={`${log.foodName}, ${Math.round(log.grams)} grams, ${Math.round(log.kcal)} calories. Tap for details, long press to remove.`}
-                        onPress={() => openDetail(log)}
-                        onLongPress={() => requestDelete(log)}
-                        style={styles.logRow}
-                      >
-                        <View style={styles.logInfo}>
-                          <AppText variant="body" numberOfLines={1}>
-                            {log.foodName}
-                          </AppText>
-                          <AppText
-                            variant="caption"
-                            color={colors.textFaint}
-                            style={styles.logMacro}
-                            tabular
-                            numberOfLines={1}
-                          >
-                            {Math.round(log.grams)} g · {macroLine(log.protein, log.carbs, log.fat)}
-                          </AppText>
-                        </View>
-                        <View style={styles.logKcalRow}>
-                          <AppText style={styles.logKcal} tabular>
-                            {Math.round(log.kcal)}
-                          </AppText>
-                          <AppText variant="caption" color={colors.textFaint}>
-                            kcal
-                          </AppText>
-                        </View>
-                      </PressableScale>
-                    </Animated.View>
-                  ))}
-                </View>
-              ) : null}
-
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`Add food to ${label}`}
-                onPress={() => addTo(key)}
-                style={({ pressed }) => [styles.addRow, pressed && styles.addRowPressed]}
-              >
-                <Ionicons name="add" size={18} color={colors.textDim} />
-                <AppText variant="bodyBold" color={colors.textDim}>
-                  Add food
-                </AppText>
-              </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Add food to ${label}`}
+                  onPress={() => addTo(key)}
+                  style={({ pressed }) => [styles.addRow, pressed && styles.addRowPressed]}
+                >
+                  <Ionicons name="add" size={18} color={colors.textDim} />
+                  <AppText variant="bodyBold" color={colors.textDim}>
+                    Add food
+                  </AppText>
+                </Pressable>
+              </Card>
             </Animated.View>
           );
         })
       )}
+
+      {/* Water — compact charcoal block: litres up top, red fill bar below.
+          Same one-tap +250 / long-press −250 target as before. */}
+      <Animated.View entering={enterUp(8)} style={styles.waterWrap}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Water: ${litres(waterMl)} litres. Tap to add 250 millilitres, long press to remove 250.`}
+          onPress={addWaterTap}
+          onLongPress={() => {
+            if (waterMl <= 0) return;
+            tapHaptic();
+            void addWater(-250);
+          }}
+          style={({ pressed }) => (pressed ? styles.waterPressed : null)}
+        >
+          <Animated.View
+            style={[styles.waterTileInner, waterPopStyle]}
+            accessibilityElementsHidden
+            importantForAccessibility="no-hide-descendants"
+          >
+            <Card style={styles.waterCard}>
+              <View style={styles.waterTop}>
+                <IconChip icon="water" />
+                <View style={styles.waterInfo}>
+                  <AppText variant="label">Water</AppText>
+                  <View style={styles.waterValueRow}>
+                    <AppText style={styles.waterValue} tabular>
+                      {litres(waterMl)}
+                    </AppText>
+                    <AppText variant="caption" color={colors.textDim}>
+                      L
+                    </AppText>
+                  </View>
+                </View>
+              </View>
+              <ProgressBar
+                value={targets.waterMl > 0 ? waterMl / targets.waterMl : 0}
+                height={10}
+              />
+            </Card>
+          </Animated.View>
+        </Pressable>
+        <AppText variant="caption" color={colors.textDim} style={styles.waterCaption} tabular>
+          target {litres(targets.waterMl)}L · tap +250ml · hold −250ml
+        </AppText>
+      </Animated.View>
 
       {/* Branded confirm for the long-press remove shortcut */}
       <ConfirmDialog

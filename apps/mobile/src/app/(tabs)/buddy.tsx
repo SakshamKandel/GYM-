@@ -1,30 +1,23 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import Animated, {
-  cancelAnimation,
-  Easing,
-  FadeOut,
-  useAnimatedStyle,
-  useReducedMotion,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { FadeOut } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
   AppTextInput,
   Button,
-  Divider,
+  Card,
   enterFade,
   enterUp,
   FLOATING_TAB_SPACE,
-  HeroCard,
+  FractionStat,
+  IconChip,
   layoutSpring,
   PressableScale,
   Screen,
+  ScreenHeader,
   SectionLabel,
   Tag,
 } from '../../components/ui';
@@ -92,27 +85,45 @@ export default function BuddyScreen() {
 }
 
 // ════════════════════════════════════════════════════════════════
-// Signed-out view — nudge to sign in
+// Meta chip — outlined pill under the screen title (brief §6).
+// Chips are allowed borders; the no-border law is for cards.
+// ════════════════════════════════════════════════════════════════
+
+function MetaChip({ label }: { label: string }) {
+  return (
+    <View style={styles.metaChip}>
+      <AppText variant="label" color={colors.text}>
+        {label}
+      </AppText>
+    </View>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Signed-out view — red hero block carries the invite to sign in
 // ════════════════════════════════════════════════════════════════
 
 function SignedOutView() {
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
-      <Animated.View entering={enterUp(0)}>
-        <HeroCard mascot tone="surface">
-          <AppText variant="label" color={colors.accent}>
-            GYM BUDDY
-          </AppText>
-          <AppText variant="heading" style={styles.heroTitle}>
+      <ScreenHeader eyebrow="Gym buddy" title="Buddy" />
+      <Animated.View entering={enterUp(1)} style={styles.heroWrap}>
+        <Card variant="red" style={styles.heroCard}>
+          <AppText variant="title" color={colors.onBlock}>
             Train together, stay accountable
           </AppText>
-          <AppText variant="caption">
+          <AppText variant="body" color={colors.onBlock}>
             Sign in to add friends, start live sessions, and unlock referral rewards.
           </AppText>
-        </HeroCard>
+          <Button
+            label="Sign in"
+            variant="onBlock"
+            onPress={() => router.push('/auth/sign-in')}
+            style={styles.formBtn}
+          />
+        </Card>
       </Animated.View>
       <View style={styles.signedOutBtns}>
-        <Button label="Sign in" variant="primary" onPress={() => router.push('/auth/sign-in')} />
         <Button
           label="Create account"
           variant="secondary"
@@ -167,12 +178,16 @@ function BuddyContent({
 
   return (
     <Screen scroll keyboardAware bottomInset={FLOATING_TAB_SPACE}>
-      <Animated.View entering={enterUp(0)}>
-        <AppText variant="heading">Buddy</AppText>
-        <AppText variant="caption" style={styles.subtitle}>
-          Pair up, train live, and grow together.
-        </AppText>
-      </Animated.View>
+      <ScreenHeader
+        eyebrow="Gym buddy"
+        title="Buddy"
+        meta={
+          <>
+            <MetaChip label={sessions.length > 0 ? 'Live now' : 'Team'} />
+            <MetaChip label={`${accepted.length}/${BUDDY_LIMIT} buddies`} />
+          </>
+        }
+      />
 
       {stale ? (
         <Animated.View entering={enterFade(0)}>
@@ -183,13 +198,31 @@ function BuddyContent({
             style={styles.staleRow}
           >
             <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
-            <AppText variant="caption" style={styles.staleText}>
+            <AppText variant="body" color={colors.textDim} style={styles.staleText}>
               Showing last known state — tap to retry.
             </AppText>
             <Ionicons name="refresh" size={15} color={colors.textDim} />
           </PressableScale>
         </Animated.View>
       ) : null}
+
+      {/* ── Red hero: buddy crew summary ──────────────────────── */}
+      <Animated.View entering={enterUp(1)} style={styles.heroWrap}>
+        <Card variant="red" style={styles.heroCard}>
+          <View style={styles.heroTopRow}>
+            <AppText variant="label" color={colors.onBlock}>
+              Your crew
+            </AppText>
+            {sessions.length > 0 ? <Tag label="Live now" variant="onBlock" /> : null}
+          </View>
+          <FractionStat value={accepted.length} total={BUDDY_LIMIT} onBlock />
+          <AppText variant="body" color={colors.onBlock}>
+            {sessions.length > 0
+              ? 'A training session is live. Join in, send support, and keep the streak moving.'
+              : 'Pair up, train live, and use friendly pressure to stay consistent.'}
+          </AppText>
+        </Card>
+      </Animated.View>
 
       {/* ── Pending incoming invites ──────────────────────────── */}
       {pendingIn.length > 0 ? (
@@ -244,7 +277,7 @@ function BuddyContent({
       ) : (
         <Animated.View entering={enterFade(0)} style={styles.emptyState}>
           <Ionicons name="people-outline" size={40} color={colors.textFaint} />
-          <AppText variant="caption" center style={styles.emptyText}>
+          <AppText variant="body" color={colors.textDim} center style={styles.emptyText}>
             No buddies yet — invite a friend above to get started.
           </AppText>
         </Animated.View>
@@ -269,8 +302,6 @@ function BuddyContent({
 
       {accepted.length > 0 ? (
         <>
-          <Divider />
-
           {/* ── Coach challenge ────────────────────────────────── */}
           {social.challenge !== null ? (
             <View>
@@ -315,9 +346,7 @@ function BuddyContent({
           onPress={() => pushPath('/leaderboard')}
           style={styles.publicBoardCard}
         >
-          <View style={styles.publicBoardIcon}>
-            <Ionicons name="podium" size={20} color={colors.accent} />
-          </View>
+          <IconChip icon="podium" color={colors.accentFaint} iconColor={colors.accent} />
           <View style={styles.buddyInfo}>
             <AppText variant="bodyBold">This month&apos;s consistency ranking</AppText>
             <AppText variant="caption">Whole gym — session-days, one per day.</AppText>
@@ -325,8 +354,6 @@ function BuddyContent({
           <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
         </PressableScale>
       </View>
-
-      <Divider />
 
       {/* ── Live sessions ─────────────────────────────────────── */}
       <View>
@@ -352,8 +379,6 @@ function BuddyContent({
           mySession={mySession}
         />
       </View>
-
-      <Divider />
 
       {/* ── Referral program ──────────────────────────────────── */}
       <View>
@@ -410,7 +435,7 @@ function InviteForm({ buddyCount, onSent }: { buddyCount: number; onSent: () => 
   return (
     <View style={styles.formCard}>
       {atLimit ? (
-        <AppText variant="caption" color={colors.warning}>
+        <AppText variant="body" color={colors.warning}>
           You&apos;ve hit the {BUDDY_LIMIT}-buddy limit. Remove a buddy to add someone new.
         </AppText>
       ) : (
@@ -435,14 +460,14 @@ function InviteForm({ buddyCount, onSent }: { buddyCount: number; onSent: () => 
           />
           {success ? (
             <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
-              <AppText variant="caption" color={colors.success} style={styles.formMsg}>
+              <AppText variant="body" color={colors.success} style={styles.formMsg}>
                 Invite sent! They&apos;ll appear here once they accept.
               </AppText>
             </Animated.View>
           ) : null}
           {error ? (
             <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
-              <AppText variant="caption" color={colors.error} style={styles.formMsg}>
+              <AppText variant="body" color={colors.error} style={styles.formMsg}>
                 {error}
               </AppText>
             </Animated.View>
@@ -494,7 +519,7 @@ function BuddyRow({
           </AppText>
         </View>
         <View style={styles.buddyInfo}>
-          <AppText variant="title" style={styles.buddyName}>
+          <AppText variant="bodyBold">
             {link.buddy.displayName || link.buddy.email}
           </AppText>
           <AppText variant="caption">{subtitle}</AppText>
@@ -578,7 +603,7 @@ function PendingInviteRow({
           </AppText>
         </View>
         <View style={styles.buddyInfo}>
-          <AppText variant="title" style={styles.buddyName}>
+          <AppText variant="bodyBold">
             {link.buddy.displayName || link.buddy.email}
           </AppText>
           <AppText variant="caption">wants to be your buddy</AppText>
@@ -606,7 +631,7 @@ function PendingOutRow({ link, onCancel }: { link: BuddyLink; onCancel: () => vo
           </AppText>
         </View>
         <View style={styles.buddyInfo}>
-          <AppText variant="title" style={styles.buddyName}>
+          <AppText variant="bodyBold">
             {link.buddy.displayName || link.buddy.email}
           </AppText>
           <AppText variant="caption">waiting for response…</AppText>
@@ -625,42 +650,13 @@ function PendingOutRow({ link, onCancel }: { link: BuddyLink; onCancel: () => vo
 }
 
 // ════════════════════════════════════════════════════════════════
-// Live status dot — a solid accent dot with a slow radiating halo: a
-// genuine "broadcasting" indicator for an active session. The halo is
-// ambient motion, so it's disabled under reduced motion (the solid dot
-// remains as the static status marker).
+// Live status dot — a static solid accent dot. The block language bans
+// looping/pulsing motion, so "live" reads through the red dot + LIVE
+// label, not animation.
 // ════════════════════════════════════════════════════════════════
 
 function LiveDot() {
-  const reduceMotion = useReducedMotion();
-  const ping = useSharedValue(0);
-
-  useEffect(() => {
-    if (reduceMotion) {
-      ping.value = 0;
-      return;
-    }
-    ping.value = withRepeat(
-      withTiming(1, { duration: 1800, easing: Easing.out(Easing.ease) }),
-      -1,
-      false,
-    );
-    return () => cancelAnimation(ping);
-  }, [reduceMotion, ping]);
-
-  const haloStyle = useAnimatedStyle(() => ({
-    opacity: (1 - ping.value) * 0.4,
-    transform: [{ scale: 1 + ping.value * 2.4 }],
-  }));
-
-  return (
-    <View style={styles.liveDotWrap}>
-      {reduceMotion ? null : (
-        <Animated.View pointerEvents="none" style={[styles.liveHalo, haloStyle]} />
-      )}
-      <View style={styles.liveDot} />
-    </View>
-  );
+  return <View style={styles.liveDot} />;
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -697,7 +693,7 @@ function LiveSessionSection({
     return (
       <Animated.View entering={enterFade(0)} style={styles.emptyState}>
         <Ionicons name="barbell-outline" size={36} color={colors.textFaint} />
-        <AppText variant="caption" center style={styles.emptyText}>
+        <AppText variant="body" color={colors.textDim} center style={styles.emptyText}>
           No active live sessions. Start one below or wait for a buddy to go live.
         </AppText>
       </Animated.View>
@@ -708,7 +704,7 @@ function LiveSessionSection({
     <View style={styles.sessionList}>
       {error ? (
         <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
-          <AppText variant="caption" color={colors.error} style={styles.formMsg}>
+          <AppText variant="body" color={colors.error} style={styles.formMsg}>
             {error}
           </AppText>
         </Animated.View>
@@ -728,7 +724,7 @@ function LiveSessionSection({
               </AppText>
             </View>
             <View style={styles.buddyInfo}>
-              <AppText variant="title" style={styles.buddyName}>
+              <AppText variant="bodyBold">
                 {session.host.displayName}
               </AppText>
               <AppText variant="caption">{session.workoutName}</AppText>
@@ -755,7 +751,7 @@ function LiveSessionSection({
             style={styles.formBtn}
           />
           {session.host.tier !== tier ? (
-            <AppText variant="caption" color={colors.warning} style={styles.formMsg}>
+            <AppText variant="body" color={colors.warning} style={styles.formMsg}>
               {joinSessionErrorLine('tier_mismatch')}
             </AppText>
           ) : null}
@@ -804,7 +800,7 @@ function StartSessionForm({
             YOUR SESSION IS LIVE
           </AppText>
         </View>
-        <AppText variant="title" style={styles.mySessionName}>
+        <AppText variant="title">
           {mySession.workoutName}
         </AppText>
         <Button
@@ -819,7 +815,7 @@ function StartSessionForm({
 
   return (
     <View style={styles.formCard}>
-      <AppText variant="caption" style={styles.formHint}>
+      <AppText variant="body" color={colors.textDim}>
         Start a live workout and let your buddies join in real time.
       </AppText>
       <AppTextInput
@@ -840,7 +836,7 @@ function StartSessionForm({
       />
       {error ? (
         <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
-          <AppText variant="caption" color={colors.error} style={styles.formMsg}>
+          <AppText variant="body" color={colors.error} style={styles.formMsg}>
             Couldn&apos;t start the session — try again in a bit.
           </AppText>
         </Animated.View>
@@ -887,16 +883,19 @@ function ReferralSection({
 
   return (
     <View>
-      <View style={styles.referralHero}>
-        <Ionicons name="gift-outline" size={28} color={colors.accent} />
+      {/* Cream counterpoint block (the screen's one cream card, brief §2) */}
+      <Card variant="cream" style={styles.referralCream}>
+        <Ionicons name="gift-outline" size={28} color={colors.onBlock} />
         <View style={styles.referralHeroText}>
-          <AppText variant="title">Invite friends, earn discounts</AppText>
-          <AppText variant="caption">
+          <AppText variant="title" color={colors.onBlock}>
+            Invite friends, earn discounts
+          </AppText>
+          <AppText variant="body" color={colors.creamDim}>
             For every friend who joins, you both get a subscription discount.
             {joinedCount > 0 ? ` ${joinedCount} friend${joinedCount > 1 ? 's' : ''} joined so far!` : ''}
           </AppText>
         </View>
-      </View>
+      </Card>
 
       <View style={styles.formCard}>
         <AppTextInput
@@ -920,14 +919,14 @@ function ReferralSection({
         />
         {success ? (
           <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
-            <AppText variant="caption" color={colors.success} style={styles.formMsg}>
+            <AppText variant="body" color={colors.success} style={styles.formMsg}>
               Referral sent! You&apos;ll get a discount when they join.
             </AppText>
           </Animated.View>
         ) : null}
         {error ? (
           <Animated.View entering={enterFade(0)} accessibilityLiveRegion="polite">
-            <AppText variant="caption" color={colors.error} style={styles.formMsg}>
+            <AppText variant="body" color={colors.error} style={styles.formMsg}>
               {error}
             </AppText>
           </Animated.View>
@@ -949,7 +948,7 @@ function ReferralSection({
                 </AppText>
               </View>
               <View style={styles.buddyInfo}>
-                <AppText style={styles.referralEmail}>{ref.inviteeEmail}</AppText>
+                <AppText variant="body" numberOfLines={1}>{ref.inviteeEmail}</AppText>
                 <AppText
                   variant="caption"
                   color={
@@ -977,34 +976,51 @@ function ReferralSection({
 }
 
 // ════════════════════════════════════════════════════════════════
-// Styles
+// Styles — block language: borderless charcoal cards, one red hero,
+// one cream counterpoint, pill chips, fill-contrast separation.
 // ════════════════════════════════════════════════════════════════
 
 const styles = StyleSheet.create({
-  subtitle: { marginTop: spacing.xs, marginBottom: spacing.lg },
-  heroTitle: { fontSize: 25, lineHeight: 32 },
-  signedOutBtns: { gap: spacing.md, marginTop: spacing.xl },
+  // Header & hero
+  heroWrap: { marginTop: spacing.xl },
+  heroCard: { gap: spacing.md },
+  heroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  signedOutBtns: { gap: spacing.md, marginTop: spacing.md },
+
+  // Outlined meta chip under the title (brief §6: 34–36 pill, borderStrong)
+  metaChip: {
+    minHeight: 34,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    paddingHorizontal: spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   staleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: spacing.sm,
     backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
-    minHeight: touch.min,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
-    marginBottom: spacing.md,
+    minHeight: touch.min,
+    marginTop: spacing.md,
   },
   staleText: { flex: 1 },
 
-  // Cards
+  // Charcoal form modules — chunky blocks, no borders
   formCard: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.lg,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     gap: spacing.md,
   },
   textInput: {
@@ -1013,14 +1029,11 @@ const styles = StyleSheet.create({
   },
   formBtn: { marginTop: spacing.xs },
   formMsg: { marginTop: spacing.xs },
-  formHint: { marginBottom: spacing.xs },
 
-  // Buddy card
+  // Buddy rows — rounded charcoal rows; gaps replace hairlines
   buddyCard: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderRadius: radius.md,
     padding: spacing.lg,
     marginBottom: spacing.md,
     gap: spacing.md,
@@ -1033,13 +1046,12 @@ const styles = StyleSheet.create({
   avatar: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: radius.full,
     backgroundColor: colors.surfaceRaised,
     alignItems: 'center',
     justifyContent: 'center',
   },
   buddyInfo: { flex: 1, gap: 2 },
-  buddyName: { fontSize: 17 },
   iconBtn: {
     width: touch.min,
     height: touch.min,
@@ -1054,33 +1066,24 @@ const styles = StyleSheet.create({
   actionBtn: { flex: 1 },
   buddyExpand: { gap: spacing.md },
   weekLabel: { marginBottom: spacing.xs },
-  weekStrip: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  weekStrip: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   weekDot: {
     width: 8,
     height: 8,
-    borderRadius: 4,
+    borderRadius: radius.full,
     backgroundColor: colors.surfaceRaised,
   },
   weekDotOn: { backgroundColor: colors.accent },
 
-  // Public leaderboard entry card
+  // Public leaderboard entry row
   publicBoardCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderRadius: radius.md,
     padding: spacing.lg,
-  },
-  publicBoardIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.sm,
-    backgroundColor: colors.accentFaint,
-    alignItems: 'center',
-    justifyContent: 'center',
+    minHeight: 64,
   },
 
   // Empty state
@@ -1091,38 +1094,23 @@ const styles = StyleSheet.create({
   },
   emptyText: { paddingHorizontal: spacing.xl },
 
-  // Live sessions
+  // Live sessions — charcoal blocks; "live" reads via dot + label
   sessionList: { gap: spacing.md },
   sessionCard: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1.5,
-    borderColor: colors.accentFaint,
-    padding: spacing.lg,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     gap: spacing.md,
   },
   sessionTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-  },
-  liveDotWrap: {
-    width: 8,
-    height: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  liveHalo: {
-    position: 'absolute',
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.accent,
+    gap: spacing.sm,
   },
   liveDot: {
     width: 8,
     height: 8,
-    borderRadius: 4,
+    borderRadius: radius.full,
     backgroundColor: colors.accent,
   },
   sessionBody: {
@@ -1132,28 +1120,25 @@ const styles = StyleSheet.create({
   },
   tierRow: {
     flexDirection: 'row',
-    gap: 6,
-    marginTop: 4,
+    gap: spacing.sm,
+    marginTop: spacing.xs,
   },
   mySessionCard: {
-    backgroundColor: colors.accentFaint,
-    borderRadius: radius.lg,
-    borderWidth: 1.5,
-    borderColor: colors.accent,
-    padding: spacing.lg,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     gap: spacing.md,
     marginTop: spacing.md,
   },
-  mySessionName: { fontSize: 18 },
 
-  // Referrals
-  referralHero: {
+  // Referrals — cream counterpoint block + charcoal rows
+  referralCream: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.md,
     marginBottom: spacing.md,
   },
-  referralHeroText: { flex: 1, gap: 4 },
+  referralHeroText: { flex: 1, gap: spacing.xs },
   referralList: {
     marginTop: spacing.lg,
     gap: spacing.sm,
@@ -1165,11 +1150,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     padding: spacing.md,
+    minHeight: 64,
   },
-  referralEmail: {
-    fontFamily: type.body,
-    fontSize: 15,
-    color: colors.text,
-  },
-
 });

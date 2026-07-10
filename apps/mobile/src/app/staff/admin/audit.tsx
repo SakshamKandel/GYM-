@@ -8,11 +8,11 @@ import {
   AppText,
   Button,
   Chip,
-  Divider,
   enterDown,
   enterUp,
   PressableScale,
   Screen,
+  ScreenHeader,
   Tag,
 } from '../../../components/ui';
 import {
@@ -30,6 +30,9 @@ import { useAuth } from '../../../state/auth';
  * action and target. A row of quick action filters narrows the feed; the raw
  * filter re-runs from page one. "Load more" appends the next cursor page.
  * Gated: sub-roles see a locked notice, never the data.
+ *
+ * Block language (REVAMP-BRIEF): back row → ScreenHeader → pill filter chips →
+ * charcoal entry rows separated by gaps (no hairline dividers, no borders).
  */
 
 /** Common audit actions surfaced as one-tap filter chips (server free-text). */
@@ -194,7 +197,6 @@ export default function AuditScreen() {
               {e.targetId ? ` · ${e.targetId}` : ''}
             </AppText>
           </View>
-          {i < entries.length - 1 ? <Divider /> : null}
         </Animated.View>
       ))}
 
@@ -215,20 +217,22 @@ export default function AuditScreen() {
   );
 }
 
-/** Shared back row (no header — matches the rest of the app). */
+/** Shared back row + revamp header (no native header — matches the app). */
 function BackRow({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <Animated.View entering={enterDown()} style={styles.headerRow}>
-      <PressableScale
-        accessibilityRole="button"
-        accessibilityLabel="Back"
-        onPress={onBack}
-        style={styles.backBtn}
-      >
-        <Ionicons name="chevron-back" size={24} color={colors.text} />
-      </PressableScale>
-      <AppText variant="heading">{title}</AppText>
-    </Animated.View>
+    <>
+      <Animated.View entering={enterDown()} style={styles.headerRow}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          onPress={onBack}
+          style={styles.backBtn}
+        >
+          <Ionicons name="chevron-back" size={24} color={colors.text} />
+        </PressableScale>
+      </Animated.View>
+      <ScreenHeader eyebrow="Admin console" title={title} style={styles.header} />
+    </>
   );
 }
 
@@ -264,6 +268,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  header: { marginBottom: spacing.gutter },
   locked: {
     marginTop: spacing.xxl,
     alignItems: 'center',
@@ -278,7 +283,14 @@ const styles = StyleSheet.create({
   },
   center: { paddingVertical: spacing.xl, alignItems: 'center' },
   hint: { marginTop: spacing.md },
-  entry: { paddingVertical: spacing.md, gap: 4 },
+  // Charcoal entry row (brief §11c): gaps between rows replace hairlines.
+  entry: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    gap: 4,
+    marginBottom: spacing.sm,
+  },
   entryHead: {
     flexDirection: 'row',
     alignItems: 'center',

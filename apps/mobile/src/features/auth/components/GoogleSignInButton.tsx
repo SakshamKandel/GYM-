@@ -1,5 +1,4 @@
 import * as Google from 'expo-auth-session/providers/google';
-import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { useEffect, useState } from 'react';
 import { Platform, View } from 'react-native';
@@ -9,6 +8,7 @@ import { AppText, enterFade } from '../../../components/ui';
 import { toApiError } from '../../../lib/api/client';
 import { successHaptic, warnHaptic } from '../../../lib/haptics';
 import { useAuth } from '../../../state/auth';
+import { enterApp } from '../nav';
 import { describeGoogleError, GooglePill, googleStyles } from './googleShared';
 import { NativeGoogleSignIn } from './NativeGoogleSignIn';
 
@@ -57,7 +57,9 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
     signInWithGoogle(idToken)
       .then(() => {
         successHaptic();
-        router.replace('/');
+        // Shared staff-aware landing — a bare router.replace('/') bounced
+        // staff accounts to /welcome ("login did nothing").
+        enterApp();
       })
       .catch((err: unknown) => {
         if (cancelled) return;

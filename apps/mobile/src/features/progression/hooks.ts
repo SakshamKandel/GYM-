@@ -4,7 +4,7 @@ import type { ProgressionAction, ProgressionResult } from '@gym/shared';
 import { suggestProgression } from '@gym/shared';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
-import { getSuggestions, type ServerSuggestion } from './api';
+import { getSuggestions, ProgressionApiError, type ServerSuggestion } from './api';
 import { buildProgressionInput, type EngineExercise } from './engineInput';
 
 /**
@@ -66,8 +66,13 @@ export async function refreshServerSuggestions(): Promise<void> {
     const byExercise: Record<string, ServerSuggestion> = {};
     for (const s of list) byExercise[s.exerciseId] = s;
     useServerSuggestions.setState({ byExercise });
-  } catch {
-    // Offline / expired session — the local suggestion covers it silently.
+  } catch (err) {
+    // A 401 means the cached session may be dead — hand it to the auth
+    // store's guarded refresh (health-probe-gated, stale-token safe).
+    if (err instanceof ProgressionApiError && err.code === 'unauthorized') {
+      void useAuth.getState().refresh();
+    }
+    // Otherwise offline — the local suggestion covers it silently.
   } finally {
     fetchInFlight = false;
   }

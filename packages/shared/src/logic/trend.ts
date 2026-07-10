@@ -39,7 +39,12 @@ export interface TrendSummary {
  */
 export function trendSummary(points: TrendPoint[], windowDays = 7): TrendSummary {
   if (points.length < 2) return { direction: 'flat', deltaKg: 0, ratePerWeekKg: 0 };
-  const recent = points.slice(-windowDays);
+  // Window by date span (last N days), not by point count — sporadic weigh-ins
+  // must not stretch the "last N days" arrow across the whole history.
+  const cutoff =
+    new Date(points[points.length - 1]!.date).getTime() - (windowDays - 1) * 86_400_000;
+  const recent = points.filter((p) => new Date(p.date).getTime() >= cutoff);
+  if (recent.length < 2) return { direction: 'flat', deltaKg: 0, ratePerWeekKg: 0 };
   const first = recent[0]!;
   const last = recent[recent.length - 1]!;
   const deltaKg = Math.round((last.trendKg - first.trendKg) * 100) / 100;

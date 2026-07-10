@@ -1,9 +1,9 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { getCoachMessages } from '../../lib/api/client';
+import { CoachApiError, getCoachMessages } from '../../lib/api/client';
 import { mmkvStorage } from '../../lib/mmkvStorage';
 import { useAuth } from '../../state/auth';
-import { getCheckIns, type ServerCheckIn } from './api';
+import { CheckInApiError, getCheckIns, type ServerCheckIn } from './api';
 
 /**
  * Weekly coach check-in state.
@@ -107,8 +107,14 @@ export async function hydrateCheckIns(): Promise<void> {
     } else {
       useCheckIn.setState({ coachReply: null });
     }
-  } catch {
-    // Offline / expired session — the persisted local due-state covers it.
+  } catch (err) {
+    // A 401 means the cached session may be dead — hand it to the auth
+    // store's guarded refresh (health-probe-gated, stale-token safe).
+    const unauthorized =
+      (err instanceof CheckInApiError || err instanceof CoachApiError) &&
+      err.code === 'unauthorized';
+    if (unauthorized) void useAuth.getState().refresh();
+    // Otherwise offline — the persisted local due-state covers it.
   } finally {
     hydrateInFlight = false;
   }

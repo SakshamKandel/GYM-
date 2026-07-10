@@ -1,4 +1,6 @@
 import { router, type Href } from 'expo-router';
+import { useAuth } from '../../state/auth';
+import { replaceStaff, STAFF_ROUTES } from '../staff/nav';
 
 /**
  * Typed-routes escape hatch (same pattern as features/training/nav.ts).
@@ -12,4 +14,21 @@ export function pushPath(path: string): void {
 
 export function replacePath(path: string): void {
   router.replace(path as Href);
+}
+
+/**
+ * Post-sign-in landing — login is the app's front door. Staff members skip
+ * the onboarding-gated root and land straight in the staff console; everyone
+ * else goes to '/'. The auth store has already awaited the /api/me/staff
+ * probe by the time signIn/signInWithGoogle/signUp resolves, so staffRole is
+ * settled here. EVERY sign-in flow (email form AND both Google buttons) must
+ * route through this — a bare router.replace('/') bounced staff accounts to
+ * /welcome, which read as "login did nothing".
+ */
+export function enterApp(): void {
+  if (useAuth.getState().staffRole !== null) {
+    replaceStaff(STAFF_ROUTES.hub);
+    return;
+  }
+  router.replace('/');
 }

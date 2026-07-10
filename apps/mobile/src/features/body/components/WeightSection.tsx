@@ -39,12 +39,11 @@ const styles = StyleSheet.create({
   hero: { marginTop: spacing.lg },
   heroValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm },
   direction: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  // Borderless charcoal card — separation by fill contrast (REVAMP-BRIEF §1).
   chartCard: {
     marginTop: spacing.lg,
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
     padding: spacing.md,
   },
   chartHeader: {
@@ -102,7 +101,9 @@ export function WeightSection() {
   return (
     <View>
       <Animated.View entering={enterUp(0)}>
-        <HeroCard style={styles.hero}>
+        {/* Charcoal, not red: Progress already has its one red hero (the
+            monthly-pace block) and this card's ink is white-on-dark. */}
+        <HeroCard variant="charcoal" style={styles.hero}>
           <AppText variant="label">Trend weight</AppText>
           <View style={styles.heroValueRow}>
             {headline.trendValue !== null ? (

@@ -1,8 +1,10 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -13,24 +15,24 @@ import {
 } from 'react-native';
 import Animated from 'react-native-reanimated';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { hasEntitlement, type FontScale, type Tier } from '@gym/shared';
+import { BADGE_CATALOG, hasEntitlement, type BadgeDef, type FontScale, type Tier } from '@gym/shared';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
-  AnimatedTierRing,
   AppText,
   AppTextInput,
   Button,
   ConfirmDialog,
-  Divider,
   IconChip,
   PressableScale,
   Screen,
+  ScreenHeader,
   Tag,
   enterDown,
   enterFade,
   enterUp,
   layoutSpring,
 } from '../components/ui';
+import { BadgeMedal } from '../components/ui/badges/BadgeMedal';
 import { shareTrainingData } from '../lib/export';
 import { successHaptic, tapHaptic, warnHaptic } from '../lib/haptics';
 import {
@@ -38,17 +40,18 @@ import {
   scheduleMorningNudge,
   scheduleWorkoutReminders,
 } from '../lib/notifications';
+import { deleteAccount, logoutAll, toApiError } from '../lib/api/client';
 import { patchWeeklyTarget, toGamificationError } from '../lib/api/gamification';
 import { getPublicLeaderboard, setPublicBoardHidden } from '../lib/api/social';
 import { getRepo } from '../lib/repo';
 import { SEED_PLANS } from '../lib/seed/plans';
+import { useEffectiveTier } from '../lib/tier';
 import { useAuth } from '../state/auth';
 import { publicBoardHiddenFor, useGamificationDisplay } from '../state/gamification';
 import { useProfile } from '../state/profile';
 import { useReminders } from '../state/reminders';
 import { useSecurity } from '../state/security';
 import { ProfileGamification } from '../features/gamification/components/ProfileGamification';
-import { VipCard } from '../features/subscription/components/VipCard';
 import { useGamificationBadges } from '../features/gamification/store';
 import { useWeeklyStreak } from '../features/streak/hooks';
 import { pushPath } from '../features/auth/nav';
@@ -62,9 +65,11 @@ import {
 } from '../features/onboarding/logic';
 
 /**
- * /settings — one profile card, then three compact groups (setup, targets,
- * plan), a subscription row, and the quiet sign-out + about footer.
- * Everything is dense on purpose: 52–56dp rows inside bordered surfaces.
+ * /settings — block-language settings (REVAMP-BRIEF): back pill + huge
+ * SETTINGS header, a charcoal account block (avatar + editable name + tier
+ * chip), then borderless charcoal section blocks where spacing — never a
+ * hairline — separates rows, and a black danger-zone block whose delete
+ * action is a red text button.
  */
 
 const FONT_SCALE_OPTIONS: { value: FontScale; label: string }[] = [
@@ -110,12 +115,12 @@ function MiniChip({
       accessibilityState={{ selected }}
       accessibilityLabel={label}
       onPress={onPress}
-      hitSlop={6}
+      hitSlop={8}
       style={[styles.miniChip, selected && styles.miniChipSelected]}
     >
       <AppText
         style={styles.miniChipText}
-        color={selected ? colors.text : colors.textDim}
+        color={selected ? colors.onBlock : colors.textDim}
         tabular={false}
       >
         {label}
@@ -147,7 +152,7 @@ function DayChip({
     >
       <AppText
         style={styles.dayChipText}
-        color={selected ? colors.text : colors.textDim}
+        color={selected ? colors.onBlock : colors.textDim}
         tabular={false}
       >
         {letter}
@@ -203,6 +208,11 @@ function MiniStepper({
       repeatTimer.current = null;
     }
   }
+
+  // Clear any live long-press repeat if the stepper unmounts before onPressOut
+  // (e.g. Android back button, or the reminder row collapsing) — otherwise the
+  // interval keeps firing apply() on unmounted state forever.
+  useEffect(() => stopRepeat, []);
 
   return (
     <View style={styles.miniStepper}>
@@ -271,6 +281,101 @@ function TargetCell({ label, value, color }: { label: string; value: number; col
   );
 }
 
+/**
+ * Final delete-account gate — mirrors ConfirmDialog's card exactly (same
+ * scrim, card, and button row), plus a typed "DELETE" arm switch so a stray
+ * double-tap can never erase an account. ConfirmDialog itself stays a pure
+ * yes/no popup; this variant owns its text field and inline error line.
+ */
+function DeleteAccountDialog({
+  visible,
+  email,
+  value,
+  onChangeValue,
+  busy,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  visible: boolean;
+  email: string;
+  value: string;
+  onChangeValue: (next: string) => void;
+  busy: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const armed = value.trim() === 'DELETE';
+
+  // Same physical warning ConfirmDialog gives every destructive prompt.
+  useEffect(() => {
+    if (visible) warnHaptic();
+  }, [visible]);
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onCancel}>
+      <Animated.View entering={enterFade()} style={styles.dialogFill}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.dialogFill}
+        >
+          <Pressable
+            style={styles.dialogBackdrop}
+            onPress={onCancel}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss"
+          >
+            {/* Stop backdrop presses from falling through the card. */}
+            <Pressable
+              accessibilityViewIsModal
+              onPress={() => undefined}
+              style={styles.dialogCard}
+            >
+              <AppText variant="title">Last step</AppText>
+              <AppText variant="body" color={colors.textDim}>
+                {`This permanently deletes ${email} and everything synced to it. Type DELETE to confirm.`}
+              </AppText>
+              <AppTextInput
+                value={value}
+                onChangeText={onChangeValue}
+                placeholder="DELETE"
+                autoCapitalize="characters"
+                autoCorrect={false}
+                editable={!busy}
+                returnKeyType="done"
+                accessibilityLabel="Type DELETE to confirm"
+              />
+              {error !== null ? (
+                <AppText variant="caption" color={colors.error}>
+                  {error}
+                </AppText>
+              ) : null}
+              <View style={styles.dialogButtons}>
+                <Button
+                  label="Cancel"
+                  variant="secondary"
+                  style={styles.dialogBtn}
+                  disabled={busy}
+                  onPress={onCancel}
+                />
+                <Button
+                  label={busy ? 'Deleting…' : 'Delete forever'}
+                  variant="danger"
+                  style={styles.dialogBtn}
+                  disabled={!armed}
+                  loading={busy}
+                  onPress={onConfirm}
+                />
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Animated.View>
+    </Modal>
+  );
+}
+
 export default function SettingsScreen() {
   const displayName = useProfile((s) => s.displayName);
   const sex = useProfile((s) => s.sex);
@@ -283,7 +388,9 @@ export default function SettingsScreen() {
   const fontScale = useProfile((s) => s.fontScale);
   const targets = useProfile((s) => s.targets);
   const planId = useProfile((s) => s.planId);
-  const tier = useProfile((s) => s.tier);
+  // Effective tier (server-first) — gates the Priority support row below, so
+  // a paywall purchase unlocks it without waiting for a profile-store echo.
+  const tier = useEffectiveTier();
   const daysPerWeek = useProfile((s) => s.daysPerWeek);
   const update = useProfile((s) => s.update);
 
@@ -307,6 +414,26 @@ export default function SettingsScreen() {
   const publicBoardTouchedRef = useRef(false);
   const gamification = useWeeklyStreak();
   const earnedBadgeCount = useGamificationBadges((s) => s.badges.length);
+  const earnedBadges = useGamificationBadges((s) => s.badges);
+
+  // The three most recently earned badges as mini medals on the Badges row
+  // (server returns newest-first; challenge extras fall back to a synthetic
+  // crew/award def since they have no catalog entry).
+  const recentBadges = useMemo<Array<{ def: BadgeDef; status: 'logged' | 'verified' }>>(
+    () =>
+      earnedBadges.slice(0, 3).map((b) => {
+        const def = BADGE_CATALOG.find((c) => c.id === b.badgeId) ?? {
+          id: b.badgeId,
+          family: 'crew' as const,
+          name: 'Challenge',
+          description: '',
+          icon: 'award' as const,
+          sort: 900,
+        };
+        return { def, status: b.status };
+      }),
+    [earnedBadges],
+  );
 
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
@@ -314,6 +441,16 @@ export default function SettingsScreen() {
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+
+  // ── Account controls (signed-in only) ────────────────────────
+  const [confirmingLogoutAll, setConfirmingLogoutAll] = useState(false);
+  const [logoutAllBusy, setLogoutAllBusy] = useState(false);
+  const [logoutAllError, setLogoutAllError] = useState<string | null>(null);
+  // Two-step delete: yes/no popup first, then the typed-DELETE gate.
+  const [deleteStep, setDeleteStep] = useState<'idle' | 'confirm' | 'type'>('idle');
+  const [deleteText, setDeleteText] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -541,6 +678,76 @@ export default function SettingsScreen() {
     successHaptic();
   }
 
+  /**
+   * "Sign out everywhere" — the server MUST confirm every session is revoked
+   * before we clear locally, otherwise the button would lie about the other
+   * devices. On failure the popup closes and a readable line appears under
+   * the row; on success we run the normal local sign-out cleanup.
+   */
+  async function onLogoutAllConfirm(): Promise<void> {
+    if (logoutAllBusy) return;
+    const token = authToken;
+    if (token === null) {
+      setConfirmingLogoutAll(false);
+      return;
+    }
+    setLogoutAllBusy(true);
+    setLogoutAllError(null);
+    try {
+      await logoutAll(token);
+    } catch (err) {
+      setLogoutAllBusy(false);
+      setConfirmingLogoutAll(false);
+      setLogoutAllError(
+        toApiError(err).code === 'unauthorized'
+          ? 'This session has already expired — sign in again, then retry.'
+          : "Couldn't reach the server — your other devices are still signed in. Try again in a moment.",
+      );
+      warnHaptic();
+      return;
+    }
+    await signOut(); // never throws; clears local account state
+    setLogoutAllBusy(false);
+    setConfirmingLogoutAll(false);
+    successHaptic();
+  }
+
+  /**
+   * Final delete-account step — only reachable after the yes/no popup AND
+   * typing DELETE. The server must confirm the hard-delete before any local
+   * cleanup; a failure keeps the dialog open (text intact) with an inline
+   * error so the user can retry without re-arming.
+   */
+  async function onDeleteConfirm(): Promise<void> {
+    if (deleteBusy || deleteText.trim() !== 'DELETE') return;
+    const token = authToken;
+    if (token === null) {
+      setDeleteStep('idle');
+      return;
+    }
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await deleteAccount(token);
+    } catch (err) {
+      setDeleteBusy(false);
+      setDeleteError(
+        toApiError(err).code === 'unauthorized'
+          ? 'Your session has expired — sign in again to delete your account.'
+          : "Couldn't reach the server. Nothing was deleted — check your connection and try again.",
+      );
+      warnHaptic();
+      return;
+    }
+    // Account is gone server-side; run the normal local sign-out cleanup
+    // (state set BEFORE navigation so nothing lands on an unmounted screen).
+    setDeleteBusy(false);
+    setDeleteStep('idle');
+    setDeleteText('');
+    await signOut(); // never throws; clears local account state
+    router.replace('/welcome');
+  }
+
   const recalcKg = latestKg ?? startWeightKg;
   const canRecalculate =
     sex !== null &&
@@ -582,60 +789,68 @@ export default function SettingsScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppText variant="heading">Settings</AppText>
       </Animated.View>
+      <ScreenHeader title="Settings" eyebrow="Profile & preferences" />
 
-      {/* ── VIP membership card (the profile area's luxury island) ── */}
-      <Animated.View entering={enterUp(0)}>
-        <VipCard
-          tier={serverTier}
-          avatar={
-            /* Animated metallic ring = subscription identity on the avatar;
-               the earned RankEmblem stays beside the rank text below (never
-               on the avatar) so the two can't be confused. */
-            <AnimatedTierRing tier={serverTier} size={56}>
-              <View style={styles.avatar}>
-                <AppText style={styles.avatarInitial} tabular={false}>
-                  {nameInitial}
-                </AppText>
-              </View>
-            </AnimatedTierRing>
-          }
-          nameSlot={
-            editingName ? (
-              <AppTextInput
-                value={nameDraft}
-                onChangeText={setNameDraft}
-                autoFocus
-                placeholder="Athlete"
-                style={styles.nameInput}
-                returnKeyType="done"
-                onSubmitEditing={commitName}
-                onBlur={commitName}
-                maxLength={24}
-                accessibilityLabel="Your name"
-              />
-            ) : (
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityLabel="Edit name"
-                onPress={() => {
-                  setNameDraft(displayName);
-                  setEditingName(true);
-                }}
-                hitSlop={8}
-                style={styles.nameRow}
-              >
-                <AppText variant="bodyBold" numberOfLines={1} style={styles.nameText}>
-                  {displayName || 'Athlete'}
-                </AppText>
-                <Ionicons name="pencil" size={16} color={colors.textDim} />
-              </PressableScale>
-            )
-          }
-          subtitle={signedIn && authUser ? authUser.email : 'Local only — sign in to sync'}
-          onUpgrade={() => pushPath('/subscribe')}
-        />
+      {/* ── Account card — charcoal block: avatar, editable name, tier chip ── */}
+      <Animated.View entering={enterUp(0)} style={styles.accountSection}>
+        <View style={styles.accountCard}>
+          <View style={styles.accountHeader}>
+            <View style={styles.avatar}>
+              <AppText style={styles.avatarInitial} tabular={false}>
+                {nameInitial}
+              </AppText>
+            </View>
+            <View style={styles.accountInfo}>
+              {editingName ? (
+                <AppTextInput
+                  value={nameDraft}
+                  onChangeText={setNameDraft}
+                  autoFocus
+                  placeholder="Athlete"
+                  style={styles.nameInput}
+                  returnKeyType="done"
+                  onSubmitEditing={commitName}
+                  onBlur={commitName}
+                  maxLength={24}
+                  accessibilityLabel="Your name"
+                />
+              ) : (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit name"
+                  onPress={() => {
+                    setNameDraft(displayName);
+                    setEditingName(true);
+                  }}
+                  hitSlop={8}
+                  style={styles.nameRow}
+                >
+                  <AppText variant="bodyBold" numberOfLines={1} style={styles.nameText}>
+                    {displayName || 'Athlete'}
+                  </AppText>
+                  <Ionicons name="pencil" size={16} color={colors.textDim} />
+                </PressableScale>
+              )}
+              <AppText variant="caption" numberOfLines={1}>
+                {signedIn && authUser ? authUser.email : 'Local only — sign in to sync'}
+              </AppText>
+            </View>
+            <View style={styles.tierChip}>
+              <AppText variant="label" color={colors.text}>
+                {TIER_LABEL[serverTier]}
+              </AppText>
+            </View>
+          </View>
+          {serverTier !== 'elite' ? (
+            <Button
+              label="Upgrade"
+              variant={signedIn && serverTier === 'starter' ? 'primary' : 'secondary'}
+              onPress={() => pushPath('/subscribe')}
+              accessibilityLabel="Upgrade your plan"
+            />
+          ) : null}
+        </View>
         {signedIn ? (
           <ProfileGamification hidden={hideGamification} profile={gamification?.profile ?? null} />
         ) : null}
@@ -650,6 +865,15 @@ export default function SettingsScreen() {
             <AppText variant="body" style={styles.badgesRowText}>
               Badges
             </AppText>
+            {/* Latest three earned badges as mini medals — a quiet trophy
+                shelf on the profile card, newest first. */}
+            {recentBadges.length > 0 ? (
+              <View style={styles.badgesRecent}>
+                {recentBadges.map(({ def, status }) => (
+                  <BadgeMedal key={def.id} badge={def} status={status} size={24} />
+                ))}
+              </View>
+            ) : null}
             <AppText variant="caption">{earnedBadgeCount} earned</AppText>
             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </PressableScale>
@@ -691,7 +915,6 @@ export default function SettingsScreen() {
               ))}
             </View>
           </View>
-          <Divider />
           <View style={styles.row}>
             <IconChip icon="resize" size={36} />
             <AppText style={styles.rowLabel}>Height</AppText>
@@ -707,7 +930,6 @@ export default function SettingsScreen() {
               />
             </View>
           </View>
-          <Divider />
           <View style={styles.row}>
             <IconChip icon="calendar" size={36} />
             <AppText style={styles.rowLabel}>Born</AppText>
@@ -722,7 +944,6 @@ export default function SettingsScreen() {
               />
             </View>
           </View>
-          <Divider />
           <View style={styles.row}>
             <IconChip icon="scale" size={36} />
             <AppText style={styles.rowLabel}>Units</AppText>
@@ -739,7 +960,6 @@ export default function SettingsScreen() {
               />
             </View>
           </View>
-          <Divider />
           <View style={[styles.row, styles.rowWrap]}>
             <IconChip icon="text" size={36} />
             <AppText style={styles.rowLabel}>Text size</AppText>
@@ -769,7 +989,6 @@ export default function SettingsScreen() {
             <TargetCell label="Carbs" value={targets.carbs} color={colors.carbs} />
             <TargetCell label="Fat" value={targets.fat} color={colors.fat} />
           </View>
-          <Divider />
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel="Recalculate targets from profile — uses your latest logged body weight"
@@ -811,7 +1030,6 @@ export default function SettingsScreen() {
             <Animated.View entering={enterFade()}>
               {SEED_PLANS.map((p) => (
                 <View key={p.id}>
-                  <Divider />
                   <PressableScale
                     accessibilityRole="radio"
                     accessibilityState={{ selected: planId === p.id }}
@@ -995,7 +1213,6 @@ export default function SettingsScreen() {
               </View>
             </Animated.View>
           ) : null}
-          <Divider />
           {/* Row 2 — daily morning nudge. */}
           <View style={styles.row}>
             <IconChip icon="sunny" size={36} />
@@ -1008,7 +1225,6 @@ export default function SettingsScreen() {
               accessibilityLabel="Morning nudge"
             />
           </View>
-          <Divider />
           {/* Row 3 — weekly Sunday check-in. */}
           <View style={styles.row}>
             <IconChip icon="calendar-clear" size={36} />
@@ -1026,10 +1242,10 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
-      {/* ── Gamification ────────────────────────────────────── */}
+      {/* ── Achievements ────────────────────────────────────── */}
       <Animated.View entering={enterUp(7)} layout={layoutSpring}>
         <AppText variant="label" style={styles.sectionLabel}>
-          Gamification
+          Achievements
         </AppText>
         <View style={styles.group}>
           <View style={styles.row}>
@@ -1048,40 +1264,36 @@ export default function SettingsScreen() {
               valueStyle={styles.timeStepperValue}
             />
           </View>
-          <Divider />
           <View style={styles.row}>
             <IconChip icon="eye-off" size={36} />
             <AppText style={styles.rowLabelGrow} numberOfLines={1}>
-              Hide gamification
+              Hide achievements
             </AppText>
             <Switch
               value={hideGamification}
               onValueChange={setHideGamification}
               trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
               thumbColor={hideGamification ? colors.accent : colors.textDim}
-              accessibilityLabel="Hide gamification"
+              accessibilityLabel="Hide achievements"
             />
           </View>
           {/* Public-board opt-out — server-side privacy flag, so only shown
               when signed in. Optimistic flip; a failed PATCH reverts with a
               warn haptic (the server flag is the source of truth). */}
           {signedIn ? (
-            <>
-              <Divider />
-              <View style={styles.row}>
-                <IconChip icon="podium" size={36} />
-                <AppText style={styles.rowLabelGrow} numberOfLines={2}>
-                  Show me on the public leaderboard
-                </AppText>
-                <Switch
-                  value={!publicBoardHidden}
-                  onValueChange={onPublicBoardToggle}
-                  trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
-                  thumbColor={!publicBoardHidden ? colors.accent : colors.textDim}
-                  accessibilityLabel="Show me on the public leaderboard"
-                />
-              </View>
-            </>
+            <View style={styles.row}>
+              <IconChip icon="podium" size={36} />
+              <AppText style={styles.rowLabelGrow} numberOfLines={2}>
+                Show me on the public leaderboard
+              </AppText>
+              <Switch
+                value={!publicBoardHidden}
+                onValueChange={onPublicBoardToggle}
+                trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
+                thumbColor={!publicBoardHidden ? colors.accent : colors.textDim}
+                accessibilityLabel="Show me on the public leaderboard"
+              />
+            </View>
           ) : null}
         </View>
       </Animated.View>
@@ -1160,14 +1372,53 @@ export default function SettingsScreen() {
         </Animated.View>
       ) : null}
 
-      {/* ── Sign out (destructive actions live last) ────────── */}
+      {/* ── Danger zone — black block, destructive last ─────── */}
       {signedIn ? (
-        <Animated.View entering={enterUp(8)} layout={layoutSpring} style={styles.signOutBlock}>
+        <Animated.View entering={enterUp(8)} layout={layoutSpring} style={styles.dangerBlock}>
+          <AppText variant="label">Danger zone</AppText>
           <Button
             label="Sign out"
-            variant="ghost"
+            variant="secondary"
             onPress={() => setConfirmingSignOut(true)}
           />
+          <Button
+            label="Sign out everywhere"
+            variant="ghost"
+            loading={logoutAllBusy}
+            onPress={() => {
+              setLogoutAllError(null);
+              setConfirmingLogoutAll(true);
+            }}
+          />
+          {logoutAllError !== null ? (
+            <AppText variant="caption" color={colors.error} center style={styles.accountError}>
+              {logoutAllError}
+            </AppText>
+          ) : null}
+          {/* Delete account — red TEXT button (never the accent CTA); same
+              handler + busy behavior as the old outlined danger button. */}
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Delete account"
+            accessibilityState={{ disabled: deleteBusy }}
+            disabled={deleteBusy}
+            onPress={() => {
+              setDeleteError(null);
+              setDeleteText('');
+              setDeleteStep('confirm');
+            }}
+            style={[styles.deleteBtn, deleteBusy && styles.deleteBtnBusy]}
+          >
+            {deleteBusy ? <ActivityIndicator size="small" color={colors.error} /> : null}
+            <AppText variant="bodyBold" color={colors.error}>
+              Delete account
+            </AppText>
+          </PressableScale>
+          {deleteStep === 'idle' && deleteError !== null ? (
+            <AppText variant="caption" color={colors.error} center style={styles.accountError}>
+              {deleteError}
+            </AppText>
+          ) : null}
         </Animated.View>
       ) : null}
 
@@ -1181,6 +1432,45 @@ export default function SettingsScreen() {
         danger
         onConfirm={() => void onSignOut()}
         onCancel={() => setConfirmingSignOut(false)}
+      />
+      <ConfirmDialog
+        visible={confirmingLogoutAll}
+        title="Sign out everywhere?"
+        message="Every device signed in to this account gets disconnected, including this one. Your logs stay safe on this phone."
+        confirmLabel={logoutAllBusy ? 'Signing out…' : 'Yes, sign out everywhere'}
+        cancelLabel="No, stay"
+        danger
+        onConfirm={() => void onLogoutAllConfirm()}
+        onCancel={() => {
+          if (!logoutAllBusy) setConfirmingLogoutAll(false);
+        }}
+      />
+      {/* Delete account, step 1 of 2 — plain-words permanence warning. */}
+      <ConfirmDialog
+        visible={deleteStep === 'confirm'}
+        title="Delete your account?"
+        message="This permanently erases your account, subscription and everything synced to our servers. It cannot be undone. Logs saved on this phone stay on the phone."
+        confirmLabel="Continue"
+        cancelLabel="Keep my account"
+        danger
+        onConfirm={() => {
+          setDeleteText('');
+          setDeleteStep('type');
+        }}
+        onCancel={() => setDeleteStep('idle')}
+      />
+      {/* Delete account, step 2 of 2 — typed-DELETE arm switch. */}
+      <DeleteAccountDialog
+        visible={deleteStep === 'type'}
+        email={authUser?.email ?? 'this account'}
+        value={deleteText}
+        onChangeValue={setDeleteText}
+        busy={deleteBusy}
+        error={deleteError}
+        onConfirm={() => void onDeleteConfirm()}
+        onCancel={() => {
+          if (!deleteBusy) setDeleteStep('idle');
+        }}
       />
       <ConfirmDialog
         visible={confirmingBioOff}
@@ -1245,7 +1535,26 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
 
-  // Profile card (now VipCard — these style the slots passed into it)
+  // Account card — charcoal block: avatar + editable name + tier chip
+  accountSection: { marginTop: spacing.xl },
+  accountCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+    gap: spacing.lg,
+  },
+  accountHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  accountInfo: { flex: 1, minWidth: 0, gap: 2 },
+  // Outlined meta pill (brief §6) — chips may carry strokes; cards may not.
+  tierChip: {
+    minHeight: 34,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   avatar: {
     width: 56,
     height: 56,
@@ -1269,23 +1578,28 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   authRow: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.md },
-  authBtn: { flex: 1, minHeight: 44 },
+  authBtn: { flex: 1 },
+  // Badges shelf — its own small charcoal row block under the account card.
   badgesRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    marginTop: spacing.sm,
+    marginTop: spacing.md,
+    minHeight: 56,
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
   },
   badgesRowText: { flex: 1 },
+  badgesRecent: { flexDirection: 'row', gap: 4 },
 
-  // Bordered group of compact rows
+  // Charcoal section block — NO border; spacing (not hairlines) between rows
   group: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    paddingHorizontal: spacing.lg,
+    borderRadius: radius.block,
+    paddingHorizontal: spacing.gutter,
+    paddingVertical: spacing.xs,
   },
   row: {
     flexDirection: 'row',
@@ -1327,10 +1641,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  miniChipSelected: { borderColor: colors.text },
+  // Selected = solid red pill with BLACK label (black-on-red brand law).
+  miniChipSelected: { borderColor: colors.accent, backgroundColor: colors.accent },
   miniChipText: {
     fontFamily: type.bodyMedium,
-    fontSize: 11,
+    fontSize: 12,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
@@ -1361,7 +1676,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dayChipSelected: { borderColor: colors.accent, backgroundColor: colors.accentDim },
+  dayChipSelected: { borderColor: colors.accent, backgroundColor: colors.accent },
   dayChipText: {
     fontFamily: type.bodyMedium,
     fontSize: 13,
@@ -1391,8 +1706,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
     backgroundColor: colors.surfaceRaised,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1423,7 +1736,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   recalcRow: {
-    minHeight: 44,
+    minHeight: touch.min,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1453,10 +1766,45 @@ const styles = StyleSheet.create({
   securityTitle: { flex: 1 },
   securityStatus: { lineHeight: 18 },
 
-  // Sign out + about footer
-  signOutBlock: { marginTop: spacing.xxl },
-  signOutConfirm: { gap: spacing.sm },
-  signOutButtons: { flexDirection: 'row', gap: spacing.md },
-  signOutButton: { flex: 1 },
+  // Danger zone — black block that recedes behind the charcoal sections
+  dangerBlock: {
+    marginTop: spacing.xxl,
+    backgroundColor: colors.bg,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+    gap: spacing.sm,
+  },
+  // Red TEXT button — quiet, centered, ≥48dp; spinner replaces nothing (the
+  // label stays put) so the row never jumps while deleting.
+  deleteBtn: {
+    minHeight: touch.min,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  deleteBtnBusy: { opacity: 0.4 },
+  accountError: { paddingHorizontal: spacing.lg, lineHeight: 18 },
   about: { marginTop: spacing.xl },
+
+  // Delete-account dialog — mirrors ui/ConfirmDialog's backdrop + card so the
+  // two popups are visually indistinguishable (same scrim, radius, gaps).
+  dialogFill: { flex: 1 },
+  dialogBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)', // same scrim literal as ui/ConfirmDialog
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  dialogCard: {
+    width: '100%',
+    maxWidth: 330,
+    backgroundColor: colors.surface,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+    gap: spacing.sm,
+  },
+  dialogButtons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.sm },
+  dialogBtn: { flex: 1 },
 });

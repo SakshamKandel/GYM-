@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS food_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_food_logs_date ON food_logs(date);
 CREATE TABLE IF NOT EXISTS water_logs (date TEXT PRIMARY KEY, ml INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS step_logs (date TEXT PRIMARY KEY, steps INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS streaks (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   current INTEGER NOT NULL DEFAULT 0, best INTEGER NOT NULL DEFAULT 0, last_workout_date TEXT
@@ -531,6 +532,38 @@ export async function createSqliteRepo(): Promise<Repo> {
         'SELECT ml FROM water_logs WHERE date = ?', date,
       );
       return r?.ml ?? 0;
+    },
+
+    // ── Steps ───────────────────────────────────────────────
+    async getSteps(date) {
+      const r = await db.getFirstAsync<{ steps: number }>(
+        'SELECT steps FROM step_logs WHERE date = ?', date,
+      );
+      return r?.steps ?? 0;
+    },
+    async setSteps(date, steps) {
+      await db.runAsync(
+        `INSERT INTO step_logs (date, steps) VALUES (?, MAX(0, ?))
+         ON CONFLICT(date) DO UPDATE SET steps = MAX(0, excluded.steps)`,
+        date, steps,
+      );
+    },
+    async addSteps(date, delta) {
+      await db.runAsync(
+        `INSERT INTO step_logs (date, steps) VALUES (?, MAX(0, ?))
+         ON CONFLICT(date) DO UPDATE SET steps = MAX(0, step_logs.steps + ?)`,
+        date, delta, delta,
+      );
+      const r = await db.getFirstAsync<{ steps: number }>(
+        'SELECT steps FROM step_logs WHERE date = ?', date,
+      );
+      return r?.steps ?? 0;
+    },
+    async getStepsBetween(startDate, endDate) {
+      return db.getAllAsync<{ date: string; steps: number }>(
+        'SELECT date, steps FROM step_logs WHERE date >= ? AND date <= ? ORDER BY date ASC',
+        startDate, endDate,
+      );
     },
 
     // ── Streak ──────────────────────────────────────────────

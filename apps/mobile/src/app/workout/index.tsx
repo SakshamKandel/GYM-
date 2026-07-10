@@ -11,6 +11,7 @@ import {
   enterDown,
   enterFade,
   enterUp,
+  FractionStat,
   layoutSpring,
 } from '../../components/ui';
 import { SuggestionRow } from '../../features/progression/components/SuggestionRow';
@@ -32,8 +33,12 @@ import { useProfile } from '../../state/profile';
 
 /**
  * Gym mode — the active logger. One hand, sweaty thumbs:
- * scrollable exercise sections on top, pinned thumb-zone editor below.
- * The editor becomes the rest timer after every logged set.
+ * scrollable exercise sections on top, pinned thumb-zone dock below.
+ * Blocked language (REVAMP-BRIEF): the current exercise is the screen's ONE
+ * red hero block (name + set x/y fraction) pinned above the editor; the rest
+ * timer takes over as the cream counterpoint block; exercise sections stack
+ * as borderless charcoal cards. The editor becomes the rest timer after
+ * every logged set.
  */
 
 /** Breathing room above the top strip — matches Screen's TOP_AIR so the
@@ -56,17 +61,52 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    gap: spacing.md,
+    paddingHorizontal: spacing.gutter,
     paddingVertical: spacing.sm,
   },
+  /** Eyebrow (workout name) over the big Oswald elapsed clock — header order. */
+  clockWrap: { flex: 1, gap: spacing.xs },
+  clock: { lineHeight: 46 },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 20, paddingBottom: spacing.xl },
-  editor: {
+  scrollContent: { paddingHorizontal: spacing.gutter, paddingBottom: spacing.xl },
+  /** Charcoal exercise card — borderless block; the section's own bottom
+   * margin (spacing.lg) provides the inner bottom inset, hence paddingBottom 0. */
+  exerciseCard: {
     backgroundColor: colors.surface,
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+    borderRadius: radius.block,
+    padding: spacing.lg,
+    paddingBottom: 0,
+    marginBottom: spacing.md,
+  },
+  /** Pinned thumb-zone dock — canvas-colored; the blocks inside carry the color. */
+  dock: {
+    backgroundColor: colors.bg,
+    paddingHorizontal: spacing.gutter,
+    paddingTop: spacing.sm,
+    gap: spacing.md,
+  },
+  /** The screen's ONE red hero block: current exercise + set fraction. */
+  hero: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.blockRed,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+  },
+  heroLeft: { flex: 1, gap: spacing.xs },
+  /** Charcoal block housing the suggestion row + log editor. */
+  editorBlock: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.block,
+    padding: spacing.lg,
+  },
+  /** Cream counterpoint block — the rest-timer takeover. */
+  creamBlock: {
+    backgroundColor: colors.blockCream,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
   },
   empty: { alignItems: 'center', paddingVertical: spacing.md, gap: spacing.sm },
   addBtn: { alignSelf: 'center', marginTop: spacing.sm },
@@ -242,15 +282,15 @@ export default function WorkoutScreen() {
   return (
     <View style={[styles.root, { paddingTop: insets.top + TOP_AIR }]}>
       <Animated.View entering={enterDown(0)} style={[styles.contentCap, styles.topStrip]}>
-        <View>
-          <AppText variant="display" tabular style={{ fontSize: 34, lineHeight: 40 }}>
-            {formatClock(elapsed)}
-          </AppText>
-          <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+        <View style={styles.clockWrap}>
+          <AppText variant="label" numberOfLines={1}>
             {session.workoutName}
           </AppText>
+          <AppText variant="display" tabular style={styles.clock}>
+            {formatClock(elapsed)}
+          </AppText>
         </View>
-        <Button label="FINISH" variant="ghost" onPress={handleFinish} accessibilityLabel="Finish workout" />
+        <Button label="FINISH" variant="secondary" onPress={handleFinish} accessibilityLabel="Finish workout" />
       </Animated.View>
 
       <ScrollView
@@ -258,7 +298,12 @@ export default function WorkoutScreen() {
         contentContainerStyle={[styles.contentCap, styles.scrollContent]}
       >
         {session.exercises.map((ex, i) => (
-          <Animated.View key={ex.exerciseId} entering={enterUp(Math.min(i, 8))} layout={layoutSpring}>
+          <Animated.View
+            key={ex.exerciseId}
+            entering={enterUp(Math.min(i, 8))}
+            layout={layoutSpring}
+            style={styles.exerciseCard}
+          >
             <ExerciseSection
               exercise={ex}
               isCurrent={i === session.currentIdx}
@@ -291,13 +336,32 @@ export default function WorkoutScreen() {
         entering={enterUp(1)}
         style={[
           styles.contentCap,
-          styles.editor,
+          styles.dock,
           { paddingBottom: Math.max(insets.bottom, spacing.lg) },
         ]}
       >
+        {/* The ONE red hero block: what you're lifting + which set you're on. */}
+        {currentExercise ? (
+          <View style={styles.hero}>
+            <View style={styles.heroLeft}>
+              <AppText variant="label" color={colors.onBlock}>
+                Now lifting
+              </AppText>
+              <AppText variant="title" color={colors.onBlock} numberOfLines={2}>
+                {currentExercise.exerciseName}
+              </AppText>
+            </View>
+            <FractionStat
+              value={currentExercise.loggedSets.length + 1}
+              total={currentExercise.targetSets}
+              label="Set"
+              onBlock
+            />
+          </View>
+        ) : null}
         {/* Keyed wrappers so the timer↔editor swap fades instead of popping. */}
         {session.rest ? (
-          <Animated.View key="rest" entering={enterFade(0)}>
+          <Animated.View key="rest" entering={enterFade(0)} style={styles.creamBlock}>
             <RestTimerPanel
               rest={session.rest}
               onAdjust={(d) => useSession.getState().adjustRest(d)}
@@ -305,7 +369,7 @@ export default function WorkoutScreen() {
             />
           </Animated.View>
         ) : currentExercise ? (
-          <Animated.View key="editor" entering={enterFade(0)}>
+          <Animated.View key="editor" entering={enterFade(0)} style={styles.editorBlock}>
             {suggestion && currentExercise.loggedSets.length === 0 ? (
               <SuggestionRow
                 suggestion={suggestion}
@@ -329,7 +393,7 @@ export default function WorkoutScreen() {
             />
           </Animated.View>
         ) : (
-          <View style={styles.empty}>
+          <View style={[styles.editorBlock, styles.empty]}>
             <Button
               label="Add exercise"
               variant="secondary"

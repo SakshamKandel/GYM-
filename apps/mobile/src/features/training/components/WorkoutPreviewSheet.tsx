@@ -1,15 +1,15 @@
 import { StyleSheet, View } from 'react-native';
 import type { PlanWorkout } from '@gym/shared';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
-import { AppText, Button, Divider, SectionLabel, StatBlock } from '../../../components/ui';
+import { AppText, Button, SectionLabel, StatBlock } from '../../../components/ui';
 import { getExercise } from '../../../lib/exercises';
 import { estimateWorkoutMinutes } from '../logic';
 
 /**
  * Peek at a plan workout before committing: a compact exercises · sets · time
- * stat card, the full movement list (name + target sets × reps), and one
- * primary "Start workout". Rendered inside <Sheet>, so all movement belongs to
- * the sheet itself — the content here is passive and static.
+ * stat tile, the movement list as gapped rounded rows (no hairlines — block
+ * language), and one primary "Start workout". Rendered inside <Sheet>, so all
+ * movement belongs to the sheet itself — the content here is passive and static.
  */
 
 interface Props {
@@ -18,28 +18,34 @@ interface Props {
 }
 
 const styles = StyleSheet.create({
+  // Inner tile inside the sheet block — nested elements take radius.md.
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     backgroundColor: colors.surfaceRaised,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     paddingVertical: spacing.lg,
     paddingHorizontal: spacing.md,
     gap: spacing.sm,
   },
   statCol: { flex: 1, minWidth: 0 },
+  /** Gapped rounded rows — replaces Divider hairlines. */
+  list: { gap: spacing.sm },
   exRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    minHeight: 52,
+    minHeight: 56,
   },
   numBlock: {
     width: 30,
     height: 30,
     borderRadius: radius.sm,
-    backgroundColor: colors.surfaceRaised,
+    backgroundColor: colors.bg,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -67,13 +73,13 @@ export function WorkoutPreviewSheet({ workout, onStart }: Props) {
       </View>
 
       <SectionLabel>Exercises</SectionLabel>
-      {workout.exercises.map((e, i) => {
-        const info = getExercise(e.exerciseId);
-        const meta = info ? `${info.muscleGroup} · ${info.equipment ?? 'bodyweight'}` : null;
-        return (
-          <View key={e.id}>
-            {i > 0 ? <Divider /> : null}
+      <View style={styles.list}>
+        {workout.exercises.map((e, i) => {
+          const info = getExercise(e.exerciseId);
+          const meta = info ? `${info.muscleGroup} · ${info.equipment ?? 'bodyweight'}` : null;
+          return (
             <View
+              key={e.id}
               style={styles.exRow}
               accessible
               accessibilityLabel={`${e.exerciseName}, ${e.sets} sets of ${e.repRange} reps`}
@@ -97,9 +103,9 @@ export function WorkoutPreviewSheet({ workout, onStart }: Props) {
                 {`${e.sets} × ${e.repRange}`}
               </AppText>
             </View>
-          </View>
-        );
-      })}
+          );
+        })}
+      </View>
 
       <Button
         label="Start workout"

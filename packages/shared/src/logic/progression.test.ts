@@ -177,7 +177,10 @@ describe('suggestProgression — hold', () => {
       ),
     );
     assert.equal(r.action, 'hold');
-    assert.equal(r.reason, 'In the 8–12 range — add reps before adding weight');
+    assert.equal(
+      r.reason,
+      'RPE 8.5 at the top of the 8–12 range — hold 100 kg and recover before adding weight',
+    );
   });
 });
 
@@ -265,14 +268,18 @@ describe('suggestProgression — stall and deload', () => {
     assert.equal(r.action, 'increase');
     assert.equal(r.targetWeightKg, 22.5);
   });
-  it('stall takes priority over increase (rule order)', () => {
+  it('a flat top-of-range history at low RPE earns the increase, not a false deload', () => {
+    // 100x12 (top of the 8–12 range) at RPE 7 for three sessions running: e1RM
+    // is flat, but capping the rep range at low effort is not a stall — the
+    // lifter has earned the weight jump, so Rule 2 (increase) wins over Rule 1.
     const sets: Array<[number, number, number | null]> = [[100, 12, 7]];
     const r = must(
       suggestProgression(
         input([session('2026-06-17', sets), session('2026-06-24', sets), session('2026-07-01', sets)]),
       ),
     );
-    assert.equal(r.action, 'deload');
+    assert.equal(r.action, 'increase');
+    assert.equal(r.targetWeightKg, 102.5);
   });
 });
 

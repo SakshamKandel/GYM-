@@ -1,4 +1,5 @@
 export * from './types';
+export * from './logic/activity';
 export * from './logic/analytics';
 export * from './logic/macros';
 export * from './logic/pr';
@@ -15,4 +16,5 @@ export * from './logic/units';
 export * from './logic/gamificationXp';
 export * from './logic/weeklyStreak';
 export * from './logic/badges';
+export * from './logic/leaderboard';
 export * from './logic/plausibility';

@@ -32,6 +32,7 @@ export interface TrainingExport {
   measurements: Measurement[];
   foodLogs: FoodLog[];
   waterLogs: { date: string; ml: number }[];
+  stepLogs: { date: string; steps: number }[];
   streak: Streak;
 }
 
@@ -59,6 +60,8 @@ export async function buildTrainingExport(repo: Repo, today: string): Promise<Tr
     .map((date, i) => ({ date, ml: waterByDate[i] ?? 0 }))
     .filter((w) => w.ml > 0);
 
+  const stepLogs = (await repo.getStepsBetween(from, today)).filter((s) => s.steps > 0);
+
   return {
     exportedAt: nowIso(),
     app: 'gym-tracker',
@@ -68,6 +71,7 @@ export async function buildTrainingExport(repo: Repo, today: string): Promise<Tr
     measurements,
     foodLogs,
     waterLogs,
+    stepLogs,
     streak,
   };
 }

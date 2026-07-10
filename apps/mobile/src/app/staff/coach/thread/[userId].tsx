@@ -11,9 +11,18 @@ import {
 import { Image } from 'expo-image';
 import { useLocalSearchParams } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
-import { AppText, AppTextInput, PressableScale, Tag } from '../../../../components/ui';
+import {
+  AppText,
+  AppTextInput,
+  enterDown,
+  enterUp,
+  PressableScale,
+  Tag,
+} from '../../../../components/ui';
+import { addDays, posterDate, toIsoDate, todayIso } from '../../../../lib/dates';
 import { successHaptic } from '../../../../lib/haptics';
 import { useAuth } from '../../../../state/auth';
 import {
@@ -28,21 +37,24 @@ import { pushStaff, STAFF_ROUTES } from '../../../../features/staff/nav';
 
 /**
  * Coach thread — the full coach_chat history with one client, built to feel like
- * a real chat. The CLIENT's messages sit right-aligned in the red bubble (this
- * is the coach's phone, so "their" outbound side is the client); the COACH's own
- * replies sit left with the Newie avatar, mirroring the athlete-side chat exactly
- * but flipped for who's holding the phone. A header shows the client's name and
- * tier, and a pinned composer sends via replyToClient() then refetches so the
- * server-confirmed row (and read receipts) land in the list.
+ * a real chat. The CLIENT's messages sit right-aligned in the red block with
+ * BLACK ink (black-on-red law); the COACH's own replies sit left in borderless
+ * charcoal with the Newie avatar — mirroring the athlete-side MessageBubble
+ * language exactly but flipped for who's holding the phone. Runs from one
+ * sender group (tail corner, timestamp and avatar only on the last of a run),
+ * day dividers ride quiet raised pills. A compact header shows the client's
+ * name and tier, and a pinned pill composer sends via replyToClient() then
+ * refetches so the server-confirmed row (and read receipts) land in the list.
  */
 
 const NEWIE = require('../../../../../assets/images/newie.png');
 const MAX_LEN = 2000;
+const AVATAR = 30;
 
 const TIER_COLOR: Record<Tier, string> = {
   starter: colors.textDim,
   silver: colors.blue,
-  gold: colors.fat,
+  gold: colors.warning,
   elite: colors.accent,
 };
 const TIER_LABEL: Record<Tier, string> = {
@@ -68,22 +80,93 @@ function sendErrorLine(code: StaffErrorCode): string {
   return "Couldn't send — check your connection and try again.";
 }
 
-/** One bubble. Client = right/red; coach (you) = left/surface + avatar. */
-function Bubble({ message }: { message: CoachThreadMessage }) {
-  const isClient = message.sender === 'user';
+/** "3:42 PM" — local wall-clock, deterministic (no Intl dependency). */
+function clockLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  let h = d.getHours();
+  const m = d.getMinutes();
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  h %= 12;
+  if (h === 0) h = 12;
+  return `${h}:${String(m).padStart(2, '0')} ${suffix}`;
+}
+
+/** Same local calendar day? Used for grouping and day dividers. */
+function sameLocalDay(a: string, b: string): boolean {
+  return toIsoDate(new Date(a)) === toIsoDate(new Date(b));
+}
+
+/** "Today" / "Yesterday" / "THU, JUL 3" for the day divider. */
+function dividerLabel(iso: string): string {
+  const local = toIsoDate(new Date(iso));
+  const today = todayIso();
+  if (local === today) return 'Today';
+  if (local === addDays(today, -1)) return 'Yesterday';
+  return posterDate(local);
+}
+
+function DayDivider({ iso }: { iso: string }) {
   return (
-    <View style={[styles.bubbleRow, isClient ? styles.rowRight : styles.rowLeft]}>
+    <View style={styles.dayDivider} accessibilityRole="header">
+      <AppText variant="label" color={colors.textDim}>
+        {dividerLabel(iso)}
+      </AppText>
+    </View>
+  );
+}
+
+/** One bubble. Client = right/red block, black ink; coach (you) = left,
+ * borderless charcoal + avatar. Tail + timestamp only on the last of a run. */
+function Bubble({
+  message,
+  firstInGroup,
+  lastInGroup,
+  showAvatar,
+}: {
+  message: CoachThreadMessage;
+  firstInGroup: boolean;
+  lastInGroup: boolean;
+  showAvatar: boolean;
+}) {
+  const isClient = message.sender === 'user';
+  const time = clockLabel(message.createdAt);
+  return (
+    <View
+      style={[
+        styles.bubbleRow,
+        isClient ? styles.rowRight : styles.rowLeft,
+        firstInGroup ? styles.groupStart : styles.grouped,
+      ]}
+    >
       {!isClient ? (
-        <Image
-          source={NEWIE}
-          style={styles.avatar}
-          contentFit="cover"
-          contentPosition="top"
-          accessibilityLabel="You"
-        />
+        showAvatar ? (
+          <Image
+            source={NEWIE}
+            style={styles.avatar}
+            contentFit="cover"
+            contentPosition="top"
+            accessibilityLabel="You"
+          />
+        ) : (
+          <View style={styles.avatarSpacer} />
+        )
       ) : null}
-      <View style={[styles.bubble, isClient ? styles.clientBubble : styles.coachBubble]}>
-        <AppText color={isClient ? colors.onAccent : colors.text}>{message.body}</AppText>
+      <View style={[styles.col, isClient ? styles.colClient : styles.colCoach]}>
+        <View
+          style={[
+            styles.bubble,
+            isClient ? styles.clientBubble : styles.coachBubble,
+            lastInGroup ? (isClient ? styles.clientTail : styles.coachTail) : null,
+          ]}
+        >
+          <AppText color={isClient ? colors.onBlock : colors.text}>{message.body}</AppText>
+        </View>
+        {lastInGroup && time ? (
+          <AppText variant="label" color={colors.textFaint} style={styles.time}>
+            {time}
+          </AppText>
+        ) : null}
       </View>
     </View>
   );
@@ -96,6 +179,7 @@ export default function CoachThreadScreen() {
   const insets = useSafeAreaInsets();
 
   const clientName = params.name?.trim() || 'Client';
+  const clientInitial = clientName.charAt(0).toUpperCase();
   const tier = isTier(params.tier) ? params.tier : null;
 
   const [messages, setMessages] = useState<CoachThreadMessage[]>([]);
@@ -106,6 +190,7 @@ export default function CoachThreadScreen() {
   const [sendError, setSendError] = useState<StaffErrorCode | null>(null);
 
   const listRef = useRef<FlatList<CoachThreadMessage>>(null);
+  const pendingSeq = useRef(0);
 
   const scrollToEnd = useCallback(() => {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
@@ -144,31 +229,74 @@ export default function CoachThreadScreen() {
     setSending(true);
     setSendError(null);
     setDraft('');
+    // Optimistic bubble: the coach's reply lands in the thread the instant they
+    // tap send, rather than vanishing for the reply + refetch round-trips. On
+    // success we swap it for the server-confirmed row; on failure we pull it
+    // back out and restore the draft so nothing looks lost or double-sent.
+    const tempId = `pending-${(pendingSeq.current += 1)}`;
+    const optimistic: CoachThreadMessage = {
+      id: tempId,
+      kind: 'text',
+      sender: 'coach',
+      body,
+      senderAccountId: null,
+      readByUser: false,
+      readByCoach: true,
+      createdAt: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimistic]);
     void (async () => {
       try {
-        await replyToClient(userId, body, token);
+        const saved = await replyToClient(userId, body, token);
         successHaptic();
-        // Refetch so the server-confirmed row + read state replace the draft.
-        await load();
+        // Swap the optimistic bubble for the server-confirmed row.
+        setMessages((prev) => prev.map((m) => (m.id === tempId ? saved : m)));
       } catch (err) {
         setSendError(toStaffError(err).code);
+        setMessages((prev) => prev.filter((m) => m.id !== tempId));
         setDraft((d) => (d.length === 0 ? body : d)); // restore if still empty
-      } finally {
         setSending(false);
+        return;
       }
+      setSending(false);
+      // Background refetch for read state + any client messages that arrived —
+      // non-fatal since the reply already shows.
+      void load();
     })();
   }, [draft, sending, token, userId, load]);
 
   const renderItem = useCallback<ListRenderItem<CoachThreadMessage>>(
-    ({ item }) => <Bubble message={item} />,
-    [],
+    ({ item, index }) => {
+      const prev = index > 0 ? messages[index - 1] : undefined;
+      const next = index < messages.length - 1 ? messages[index + 1] : undefined;
+      const newDay = !prev || !sameLocalDay(prev.createdAt, item.createdAt);
+      const firstInGroup = newDay || prev === undefined || prev.sender !== item.sender;
+      const lastInGroup =
+        !next || !sameLocalDay(next.createdAt, item.createdAt) || next.sender !== item.sender;
+      return (
+        <Animated.View entering={enterUp()}>
+          {newDay ? <DayDivider iso={item.createdAt} /> : null}
+          <Bubble
+            message={item}
+            firstInGroup={firstInGroup}
+            lastInGroup={lastInGroup}
+            showAvatar={item.sender !== 'user' && lastInGroup}
+          />
+        </Animated.View>
+      );
+    },
+    [messages],
   );
 
   const showEmpty = !loading && !loadError && messages.length === 0;
 
   return (
     <View style={styles.fill}>
-      <View style={[styles.header, { paddingTop: insets.top + spacing.md }]}>
+      {/* Compact chat header — no hairline; the thread owns the screen. */}
+      <Animated.View
+        entering={enterDown()}
+        style={[styles.header, { paddingTop: insets.top + spacing.md }]}
+      >
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Back to inbox"
@@ -177,6 +305,9 @@ export default function CoachThreadScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
+        <View style={styles.clientAvatar}>
+          <AppText variant="bodyBold">{clientInitial}</AppText>
+        </View>
         <View style={styles.headerText}>
           <AppText variant="title" numberOfLines={1}>
             {clientName}
@@ -207,7 +338,7 @@ export default function CoachThreadScreen() {
             <Ionicons name="card-outline" size={22} color={colors.text} />
           </PressableScale>
         ) : null}
-      </View>
+      </Animated.View>
 
       <KeyboardAvoidingView
         style={styles.fill}
@@ -292,6 +423,8 @@ export default function CoachThreadScreen() {
           </View>
         ) : null}
 
+        {/* Pill composer beside the red send circle — no hairline above; the
+            filled pill separates itself from the thread (no-border law). */}
         <View style={[styles.inputBar, { paddingBottom: insets.bottom + spacing.sm }]}>
           <AppTextInput
             style={styles.input}
@@ -311,9 +444,9 @@ export default function CoachThreadScreen() {
             style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]}
           >
             {sending ? (
-              <ActivityIndicator color={colors.onAccent} />
+              <ActivityIndicator color={colors.onBlock} />
             ) : (
-              <Ionicons name="arrow-up" size={22} color={colors.onAccent} />
+              <Ionicons name="arrow-up" size={22} color={colors.onBlock} />
             )}
           </PressableScale>
         </View>
@@ -328,16 +461,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.gutter,
     paddingBottom: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
   backBtn: {
     width: touch.min,
     height: touch.min,
     borderRadius: radius.full,
     backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clientAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -359,9 +498,8 @@ const styles = StyleSheet.create({
   },
   retryBtn: { paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
   listContent: {
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.gutter,
     paddingVertical: spacing.md,
-    gap: 2,
     flexGrow: 1,
   },
   staleRow: {
@@ -371,52 +509,66 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingBottom: spacing.sm,
   },
+  dayDivider: {
+    alignSelf: 'center',
+    marginVertical: spacing.md,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+  },
   bubbleRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: spacing.sm,
-    marginVertical: 4,
   },
   rowRight: { justifyContent: 'flex-end' },
   rowLeft: { justifyContent: 'flex-start' },
+  groupStart: { marginTop: spacing.sm },
+  grouped: { marginTop: 2 },
   avatar: {
-    width: 30,
-    height: 30,
+    width: AVATAR,
+    height: AVATAR,
     borderRadius: radius.full,
     backgroundColor: colors.surfaceRaised,
   },
+  avatarSpacer: { width: AVATAR },
+  col: { flexShrink: 1, maxWidth: '80%' },
+  colClient: { alignItems: 'flex-end' },
+  colCoach: { alignItems: 'flex-start' },
   bubble: {
-    maxWidth: '78%',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     borderRadius: radius.lg,
   },
-  clientBubble: {
-    backgroundColor: colors.accent,
-    borderBottomRightRadius: radius.sm,
-  },
-  coachBubble: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderBottomLeftRadius: radius.sm,
-  },
-  errorRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xs },
+  // Client = red block with BLACK ink; coach = borderless charcoal —
+  // separation by fill contrast, never strokes (mirrors MessageBubble).
+  clientBubble: { backgroundColor: colors.blockRed },
+  coachBubble: { backgroundColor: colors.surface },
+  clientTail: { borderBottomRightRadius: radius.sm },
+  coachTail: { borderBottomLeftRadius: radius.sm },
+  time: { marginTop: spacing.xs, marginHorizontal: spacing.xs },
+  errorRow: { paddingHorizontal: spacing.gutter, paddingBottom: spacing.xs },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.gutter,
     paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
   },
-  input: { flex: 1, maxHeight: 120, paddingTop: 16, paddingBottom: 16 },
+  input: {
+    flex: 1,
+    maxHeight: 120,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.gutter,
+    borderRadius: radius.full,
+  },
   sendBtn: {
     width: touch.primary,
     height: touch.primary,
     borderRadius: radius.full,
-    backgroundColor: colors.accent,
+    backgroundColor: colors.blockRed,
     alignItems: 'center',
     justifyContent: 'center',
   },

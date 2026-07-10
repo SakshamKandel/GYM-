@@ -161,7 +161,7 @@ describe('planShieldUse', () => {
     const plans = planShieldUse({
       sessionDayIsos: days,
       weeklyTarget: 3,
-      todayIso: '2026-07-06',
+      todayIso: '2026-07-07',
       existingUses: [],
       quotaPerMonth: 1,
     });
@@ -177,7 +177,7 @@ describe('planShieldUse', () => {
     const plans = planShieldUse({
       sessionDayIsos: days,
       weeklyTarget: 3,
-      todayIso: '2026-07-06',
+      todayIso: '2026-07-07',
       existingUses: [],
       quotaPerMonth: 1,
     });
@@ -190,7 +190,7 @@ describe('planShieldUse', () => {
     const plans = planShieldUse({
       sessionDayIsos: days,
       weeklyTarget: 3,
-      todayIso: '2026-07-06',
+      todayIso: '2026-07-07',
       existingUses: [{ weekStart: '2026-06-29', monthKey: '2026-06' }],
       quotaPerMonth: 1,
     });
@@ -207,7 +207,7 @@ describe('planShieldUse', () => {
     const plans = planShieldUse({
       sessionDayIsos: days,
       weeklyTarget: 3,
-      todayIso: '2026-07-06',
+      todayIso: '2026-07-07',
       existingUses: [],
       quotaPerMonth: 1,
     });
@@ -234,7 +234,7 @@ describe('planShieldUse', () => {
     const plans = planShieldUse({
       sessionDayIsos: days,
       weeklyTarget: 3,
-      todayIso: '2026-07-13',
+      todayIso: '2026-07-14',
       existingUses: [],
       quotaPerMonth: 5,
     });
@@ -243,8 +243,8 @@ describe('planShieldUse', () => {
   });
 
   it('does not shield a week that is not yet safely elapsed (recent UTC rollover)', () => {
-    // Week B (06-29..07-05) only becomes judgeable once today >= 07-06
-    // (weekStart + 7). One day earlier (07-05, still technically "next
+    // Week B (06-29..07-05) only becomes judgeable once today >= 07-07
+    // (weekStart + 8). Earlier than that (07-05 here, still technically "next
     // week" by naive UTC-date math for a user behind UTC) must not shield it.
     const days = ['2026-06-22', '2026-06-23', '2026-06-24'];
     const plans = planShieldUse({

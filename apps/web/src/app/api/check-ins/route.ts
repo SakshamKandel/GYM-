@@ -23,9 +23,22 @@ export const runtime = 'nodejs';
  *    from this on sign-in, so due-state survives a reinstall.
  */
 
+/**
+ * Reject dates more than 2 days in the future of server time — enough slack
+ * for any real client timezone. Without this, a client can pin a fake future
+ * "latest bodyweight" (the sync anti-cheat reads the newest check-in to set
+ * the bodyweight-relative e1RM plausibility cap), permanently inflating the
+ * cap. Mirrors the guard on the workout-sync date field so both inputs that
+ * feed the plausibility calc are bounded the same way.
+ */
+function isNotFarFuture(dateIso: string): boolean {
+  const maxIso = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+  return dateIso <= maxIso;
+}
+
 const postSchema = z.object({
   id: z.string().min(1).max(64),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isNotFarFuture, 'date too far in the future'),
   bodyweightKg: z.number().min(0).max(1_000).nullish(),
   sleep: z.number().int().min(1).max(5),
   energy: z.number().int().min(1).max(5),

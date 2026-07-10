@@ -37,7 +37,7 @@ const styles = StyleSheet.create({
   label: { flexShrink: 1, minWidth: 0 },
   amount: { flexShrink: 0 },
   track: {
-    height: 8,
+    height: 10,
     borderRadius: radius.full,
     backgroundColor: colors.surfaceRaised,
     overflow: 'hidden',

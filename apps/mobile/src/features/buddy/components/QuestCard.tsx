@@ -1,7 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing } from '@gym/ui-tokens';
-import { AppText } from '../../../components/ui';
+import { AppText, IconChip } from '../../../components/ui';
 import type { QuestPair } from '../../../lib/api/social';
 
 /**
@@ -10,6 +10,9 @@ import type { QuestPair } from '../../../lib/api/social';
  * server-awarded (the `buddy_quest` badge lands via the award engine) — this
  * is display-only. Complete pairs get a quiet checkmark, no confetti here
  * (the badge celebration already covers that moment once).
+ *
+ * Block language: borderless charcoal block (`radius.block`), rounded-square
+ * icon chip anchor, thick pill progress bars on the raised track.
  */
 
 interface Props {
@@ -32,7 +35,7 @@ export function QuestCard({ pairs, target }: Props) {
   return (
     <View style={styles.card}>
       <View style={styles.header}>
-        <Ionicons name="flag-outline" size={18} color={colors.accent} />
+        <IconChip icon="flag-outline" color={colors.accentFaint} iconColor={colors.accent} />
         <AppText variant="title" style={styles.headerText}>
           Buddy quest — {target} session-days each
         </AppText>
@@ -58,25 +61,25 @@ export function QuestCard({ pairs, target }: Props) {
 }
 
 const styles = StyleSheet.create({
+  // Chunky charcoal block — NO border (fill contrast separates it, brief §1).
   card: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.lg,
-    gap: spacing.md,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+    gap: spacing.lg,
   },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   headerText: { flex: 1 },
-  pairList: { gap: spacing.md },
-  pairRow: { gap: 6 },
-  pairTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  pairList: { gap: spacing.lg },
+  pairRow: { gap: spacing.sm },
+  pairTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   pairName: { flex: 1 },
+  // Thick rounded bars (brief §7: 8–10 high, full-pill, raised track on dark).
   barTrack: {
-    height: 6,
+    height: 8,
     borderRadius: radius.full,
     backgroundColor: colors.surfaceRaised,
     overflow: 'hidden',
   },
-  barFill: { height: 6, borderRadius: radius.full },
+  barFill: { height: '100%', borderRadius: radius.full },
 });

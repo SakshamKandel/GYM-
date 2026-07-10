@@ -38,6 +38,8 @@ const styles = StyleSheet.create({
   },
   markerOff: { backgroundColor: 'transparent' },
   titleWrap: { flex: 1 },
+  /** Rounded set rows separated by gaps — no hairlines in the block language. */
+  rows: { gap: spacing.xs },
 });
 
 export function ExerciseSection({
@@ -72,25 +74,27 @@ export function ExerciseSection({
           </AppText>
         </View>
       </PressableScale>
-      {Array.from({ length: rowCount }, (_, i) => {
-        const setNo = i + 1;
-        const logged = exercise.loggedSets[i] ?? null;
-        return (
-          // entering + layout so rows added past the target visibly insert.
-          <Animated.View key={setNo} entering={enterUp(0)} layout={layoutSpring}>
-            <SetRow
-              setNo={setNo}
-              repRange={exercise.repRange}
-              logged={logged}
-              ghost={ghostTarget(exercise.lastSets, setNo)}
-              isCurrent={isCurrent && logged === null && setNo === currentSetNo}
-              flash={logged !== null && flashSetId === logged.id}
-              onFlashDone={onFlashDone}
-              unitPref={unitPref}
-            />
-          </Animated.View>
-        );
-      })}
+      <View style={styles.rows}>
+        {Array.from({ length: rowCount }, (_, i) => {
+          const setNo = i + 1;
+          const logged = exercise.loggedSets[i] ?? null;
+          return (
+            // entering + layout so rows added past the target visibly insert.
+            <Animated.View key={setNo} entering={enterUp(0)} layout={layoutSpring}>
+              <SetRow
+                setNo={setNo}
+                repRange={exercise.repRange}
+                logged={logged}
+                ghost={ghostTarget(exercise.lastSets, setNo)}
+                isCurrent={isCurrent && logged === null && setNo === currentSetNo}
+                flash={logged !== null && flashSetId === logged.id}
+                onFlashDone={onFlashDone}
+                unitPref={unitPref}
+              />
+            </Animated.View>
+          );
+        })}
+      </View>
     </View>
   );
 }

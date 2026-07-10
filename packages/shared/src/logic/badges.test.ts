@@ -3,9 +3,12 @@ import { describe, it } from 'node:test';
 import {
   BADGE_CATALOG,
   STRENGTH_BADGE_IDS,
+  badgeProgress,
+  badgeTier,
   canonicalLift,
   computeEarnedBadgeIds,
   type BadgeComputeInput,
+  type BadgeProgressStats,
 } from './badges.ts';
 
 function emptyInput(overrides: Partial<BadgeComputeInput> = {}): BadgeComputeInput {
@@ -45,6 +48,118 @@ describe('BADGE_CATALOG', () => {
   it('STRENGTH_BADGE_IDS matches the strength family exactly', () => {
     const fromCatalog = BADGE_CATALOG.filter((b) => b.family === 'strength').map((b) => b.id).sort();
     assert.deepEqual([...STRENGTH_BADGE_IDS].sort(), fromCatalog);
+  });
+
+  it('every badge has a non-empty description', () => {
+    for (const b of BADGE_CATALOG) {
+      assert.ok(b.description.length > 10, `${b.id} needs a real description`);
+    }
+  });
+});
+
+function emptyStats(overrides: Partial<BadgeProgressStats> = {}): BadgeProgressStats {
+  return {
+    bestE1RmByLift: {},
+    lifetimeSessionDays: 0,
+    lifetimeTonnageKg: 0,
+    prCount: 0,
+    streakWeeksBest: 0,
+    checkInCount: 0,
+    hasBuddy: false,
+    ...overrides,
+  };
+}
+
+describe('badgeProgress', () => {
+  const byId = new Map(BADGE_CATALOG.map((b) => [b.id, b]));
+
+  it('tracks a single-lift strength club against best e1RM', () => {
+    const p = badgeProgress(byId.get('bench_100')!, emptyStats({ bestE1RmByLift: { bench: 82.5 } }));
+    assert.deepEqual(p, { current: 82.5, target: 100, unit: 'kg' });
+  });
+
+  it('total club shows the partial big-three sum even with lifts missing', () => {
+    const p = badgeProgress(
+      byId.get('total_300')!,
+      emptyStats({ bestE1RmByLift: { bench: 80, squat: 110 } }),
+    );
+    assert.deepEqual(p, { current: 190, target: 300, unit: 'kg' });
+  });
+
+  it('sessions and streak badges use their respective counters', () => {
+    const stats = emptyStats({ lifetimeSessionDays: 18, streakWeeksBest: 5 });
+    assert.deepEqual(badgeProgress(byId.get('sessions_25')!, stats), {
+      current: 18,
+      target: 25,
+      unit: 'sessions',
+    });
+    assert.deepEqual(badgeProgress(byId.get('streak_8w')!, stats), {
+      current: 5,
+      target: 8,
+      unit: 'weeks',
+    });
+  });
+
+  it('mileage, records and check-in badges report kg / prs / check-ins', () => {
+    const stats = emptyStats({ lifetimeTonnageKg: 42_000, prCount: 7, checkInCount: 3 });
+    assert.deepEqual(badgeProgress(byId.get('tonnage_50k')!, stats), {
+      current: 42_000,
+      target: 50_000,
+      unit: 'kg',
+    });
+    assert.deepEqual(badgeProgress(byId.get('pr_25')!, stats), { current: 7, target: 25, unit: 'prs' });
+    assert.deepEqual(badgeProgress(byId.get('checkin_10')!, stats), {
+      current: 3,
+      target: 10,
+      unit: 'check-ins',
+    });
+  });
+
+  it('buddy_first is a 0-or-1 progress', () => {
+    assert.deepEqual(badgeProgress(byId.get('buddy_first')!, emptyStats()), {
+      current: 0,
+      target: 1,
+      unit: 'buddies',
+    });
+    assert.deepEqual(badgeProgress(byId.get('buddy_first')!, emptyStats({ hasBuddy: true })), {
+      current: 1,
+      target: 1,
+      unit: 'buddies',
+    });
+  });
+
+  it('event-shaped badges have no scalar progress', () => {
+    assert.equal(badgeProgress(byId.get('comeback')!, emptyStats()), null);
+    assert.equal(badgeProgress(byId.get('buddy_quest')!, emptyStats()), null);
+    assert.equal(badgeProgress(byId.get('coach_pick')!, emptyStats()), null);
+  });
+
+  it('progress reaching target agrees with computeEarnedBadgeIds for threshold badges', () => {
+    // A stats snapshot exactly at several thresholds must award exactly those
+    // badges AND report current >= target through badgeProgress — the two
+    // evaluators may never disagree (they drive "earned" vs "progress" UI).
+    const stats = emptyStats({
+      bestE1RmByLift: { bench: 100, squat: 100, deadlift: 100 },
+      lifetimeSessionDays: 25,
+      streakWeeksBest: 8,
+      prCount: 25,
+      checkInCount: 10,
+      lifetimeTonnageKg: 50_000,
+      hasBuddy: true,
+    });
+    const earned = new Set(
+      computeEarnedBadgeIds({ ...stats, sessionDayIsos: ['2026-07-01'] }),
+    );
+    for (const badge of BADGE_CATALOG) {
+      const p = badgeProgress(badge, stats);
+      if (p === null || badge.lift === 'total') continue; // total's partial-sum display is the documented exception
+      const done = p.current >= p.target;
+      assert.equal(
+        done,
+        earned.has(badge.id),
+        `${badge.id}: progress says ${done ? 'done' : 'not done'} but award engine disagrees`,
+      );
+    }
   });
 });
 
@@ -223,5 +338,55 @@ describe('computeEarnedBadgeIds — mileage, records, crew', () => {
       }),
     );
     assert.equal(maxedOut.length, 42); // 44 minus buddy_quest and coach_pick
+  });
+});
+
+describe('badgeTier', () => {
+  const byId = new Map(BADGE_CATALOG.map((b) => [b.id, b]));
+  const tierOf = (id: string) => badgeTier(byId.get(id)!);
+
+  it('3-rung ladders run bronze → silver → gold', () => {
+    assert.deepEqual(
+      ['bench_60', 'bench_100', 'bench_140'].map(tierOf),
+      ['bronze', 'silver', 'gold'],
+    );
+    assert.deepEqual(['ohp_40', 'ohp_60', 'ohp_80'].map(tierOf), ['bronze', 'silver', 'gold']);
+    assert.deepEqual(
+      ['total_300', 'total_450', 'total_600'].map(tierOf),
+      ['bronze', 'silver', 'gold'],
+    );
+  });
+
+  it('4-rung ladders (squat, deadlift) top out at elite', () => {
+    assert.deepEqual(
+      ['squat_60', 'squat_100', 'squat_140', 'squat_180'].map(tierOf),
+      ['bronze', 'silver', 'gold', 'elite'],
+    );
+    assert.deepEqual(
+      ['deadlift_100', 'deadlift_140', 'deadlift_180', 'deadlift_220'].map(tierOf),
+      ['bronze', 'silver', 'gold', 'elite'],
+    );
+  });
+
+  it('every strength badge has a tier; every other badge has none', () => {
+    for (const badge of BADGE_CATALOG) {
+      const tier = badgeTier(badge);
+      if (badge.family === 'strength') assert.notEqual(tier, null, badge.id);
+      else assert.equal(tier, null, badge.id);
+    }
+  });
+
+  it('a badge not in the catalog (challenge extra) gets no tier', () => {
+    assert.equal(
+      badgeTier({
+        id: 'challenge:abc',
+        family: 'crew',
+        name: 'Challenge',
+        description: '',
+        icon: 'award',
+        sort: 900,
+      }),
+      null,
+    );
   });
 });

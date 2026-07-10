@@ -13,7 +13,7 @@ import {
   type CheckInSignals,
   type GreeceReply,
 } from '@gym/shared';
-import { colors, radius, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AnimatedNumber,
   AppText,
@@ -83,18 +83,20 @@ const styles = StyleSheet.create({
   questions: { gap: spacing.md },
   question: { gap: spacing.xs },
   optionRow: { flexDirection: 'row', gap: spacing.sm },
+  // Option chips follow the interactive-chip spec (brief §6): outlined pill on
+  // dark, selected = solid red fill with BLACK label. ≥48dp tap target.
   option: {
     flex: 1,
-    height: 44,
+    minHeight: touch.min,
     borderRadius: radius.full,
     borderWidth: 1.5,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
   optionSelected: {
     borderColor: colors.accent,
-    backgroundColor: colors.surfaceRaised,
+    backgroundColor: colors.accent,
   },
   replyLines: { gap: spacing.xs, marginTop: spacing.xs },
 });
@@ -127,7 +129,7 @@ function QuestionRow({
             >
               <AppText
                 variant="bodyBold"
-                color={selected ? colors.text : colors.textDim}
+                color={selected ? colors.onBlock : colors.textDim}
                 tabular={false}
                 numberOfLines={1}
                 adjustsFontSizeToFit
@@ -284,7 +286,7 @@ export function WeeklyCheckIn({ stagger = 0 }: { stagger?: number }) {
   if (phase === 'done' && reply !== null) {
     return (
       <Animated.View entering={enterUp(stagger)} style={styles.wrap}>
-        <HeroCard mascot>
+        <HeroCard mascot variant="charcoal">
           <AppText variant="label">Greece's reply</AppText>
           <Animated.View entering={enterFade(0)}>
             <AppText variant="title">{reply.headline}</AppText>
@@ -308,7 +310,7 @@ export function WeeklyCheckIn({ stagger = 0 }: { stagger?: number }) {
   if (phase === 'asking') {
     return (
       <Animated.View entering={enterUp(stagger)} style={styles.wrap}>
-        <HeroCard>
+        <HeroCard variant="charcoal">
           <AppText variant="label">GM weekly check-in</AppText>
           <Animated.View entering={enterFade(0)} style={styles.questions}>
             {QUESTIONS.map((q) => (
@@ -340,7 +342,7 @@ export function WeeklyCheckIn({ stagger = 0 }: { stagger?: number }) {
 
   return (
     <Animated.View entering={enterUp(stagger)} style={styles.wrap}>
-      <HeroCard>
+      <HeroCard variant="charcoal">
         <AppText variant="label">GM weekly check-in</AppText>
         <View style={styles.numRow}>
           {rate > 0 ? <AppText variant="display">+</AppText> : null}

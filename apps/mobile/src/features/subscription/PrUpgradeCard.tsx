@@ -42,12 +42,11 @@ const GOLD_BENEFITS = [
 ] as const;
 
 const styles = StyleSheet.create({
+  // Borderless charcoal block (REVAMP-BRIEF §1): separation via fill contrast.
   card: {
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.block,
     backgroundColor: colors.surface,
-    padding: spacing.xl,
+    padding: spacing.gutter,
     gap: spacing.md,
     marginTop: spacing.xl,
     alignItems: 'flex-start',

@@ -1,22 +1,31 @@
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { ordinalLabel } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import { AppText, PressableScale, TierAvatarFrame } from '../../../components/ui';
 import { RankEmblem } from '../../gamification/components/RankEmblem';
 import type { PublicLeaderboardResult, PublicLeaderboardRow } from '../../../lib/api/social';
 import { avatarLetter } from '../logic';
+import { MovementMark, PositionMarker } from './LeaderboardBits';
 
 /**
- * Public gym-wide consistency leaderboard — ranked by session-days THIS
- * calendar month ONLY (design law: never kg, never XP, tier is visual
- * identity and never affects order). Server does the ranking and the privacy
- * filtering; this component only renders what it's given.
+ * Public gym-wide consistency leaderboard — ranked by session-days in the
+ * scoped calendar month ONLY (design law: never kg, never XP, tier is visual
+ * identity and never affects order). Server does the ranking, tie-sharing,
+ * privacy filtering, and 7-day movement; this component only renders what
+ * it's given.
  *
  * PRIVACY LAW: rows are plain Views, NOT links — a stranger's row exposes
- * only name/avatar/tier/rank/session-days and never taps through to their
- * workouts. The one exception: rows belonging to the caller's ACCEPTED
- * buddies reuse the existing buddy tap-through (BuddySummarySheet), which
- * shows only what the buddy feed already shows them.
+ * only name/avatar/tier/rank/position/session-days/movement and never taps
+ * through to their workouts. The one exception: rows belonging to the
+ * caller's ACCEPTED buddies reuse the existing buddy tap-through
+ * (BuddySummarySheet), which shows only what the buddy feed already shows.
+ *
+ * Visual language: top 3 get a flat metal medal disc (no glow, no gradient —
+ * the ONE solid fill mirrors the earned-rank metal palette), everyone else a
+ * tabular ordinal. Ties share a position (server competition ranking), so
+ * two 2nds are both medalled. Movement is a quiet ▲/▼ caption vs. a week
+ * ago; "new" marks members who weren't on the board then.
  *
  * The caller's own row is highlighted; when they rank outside the visible
  * list, a pinned "You — Nth" footer row shows their absolute position.
@@ -26,24 +35,11 @@ interface Props {
   rows: PublicLeaderboardRow[];
   me: PublicLeaderboardResult['me'];
   month: string;
+  /** True when showing LAST month's final standings (no movement column). */
+  final?: boolean;
   /** Account ids of the caller's accepted buddies — the only tappable rows. */
   buddyIds: ReadonlySet<string>;
   onSelectBuddy: (accountId: string, displayName: string) => void;
-}
-
-function ordinal(n: number): string {
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
-  switch (n % 10) {
-    case 1:
-      return `${n}st`;
-    case 2:
-      return `${n}nd`;
-    case 3:
-      return `${n}rd`;
-    default:
-      return `${n}th`;
-  }
 }
 
 function monthLabel(monthKey: string): string {
@@ -52,37 +48,41 @@ function monthLabel(monthKey: string): string {
   return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long' });
 }
 
-export function PublicLeaderboard({ rows, me, month, buddyIds, onSelectBuddy }: Props) {
+export function PublicLeaderboard({ rows, me, month, final = false, buddyIds, onSelectBuddy }: Props) {
   if (rows.length === 0) {
     return (
       <View style={styles.emptyState}>
         <Ionicons name="podium-outline" size={32} color={colors.textFaint} />
         <AppText variant="caption" center style={styles.emptyText}>
-          No ranked sessions yet in {monthLabel(month)} — first session puts you on the board.
+          {final
+            ? `No ranked sessions in ${monthLabel(month)} — the board was empty that month.`
+            : `No ranked sessions yet in ${monthLabel(month)} — first session puts you on the board.`}
         </AppText>
       </View>
     );
   }
 
   const meVisible = rows.some((r) => r.isMe);
+  // Movement renders only when the server actually computed it — otherwise
+  // every row would read "new" during the first week of a month.
+  const movementAvailable = !final && rows.some((r) => r.delta !== null);
 
   return (
     <View style={styles.list}>
       <AppText variant="caption" style={styles.hint}>
-        Session-days in {monthLabel(month)} — one per day, whole gym.
+        {final
+          ? `${monthLabel(month)} final standings — session-days, one per day.`
+          : `Session-days in ${monthLabel(month)} — one per day, whole gym.`}
       </AppText>
 
       {rows.map((row) => {
+        // Me-row rides the red block — BLACK ink on red (brand law), never
+        // white-on-red. Movement keeps its dark-surface palette by sitting in
+        // a near-black pill (filled chip-inside-block pattern, brief §6).
         const content = (
           <View style={[styles.row, row.isMe && styles.rowMe]}>
             <View style={styles.rankWrap}>
-              <AppText
-                variant="bodyBold"
-                tabular
-                color={row.position <= 3 ? colors.accent : colors.textDim}
-              >
-                {ordinal(row.position)}
-              </AppText>
+              <PositionMarker position={row.position} ink={row.isMe ? colors.onBlock : undefined} />
             </View>
             <TierAvatarFrame tier={row.tier} size={36}>
               <View style={styles.avatar}>
@@ -95,16 +95,33 @@ export function PublicLeaderboard({ rows, me, month, buddyIds, onSelectBuddy }: 
               {/* Tier identity on avatar rows = the ring on the avatar ONLY
                   (design law) — never a shield beside the name. */}
               <View style={styles.nameRow}>
-                <AppText variant="bodyBold" numberOfLines={1} style={styles.nameText}>
+                <AppText
+                  variant="bodyBold"
+                  numberOfLines={1}
+                  style={styles.nameText}
+                  color={row.isMe ? colors.onBlock : undefined}
+                >
                   {row.isMe ? 'You' : row.displayName}
                 </AppText>
                 {/* Earned rank medal — ring only (no level number in public). */}
                 <RankEmblem rank={row.rank} size={20} />
               </View>
-              <AppText variant="caption">
+              {/* 13px black at 0.8 over red stays ≥4.5:1 (screen precedent). */}
+              <AppText
+                variant="caption"
+                color={row.isMe ? colors.onBlock : undefined}
+                style={row.isMe ? styles.meDim : undefined}
+              >
                 {row.sessionDays} session{row.sessionDays === 1 ? '' : 's'}
               </AppText>
             </View>
+            {row.isMe && movementAvailable ? (
+              <View style={styles.movementPill}>
+                <MovementMark delta={row.delta} available={movementAvailable} />
+              </View>
+            ) : (
+              <MovementMark delta={row.delta} available={movementAvailable} />
+            )}
             {!row.isMe && buddyIds.has(row.accountId) ? (
               <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
             ) : null}
@@ -129,20 +146,24 @@ export function PublicLeaderboard({ rows, me, month, buddyIds, onSelectBuddy }: 
         return <View key={row.accountId}>{content}</View>;
       })}
 
-      {/* Caller ranks below the visible list — pin their absolute position. */}
+      {/* Caller ranks below the visible list — pin their absolute position.
+          Same red block treatment as the in-list me-row: black ink on red. */}
       {!meVisible && !me.hidden && me.position !== null ? (
         <View style={[styles.row, styles.rowMe]}>
           <View style={styles.rankWrap}>
-            <AppText variant="bodyBold" tabular color={colors.textDim}>
-              {ordinal(me.position)}
-            </AppText>
+            <PositionMarker position={me.position} ink={colors.onBlock} />
           </View>
           <View style={styles.info}>
-            <AppText variant="bodyBold">
-              You — {ordinal(me.position)} · {me.sessionDays} session
+            <AppText variant="bodyBold" color={colors.onBlock}>
+              You — {ordinalLabel(me.position)} · {me.sessionDays} session
               {me.sessionDays === 1 ? '' : 's'}
             </AppText>
           </View>
+          {movementAvailable ? (
+            <View style={styles.movementPill}>
+              <MovementMark delta={me.delta} available={movementAvailable} />
+            </View>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -162,9 +183,20 @@ const styles = StyleSheet.create({
     minHeight: touch.min,
     paddingVertical: spacing.sm,
   },
+  // The caller's row is the list's red highlight block — fill contrast, not
+  // a stroke (borders on cards = bug in the block language).
   rowMe: {
-    borderWidth: 1.5,
-    borderColor: colors.accentFaint,
+    backgroundColor: colors.blockRed,
+  },
+  // Secondary black ink on red: 0.8 keeps 13px captions ≥4.5:1.
+  meDim: { opacity: 0.8 },
+  // Near-black pill so MovementMark's dark-surface palette keeps its
+  // contrast on the red block (mirrors the StandingCard pattern).
+  movementPill: {
+    backgroundColor: colors.onBlock,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
   },
   rankWrap: { width: 42, alignItems: 'flex-start' },
   avatar: {

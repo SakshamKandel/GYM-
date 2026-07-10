@@ -188,12 +188,18 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
     };
   }
 
+  // A session that already tops the rep range at a low enough RPE earns a weight
+  // increase (Rule 2). A flat e1RM caused by capping the rep range at low RPE is not
+  // a stall, so decide this before Rule 1 and let such sessions skip the deload.
+  const allAtTop = last.sets.every((s) => s.reps >= repMax);
+  const qualifiesForIncrease = allAtTop && (avgRpe === null || avgRpe <= RPE_INCREASE_CEILING);
+
   // Rule 1 — stall: no e1RM progress across 3+ consecutive sessions → deload ~10%.
   const sessionE1Rms = sessions.map((s) =>
     Math.max(...s.sets.map((x) => effortScore(x.weightKg, x.reps))),
   );
   const stall = stallLength(sessionE1Rms);
-  if (stall >= STALL_SESSIONS) {
+  if (stall >= STALL_SESSIONS && !qualifiesForIncrease) {
     const gridded = round2(Math.round((topWeight * DELOAD_FACTOR) / incrementKg) * incrementKg);
     const target = gridded <= 0 || gridded >= topWeight ? round2(topWeight * DELOAD_FACTOR) : gridded;
     return {
@@ -205,8 +211,7 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
   }
 
   // Rule 2 — increase: every set at/above the top of the range and RPE easy enough.
-  const allAtTop = last.sets.every((s) => s.reps >= repMax);
-  if (allAtTop && (avgRpe === null || avgRpe <= RPE_INCREASE_CEILING)) {
+  if (qualifiesForIncrease) {
     const rpePart = avgRpe === null ? '' : ` @ RPE ${fmtRpe(avgRpe)}`;
     return {
       ...base,
@@ -234,7 +239,17 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
     };
   }
 
-  // Rule 4 — default hold: mid-range, keep adding reps.
+  // Rule 4 — default hold. Already topping the range but RPE was too high for an
+  // increase → recover before adding weight; otherwise mid-range → keep adding reps.
+  if (allAtTop) {
+    const rpePart = avgRpe === null ? '' : `RPE ${fmtRpe(avgRpe)} at the top of the ${rangeLabel} range`;
+    return {
+      ...base,
+      action: 'hold',
+      targetWeightKg: topWeight,
+      reason: `${rpePart || `Topped the ${rangeLabel} range`} — hold ${fmtWeight(topWeight, unitPref)} and recover before adding weight`,
+    };
+  }
   return {
     ...base,
     action: 'hold',

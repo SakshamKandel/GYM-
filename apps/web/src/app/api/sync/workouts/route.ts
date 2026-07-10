@@ -114,46 +114,49 @@ export async function POST(req: Request) {
   const { workouts } = parsed.data;
 
   const db = getDb();
-
-  const newlyInserted = await db
-    .insert(syncedWorkouts)
-    .values(
-      workouts.map((w) => ({
-        id: w.id,
-        accountId: user.id,
-        date: w.date,
-        name: w.name,
-        templateId: w.templateId ?? null,
-        templateName: w.templateName ?? null,
-        startedAt: new Date(w.startedAt),
-        finishedAt: new Date(w.finishedAt),
-        durationSec: w.durationSec ?? null,
-      })),
-    )
-    .onConflictDoNothing({ target: syncedWorkouts.id })
-    .returning({ id: syncedWorkouts.id });
-  const newlyInsertedIds = new Set(newlyInserted.map((r) => r.id));
-
-  // Ownership gate for the set rows: only workouts that now exist AND belong
-  // to the caller accept sets. A replayed foreign workout id conflicts above
-  // (do-nothing) and is filtered out here, so its sets are never written.
   const batchIds = workouts.map((w) => w.id);
-  const ownedRows = await db
-    .select({ id: syncedWorkouts.id })
-    .from(syncedWorkouts)
-    .where(and(eq(syncedWorkouts.accountId, user.id), inArray(syncedWorkouts.id, batchIds)));
-  const ownedIds = new Set(ownedRows.map((r) => r.id));
 
-  // Sets are only inserted for workouts NEWLY inserted in THIS request — not
+  // Which of the batch's ids already exist (any owner), resolved BEFORE the
+  // insert so the workout rows and their set rows can be written in ONE atomic
+  // db.batch() below. neon-http is non-interactive — it has no db.transaction()
+  // callback — but db.batch runs its statements inside a single server-side
+  // transaction (all commit or none do). A workout is "newly inserted" by this
+  // request iff it does not already exist; new rows are always written with
+  // accountId = user.id, so newly-inserted ⇒ owned by the caller.
+  const existingRows = await db
+    .select({ id: syncedWorkouts.id, accountId: syncedWorkouts.accountId })
+    .from(syncedWorkouts)
+    .where(inArray(syncedWorkouts.id, batchIds));
+  const existingOwnerById = new Map(existingRows.map((r) => [r.id, r.accountId] as const));
+  const isNewWorkout = (id: string) => !existingOwnerById.has(id);
+  const isOwnedWorkout = (id: string) =>
+    existingOwnerById.has(id) ? existingOwnerById.get(id) === user.id : true;
+
+  const workoutValues = workouts.map((w) => ({
+    id: w.id,
+    accountId: user.id,
+    date: w.date,
+    name: w.name,
+    templateId: w.templateId ?? null,
+    templateName: w.templateName ?? null,
+    startedAt: new Date(w.startedAt),
+    finishedAt: new Date(w.finishedAt),
+    durationSec: w.durationSec ?? null,
+  }));
+
+  // Sets are only inserted for workouts NEWLY created by THIS request — not
   // merely "owned" — matching the documented append-only contract ("a
-  // replayed workout is a full no-op"). Gating on ownedIds alone would let a
+  // replayed workout is a full no-op"). Gating on ownership alone would let a
   // client re-POST an existing workout id with an extra set appended: the
-  // workout insert conflicts (do-nothing, so it's not "fresh") but the new
+  // workout upsert conflicts (do-nothing, so it's not "fresh") but the new
   // set id would still insert and NEVER pass through the plausibility check
-  // below (which only iterates newlyInserted/freshWorkouts), permanently
-  // laundering an implausible set into an already-ranked=true workout.
+  // below (which only iterates fresh workouts), permanently laundering an
+  // implausible set into an already-ranked=true workout. A foreign id also
+  // fails isNewWorkout (it exists under another account), so its sets are
+  // never written. Every new workout carries ≥1 set (schema min(1)), so
+  // setValues is non-empty exactly when there is a new workout to insert.
   const setValues = workouts
-    .filter((w) => ownedIds.has(w.id) && newlyInsertedIds.has(w.id))
+    .filter((w) => isNewWorkout(w.id))
     .flatMap((w) =>
       w.sets.map((s) => ({
         id: s.id,
@@ -171,16 +174,30 @@ export async function POST(req: Request) {
       })),
     );
 
+  // Atomic write: the workout rows and their set rows commit together or not
+  // at all. A mid-request failure (Neon connection reset, statement timeout,
+  // serverless eviction between the two writes) rolls back the workout rows
+  // too, so the idempotent retry re-inserts them as fresh and re-writes their
+  // sets — an orphaned zero-set workout can never be echoed back as synced.
+  let newlyInsertedIds = new Set<string>();
   if (setValues.length > 0) {
-    await db.insert(syncedSets).values(setValues).onConflictDoNothing({ target: syncedSets.id });
+    const [insertedWorkouts] = await db.batch([
+      db
+        .insert(syncedWorkouts)
+        .values(workoutValues)
+        .onConflictDoNothing({ target: syncedWorkouts.id })
+        .returning({ id: syncedWorkouts.id }),
+      db.insert(syncedSets).values(setValues).onConflictDoNothing({ target: syncedSets.id }),
+    ]);
+    newlyInsertedIds = new Set(insertedWorkouts.map((r) => r.id));
   }
 
-  const syncedWorkoutIds = batchIds.filter((id) => ownedIds.has(id));
+  const syncedWorkoutIds = batchIds.filter((id) => isOwnedWorkout(id));
 
   // ── Plausibility layer: only NEWLY inserted workouts (a replayed workout
   //    already got its verdict the first time — re-checking a replay against
   //    a baseline that now includes its own sets would be circular). ────────
-  const freshWorkouts = workouts.filter((w) => ownedIds.has(w.id) && newlyInsertedIds.has(w.id));
+  const freshWorkouts = workouts.filter((w) => newlyInsertedIds.has(w.id));
   const flaggedWorkoutIds: string[] = [];
 
   if (freshWorkouts.length > 0) {

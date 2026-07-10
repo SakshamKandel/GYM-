@@ -1,5 +1,5 @@
 import { accounts, syncedWorkouts } from '@gym/db';
-import { effectiveTier } from '@gym/shared';
+import { competitionPositions, effectiveTier } from '@gym/shared';
 import { and, eq, gte, inArray, lt } from 'drizzle-orm';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { acceptedBuddyIds } from '@/lib/buddy';
@@ -77,7 +77,7 @@ export async function GET(req: Request) {
   const infoById = new Map(nameRows.map((r) => [r.id, r]));
 
   const now = new Date();
-  const rows = memberIds
+  const sorted = memberIds
     .map((id) => {
       const info = infoById.get(id);
       return {
@@ -88,7 +88,14 @@ export async function GET(req: Request) {
         isMe: id === user.id,
       };
     })
-    .sort((a, b) => b.sessionDays - a.sessionDays);
+    // sessionDays ONLY (design law), accountId asc as a stable, meaningless
+    // tiebreak so tied buddies don't reshuffle between refreshes.
+    .sort((a, b) => b.sessionDays - a.sessionDays || (a.accountId < b.accountId ? -1 : 1));
+
+  // Competition ranking (1, 2, 2, 4, ...) — tied buddies share a position
+  // instead of one of them arbitrarily "winning" by list order.
+  const positions = competitionPositions(sorted.map((r) => r.sessionDays));
+  const rows = sorted.map((r, i) => ({ ...r, position: positions[i]! }));
 
   return json({ month: monthKey, rows }, 200);
 }

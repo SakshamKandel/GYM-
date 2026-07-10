@@ -187,6 +187,9 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
 
   const auth = useAuth.getState();
   if (auth.status !== 'signedIn' || auth.token === null) return false;
+  // Snapshot the account we're registering for; re-verified after every await
+  // below so a sign-out mid-flight can never be overtaken by this register.
+  const authToken = auth.token;
 
   try {
     const granted = await requestPermission();
@@ -194,13 +197,19 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
 
     // Native device token = the raw FCM token on Android (Firebase must be
     // configured via google-services.json at build time for this to resolve).
-    const tokenResponse = await Notifications.getDevicePushTokenAsync();
-    const deviceToken =
-      typeof tokenResponse.data === 'string' ? tokenResponse.data : '';
+    // Bounded (5s) like currentDeviceToken so a hung native call can't leave
+    // a registration pending indefinitely across a sign-out.
+    const deviceToken = await currentDeviceToken();
     if (!deviceToken) return false;
 
+    // Re-read auth AFTER the awaits: if the user signed out (or switched
+    // accounts) while the permission/token fetch was in flight, abort so we
+    // don't re-register the device to the just-signed-out account.
+    const latest = useAuth.getState();
+    if (latest.status !== 'signedIn' || latest.token !== authToken) return false;
+
     const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
-    await registerPushToken(deviceToken, platform, auth.token);
+    await registerPushToken(deviceToken, platform, authToken);
     return true;
   } catch {
     // Denied permission, offline, Firebase not configured, or unauthorized.

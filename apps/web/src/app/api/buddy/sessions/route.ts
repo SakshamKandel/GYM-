@@ -1,4 +1,5 @@
 import { accounts, buddyActivity, buddySessions, buddySessionParticipants } from '@gym/db';
+import { effectiveTier } from '@gym/shared';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { acceptedBuddyIds, authedUser } from '@/lib/buddy';
@@ -35,6 +36,7 @@ export async function GET(req: Request) {
       hostId: accounts.id,
       hostName: accounts.displayName,
       hostTier: accounts.tier,
+      hostTierExpiresAt: accounts.tierExpiresAt,
       workoutName: buddySessions.workoutName,
       status: buddySessions.status,
       startedAt: buddySessions.startedAt,
@@ -49,9 +51,16 @@ export async function GET(req: Request) {
     )
     .orderBy(desc(buddySessions.startedAt));
 
+  const now = new Date();
   const sessions = rows.map((r) => ({
     id: r.id,
-    host: { id: r.hostId, displayName: r.hostName, tier: r.hostTier },
+    host: {
+      id: r.hostId,
+      displayName: r.hostName,
+      // Server-authoritative tier: a lapsed paid tier collapses to 'starter'
+      // so buddies never see a stale Elite shield next to a downgraded account.
+      tier: effectiveTier(r.hostTier, r.hostTierExpiresAt, now),
+    },
     workoutName: r.workoutName,
     status: r.status,
     startedAt: r.startedAt,

@@ -5,9 +5,10 @@ import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { displayWeight } from '@gym/shared';
-import { colors, radius, spacing, type } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
+  Card,
   enterDown,
   enterUp,
   IconChip,
@@ -33,14 +34,19 @@ const SEED_EXERCISE_IDS: ReadonlySet<string> = new Set(
     .flatMap((w) => w.exercises.map((e) => e.exerciseId)),
 );
 
-/** Exercise detail: image (tap swaps angle), facts, steps, personal history. */
+/**
+ * Exercise detail: image (tap swaps angle), facts, steps, personal history.
+ * Revamp (REVAMP-BRIEF): light image well framed inside a charcoal block,
+ * Oswald display name with meta pills, red hero block for the headline
+ * record (best e1RM + rep maxes), cream counterpoint block for the steps.
+ */
 
 /** Inverse Epley: the weight you could lift for `reps`, given an e1RM. */
 function repMaxKg(e1rmKg: number, reps: number): number {
   return e1rmKg / (1 + reps / 30);
 }
 
-/** Rep counts shown as estimated rep-maxes in the records grid. */
+/** Rep counts shown as estimated rep-maxes in the red records block. */
 const REP_MAX_TARGETS = [5, 8, 12] as const;
 
 const styles = StyleSheet.create({
@@ -51,22 +57,23 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   backBtn: {
-    width: 44,
-    height: 44,
+    width: touch.min,
+    height: touch.min,
     borderRadius: radius.full,
     backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // White rounded block — the bundled photos have white backgrounds, so the
-  // block makes them look deliberate, like an oversized icon chip.
-  imageWrap: {
+  // Framed image well (brief §8): the bundled photos ship on white
+  // backgrounds, so the well stays light for legibility — but it sits framed
+  // at radius.md INSIDE a raised charcoal block (radius.block, no border), so
+  // the page keeps its dark composition instead of opening on a wall of white.
+  imageCard: { marginBottom: spacing.lg },
+  imageWell: {
     width: '100%',
-    aspectRatio: 4 / 3,
-    borderRadius: radius.lg,
-    backgroundColor: colors.onAccent, // pure white, matching the image bg
+    height: 240,
+    borderRadius: radius.md,
     overflow: 'hidden',
-    marginBottom: spacing.lg,
   },
   image: { width: '100%', height: '100%' },
   // Discoverability badge on multi-angle photos: a dark pill on the white image
@@ -77,24 +84,41 @@ const styles = StyleSheet.create({
     bottom: spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: spacing.xs,
     backgroundColor: colors.surface,
     borderRadius: radius.full,
-    paddingVertical: 4,
+    paddingVertical: spacing.xs,
     paddingHorizontal: spacing.sm,
   },
-  swapText: { fontFamily: type.display, fontSize: 12, color: colors.text, letterSpacing: 0.5 },
+  // Header block (brief §5): eyebrow → big Oswald name → meta pills.
+  title: {
+    textTransform: 'uppercase',
+    lineHeight: 44,
+    marginTop: spacing.xs,
+  },
   pillRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
     marginTop: spacing.md,
   },
+  // Outlined meta pill (brief §6) — non-interactive fact chip on dark.
+  metaPill: {
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radius.full,
+    minHeight: 34,
+    paddingHorizontal: spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   step: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
+  stepLast: { marginBottom: 0 },
+  // Black-on-cream numerals — never red text on cream (brief §2).
   stepNo: {
     fontFamily: type.display,
-    fontSize: 20,
-    color: colors.accent,
+    fontSize: type.size.title,
+    color: colors.onBlock,
     width: 26,
     lineHeight: 24,
   },
@@ -108,6 +132,25 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.md,
   },
+  // Red hero block (brief §11b): headline record + rep-max estimates, all
+  // BLACK ink (`onBlock`) — never white-on-red.
+  heroBlock: { gap: spacing.sm },
+  heroRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs },
+  heroValue: { flexShrink: 1 },
+  heroUnit: { opacity: 0.6 },
+  repMaxRow: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    marginTop: spacing.xs,
+  },
+  repMaxCell: { flex: 1, gap: spacing.xs / 2 },
+  repMaxValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs },
+  repMaxValue: {
+    fontSize: type.size.heading,
+    lineHeight: 38,
+    flexShrink: 1,
+  },
+  recordsCard: { marginTop: spacing.md },
   recordsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -119,23 +162,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.md,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm,
   },
   historyDate: { flexShrink: 0 },
-  historyNumbers: { fontFamily: type.display, fontSize: 22, color: colors.text, flexShrink: 1, minWidth: 0, textAlign: 'right' },
+  historyNumbers: {
+    fontFamily: type.display,
+    fontSize: type.size.title,
+    color: colors.text,
+    flexShrink: 1,
+    minWidth: 0,
+    textAlign: 'right',
+  },
   sessionRight: { alignItems: 'flex-end', flexShrink: 1, minWidth: 0 },
-  // Locked "Greece's demo" card — compact row, tap routes to plans.
+  // Locked "Greece's demo" card — charcoal block row (no border — separation
+  // by fill contrast), tap routes to plans.
   lockedCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     backgroundColor: colors.surface,
-    padding: spacing.md,
+    padding: spacing.lg,
   },
-  lockedText: { flex: 1, gap: 2 },
+  lockedText: { flex: 1, gap: spacing.xs / 2 },
   // "Coming soon" chip — small, quiet, only for seed-plan exercises.
   comingSoonChip: {
     flexDirection: 'row',
@@ -144,10 +193,21 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     backgroundColor: colors.surface,
     borderRadius: radius.full,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
   },
 });
+
+/** Outlined fact pill (level · equipment · muscle group). */
+function MetaPill({ label }: { label: string }) {
+  return (
+    <View style={styles.metaPill}>
+      <AppText variant="label" color={colors.text} numberOfLines={1}>
+        {label}
+      </AppText>
+    </View>
+  );
+}
 
 export default function ExerciseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -157,6 +217,9 @@ export default function ExerciseDetailScreen() {
   const history = useExerciseHistory(exerciseId);
   const planVideo = usePlanVideo(exerciseId);
   const [imgIdx, setImgIdx] = useState(0);
+  // The well starts charcoal (surfaceRaised) and only turns light once a photo
+  // has actually decoded — no pure-white flash while the CDN image streams in.
+  const [imgLoaded, setImgLoaded] = useState(false);
 
   if (!exercise) {
     return (
@@ -219,43 +282,56 @@ export default function ExerciseDetailScreen() {
         </PressableScale>
       </Animated.View>
 
-      <Animated.View entering={enterUp(0)}>
-        <PressableScale
-          accessibilityRole={images.length > 1 ? 'button' : 'image'}
-          accessibilityLabel={
-            images.length > 1 ? `${exercise.name} photo. Tap to see the other angle.` : exercise.name
-          }
-          disabled={images.length <= 1}
-          pressScale={0.985}
-          onPress={() => {
-            if (images.length > 1) setImgIdx((i) => (i + 1) % images.length);
-          }}
-          style={styles.imageWrap}
-        >
-          {images[imgIdx] ? (
-            <Image
-              source={{ uri: images[imgIdx] }}
-              style={styles.image}
-              contentFit="contain"
-              transition={150}
-            />
-          ) : null}
-          {images.length > 1 ? (
-            <View style={styles.swapBadge} pointerEvents="none" accessibilityElementsHidden>
-              <Ionicons name="swap-horizontal" size={13} color={colors.textDim} />
-              <AppText style={styles.swapText} tabular>
-                {`${imgIdx + 1}/${images.length}`}
-              </AppText>
-            </View>
-          ) : null}
-        </PressableScale>
-      </Animated.View>
+      {images.length > 0 ? (
+        <Animated.View entering={enterUp(0)}>
+          <Card backgroundColor={colors.surfaceRaised} style={styles.imageCard}>
+            <PressableScale
+              accessibilityRole={images.length > 1 ? 'button' : 'image'}
+              accessibilityLabel={
+                images.length > 1
+                  ? `${exercise.name} photo. Tap to see the other angle.`
+                  : exercise.name
+              }
+              disabled={images.length <= 1}
+              pressScale={0.985}
+              onPress={() => {
+                if (images.length > 1) setImgIdx((i) => (i + 1) % images.length);
+              }}
+              style={[
+                styles.imageWell,
+                { backgroundColor: imgLoaded ? colors.onAccent : colors.surfaceRaised },
+              ]}
+            >
+              {images[imgIdx] ? (
+                <Image
+                  source={{ uri: images[imgIdx] }}
+                  style={styles.image}
+                  contentFit="contain"
+                  transition={150}
+                  onLoad={() => setImgLoaded(true)}
+                />
+              ) : null}
+              {images.length > 1 ? (
+                <View style={styles.swapBadge} pointerEvents="none" accessibilityElementsHidden>
+                  <Ionicons name="swap-horizontal" size={13} color={colors.textDim} />
+                  <AppText variant="label" color={colors.text} tabular>
+                    {`${imgIdx + 1}/${images.length}`}
+                  </AppText>
+                </View>
+              ) : null}
+            </PressableScale>
+          </Card>
+        </Animated.View>
+      ) : null}
 
       <Animated.View entering={enterUp(1)}>
-        <AppText variant="heading">{exercise.name}</AppText>
+        <AppText variant="label">Exercise library</AppText>
+        <AppText variant="display" style={styles.title}>
+          {exercise.name}
+        </AppText>
         <View style={styles.pillRow}>
           {facts.map((f) => (
-            <Tag key={f} label={f} variant="dim" />
+            <MetaPill key={f} label={f} />
           ))}
         </View>
       </Animated.View>
@@ -316,73 +392,106 @@ export default function ExerciseDetailScreen() {
             />
 
             <SectionLabel>Records</SectionLabel>
-            <View style={styles.recordsGrid}>
-              {history.bestWeightKg !== null ? (
-                <StatBlock
-                  style={styles.recordCell}
-                  label="heaviest set"
-                  value={formatWeightNumber(displayWeight(history.bestWeightKg, unitPref))}
-                  unit={unitPref}
-                />
-              ) : null}
-              {bestE1RmKg !== null ? (
-                <StatBlock
-                  style={styles.recordCell}
-                  label="best 1rm (est.)"
-                  value={formatWeightNumber(displayWeight(bestE1RmKg, unitPref))}
-                  unit={unitPref}
-                />
-              ) : null}
-              {history.bestSessionVolumeKg !== null ? (
-                <StatBlock
-                  style={styles.recordCell}
-                  label="best session volume"
-                  value={Math.round(displayWeight(history.bestSessionVolumeKg, unitPref))}
-                  unit={unitPref}
-                />
-              ) : null}
-              {bestE1RmKg !== null
-                ? REP_MAX_TARGETS.map((reps) => (
+            {bestE1RmKg !== null ? (
+              <Card variant="red" style={styles.heroBlock}>
+                <AppText variant="label" color={colors.onBlock}>
+                  Best 1RM (est.)
+                </AppText>
+                <View style={styles.heroRow}>
+                  <AppText
+                    variant="stat"
+                    color={colors.onBlock}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.6}
+                    style={styles.heroValue}
+                  >
+                    {formatWeightNumber(displayWeight(bestE1RmKg, unitPref))}
+                  </AppText>
+                  <AppText variant="title" color={colors.onBlock} style={styles.heroUnit}>
+                    {unitPref}
+                  </AppText>
+                </View>
+                <View style={styles.repMaxRow}>
+                  {REP_MAX_TARGETS.map((reps) => (
+                    <View key={reps} style={styles.repMaxCell}>
+                      <AppText variant="label" color={colors.onBlock} numberOfLines={1}>
+                        {`${reps}-rep max`}
+                      </AppText>
+                      <View style={styles.repMaxValueRow}>
+                        <AppText
+                          variant="display"
+                          color={colors.onBlock}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.6}
+                          style={styles.repMaxValue}
+                        >
+                          {formatWeightNumber(displayWeight(repMaxKg(bestE1RmKg, reps), unitPref))}
+                        </AppText>
+                        <AppText variant="caption" color={colors.onBlock}>
+                          {unitPref}
+                        </AppText>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              </Card>
+            ) : null}
+            {history.bestWeightKg !== null || history.bestSessionVolumeKg !== null ? (
+              <Card style={styles.recordsCard}>
+                <View style={styles.recordsGrid}>
+                  {history.bestWeightKg !== null ? (
                     <StatBlock
-                      key={reps}
                       style={styles.recordCell}
-                      label={`${reps}-rep max (est.)`}
-                      value={formatWeightNumber(displayWeight(repMaxKg(bestE1RmKg, reps), unitPref))}
+                      label="heaviest set"
+                      value={formatWeightNumber(displayWeight(history.bestWeightKg, unitPref))}
                       unit={unitPref}
                     />
-                  ))
-                : null}
-            </View>
+                  ) : null}
+                  {history.bestSessionVolumeKg !== null ? (
+                    <StatBlock
+                      style={styles.recordCell}
+                      label="best session volume"
+                      value={Math.round(displayWeight(history.bestSessionVolumeKg, unitPref))}
+                      unit={unitPref}
+                    />
+                  ) : null}
+                </View>
+              </Card>
+            ) : null}
 
             {history.recentSessions.length > 0 ? (
               <>
                 <SectionLabel>Recent sessions</SectionLabel>
-                {history.recentSessions.map((s) => (
-                  <View key={s.date} style={styles.historyRow}>
-                    <AppText
-                      variant="caption"
-                      color={colors.textDim}
-                      numberOfLines={1}
-                      style={styles.historyDate}
-                    >
-                      {posterDate(s.date)}
-                    </AppText>
-                    <View style={styles.sessionRight}>
+                <Card>
+                  {history.recentSessions.map((s) => (
+                    <View key={s.date} style={styles.historyRow}>
                       <AppText
-                        style={styles.historyNumbers}
-                        tabular
+                        variant="caption"
+                        color={colors.textDim}
                         numberOfLines={1}
-                        adjustsFontSizeToFit
-                        minimumFontScale={0.6}
+                        style={styles.historyDate}
                       >
-                        {`${formatWeightNumber(displayWeight(s.topWeightKg, unitPref))} ${unitPref} × ${s.topReps}`}
+                        {posterDate(s.date)}
                       </AppText>
-                      <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
-                        {`${Math.round(displayWeight(s.volumeKg, unitPref))} ${unitPref} total`}
-                      </AppText>
+                      <View style={styles.sessionRight}>
+                        <AppText
+                          style={styles.historyNumbers}
+                          tabular
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.6}
+                        >
+                          {`${formatWeightNumber(displayWeight(s.topWeightKg, unitPref))} ${unitPref} × ${s.topReps}`}
+                        </AppText>
+                        <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+                          {`${Math.round(displayWeight(s.volumeKg, unitPref))} ${unitPref} total`}
+                        </AppText>
+                      </View>
                     </View>
-                  </View>
-                ))}
+                  ))}
+                </Card>
               </>
             ) : null}
           </Animated.View>
@@ -399,16 +508,21 @@ export default function ExerciseDetailScreen() {
       {exercise.instructions.length > 0 ? (
         <Animated.View entering={enterUp(3)}>
           <SectionLabel>How to do it</SectionLabel>
-          {exercise.instructions.map((step, i) => (
-            <View key={i} style={styles.step}>
-              <AppText style={styles.stepNo} tabular>
-                {`${i + 1}.`}
-              </AppText>
-              <AppText variant="body" style={styles.stepText}>
-                {step}
-              </AppText>
-            </View>
-          ))}
+          <Card variant="cream">
+            {exercise.instructions.map((step, i) => (
+              <View
+                key={i}
+                style={[styles.step, i === exercise.instructions.length - 1 && styles.stepLast]}
+              >
+                <AppText style={styles.stepNo} tabular>
+                  {`${i + 1}.`}
+                </AppText>
+                <AppText variant="body" color={colors.onBlock} style={styles.stepText}>
+                  {step}
+                </AppText>
+              </View>
+            ))}
+          </Card>
         </Animated.View>
       ) : null}
     </Screen>

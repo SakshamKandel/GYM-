@@ -16,6 +16,17 @@ import {
   type EngineExercise,
 } from './engineInput';
 
+// Server-side per-field caps (see /api/progression/suggestions zod schema).
+// Targets are clamped to these client-side so a pathological local row (a
+// corrupt/fat-fingered logged weight the engine amplifies past the cap) can
+// never 400 the whole batch and starve every valid suggestion in it.
+const MAX_TARGET_WEIGHT_KG = 10_000;
+const MIN_TARGET_REPS = 1;
+const MAX_TARGET_REPS = 100;
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.max(min, Math.min(value, max));
+
 /**
  * Post-sync progression hand-off (contracted export — features/sync/
  * workoutSync.ts dynamic-imports this after each server-confirmed batch).
@@ -79,9 +90,17 @@ export async function submitSuggestionsForWorkouts(workoutIds: string[]): Promis
         exerciseName: result.exerciseName,
         sourceWorkoutId,
         action: result.action,
-        targetWeightKg: result.targetWeightKg,
-        targetRepsMin: result.targetRepsMin,
-        targetRepsMax: result.targetRepsMax,
+        targetWeightKg: clamp(result.targetWeightKg, 0, MAX_TARGET_WEIGHT_KG),
+        targetRepsMin: clamp(
+          Math.round(result.targetRepsMin),
+          MIN_TARGET_REPS,
+          MAX_TARGET_REPS,
+        ),
+        targetRepsMax: clamp(
+          Math.round(result.targetRepsMax),
+          MIN_TARGET_REPS,
+          MAX_TARGET_REPS,
+        ),
         reason: result.reason,
       });
     }

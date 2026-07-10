@@ -36,7 +36,7 @@ export function MacroRing({
   color,
   unit = 'g',
   size = 64,
-  strokeWidth = 6,
+  strokeWidth = 7,
   delay = 0,
 }: Props) {
   const rounded = Math.round(current);

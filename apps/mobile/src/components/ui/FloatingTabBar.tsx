@@ -3,24 +3,23 @@ import { useEffect } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
-  interpolate,
   interpolateColor,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, type } from '@gym/ui-tokens';
+import { router, type Href } from 'expo-router';
+import { colors, radius, spacing } from '@gym/ui-tokens';
 import { tapHaptic } from '../../lib/haptics';
 
 /**
- * Floating tab bar — charcoal capsule with an expanding signal-red pill.
- *
- * Inactive tabs are calm outline icons. The active tab grows into a solid
- * red capsule holding icon + label side by side; switching tabs morphs the
- * pill across (the old one shrinks as the new one grows on the same spring),
- * so no absolute positioning or width measuring is needed. Long-press keeps
- * the per-tab quick action. No glow, no blur — flat brand surfaces only.
+ * Floating tab bar (revamp): a compact centered dark pill floating above the
+ * bottom inset. Icon-only items — the ACTIVE icon sits inside a filled
+ * signal-red circle (black icon on red, per the block language); inactive
+ * icons stay dim. The red circle crossfades between tabs on one spring.
+ * Long-press keeps the per-tab quick action. No glow, no border — the pill
+ * separates from the canvas by fill contrast alone.
  */
 
 export const TAB_ICONS: Record<
@@ -59,12 +58,13 @@ interface TabBarProps {
   };
 }
 
-const BAR_H = 64;
-const PILL_H = 48; // touch floor
-/** How much wider the active tab is than an idle one. */
-const ACTIVE_FLEX = 2.2;
-/** Room the label can occupy inside the pill before clipping. */
-const LABEL_MAX_W = 92;
+const BAR_H = 60;
+/** Active-state circle — meets the 44dp+ target inside the 56dp item. */
+const CIRCLE = 44;
+/** Per-tab touch target width (≥48dp floor). */
+const ITEM_W = 56;
+/** The pill floats this far above the bottom safe-area inset. */
+const FLOAT_GAP = 16;
 
 /** Space consumed by the bar — screens pad bottom by this. */
 export const FLOATING_TAB_SPACE = 96;
@@ -75,36 +75,28 @@ const PRESS_SPRING = { damping: 22, stiffness: 420, mass: 0.6 };
 const styles = StyleSheet.create({
   wrap: {
     position: 'absolute',
-    left: 12,
-    right: 12,
+    left: 0,
+    right: 0,
     alignItems: 'center',
   },
   bar: {
-    width: '100%',
-    maxWidth: 430,
     height: BAR_H,
     flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: colors.surfaceRaised,
-    borderRadius: BAR_H / 2,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.28,
-    shadowRadius: 12,
-    elevation: 8,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
   },
-  tab: {
-    flex: 1,
+  item: {
+    width: ITEM_W,
+    height: BAR_H,
+    alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: (BAR_H - PILL_H) / 2,
-    paddingHorizontal: 3,
   },
-  pill: {
-    height: PILL_H,
-    borderRadius: PILL_H / 2,
-    flexDirection: 'row',
+  circle: {
+    width: CIRCLE,
+    height: CIRCLE,
+    borderRadius: CIRCLE / 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -122,15 +114,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  labelClip: {
-    overflow: 'hidden',
-  },
-  label: {
-    fontFamily: type.bodySemiBold,
-    fontSize: 13,
-    letterSpacing: 0.2,
-    color: colors.onAccent,
   },
 });
 
@@ -150,17 +133,13 @@ function TabItem({ focused, icons, label, onPress, onLongPress }: TabItemProps) 
     active.value = withSpring(focused ? 1 : 0, PILL_SPRING);
   }, [focused, active]);
 
-  // The tab itself grows/shrinks; the red fill fades on the same spring, so
-  // the pill reads as one shape morphing across the bar.
-  const growStyle = useAnimatedStyle(() => ({
-    flex: 1 + active.value * (ACTIVE_FLEX - 1),
-  }));
-
-  const pillStyle = useAnimatedStyle(() => ({
+  // The circle fades between the bar's own fill (invisible) and solid red on
+  // one spring, so switching tabs reads as the red disc hopping across.
+  const circleStyle = useAnimatedStyle(() => ({
     backgroundColor: interpolateColor(
       active.value,
       [0, 1],
-      ['rgba(0,0,0,0)', colors.accent],
+      [colors.surfaceRaised, colors.accent],
     ),
     transform: [{ scale: 1 - pressed.value * 0.06 }],
   }));
@@ -173,47 +152,33 @@ function TabItem({ focused, icons, label, onPress, onLongPress }: TabItemProps) 
     opacity: active.value,
   }));
 
-  // The label unclips as the pill grows; keeping it width-clipped (instead of
-  // conditionally mounted) is what lets the morph stay one smooth spring.
-  const labelStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(active.value, [0.5, 1], [0, 1], 'clamp'),
-    maxWidth: active.value * LABEL_MAX_W,
-    marginLeft: active.value * 7,
-  }));
-
   return (
-    <Animated.View style={[styles.tab, growStyle]}>
-      <Pressable
-        accessibilityRole="tab"
-        accessibilityLabel={label}
-        accessibilityState={{ selected: focused }}
-        onPress={onPress}
-        onLongPress={onLongPress}
-        delayLongPress={400}
-        onPressIn={() => {
-          pressed.value = withSpring(1, PRESS_SPRING);
-        }}
-        onPressOut={() => {
-          pressed.value = withSpring(0, PRESS_SPRING);
-        }}
-      >
-        <Animated.View style={[styles.pill, pillStyle]}>
-          <View style={styles.iconStack}>
-            <Animated.View style={[styles.iconLayer, idleIconStyle]}>
-              <Ionicons name={icons.idle} size={22} color={colors.textFaint} />
-            </Animated.View>
-            <Animated.View style={[styles.iconLayer, activeIconStyle]}>
-              <Ionicons name={icons.active} size={21} color={colors.onAccent} />
-            </Animated.View>
-          </View>
-          <Animated.View style={[styles.labelClip, labelStyle]}>
-            <Animated.Text numberOfLines={1} style={styles.label}>
-              {label}
-            </Animated.Text>
+    <Pressable
+      accessibilityRole="tab"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: focused }}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={400}
+      onPressIn={() => {
+        pressed.value = withSpring(1, PRESS_SPRING);
+      }}
+      onPressOut={() => {
+        pressed.value = withSpring(0, PRESS_SPRING);
+      }}
+      style={styles.item}
+    >
+      <Animated.View style={[styles.circle, circleStyle]}>
+        <View style={styles.iconStack}>
+          <Animated.View style={[styles.iconLayer, idleIconStyle]}>
+            <Ionicons name={icons.idle} size={22} color={colors.textDim} />
           </Animated.View>
-        </Animated.View>
-      </Pressable>
-    </Animated.View>
+          <Animated.View style={[styles.iconLayer, activeIconStyle]}>
+            <Ionicons name={icons.active} size={22} color={colors.onBlock} />
+          </Animated.View>
+        </View>
+      </Animated.View>
+    </Pressable>
   );
 }
 
@@ -222,7 +187,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
 
   return (
     <View
-      style={[styles.wrap, { bottom: Math.max(insets.bottom, 12) }]}
+      style={[styles.wrap, { bottom: insets.bottom + FLOAT_GAP }]}
       pointerEvents="box-none"
     >
       <View style={styles.bar}>
@@ -258,7 +223,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
               onLongPress={() => {
                 if (quickRoute) {
                   tapHaptic();
-                  navigation.navigate(quickRoute);
+                  router.push(quickRoute as Href);
                 }
               }}
             />

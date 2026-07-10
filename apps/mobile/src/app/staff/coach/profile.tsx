@@ -13,6 +13,7 @@ import {
   PressableScale,
   SectionLabel,
   Screen,
+  ScreenHeader,
 } from '../../../components/ui';
 import { useAuth } from '../../../state/auth';
 import {
@@ -150,7 +151,7 @@ export default function CoachProfileScreen() {
 
   return (
     <Screen scroll keyboardAware>
-      <Animated.View entering={enterDown()} style={styles.headerRow}>
+      <Animated.View entering={enterDown()} style={styles.backRow}>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Back to clients"
@@ -159,11 +160,9 @@ export default function CoachProfileScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <View style={styles.headerText}>
-          <AppText variant="heading">Profile</AppText>
-          <AppText variant="caption">How clients see you</AppText>
-        </View>
       </Animated.View>
+
+      <ScreenHeader eyebrow="How clients see you" title="Profile" style={styles.header} />
 
       {loading && form === null ? (
         <View style={styles.centerState}>
@@ -279,13 +278,7 @@ export default function CoachProfileScreen() {
 }
 
 const styles = StyleSheet.create({
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingBottom: spacing.sm,
-  },
-  headerText: { flex: 1, gap: 2 },
+  backRow: { marginBottom: spacing.lg },
   backBtn: {
     width: touch.min,
     height: touch.min,
@@ -294,34 +287,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  header: { marginBottom: spacing.sm },
   bio: {
     minHeight: 120,
     paddingTop: 14,
     textAlignVertical: 'top',
   },
   counter: { alignSelf: 'flex-end', marginTop: spacing.xs },
+  // Borderless charcoal row — separation by fill contrast, never strokes.
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
   },
   toggleText: { flex: 1, gap: 2 },
+  // Switch track: filled, no stroke; ON = red track with a BLACK knob
+  // (black-on-red law applies to controls too).
   switch: {
     width: 52,
     height: 32,
     borderRadius: radius.full,
-    backgroundColor: colors.surfaceRaised,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 3,
+    backgroundColor: colors.surfacePressed,
+    padding: 4,
     justifyContent: 'center',
   },
-  switchOn: { backgroundColor: colors.accent, borderColor: colors.accent },
+  switchOn: { backgroundColor: colors.accent },
   knob: {
     width: 24,
     height: 24,
@@ -329,7 +322,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.text,
     alignSelf: 'flex-start',
   },
-  knobOn: { alignSelf: 'flex-end', backgroundColor: colors.onAccent },
+  knobOn: { alignSelf: 'flex-end', backgroundColor: colors.onBlock },
   hint: { marginBottom: spacing.md },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   saveMsg: { marginTop: spacing.lg },

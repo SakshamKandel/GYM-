@@ -9,10 +9,10 @@ import {
   AnimatedNumber,
   AppText,
   Button,
+  Card,
   Chip,
   enterDown,
   enterUp,
-  MacroRing,
   PressableScale,
   Screen,
   Stepper,
@@ -44,7 +44,10 @@ const styles = StyleSheet.create({
   },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: spacing.xl },
-  name: { marginTop: spacing.lg },
+  // Header pattern (brief §5): eyebrow → big Oswald name. Food names can run
+  // long, so this uses the 40px display size, not heroTitle.
+  nameWrap: { marginTop: spacing.lg, gap: spacing.xs },
+  name: { textTransform: 'uppercase' },
   stepperWrap: { marginTop: spacing.xl, alignItems: 'center' },
   chipsRow: {
     marginTop: spacing.md,
@@ -53,16 +56,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.sm,
   },
-  panel: {
-    marginTop: spacing.xl,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.xl,
-    alignItems: 'center',
-    gap: spacing.lg,
-  },
+  // Cream counterpoint block — macro preview, black ink only (brief §2).
+  panelWrap: { marginTop: spacing.xl },
+  panel: { alignItems: 'center', gap: spacing.lg },
   kcalRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
   macroRow: { flexDirection: 'row', justifyContent: 'space-around', alignSelf: 'stretch' },
+  macroCol: { alignItems: 'center', gap: spacing.xs },
+  macroValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 2 },
+  macroValue: { fontSize: 28, lineHeight: 32 },
+  macroLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  dot: { width: 8, height: 8, borderRadius: radius.full },
   mealsRow: {
     marginTop: spacing.xl,
     flexDirection: 'row',
@@ -71,6 +74,7 @@ const styles = StyleSheet.create({
   },
   // paddingBottom keeps the button off the screen edge when insets.bottom is 0 (web).
   pinned: { marginTop: 'auto', paddingTop: spacing.md, paddingBottom: spacing.md },
+  error: { marginBottom: spacing.sm },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.lg },
 });
 
@@ -83,6 +87,7 @@ export default function PortionScreen() {
   const [food, setFood] = useState<FoodItem | null | undefined>(undefined);
   const [grams, setGrams] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -101,12 +106,14 @@ export default function PortionScreen() {
   async function logIt(): Promise<void> {
     if (!food || grams === null || saving) return;
     setSaving(true);
+    setError(false);
     try {
       const repo = await getRepo();
       await repo.logFood(buildFoodLog({ id: uid(), date, meal, food, grams }));
       logHaptic();
       router.dismissTo(FOOD_TAB_HREF);
     } catch {
+      setError(true);
       setSaving(false);
     }
   }
@@ -168,15 +175,13 @@ export default function PortionScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <Animated.View entering={enterUp(0)}>
-          <AppText variant="heading" numberOfLines={2} style={styles.name}>
+        <Animated.View entering={enterUp(0)} style={styles.nameWrap}>
+          <AppText variant="label" numberOfLines={1}>
+            {food.brand ? food.brand : 'Log food'}
+          </AppText>
+          <AppText variant="display" numberOfLines={2} style={styles.name}>
             {food.name}
           </AppText>
-          {food.brand ? (
-            <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
-              {food.brand}
-            </AppText>
-          ) : null}
         </Animated.View>
 
         <Animated.View entering={enterUp(1)}>
@@ -204,29 +209,44 @@ export default function PortionScreen() {
           </View>
         </Animated.View>
 
-        <Animated.View entering={enterUp(2)} style={styles.panel}>
-          <View>
-            <AppText variant="label" center>
-              Calories
-            </AppText>
-            <View style={styles.kcalRow}>
-              <AnimatedNumber value={macros.kcal} variant="stat" />
-              <AppText variant="caption" color={colors.textDim}>
-                kcal
+        <Animated.View entering={enterUp(2)} style={styles.panelWrap}>
+          <Card variant="cream" style={styles.panel}>
+            <View>
+              <AppText variant="label" color={colors.creamDim} center>
+                Calories
               </AppText>
+              <View style={styles.kcalRow}>
+                <AnimatedNumber value={macros.kcal} variant="stat" color={colors.onBlock} />
+                <AppText variant="caption" color={colors.creamDim}>
+                  kcal
+                </AppText>
+              </View>
             </View>
-          </View>
-          <View style={styles.macroRow}>
-            {macroBlocks.map((m, i) => (
-              <MacroRing
-                key={m.label}
-                label={m.label}
-                current={m.value}
-                color={m.color}
-                delay={120 + i * 80}
-              />
-            ))}
-          </View>
+            <View style={styles.macroRow}>
+              {macroBlocks.map((m) => (
+                <View
+                  key={m.label}
+                  style={styles.macroCol}
+                  accessibilityLabel={`${m.label}: ${Math.round(m.value)} g`}
+                >
+                  <View style={styles.macroValueRow}>
+                    <AppText variant="display" style={styles.macroValue} color={colors.onBlock}>
+                      {Math.round(m.value)}
+                    </AppText>
+                    <AppText variant="caption" color={colors.creamDim} tabular={false}>
+                      g
+                    </AppText>
+                  </View>
+                  <View style={styles.macroLabelRow}>
+                    <View style={[styles.dot, { backgroundColor: m.color }]} />
+                    <AppText variant="label" color={colors.creamDim}>
+                      {m.label}
+                    </AppText>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </Card>
         </Animated.View>
 
         <Animated.View entering={enterUp(3)} style={styles.mealsRow}>
@@ -237,6 +257,11 @@ export default function PortionScreen() {
       </ScrollView>
 
       <Animated.View entering={enterUp(4)} style={styles.pinned}>
+        {error ? (
+          <AppText variant="caption" color={colors.error} center style={styles.error}>
+            Couldn't save — try again.
+          </AppText>
+        ) : null}
         <Button
           label={`Log to ${mealLabel(meal).toLowerCase()}`}
           onPress={() => void logIt()}

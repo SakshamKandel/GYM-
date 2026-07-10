@@ -8,7 +8,6 @@ import {
   AnimatedNumber,
   AppText,
   CategoryTile,
-  Divider,
   enterFade,
   SectionLabel,
   Sheet,
@@ -59,21 +58,26 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
   },
   statHalf: { flex: 1, minWidth: 0 },
-  // List rows (sessions + PRs)
+  // List rows (sessions + PRs): rounded raised rows with gaps — the revamp
+  // replaces Divider hairlines with fill-contrast separation (brief §11c).
+  rows: { gap: spacing.sm },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    minHeight: 48,
+    minHeight: 56,
     paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
   },
   rowMain: { flex: 1, minWidth: 0 },
   rowMeta: { flexShrink: 0, textAlign: 'right' },
   prIcon: {
     width: 40,
     height: 40,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -287,10 +291,9 @@ export function SessionsDetail({
       ) : (
         <View style={styles.section}>
           <SectionLabel>This week</SectionLabel>
-          <Divider />
-          {sessions.map((s) => (
-            <View key={s.id}>
-              <View style={styles.row}>
+          <View style={styles.rows}>
+            {sessions.map((s) => (
+              <View key={s.id} style={styles.row}>
                 <View style={styles.rowMain}>
                   <AppText variant="bodyBold" numberOfLines={1}>
                     {s.name}
@@ -301,9 +304,8 @@ export function SessionsDetail({
                   {formatCompact(displayWeight(s.volumeKg, unitPref))} {unit} · {s.sets} sets
                 </AppText>
               </View>
-              <Divider />
-            </View>
-          ))}
+            ))}
+          </View>
         </View>
       )}
     </View>
@@ -332,10 +334,9 @@ export function PrDetail({ prs, unitPref }: { prs: PrRecord[]; unitPref: UnitPre
       ) : (
         <View style={styles.section}>
           <SectionLabel>Newest first</SectionLabel>
-          <Divider />
-          {shown.map((pr, i) => (
-            <View key={`${pr.exerciseId}-${pr.date}-${i}`}>
-              <View style={styles.row}>
+          <View style={styles.rows}>
+            {shown.map((pr, i) => (
+              <View key={`${pr.exerciseId}-${pr.date}-${i}`} style={styles.row}>
                 <View style={styles.prIcon}>
                   <Ionicons name="trophy" size={18} color={colors.orange} />
                 </View>
@@ -349,9 +350,8 @@ export function PrDetail({ prs, unitPref }: { prs: PrRecord[]; unitPref: UnitPre
                   {displayWeight(pr.weightKg, unitPref)} {unit} × {pr.reps}
                 </AppText>
               </View>
-              <Divider />
-            </View>
-          ))}
+            ))}
+          </View>
           {extra > 0 ? (
             <AppText variant="caption" color={colors.textDim} style={styles.more}>
               +{extra} more this month

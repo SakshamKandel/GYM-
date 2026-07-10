@@ -12,10 +12,13 @@ import { formatClock } from '../logic';
 import type { RestState } from '../session';
 
 /**
- * Rest timer takeover — replaces the log editor after every set.
- * 64px Oswald countdown, thin 3px red line depleting left→right,
- * ±15s at the edges (48dp), Skip underneath. Ends with a warn haptic
- * (fired by the session store) and auto-returns to the editor.
+ * Rest timer takeover — replaces the log editor after every set. Lives inside
+ * the workout screen's CREAM counterpoint block (REVAMP-BRIEF §2), so all ink
+ * is `onBlock`/`creamDim`: huge Oswald countdown on its own line, a thick
+ * near-black bar depleting left→right over the sanctioned rgba track, and a
+ * ±15s / Skip / +15s pill row underneath (56dp targets for sweaty thumbs).
+ * Ends with a warn haptic (fired by the session store) and auto-returns to
+ * the editor.
  */
 
 interface Props {
@@ -25,43 +28,39 @@ interface Props {
 }
 
 const styles = StyleSheet.create({
-  root: { alignItems: 'center' },
+  root: { alignItems: 'center', gap: spacing.md },
+  countdown: {
+    fontFamily: type.display,
+    fontSize: type.size.statHuge,
+    lineHeight: 84,
+    color: colors.onBlock,
+    textAlign: 'center',
+  },
   track: {
     alignSelf: 'stretch',
-    height: 3,
+    height: 8,
     borderRadius: radius.full,
-    backgroundColor: colors.border,
+    backgroundColor: 'rgba(0,0,0,0.15)', // sanctioned: bar track on a colored block
     overflow: 'hidden',
-    marginBottom: spacing.lg,
   },
-  fill: { height: 3, backgroundColor: colors.accent, borderRadius: radius.full },
+  fill: { height: 8, backgroundColor: colors.onBlock, borderRadius: radius.full },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.xl,
+    gap: spacing.lg,
     alignSelf: 'stretch',
   },
   adjustBtn: {
-    width: touch.min,
-    height: touch.min,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.surfaceRaised,
+    width: touch.primary,
+    height: touch.primary,
+    borderRadius: radius.full,
+    backgroundColor: colors.onBlock,
     alignItems: 'center',
     justifyContent: 'center',
   },
   adjustPressed: { backgroundColor: colors.surfacePressed, transform: [{ scale: 0.96 }] },
   adjustText: { fontFamily: type.display, fontSize: 14, color: colors.text, letterSpacing: 0.5 },
-  countdown: {
-    fontFamily: type.display,
-    fontSize: 64,
-    lineHeight: 72,
-    color: colors.text,
-    minWidth: 150,
-    textAlign: 'center',
-  },
 });
 
 export function RestTimerPanel({ rest, onAdjust, onSkip }: Props) {
@@ -80,9 +79,15 @@ export function RestTimerPanel({ rest, onAdjust, onSkip }: Props) {
 
   return (
     <View style={styles.root}>
-      <AppText variant="label" color={colors.textDim}>
+      <AppText variant="label" color={colors.creamDim}>
         rest
       </AppText>
+      <AppText style={styles.countdown} tabular>
+        {formatClock(rest.remainingSec)}
+      </AppText>
+      <View style={styles.track}>
+        <Animated.View style={[styles.fill, fillStyle]} />
+      </View>
       <View style={styles.row}>
         <Pressable
           accessibilityRole="button"
@@ -94,9 +99,7 @@ export function RestTimerPanel({ rest, onAdjust, onSkip }: Props) {
             −15s
           </AppText>
         </Pressable>
-        <AppText style={styles.countdown} tabular>
-          {formatClock(rest.remainingSec)}
-        </AppText>
+        <Button label="Skip" variant="onBlock" onPress={onSkip} accessibilityLabel="Skip rest" />
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Extend rest by 15 seconds"
@@ -108,10 +111,6 @@ export function RestTimerPanel({ rest, onAdjust, onSkip }: Props) {
           </AppText>
         </Pressable>
       </View>
-      <View style={styles.track}>
-        <Animated.View style={[styles.fill, fillStyle]} />
-      </View>
-      <Button label="Skip" variant="ghost" onPress={onSkip} accessibilityLabel="Skip rest" />
     </View>
   );
 }

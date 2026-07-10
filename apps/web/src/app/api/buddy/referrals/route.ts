@@ -1,5 +1,5 @@
 import { accounts, referrals } from '@gym/db';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
@@ -47,11 +47,12 @@ export async function POST(req: Request) {
   const email = parsed.data.inviteeEmail.toLowerCase();
   const db = getDb();
 
-  // Check if referral already exists for this email.
+  // Check if this referrer already invited this email (matches the
+  // (referrerId, inviteeEmail) unique index).
   const existing = await db
     .select({ id: referrals.id })
     .from(referrals)
-    .where(eq(referrals.inviteeEmail, email))
+    .where(and(eq(referrals.referrerId, me.id), eq(referrals.inviteeEmail, email)))
     .limit(1);
 
   if (existing.length > 0) return json({ error: 'already_linked' }, 409);

@@ -164,9 +164,15 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         const inserted = await sendCoachMessage(kind, body, token);
         if (mounted.current) {
           // Swap the optimistic user + typing bubbles for the server's real
-          // [user, coachReply] pair.
+          // [user, coachReply] pair. A focus reload landing mid-round-trip can
+          // have already merged in the persisted real user row, so also drop any
+          // existing row whose id is in `inserted` to avoid a duplicate key.
+          const insertedIds = new Set(inserted.map((m) => m.id));
           setMessages((prev) => [
-            ...prev.filter((m) => m.id !== optimistic.id && m.id !== typing.id),
+            ...prev.filter(
+              (m) =>
+                m.id !== optimistic.id && m.id !== typing.id && !insertedIds.has(m.id),
+            ),
             ...inserted,
           ]);
         }

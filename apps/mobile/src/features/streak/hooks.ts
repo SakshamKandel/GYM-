@@ -143,7 +143,12 @@ export function useWeeklyStreak(): WeeklyStreakData | null {
             });
           }
         } catch (err) {
-          toGamificationError(err); // swallow — offline/network never blocks the streak display
+          // A 401 means the cached session may be dead — hand it to the auth
+          // store's guarded refresh (health-probe-gated, stale-token safe).
+          if (toGamificationError(err).code === 'unauthorized') {
+            void useAuth.getState().refresh();
+          }
+          // Otherwise swallow — offline/network never blocks the streak display.
         }
       })();
 

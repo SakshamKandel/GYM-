@@ -31,12 +31,11 @@ interface Props {
 }
 
 const styles = StyleSheet.create({
+  // Borderless charcoal card — separation by fill contrast (REVAMP-BRIEF §1).
   card: {
     marginTop: spacing.lg,
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
     padding: spacing.lg,
     gap: spacing.sm,
   },
@@ -58,14 +57,14 @@ const styles = StyleSheet.create({
     marginRight: -spacing.sm,
   },
   etaRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm },
+  // Raised fill instead of the old hairline stroke (no-border card law).
   ghostRow: {
     marginTop: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceRaised,
     padding: spacing.lg,
     minHeight: 64,
   },

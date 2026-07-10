@@ -5,7 +5,8 @@ import { PressableScale } from './PressableScale';
 
 /**
  * Onboarding answer card: big tappable block, one per option, no typing
- * where a tap works. Selected = lime border + lime title (no glow).
+ * where a tap works. Block language: no borders — selected = solid red
+ * block with BLACK ink (single-select, so at most one red block shows).
  */
 interface Props {
   title: string;
@@ -16,20 +17,15 @@ interface Props {
 
 const styles = StyleSheet.create({
   card: {
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     backgroundColor: colors.surface,
     paddingVertical: spacing.lg,
     paddingHorizontal: spacing.xl,
     minHeight: 72,
     justifyContent: 'center',
-    gap: 4,
+    gap: spacing.xs,
   },
-  selected: {
-    borderColor: colors.accent,
-    backgroundColor: colors.surfaceRaised,
-  },
+  selected: { backgroundColor: colors.blockRed },
 });
 
 export function OptionCard({ title, subtitle, selected, onPress }: Props) {
@@ -41,10 +37,14 @@ export function OptionCard({ title, subtitle, selected, onPress }: Props) {
       style={[styles.card, selected && styles.selected]}
     >
       <View>
-        <AppText variant="title" color={selected ? colors.accent : colors.text}>
+        <AppText variant="title" color={selected ? colors.onBlock : colors.text}>
           {title}
         </AppText>
-        {subtitle ? <AppText variant="caption">{subtitle}</AppText> : null}
+        {subtitle ? (
+          <AppText variant="caption" color={selected ? colors.onBlock : colors.textDim}>
+            {subtitle}
+          </AppText>
+        ) : null}
       </View>
     </PressableScale>
   );

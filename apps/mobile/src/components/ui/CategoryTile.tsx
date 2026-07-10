@@ -6,8 +6,10 @@ import { AppText } from './AppText';
 import { PressableScale } from './PressableScale';
 
 /**
- * Colorful category tile (reference: Technique 16 MIN / Tactics 10 MIN).
- * Solid color block, darker inner icon chip, big condensed number.
+ * Bold color-block tile (revamp): flat sticker block, chunky `radius.block`
+ * corners, darker inner icon chip, big condensed number. Text goes BLACK on
+ * red/cream-ish (bright) fills and white on dark fills — picked by contrast,
+ * overridable via `textColor`.
  */
 interface Props {
   title: string;
@@ -21,10 +23,29 @@ interface Props {
   width?: number;
 }
 
+/**
+ * True when black text has more contrast than white on the given hex fill
+ * (relative luminance above ~0.179 — the WCAG crossover point). Non-hex
+ * strings fall back to white text.
+ */
+function blackTextOn(fill: string): boolean {
+  const hex = /^#([0-9a-f]{6})$/i.exec(fill)?.[1];
+  if (!hex) return false;
+  const lin = (v: number) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const luminance =
+    0.2126 * lin(parseInt(hex.slice(0, 2), 16)) +
+    0.7152 * lin(parseInt(hex.slice(2, 4), 16)) +
+    0.0722 * lin(parseInt(hex.slice(4, 6), 16));
+  return luminance > 0.179;
+}
+
 const styles = StyleSheet.create({
   tile: {
-    borderRadius: radius.lg,
-    padding: spacing.lg,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     minHeight: 148,
     justifyContent: 'space-between',
   },
@@ -38,7 +59,7 @@ const styles = StyleSheet.create({
   iconChip: {
     width: 52,
     height: 52,
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -57,10 +78,12 @@ export function CategoryTile({
   icon,
   color,
   deepColor,
-  textColor = colors.onAccent,
+  textColor,
   onPress,
   width,
 }: Props) {
+  const resolvedText =
+    textColor ?? (blackTextOn(color) ? colors.onBlock : colors.onAccent);
   return (
     <PressableScale
       accessibilityRole={onPress ? 'button' : undefined}
@@ -69,16 +92,16 @@ export function CategoryTile({
       onPress={onPress}
       style={[styles.tile, { backgroundColor: color }, width !== undefined ? { width } : null]}
     >
-      <AppText style={[styles.title, { color: textColor }]} tabular={false}>
+      <AppText style={[styles.title, { color: resolvedText }]} tabular={false}>
         {title}
       </AppText>
       <View style={styles.bottomRow}>
         <View style={[styles.iconChip, { backgroundColor: deepColor }]}>
-          <Ionicons name={icon} size={26} color={textColor} />
+          <Ionicons name={icon} size={26} color={resolvedText} />
         </View>
         <View style={[styles.valueWrap, styles.valueRow]}>
           <AppText
-            style={[styles.value, { color: textColor }]}
+            style={[styles.value, { color: resolvedText }]}
             tabular
             numberOfLines={1}
             adjustsFontSizeToFit
@@ -87,7 +110,7 @@ export function CategoryTile({
             {value}
           </AppText>
           {unit ? (
-            <AppText style={[styles.unit, { color: textColor }]} tabular={false}>
+            <AppText style={[styles.unit, { color: resolvedText }]} tabular={false}>
               {unit.toUpperCase()}
             </AppText>
           ) : null}

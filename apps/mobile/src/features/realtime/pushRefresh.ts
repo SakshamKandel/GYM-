@@ -95,14 +95,56 @@ function handleNotification(notification: Notifications.Notification): void {
 }
 
 /**
+ * Minimum gap between foreground catch-ups. On web a single foreground can
+ * fire AppState 'active' + visibilitychange + window focus back-to-back, and
+ * on native quick app switches would otherwise stack identical fetches.
+ */
+const FOREGROUND_CATCHUP_MIN_MS = 30_000;
+
+let lastCatchupAt = 0;
+
+/**
  * Quiet catch-up whenever the app returns to the foreground: the member may
  * have missed pushes while backgrounded (denied permission, doze, dropped
- * data-only delivery), so re-fetch the two cheap coach-facing stores.
+ * data-only delivery — and web gets no pushes at all), so re-validate the
+ * session and re-fetch the two cheap coach-facing stores. The auth refresh
+ * is what keeps the server tier / staff role from going stale until reload:
+ * it's one GET /api/me with stale-token guards and a health-probe-gated 401.
+ * Debounced so foreground bursts collapse into one round of calls.
  */
 function refreshOnForeground(): void {
   if (useAuth.getState().status !== 'signedIn') return;
+  const now = Date.now();
+  if (now - lastCatchupAt < FOREGROUND_CATCHUP_MIN_MS) return;
+  lastCatchupAt = now;
+  void useAuth.getState().refresh();
   void hydrateCheckIns();
   void refreshServerSuggestions();
+}
+
+/**
+ * Web foreground signals. React Native Web maps AppState onto the page
+ * visibility API, but 'active' rarely fires in practice (the page usually
+ * starts visible and some browsers never flip it) — so hook the DOM events
+ * directly: visibilitychange for tab switches, window focus for window
+ * switches. Guarded lookups because tsc also checks this file for native.
+ */
+function registerWebForegroundListeners(): void {
+  const g = globalThis as {
+    document?: {
+      visibilityState?: string;
+      addEventListener?: (type: string, listener: () => void) => void;
+    };
+    addEventListener?: (type: string, listener: () => void) => void;
+  };
+  try {
+    g.document?.addEventListener?.('visibilitychange', () => {
+      if (g.document?.visibilityState === 'visible') refreshOnForeground();
+    });
+    g.addEventListener?.('focus', () => refreshOnForeground());
+  } catch {
+    // No DOM (SSR pass) — the AppState listener still covers what it can.
+  }
 }
 
 /**
@@ -111,21 +153,27 @@ function refreshOnForeground(): void {
  * calls (fresh sign-ins, hot reload re-renders) no-op via the module guard,
  * and the handlers themselves re-check auth on every event — so the
  * subscriptions can safely outlive a sign-out. Never throws.
+ *
+ * Push-token listeners are native-only, but the foreground catch-up installs
+ * on EVERY platform — the old early-return for unsupported platforms meant
+ * web never caught up until a full page reload.
  */
 export function registerPushRefresh(): void {
-  if (registered || !isSupported()) return;
+  if (registered) return;
   registered = true;
-  try {
-    // Foreground: a push arrived while the member is in the app — refresh the
-    // matching store right away so the UI updates without a banner tap.
-    Notifications.addNotificationReceivedListener(handleNotification);
-    // Tap: the member opened the app from the tray — make the target screen's
-    // data fresh before (or as) it renders.
-    Notifications.addNotificationResponseReceivedListener((response) => {
-      handleNotification(response.notification);
-    });
-  } catch {
-    // Notifications module unavailable — foreground refresh still works.
+  if (isSupported()) {
+    try {
+      // Foreground: a push arrived while the member is in the app — refresh
+      // the matching store right away so the UI updates without a banner tap.
+      Notifications.addNotificationReceivedListener(handleNotification);
+      // Tap: the member opened the app from the tray — make the target
+      // screen's data fresh before (or as) it renders.
+      Notifications.addNotificationResponseReceivedListener((response) => {
+        handleNotification(response.notification);
+      });
+    } catch {
+      // Notifications module unavailable — foreground refresh still works.
+    }
   }
   try {
     AppState.addEventListener('change', (state) => {
@@ -134,4 +182,5 @@ export function registerPushRefresh(): void {
   } catch {
     // AppState unavailable (should never happen) — pushes still refresh.
   }
+  if (Platform.OS === 'web') registerWebForegroundListeners();
 }

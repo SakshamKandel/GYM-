@@ -1,20 +1,9 @@
-import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, {
-  cancelAnimation,
-  Easing,
-  useAnimatedStyle,
-  useReducedMotion,
-  useSharedValue,
-  withDelay,
-  withRepeat,
-  withSequence,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated from 'react-native-reanimated';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText } from './AppText';
-import { enterUp } from './motion';
+import { enterFade, enterUp } from './motion';
 import { PressableScale } from './PressableScale';
 
 /**
@@ -33,11 +22,20 @@ interface Props {
 const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    padding: spacing.lg,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+    paddingLeft: spacing.gutter + 4,
     gap: spacing.sm,
+    overflow: 'hidden',
+  },
+  /** Signal-red accent bar hugging the block's left edge, full height. */
+  accentBar: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 4,
+    backgroundColor: colors.accent,
   },
   header: {
     flexDirection: 'row',
@@ -58,16 +56,8 @@ const styles = StyleSheet.create({
   thinkingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
     paddingVertical: 2,
   },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.accent,
-  },
-  thinkingText: { marginLeft: 4 },
   refreshRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -76,35 +66,10 @@ const styles = StyleSheet.create({
   },
 });
 
-/** One pulsing dot of the "thinking" indicator — a gentle opacity wave. */
-function ThinkingDot({ index }: { index: number }) {
-  const pulse = useSharedValue(0.3);
-  const reduceMotion = useReducedMotion();
-  useEffect(() => {
-    // Reduced motion: hold a steady dot rather than pulsing forever.
-    if (reduceMotion) {
-      pulse.value = 0.7;
-      return;
-    }
-    pulse.value = withDelay(
-      index * 160,
-      withRepeat(
-        withSequence(
-          withTiming(1, { duration: 320, easing: Easing.inOut(Easing.quad) }),
-          withTiming(0.3, { duration: 320, easing: Easing.inOut(Easing.quad) }),
-        ),
-        -1,
-      ),
-    );
-    return () => cancelAnimation(pulse);
-  }, [index, pulse, reduceMotion]);
-  const style = useAnimatedStyle(() => ({ opacity: pulse.value }));
-  return <Animated.View style={[styles.dot, style]} />;
-}
-
 export function AITipCard({ title, tip, loading, error, onRefresh }: Props) {
   return (
     <Animated.View entering={enterUp(0)} style={styles.card}>
+      <View style={styles.accentBar} />
       <View style={styles.header}>
         <View style={styles.iconWrap}>
           <Ionicons name="sparkles" size={16} color={colors.accent} />
@@ -113,14 +78,12 @@ export function AITipCard({ title, tip, loading, error, onRefresh }: Props) {
       </View>
 
       {loading ? (
-        <View style={styles.thinkingRow}>
-          <ThinkingDot index={0} />
-          <ThinkingDot index={1} />
-          <ThinkingDot index={2} />
-          <AppText variant="caption" color={colors.textDim} style={styles.thinkingText}>
-            Coach is thinking
+        // Static thinking state — a single quiet fade-in, no pulsing loop.
+        <Animated.View entering={enterFade(0)} style={styles.thinkingRow}>
+          <AppText variant="caption" color={colors.textDim}>
+            Coach is thinking…
           </AppText>
-        </View>
+        </Animated.View>
       ) : error ? (
         <AppText variant="caption" color={colors.textDim}>
           Tip unavailable right now.

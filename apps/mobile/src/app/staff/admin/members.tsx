@@ -1,5 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -12,6 +12,7 @@ import {
   enterUp,
   PressableScale,
   Screen,
+  ScreenHeader,
   SectionLabel,
   Sheet,
   Tag,
@@ -43,6 +44,10 @@ import { useAuth } from '../../../state/auth';
  * updateMember), and assign a coach (getCoaches + assignClient). Every mutation
  * refetches the sheet AND the list so the two never disagree. Loading is a quiet
  * spinner; failures surface as a single retry line or a branded dialog.
+ *
+ * Block language (REVAMP-BRIEF): back row → ScreenHeader → search → charcoal
+ * member rows (no borders, fill-contrast separation); sheet options are raised
+ * rows with gaps instead of hairlines. Utilitarian density — no color block.
  */
 
 const TIER_ORDER: Tier[] = ['starter', 'silver', 'gold', 'elite'];
@@ -124,18 +129,25 @@ export default function AdminMembersScreen() {
   const [statusConfirm, setStatusConfirm] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
 
+  // Monotonic request id so a slow earlier fetch can't overwrite a newer query.
+  const listReqSeq = useRef(0);
+
   // ── List fetch (debounced by query) ──────────────────────────
   const loadList = useCallback(
     async (q: string) => {
       if (!token) return;
+      const reqId = ++listReqSeq.current;
       setLoading(true);
       setError(null);
       try {
-        setMembers(await getMembers(token, q));
+        const rows = await getMembers(token, q);
+        if (reqId !== listReqSeq.current) return;
+        setMembers(rows);
       } catch (err) {
+        if (reqId !== listReqSeq.current) return;
         setError(errorLine(toStaffError(err).code));
       } finally {
-        setLoading(false);
+        if (reqId === listReqSeq.current) setLoading(false);
       }
     },
     [token],
@@ -270,8 +282,9 @@ export default function AdminMembersScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppText variant="heading">Members</AppText>
       </Animated.View>
+
+      <ScreenHeader eyebrow="Admin console" title="Members" style={styles.header} />
 
       <Animated.View entering={enterUp(0)} style={styles.searchWrap}>
         <Ionicons name="search" size={18} color={colors.textDim} style={styles.searchIcon} />
@@ -296,7 +309,7 @@ export default function AdminMembersScreen() {
         ) : null}
       </Animated.View>
 
-      {loading ? (
+      {loading && members.length === 0 ? (
         <View style={styles.centre}>
           <ActivityIndicator color={colors.accent} />
         </View>
@@ -609,6 +622,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  header: { marginBottom: spacing.gutter },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -637,15 +651,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.lg,
   },
+  // Charcoal list row (brief §11c): fill contrast, no hairline borders.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
+    minHeight: 64,
     marginBottom: spacing.md,
   },
   rowText: { flex: 1, gap: 2, minWidth: 0 },
@@ -682,15 +696,17 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginTop: spacing.xs,
   },
+  // Raised option rows with gaps replace hairline separators (brief §11c).
   pickerOption: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     minHeight: touch.primary,
-    paddingHorizontal: spacing.sm,
+    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    marginBottom: spacing.sm,
   },
   coachOptionText: { flex: 1, gap: 2, minWidth: 0, paddingRight: spacing.md },
 });

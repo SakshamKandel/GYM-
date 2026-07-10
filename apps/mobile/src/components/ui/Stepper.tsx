@@ -1,5 +1,10 @@
-import { useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Pressable,
+  StyleSheet,
+  View,
+  type AccessibilityActionEvent,
+} from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { colors, radius, touch, type } from '@gym/ui-tokens';
 import { AppText } from './AppText';
@@ -27,15 +32,14 @@ const PX_PER_STEP = 24;
 const styles = StyleSheet.create({
   root: { alignItems: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  // Block language: filled circular +/- buttons — fill contrast, no strokes.
   btn: {
     width: touch.min,
     height: touch.min,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
+    borderRadius: radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceRaised,
   },
   btnPressed: { backgroundColor: colors.surfacePressed, transform: [{ scale: 0.96 }] },
   btnText: { fontFamily: type.bodySemiBold, fontSize: 22, color: colors.text, lineHeight: 24 },
@@ -44,10 +48,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 4,
     paddingVertical: 8,
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
   },
   valueBoxDragging: {
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceRaised,
   },
   dragHint: {
     fontSize: 9,
@@ -90,6 +94,11 @@ export function Stepper({ value, onChange, step, min = 0, max, format, label, bi
     }
   }
 
+  // Guarantee the long-press interval is torn down if the component unmounts
+  // mid-press (navigation, auto-dismiss, list removal) — otherwise onPressOut
+  // never fires and apply()->onChange() keeps mutating the parent forever.
+  useEffect(() => () => stopRepeat(), []);
+
   // ── Drag-to-change via react-native-gesture-handler ──────────
   // PanResponder loses the responder war against ScrollViews on Android;
   // a RNGH Pan with activeOffsetX/failOffsetY negotiates correctly:
@@ -114,7 +123,10 @@ export function Stepper({ value, onChange, step, min = 0, max, format, label, bi
           }
         })
         .onEnd(() => setDragging(false))
-        .onFinalize(() => setDragging(false)),
+        .onFinalize(() => {
+          stopRepeat();
+          setDragging(false);
+        }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [step, min, max],
   );
@@ -139,7 +151,12 @@ export function Stepper({ value, onChange, step, min = 0, max, format, label, bi
           <View
             style={[styles.valueBox, dragging && styles.valueBoxDragging]}
             accessibilityRole="adjustable"
-            accessibilityLabel={`${label ?? 'value'} is ${display}. Drag left or right to adjust.`}
+            accessibilityLabel={`${label ?? 'value'} is ${display}. Swipe up or down to adjust.`}
+            accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+            onAccessibilityAction={(e: AccessibilityActionEvent) => {
+              if (e.nativeEvent.actionName === 'increment') apply(step);
+              else if (e.nativeEvent.actionName === 'decrement') apply(-step);
+            }}
           >
             <AppText variant={big ? 'stat' : 'display'} tabular>
               {display}

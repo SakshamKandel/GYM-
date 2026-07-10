@@ -32,7 +32,7 @@ interface Props {
 export function Ring({
   progress,
   size = 72,
-  strokeWidth = 6,
+  strokeWidth = 8,
   color = colors.accent,
   trackColor = colors.surfaceRaised,
   delay = 0,

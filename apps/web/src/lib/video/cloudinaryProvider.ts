@@ -12,17 +12,23 @@
  * public_id set to the uid the server chose — so playback ALWAYS requires a
  * signed delivery URL. We persist only that uid.
  *
- * Playback: `signedPlaybackUrl` mints a short-lived (~2h) signed, authenticated
- * delivery URL. The signature covers an expiry token so the link self-expires.
+ * Playback: `signedPlaybackUrl` mints a signed, authenticated delivery URL. When
+ * a URL-signing key is configured (CLOUDINARY_URL_SIGNING_KEY) the URL also
+ * carries a Cloudinary auth token (`__cld_token__`) with a hard `exp`, so the
+ * link self-expires after PLAYBACK_TTL_SECONDS; without that key Cloudinary
+ * offers no per-request expiry on the signed-URL scheme (see the method body).
  *
  * Signing is hand-rolled with node:crypto (no SDK / no new deps):
  *   - Upload/admin signature: SHA-1 hex of the alphabetically-sorted
  *     `key=value` params joined by '&', with the api_secret appended.
- *   - Delivery signature: SHA-256 of "<transformation>/<public_id.ext><secret>"
- *     truncated + base64url-encoded per Cloudinary's signed-URL scheme.
+ *   - Delivery signature (`s--<sig>--`): SHA-1 of "<transformation>/<public_id.ext>"
+ *     with the api_secret appended, base64url-encoded, truncated to 8 chars —
+ *     Cloudinary's default signed-URL scheme.
+ *   - Auth token: HMAC-SHA256 (key from hex) over "exp=<ts>~url=<escaped>",
+ *     Cloudinary's token-based authentication scheme.
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import type {
   CreateUploadMeta,
   CreateUploadResult,
@@ -39,6 +45,13 @@ interface CloudinaryConfig {
   cloudName: string;
   apiKey: string;
   apiSecret: string;
+  /**
+   * Optional hex URL-signing key for Cloudinary token-based authentication.
+   * Present only on plans/accounts that enable it (private CDN add-on). When
+   * set, delivery URLs get a hard-expiring `__cld_token__`; when absent we fall
+   * back to a plain signed URL that has no per-request expiry.
+   */
+  urlSigningKey?: string;
 }
 
 /** Read + validate env. Throws NotConfiguredError listing every missing var. */
@@ -46,6 +59,8 @@ function loadConfig(): CloudinaryConfig {
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
   const apiKey = process.env.CLOUDINARY_API_KEY;
   const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  // Optional — its absence must NOT fail configuration.
+  const urlSigningKey = process.env.CLOUDINARY_URL_SIGNING_KEY;
 
   const missing: string[] = [];
   if (!cloudName) missing.push('CLOUDINARY_CLOUD_NAME');
@@ -53,7 +68,12 @@ function loadConfig(): CloudinaryConfig {
   if (!apiSecret) missing.push('CLOUDINARY_API_SECRET');
   if (missing.length > 0) throw new NotConfiguredError(missing);
 
-  return { cloudName: cloudName!, apiKey: apiKey!, apiSecret: apiSecret! };
+  return {
+    cloudName: cloudName!,
+    apiKey: apiKey!,
+    apiSecret: apiSecret!,
+    urlSigningKey: urlSigningKey || undefined,
+  };
 }
 
 function base64url(input: Buffer): string {
@@ -87,16 +107,57 @@ function signParams(
 /**
  * Cloudinary signed-delivery signature (the `s--<sig>--` URL segment).
  *
- * Per Cloudinary's signed-URL scheme, the string to sign is everything after
- * the delivery type in the URL path — i.e. "<transformation>/<public_id.ext>"
- * (transformation omitted when empty) — with the api_secret appended. The
- * SHA-256 digest is base64url-encoded and truncated to the first 8 chars.
+ * Per Cloudinary's default signed-URL scheme, the string to sign is everything
+ * after the delivery type in the URL path — i.e. "<transformation>/<public_id.ext>"
+ * (transformation omitted when empty) — with the api_secret appended. The SHA-1
+ * digest is base64-encoded (URL-safe: '/'→'_', '+'→'-') and truncated to the
+ * first 8 chars. (Accounts explicitly configured for long/SHA-256 signatures
+ * would instead emit the full 32-char SHA-256 digest — not the default here.)
  */
 function signDeliveryComponent(toSign: string, apiSecret: string): string {
-  const digest = createHash('sha256')
+  const digest = createHash('sha1')
     .update(toSign + apiSecret)
     .digest();
   return base64url(digest).slice(0, 8);
+}
+
+/**
+ * Cloudinary's token escaper (`escapeToLower`): percent-encode a fixed set of
+ * unsafe chars, then lowercase the resulting `%XX` hex. Applied to the `url`
+ * that scopes an auth token. Input here is a pure-ASCII delivery URL.
+ */
+function escapeToLower(value: string): string {
+  return value
+    .replace(/([ "#%&'/:;<=>?@[\]^`{|}~]+)/g, (run) =>
+      run
+        .split('')
+        .map((c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)
+        .join(''),
+    )
+    .replace(/%../g, (m) => m.toLowerCase());
+}
+
+/**
+ * Mint a Cloudinary auth token (`__cld_token__`) scoped to one exact delivery
+ * URL with a hard expiry. Signing message is "exp=<ts>~url=<escaped-url>"; the
+ * emitted token carries only `exp` + `hmac` (Cloudinary reconstructs the url
+ * from the request). HMAC-SHA256 keyed by the hex-decoded URL-signing key.
+ *
+ * @param baseUrl delivery URL WITHOUT any query string.
+ * @param signingKey hex-encoded URL-signing key.
+ * @param ttlSeconds seconds until the token expires.
+ */
+function authTokenQuery(
+  baseUrl: string,
+  signingKey: string,
+  ttlSeconds: number,
+): string {
+  const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const toSign = `exp=${exp}~url=${escapeToLower(baseUrl)}`;
+  const hmac = createHmac('sha256', Buffer.from(signingKey, 'hex'))
+    .update(toSign)
+    .digest('hex');
+  return `__cld_token__=exp=${exp}~hmac=${hmac}`;
 }
 
 /** Narrow shape of the Cloudinary destroy response we depend on. */
@@ -143,21 +204,13 @@ export class CloudinaryProvider implements VideoProvider {
 
     // Assets are stored as type=authenticated, so *every* delivery URL must be
     // signed (`s--<sig>--`) with the api_secret — an unsigned URL 401s. This is
-    // the free-tier signing scheme (SHA-256 over the path + secret). The tier
-    // gate has already run upstream; this method only mints the delivery URL.
+    // Cloudinary's default signing scheme (SHA-1 over the path + secret). The
+    // tier gate has already run upstream; this method only mints the delivery URL.
     //
     // We deliver an HLS manifest (.m3u8): Cloudinary transcodes authenticated
     // video to HLS on demand for the `.m3u8` extension. `sp_auto` selects an
     // adaptive streaming profile so the manifest has renditions.
     //
-    // Short-TTL note: a hard per-request expiry on the delivery URL itself
-    // requires Cloudinary's token-based auth (`__cld_token__`), which needs a
-    // separate URL-signing key that is a paid add-on — not available with only
-    // the api_secret on the free tier. We therefore return a signed URL (the
-    // real, free-tier mechanism); PLAYBACK_TTL_SECONDS documents the intended
-    // window and is the seam to swap in token auth if the plan is upgraded.
-    void PLAYBACK_TTL_SECONDS;
-
     const transformation = 'sp_auto';
     const publicIdWithExt = `${uid}.m3u8`;
 
@@ -168,10 +221,27 @@ export class CloudinaryProvider implements VideoProvider {
     // Cloudinary signed authenticated HLS delivery URL:
     //   https://res.cloudinary.com/<cloud>/video/authenticated/
     //     s--<sig>--/<transformation>/<public_id>.m3u8
-    return (
+    const baseUrl =
       `${CLOUDINARY_DELIVERY_BASE}/${cfg.cloudName}/video/authenticated/` +
-      `s--${signature}--/${transformation}/${publicIdWithExt}`
-    );
+      `s--${signature}--/${transformation}/${publicIdWithExt}`;
+
+    // Hard per-request expiry lives on Cloudinary's token-based auth
+    // (`__cld_token__`), which needs a URL-signing key (private-CDN add-on). When
+    // CLOUDINARY_URL_SIGNING_KEY is set we scope a token to THIS exact URL with
+    // an `exp` = now + PLAYBACK_TTL_SECONDS, so a leaked link stops streaming
+    // after the window. Without that key Cloudinary's signed-URL scheme has NO
+    // per-request expiry — a leaked link stays valid until the asset is deleted;
+    // set the signing key to close that exposure.
+    if (cfg.urlSigningKey) {
+      const token = authTokenQuery(
+        baseUrl,
+        cfg.urlSigningKey,
+        PLAYBACK_TTL_SECONDS,
+      );
+      return `${baseUrl}?${token}`;
+    }
+
+    return baseUrl;
   }
 
   async deleteVideo(uid: string): Promise<void> {

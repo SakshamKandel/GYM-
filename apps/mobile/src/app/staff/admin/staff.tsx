@@ -10,11 +10,11 @@ import {
   Button,
   Chip,
   ConfirmDialog,
-  Divider,
   enterDown,
   enterUp,
   PressableScale,
   Screen,
+  ScreenHeader,
   SectionLabel,
   Tag,
 } from '../../../components/ui';
@@ -47,6 +47,10 @@ import { useAuth } from '../../../state/auth';
  * actions — mirroring the server's cannot_target_self / insufficient_rank
  * guards so a tap can never end in a surprise 403. Gated: sub-roles see a
  * locked notice, never the data.
+ *
+ * Block language (REVAMP-BRIEF): back row → ScreenHeader → charcoal result and
+ * roster rows separated by gaps (no borders, no hairline dividers); role chips
+ * stay pills; the revoke action reads in red.
  */
 
 /** Friendly line for a failed grant/role change. */
@@ -405,7 +409,6 @@ export default function StaffAndRolesScreen() {
                 </PressableScale>
               )}
             </View>
-            {i < (staff.length - 1) ? <Divider /> : null}
           </Animated.View>
         );
       })}
@@ -428,20 +431,22 @@ export default function StaffAndRolesScreen() {
   );
 }
 
-/** Shared back row (no header — matches the rest of the app). */
+/** Shared back row + revamp header (no native header — matches the app). */
 function BackRow({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <Animated.View entering={enterDown()} style={styles.headerRow}>
-      <PressableScale
-        accessibilityRole="button"
-        accessibilityLabel="Back"
-        onPress={onBack}
-        style={styles.backBtn}
-      >
-        <Ionicons name="chevron-back" size={24} color={colors.text} />
-      </PressableScale>
-      <AppText variant="heading">{title}</AppText>
-    </Animated.View>
+    <>
+      <Animated.View entering={enterDown()} style={styles.headerRow}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          onPress={onBack}
+          style={styles.backBtn}
+        >
+          <Ionicons name="chevron-back" size={24} color={colors.text} />
+        </PressableScale>
+      </Animated.View>
+      <ScreenHeader eyebrow="Admin console" title={title} style={styles.header} />
+    </>
   );
 }
 
@@ -477,6 +482,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  header: { marginBottom: spacing.gutter },
   locked: {
     marginTop: spacing.xxl,
     alignItems: 'center',
@@ -484,47 +490,48 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
   },
   banner: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: colors.surfaceRaised,
     borderRadius: radius.md,
-    padding: spacing.md,
+    padding: spacing.lg,
     marginBottom: spacing.sm,
   },
   searchRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'stretch' },
   searchInput: { flex: 1 },
   searchBtn: { paddingHorizontal: 18 },
   hint: { marginTop: spacing.md },
+  // Charcoal result row (brief §11c): no border; picked = raised fill.
   resultRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
     borderRadius: radius.md,
-    padding: spacing.md,
+    padding: spacing.lg,
+    minHeight: 64,
     marginTop: spacing.sm,
   },
-  resultRowPicked: { borderColor: colors.accent },
+  resultRowPicked: { backgroundColor: colors.surfaceRaised },
   rowBlocked: { opacity: 0.55 },
   resultText: { flex: 1, gap: 2 },
   grantPanel: {
     marginTop: spacing.md,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
     padding: spacing.lg,
     gap: spacing.md,
   },
   roleChips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   center: { paddingVertical: spacing.xl, alignItems: 'center' },
+  // Roster rows: charcoal cards with gaps — replaces the old hairline dividers.
   staffRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingVertical: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    minHeight: 64,
+    marginBottom: spacing.sm,
   },
   staffText: { flex: 1, gap: 4 },
   staffTags: {
@@ -543,9 +550,7 @@ const styles = StyleSheet.create({
     width: touch.min,
     height: touch.min,
     borderRadius: radius.full,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: colors.surfaceRaised,
     alignItems: 'center',
     justifyContent: 'center',
   },

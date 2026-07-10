@@ -53,7 +53,7 @@ export async function GET(req: Request) {
     .innerJoin(accounts, eq(syncedWorkouts.accountId, accounts.id))
     .leftJoin(workoutFlagAcks, eq(workoutFlagAcks.workoutId, syncedWorkouts.id))
     .where(and(...conditions))
-    .orderBy(desc(syncedWorkouts.date))
+    .orderBy(sql`(${workoutFlagAcks.workoutId} is not null) asc`, desc(syncedWorkouts.date))
     .limit(200);
 
   const workoutIds = rows.map((r) => r.workoutId);

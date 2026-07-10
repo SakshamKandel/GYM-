@@ -5,6 +5,7 @@ import { createSession } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { hashPassword } from '@/lib/password';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -19,6 +20,15 @@ export function OPTIONS() {
 }
 
 export async function POST(req: Request) {
+  // Mass-signup damping: 10 registrations/min per IP (in-memory, per instance).
+  const limited = rateLimit({
+    route: 'auth/register',
+    limit: 10,
+    windowMs: 60_000,
+    ip: clientIp(req),
+  });
+  if (limited) return limited;
+
   const parsed = bodySchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
 
@@ -32,13 +42,15 @@ export async function POST(req: Request) {
     .limit(1);
   if (existing.length > 0) return json({ error: 'email_taken' }, 409);
 
+  const passwordHash = await hashPassword(parsed.data.password);
+
   let created: { id: string; email: string; displayName: string; tier: string }[];
   try {
     created = await db
       .insert(accounts)
       .values({
         email,
-        passwordHash: hashPassword(parsed.data.password),
+        passwordHash,
         displayName: parsed.data.displayName.trim(),
       })
       .returning({

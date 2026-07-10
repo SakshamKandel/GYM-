@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -14,23 +14,27 @@ import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
   Button,
-  Divider,
   HeroCard,
   PressableScale,
   Screen,
+  ScreenHeader,
   Tag,
-  enterDown,
   enterFade,
   enterUp,
 } from '../../components/ui';
-import { successHaptic } from '../../lib/haptics';
+import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { syncProfileNow } from '../../lib/profileSync';
-import { useAuth } from '../../state/auth';
+import { applyServerUser, useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
 import { activateTrial } from '../buddy/actions';
 import { trialErrorLine, TRIAL_TIERS } from '../buddy/logic';
 import { useBuddyStore } from '../buddy/store';
-import { getTrialStatus, type Trial, type TrialTier } from '../../lib/api/client';
+import {
+  getTrialStatus,
+  setSubscriptionTier,
+  type Trial,
+  type TrialTier,
+} from '../../lib/api/client';
 import {
   formatNprAmount,
   GM_TIERS,
@@ -42,10 +46,11 @@ import { TierDetailSheet, type TierDetail } from './TierDetailSheet';
 const EASE_OUT = Easing.bezier(0.25, 0.8, 0.4, 1);
 
 /**
- * The GM Method paywall — THE sales moment, kept deliberately minimal.
- * One HeroCard poster, then the four tiers as airy hairline cards. The
- * recommended tier is marked only by an accent border + "Most popular"
- * tag and owns the single red primary button. Nothing golden, ever.
+ * The GM Method paywall in the color-block language (REVAMP-BRIEF): huge
+ * Oswald header, one charcoal pitch block with the mascot, then the tiers as
+ * borderless color blocks. The recommended tier is THE screen's red hero —
+ * black ink, black pill CTA — everything else stays charcoal. Nothing golden,
+ * ever.
  *
  * Until store billing ships, choosing a plan applies the tier locally so
  * every gated screen can be previewed.
@@ -60,6 +65,7 @@ export function SubscribeScreen() {
   const [trialing, setTrialing] = useState<string | null>(null);
   const [trialError, setTrialError] = useState<string | null>(null);
   const [trialSuccess, setTrialSuccess] = useState<string | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
   const [detail, setDetail] = useState<TierDetail | null>(null);
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
@@ -88,12 +94,40 @@ export function SubscribeScreen() {
   function choose(tier: Tier): void {
     // TODO: RevenueCat purchase flow — until then the pick applies locally
     // as a preview so the whole app can be exercised on any tier.
+    const previousTier = useProfile.getState().tier;
+    // Optimistic local apply for instant UI; the profile blob backup keeps
+    // preferences in sync (the server ignores its tier field — the account
+    // tier is only ever written through POST /api/subscription/tier below).
     update({ tier });
-    // Sync the tier to the server account immediately so server-gated features
-    // (coach chat) unlock right away instead of after the backup debounce.
     syncProfileNow();
     setPreviewActive(true);
+    setPlanError(null);
     successHaptic();
+
+    // Signed out → local-only preview, exactly as before.
+    if (status !== 'signedIn' || !token) return;
+
+    // Signed in → the server is the tier authority. Persist the choice and
+    // adopt the returned user so everything reading useAuth's tier (home
+    // tier ring, server-gated screens) updates now — not on the next app
+    // foreground, and never "until reload" on web.
+    void (async () => {
+      try {
+        const user = await setSubscriptionTier(token, tier);
+        applyServerUser(user, token);
+      } catch {
+        // Roll back the optimistic write — but never clobber a NEWER pick
+        // (rapid re-taps) or another account's state (signed out mid-flight).
+        if (useAuth.getState().token !== token) return;
+        if (useProfile.getState().tier === tier) {
+          update({ tier: previousTier });
+          syncProfileNow();
+        }
+        setPreviewActive(false);
+        setPlanError("Couldn't update your plan on the server — check your connection and try again.");
+        warnHaptic();
+      }
+    })();
   }
 
   async function startTrialFlow(tier: TrialTier): Promise<void> {
@@ -138,25 +172,23 @@ export function SubscribeScreen() {
 
   return (
     <Screen scroll keyboardAware>
-      <Animated.View entering={enterDown()} style={styles.headerRow}>
-        <PressableScale
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-          onPress={goBack}
-          style={styles.backBtn}
-        >
-          <Ionicons name="chevron-back" size={24} color={colors.text} />
-        </PressableScale>
-      </Animated.View>
+      <ScreenHeader
+        title="The GM Method"
+        action={
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            onPress={goBack}
+            style={styles.backBtn}
+          >
+            <Ionicons name="close" size={24} color={colors.text} />
+          </PressableScale>
+        }
+      />
 
-      <Animated.View entering={enterUp(0)}>
-        <HeroCard mascot tone="surface">
-          <AppText variant="label" color={colors.accent}>
-            THE GM METHOD
-          </AppText>
-          <AppText variant="heading" style={styles.heroTitle}>
-            Train the way Greece Maharjan grows
-          </AppText>
+      <Animated.View entering={enterUp(0)} style={styles.pitchWrap}>
+        <HeroCard mascot variant="charcoal">
+          <AppText variant="title">Train the way Greece Maharjan grows</AppText>
           <AppText variant="caption">
             Not generic macros — a method that adapts to your body every week.
           </AppText>
@@ -182,6 +214,11 @@ export function SubscribeScreen() {
         {trialError ? (
           <AppText variant="caption" color={colors.error} style={styles.previewNote}>
             {trialError}
+          </AppText>
+        ) : null}
+        {planError ? (
+          <AppText variant="caption" color={colors.error} style={styles.planErrorNote}>
+            {planError}
           </AppText>
         ) : null}
         {activeTrial ? (
@@ -219,6 +256,43 @@ export function SubscribeScreen() {
   );
 }
 
+/** Text-only trial affordance for INSIDE the red hero block — mirrors
+ * `Button variant="ghost"` (metrics, a11y, loading/disabled states) but with
+ * black ink, because white-on-red is banned by the block language. */
+function OnRedGhostButton({
+  label,
+  disabled,
+  loading,
+  onPress,
+}: {
+  label: string;
+  disabled?: boolean;
+  loading?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: disabled || loading }}
+      disabled={disabled || loading}
+      onPress={onPress}
+      style={[styles.onRedGhost, (disabled || loading) && styles.onRedGhostDisabled]}
+    >
+      {loading ? <ActivityIndicator color={colors.onBlock} /> : null}
+      <AppText
+        style={styles.onRedGhostLabel}
+        tabular={false}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.85}
+      >
+        {label}
+      </AppText>
+    </PressableScale>
+  );
+}
+
 function TierCard({
   gmTier,
   index,
@@ -250,6 +324,14 @@ function TierCard({
   const previous = index > 0 ? GM_TIERS[index - 1] : undefined;
   const canTrial = TRIAL_TIERS.includes(gmTier.tier as TrialTier);
 
+  // Block ink: the recommended card is the screen's ONE red hero block —
+  // everything on it is black (`onBlock`); dim text dims via opacity, which
+  // keeps ≥4.5:1 on the red fill at 0.8.
+  const onRed = isRecommended;
+  const ink = onRed ? colors.onBlock : colors.text;
+  const inkDim = onRed ? colors.onBlock : colors.textDim;
+  const dim = onRed ? styles.redDim : undefined;
+
   // Selection wash: a quiet accent tint fades in when this becomes the current
   // plan (a user-driven state change — motion is allowed). Reduced-motion snaps.
   const reduceMotion = useReducedMotion();
@@ -263,32 +345,45 @@ function TierCard({
   }, [isCurrent, reduceMotion, selected]);
   const washStyle = useAnimatedStyle(() => ({ opacity: selected.value * 0.7 }));
 
+  const trialLabel = isTrialActive
+    ? 'Trial active'
+    : trialed
+      ? 'Trial used'
+      : `Try free for ${trialDays} days`;
+
   return (
     <Animated.View
       entering={enterUp(index + 1)}
-      style={[styles.card, isRecommended && styles.cardRecommended]}
+      style={[styles.card, onRed && styles.cardRed]}
     >
-      <Animated.View pointerEvents="none" style={[styles.cardWash, washStyle]} />
+      {/* The accent wash only reads on charcoal — the red hero marks "current"
+          with its Current tag + hidden CTA instead. */}
+      {onRed ? null : (
+        <Animated.View pointerEvents="none" style={[styles.cardWash, washStyle]} />
+      )}
       <View style={styles.nameRow}>
-        <AppText variant="title" style={styles.name} numberOfLines={1}>
+        <AppText variant="title" color={ink} style={styles.name} numberOfLines={1}>
           {gmTier.name}
         </AppText>
         <View style={styles.tags}>
-          {isRecommended ? <Tag label="Most popular" variant="filled" /> : null}
-          {isCurrent ? <Tag label="Current" variant="dim" /> : null}
+          {isRecommended ? <Tag label="Most popular" variant="onBlock" /> : null}
+          {isCurrent ? <Tag label="Current" variant={onRed ? 'onBlock' : 'dim'} /> : null}
         </View>
       </View>
 
       <View style={styles.priceRow}>
         {isFree ? (
-          <AppText style={styles.priceNumber} numberOfLines={1}>Free</AppText>
+          <AppText style={styles.priceNumber} color={ink} numberOfLines={1}>
+            Free
+          </AppText>
         ) : (
           <>
-            <AppText variant="caption" color={colors.textDim}>
+            <AppText variant="caption" color={inkDim} style={dim}>
               NPR
             </AppText>
             <AppText
               style={styles.priceNumber}
+              color={ink}
               tabular
               numberOfLines={1}
               adjustsFontSizeToFit
@@ -296,17 +391,23 @@ function TierCard({
             >
               {formatNprAmount(gmTier.pricePerMonthNpr)}
             </AppText>
-            <AppText variant="caption" color={colors.textDim}>
+            <AppText variant="caption" color={inkDim} style={dim}>
               /mo
             </AppText>
           </>
         )}
       </View>
-      <AppText variant="caption">{gmTier.tagline}</AppText>
+      <AppText variant="caption" color={inkDim} style={dim}>
+        {gmTier.tagline}
+      </AppText>
 
       <View style={styles.features}>
         {previous ? (
-          <AppText variant="caption" color={colors.textFaint}>
+          <AppText
+            variant="caption"
+            color={onRed ? colors.onBlock : colors.textFaint}
+            style={dim}
+          >
             Everything in {previous.name}, plus
           </AppText>
         ) : null}
@@ -315,52 +416,58 @@ function TierCard({
             <Ionicons
               name="checkmark-circle"
               size={18}
-              color={colors.textDim}
+              color={onRed ? colors.onBlock : colors.textDim}
               style={styles.featureIcon}
             />
-            <AppText style={styles.featureText}>{feature}</AppText>
+            <AppText color={ink} style={styles.featureText}>
+              {feature}
+            </AppText>
           </View>
         ))}
       </View>
 
-      <View style={styles.detailDivider}>
-        <Divider />
-      </View>
       <PressableScale
         accessibilityRole="button"
         accessibilityLabel={`See everything included in ${gmTier.name}`}
         onPress={() => onOpenDetail(gmTier)}
         style={styles.detailLink}
       >
-        <AppText variant="caption" color={colors.textDim}>
+        <AppText variant="caption" color={inkDim} style={dim}>
           See everything included
         </AppText>
-        <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+        <Ionicons
+          name="chevron-forward"
+          size={16}
+          color={inkDim}
+          style={dim}
+        />
       </PressableScale>
 
       {isCurrent ? null : (
         <View style={styles.btnStack}>
           <Button
             label={`Choose ${gmTier.name}`}
-            variant={isRecommended ? 'primary' : 'secondary'}
+            variant={onRed ? 'onBlock' : 'secondary'}
             onPress={() => onChoose(gmTier.tier)}
-            style={styles.chooseBtn}
           />
           {canTrial && signedIn ? (
-            <Button
-              label={
-                isTrialActive
-                  ? 'Trial active'
-                  : trialed
-                    ? 'Trial used'
-                    : `Try free for ${trialDays} days`
-              }
-              variant="ghost"
-              disabled={trialed || trialing !== null}
-              loading={trialing === gmTier.tier}
-              onPress={() => onTrial(gmTier.tier as TrialTier)}
-              style={styles.trialBtn}
-            />
+            onRed ? (
+              <OnRedGhostButton
+                label={trialLabel}
+                disabled={trialed || trialing !== null}
+                loading={trialing === gmTier.tier}
+                onPress={() => onTrial(gmTier.tier as TrialTier)}
+              />
+            ) : (
+              <Button
+                label={trialLabel}
+                variant="ghost"
+                disabled={trialed || trialing !== null}
+                loading={trialing === gmTier.tier}
+                onPress={() => onTrial(gmTier.tier as TrialTier)}
+                style={styles.trialBtn}
+              />
+            )
           ) : null}
         </View>
       )}
@@ -370,11 +477,6 @@ function TierCard({
 
 const styles = StyleSheet.create({
   // Screen already supplies 16px of top air — no extra paddingTop here.
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingBottom: spacing.md,
-  },
   backBtn: {
     width: touch.min,
     height: touch.min,
@@ -384,23 +486,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Poster hero — sized to wrap in ~2 lines beside the mascot art,
-  // not one word per line.
-  heroTitle: { fontSize: 25, lineHeight: 32 },
+  pitchWrap: { marginTop: spacing.xl },
   pricingNote: { marginTop: spacing.md },
   previewNote: { marginTop: spacing.sm, color: colors.success },
+  planErrorNote: { marginTop: spacing.sm, color: colors.error },
 
-  // Tier cards — hairline by default; only the recommended card gets accent.
-  cards: { gap: spacing.lg, marginTop: spacing.xl },
+  // Tier blocks — borderless color blocks; the recommended tier is the
+  // screen's single red hero, the rest stay charcoal.
+  cards: { gap: spacing.md, marginTop: spacing.xl },
   card: {
     backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.xl,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     gap: spacing.xs,
   },
-  cardRecommended: { borderWidth: 1.5, borderColor: colors.accent },
+  cardRed: { backgroundColor: colors.blockRed },
   // Quiet accent wash marking the current plan; sits behind the card content.
   // (absoluteFillObject spelled out — RN 0.86 types no longer export it.)
   cardWash: {
@@ -409,9 +509,11 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    borderRadius: radius.xl,
+    borderRadius: radius.block,
     backgroundColor: colors.accentFaint,
   },
+  // Dim ink on the red block: black at 0.8 keeps ≥4.5:1 over blockRed.
+  redDim: { opacity: 0.8 },
   nameRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -421,7 +523,7 @@ const styles = StyleSheet.create({
   name: { flexShrink: 1, minWidth: 0 },
   tags: { flexShrink: 0, flexDirection: 'row', gap: spacing.sm },
 
-  // Price: Oswald number + tiny dim currency/period captions.
+  // Price: big Oswald number + tiny dim currency/period captions.
   priceRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
@@ -431,10 +533,9 @@ const styles = StyleSheet.create({
   },
   priceNumber: {
     fontFamily: type.display,
-    fontSize: 34,
-    lineHeight: 40,
+    fontSize: type.size.display,
+    lineHeight: 46,
     letterSpacing: 0.5,
-    color: colors.text,
     flexShrink: 1,
     minWidth: 0,
   },
@@ -444,23 +545,40 @@ const styles = StyleSheet.create({
   featureIcon: { marginTop: 3 },
   featureText: { flex: 1, lineHeight: 24 },
 
-  // "See everything included" reveal affordance.
-  detailDivider: { marginTop: spacing.lg },
+  // "See everything included" reveal affordance — gap instead of a hairline.
   detailLink: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     minHeight: touch.min,
+    marginTop: spacing.sm,
   },
 
-  btnStack: { marginTop: spacing.lg, gap: spacing.xs },
-  chooseBtn: {},
+  btnStack: { marginTop: spacing.sm, gap: spacing.xs },
   trialBtn: { minHeight: touch.min },
+
+  // Ghost trial affordance inside the red hero (black ink, Button metrics).
+  onRedGhost: {
+    minHeight: touch.min,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  onRedGhostDisabled: { opacity: 0.4 },
+  onRedGhostLabel: {
+    fontFamily: type.bodySemiBold,
+    fontSize: 16,
+    letterSpacing: 0.3,
+    color: colors.onBlock,
+  },
 
   activeTrialBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: spacing.sm,
     marginTop: spacing.sm,
   },
 });

@@ -17,14 +17,15 @@ import {
   AppTextInput,
   Button,
   enterFade,
-  MacroBar,
+  FractionStat,
   OptionCard,
   PressableScale,
+  ProgressBar,
   Screen,
   Stepper,
 } from '../../components/ui';
 import { todayIso } from '../../lib/dates';
-import { successHaptic } from '../../lib/haptics';
+import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
 import { syncProfileNow } from '../../lib/profileSync';
 import { getRepo } from '../../lib/repo';
@@ -32,7 +33,6 @@ import { getPlan } from '../../lib/seed/plans';
 import { useProfile } from '../../state/profile';
 import { CountUpStat } from './components/CountUpStat';
 import { NewieStage } from './components/NewieStage';
-import { ProgressSegments } from './components/ProgressSegments';
 import {
   ACTIVITY_OPTIONS,
   BIRTH_YEAR,
@@ -96,6 +96,7 @@ export function OnboardingWizard() {
   const [draft, setDraft] = useState<OnboardingDraft>(DEFAULT_DRAFT);
   const [reaction, setReaction] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
+  const [finishError, setFinishError] = useState<string | null>(null);
   const update = useProfile((s) => s.update);
   const completeOnboarding = useProfile((s) => s.completeOnboarding);
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -161,11 +162,17 @@ export function OnboardingWizard() {
 
   async function finish(): Promise<void> {
     if (finishing) return;
+    setFinishError(null);
     setFinishing(true);
     try {
       const kg = inputToKg(draft.weightInput, draft.unitPref);
       const targets = draftTargets(draft);
       const planId = planIdForGoal(draft.goal ?? 'muscle');
+      // Persist the starting weight FIRST — the onboarded flag must only flip
+      // once the SQLite write succeeds, or a failure here would strand the user
+      // in an onboarded-but-empty state with no way back to this screen.
+      const repo = await getRepo();
+      await repo.upsertWeight({ id: uid(), date: todayIso(), kg });
       update({
         displayName: draft.name.trim() || 'Athlete',
         sex: draft.sex,
@@ -178,8 +185,6 @@ export function OnboardingWizard() {
         daysPerWeek: draft.daysPerWeek,
       });
       completeOnboarding({ targets, planId });
-      const repo = await getRepo();
-      await repo.upsertWeight({ id: uid(), date: todayIso(), kg });
       // Push the freshly-onboarded profile to Neon immediately — don't rely on
       // the 3s debounce, which a quick app-close could miss (that's how an
       // account ends up onboarded locally but empty on the server). No-op when
@@ -187,7 +192,11 @@ export function OnboardingWizard() {
       syncProfileNow();
       successHaptic();
       router.replace('/');
-    } finally {
+    } catch {
+      // Persistence failed — leave the user on this screen with a clear retry
+      // path instead of a silently re-enabled button.
+      warnHaptic();
+      setFinishError("Couldn't save your setup. Check your device storage and tap Let's go again.");
       setFinishing(false);
     }
   }
@@ -326,11 +335,15 @@ export function OnboardingWizard() {
         const plan = getPlan(planIdForGoal(draft.goal ?? 'muscle'));
         return (
           <View>
-            <CountUpStat label="Calories" value={targets.kcal} unit="kcal / day" accent />
-            <View style={styles.macroBlock}>
-              <MacroBar label="Protein" current={targets.protein} target={targets.protein} color={colors.protein} delay={80} />
-              <MacroBar label="Carbs" current={targets.carbs} target={targets.carbs} color={colors.carbs} delay={200} />
-              <MacroBar label="Fat" current={targets.fat} target={targets.fat} color={colors.fat} delay={320} />
+            {/* The screen's ONE red hero block: kcal count-up + macro
+                fraction stats, all in black ink (brief §2/§7). */}
+            <View style={styles.targetsBlock}>
+              <CountUpStat label="Calories" value={targets.kcal} unit="kcal / day" onBlock />
+              <View style={styles.macroRow}>
+                <FractionStat label="Protein" value={targets.protein} total="g" onBlock />
+                <FractionStat label="Carbs" value={targets.carbs} total="g" onBlock />
+                <FractionStat label="Fat" value={targets.fat} total="g" onBlock />
+              </View>
             </View>
             <AppText variant="caption" style={styles.gmMethodNote}>
               Starting targets by the GM Method. Gold adapts them to your weekly trend.
@@ -381,7 +394,14 @@ export function OnboardingWizard() {
           ) : (
             <View style={styles.backSpacer} />
           )}
-          <ProgressSegments step={step} total={TOTAL_STEPS} />
+          {/* Step indicator: one thin red bar sweeping toward done (brief §7).
+              ProgressBar owns the 500ms expo-out sweep + reduced-motion snap. */}
+          <ProgressBar
+            value={step / TOTAL_STEPS}
+            height={8}
+            accessibilityLabel={`Step ${step} of ${TOTAL_STEPS}`}
+            style={styles.progress}
+          />
           <View style={styles.backSpacer} />
         </View>
 
@@ -408,6 +428,11 @@ export function OnboardingWizard() {
         {/* Footer: OUTSIDE the scroll — always visible. */}
         {OPTION_STEPS.has(step) ? null : (
           <View style={styles.footer}>
+            {finishError ? (
+              <AppText variant="caption" color={colors.error} style={styles.finishError}>
+                {finishError}
+              </AppText>
+            ) : null}
             <Button label={footerLabel} onPress={footerAction} loading={finishing} />
           </View>
         )}
@@ -435,25 +460,43 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   backSpacer: { width: touch.min, height: touch.min },
+  progress: { flex: 1 },
   scrollContent: { paddingBottom: spacing.xl },
   // lg bottom so the button clears the viewport edge even at insets=0 (web).
   footer: { paddingTop: spacing.md, paddingBottom: spacing.lg },
+  finishError: { marginBottom: spacing.sm, textAlign: 'center' },
 
   cards: { gap: spacing.md },
-  stepperWrap: { alignItems: 'center', marginTop: spacing.lg },
-
-  macroBlock: {
+  // Number steps: the big Oswald stepper sits centered in its own charcoal
+  // block — flat fill, chunky corners, no border (block language).
+  stepperWrap: {
+    alignItems: 'center',
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
+    borderRadius: radius.block,
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.gutter,
+    marginTop: spacing.xs,
+  },
+
+  // Red hero block for the final targets reveal (brief §11b anatomy).
+  targetsBlock: {
+    backgroundColor: colors.blockRed,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     gap: spacing.lg,
-    marginTop: spacing.xl,
+  },
+  // Wraps so three 56px Oswald numbers never clip at large font scales.
+  macroRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: spacing.xl,
+    rowGap: spacing.md,
   },
   gmMethodNote: { marginTop: spacing.md },
   planBlock: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.xl,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     marginTop: spacing.lg,
   },
   planName: { marginTop: spacing.xs },

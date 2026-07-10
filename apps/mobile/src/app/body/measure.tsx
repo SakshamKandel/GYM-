@@ -3,8 +3,8 @@ import { router } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import type { Measurement, UnitPref } from '@gym/shared';
-import { spacing } from '@gym/ui-tokens';
-import { AppText, Button, Divider, enterDown, enterUp, Screen, Stepper } from '../../components/ui';
+import { colors, radius, spacing } from '@gym/ui-tokens';
+import { AppText, Button, enterDown, enterUp, Screen, Stepper, Tag } from '../../components/ui';
 import { posterDate, todayIso } from '../../lib/dates';
 import { successHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
@@ -34,18 +34,36 @@ const LENGTH_RANGE: Record<UnitPref, { min: number; max: number }> = {
  * fields you actually change get saved — the rest stay null on the entry.
  * Values are shown and edited in the user's unit (cm or inches) but ALWAYS
  * stored as canonical cm, mirroring how weight stores kg.
+ *
+ * Revamp layout (REVAMP-BRIEF): date eyebrow → big Oswald title → stack of
+ * charcoal rounded rows (field name + dim unit chip + stepper), gaps instead
+ * of Divider hairlines (§11c) → red save pill.
  */
 
 type Values = Record<MeasurementKey, number>;
 
 const styles = StyleSheet.create({
-  headingWrap: { marginBottom: spacing.lg },
+  headingWrap: { marginBottom: spacing.lg, gap: spacing.sm },
+  title: { textTransform: 'uppercase' },
+  // Rounded charcoal rows separated by gaps — no hairlines in the block look.
+  rows: { gap: spacing.sm },
   fieldRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    minHeight: 64,
+  },
+  fieldInfo: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
   hint: { marginTop: spacing.lg, marginBottom: spacing.md },
 });
@@ -56,6 +74,7 @@ export default function MeasureScreen() {
   const [baseline, setBaseline] = useState<Values | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   // Clear the auto-pop timer if we leave first (hardware/swipe back) so it can't
   // fire router.back() on an already-popped screen and pop one screen too many.
   const popTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -93,6 +112,7 @@ export default function MeasureScreen() {
   async function save(): Promise<void> {
     if (values === null || changedKeys.length === 0 || saving || saved) return;
     setSaving(true);
+    setError(null);
     const changed = new Set<MeasurementKey>(changedKeys);
     // Steppers run in the display unit — convert back to canonical cm here.
     const toCm = (key: MeasurementKey): number | null =>
@@ -106,39 +126,53 @@ export default function MeasureScreen() {
       hipCm: toCm('hipCm'),
       thighCm: toCm('thighCm'),
     };
-    const repo = await getRepo();
-    await repo.addMeasurement(entry);
+    try {
+      const repo = await getRepo();
+      await repo.addMeasurement(entry);
+    } catch {
+      setSaving(false);
+      setError("Couldn't save your measurements — try again.");
+      return;
+    }
     successHaptic();
     setSaved(true);
     popTimer.current = setTimeout(() => router.back(), SAVE_CONFIRM_MS);
   }
+
+  const unitChip = unitPref === 'kg' ? 'cm' : 'in';
 
   return (
     <Screen scroll>
       {saved ? null : <BackHeader />}
       <Animated.View entering={enterDown(1)} style={styles.headingWrap}>
         <AppText variant="label">{posterDate()}</AppText>
-        <AppText variant="heading">Measurements</AppText>
+        <AppText variant="display" style={styles.title}>
+          Measurements
+        </AppText>
       </Animated.View>
 
       {values !== null ? (
         <>
-          {MEASUREMENT_FIELDS.map(({ key, label }, i) => (
-            <Animated.View key={key} entering={enterUp(Math.min(i + 1, 8))}>
-              {i > 0 ? <Divider /> : null}
-              <View style={styles.fieldRow}>
-                <AppText variant="bodyBold">{label}</AppText>
-                <Stepper
-                  value={values[key]}
-                  onChange={(next) => setValues({ ...values, [key]: next })}
-                  step={0.5}
-                  min={LENGTH_RANGE[unitPref].min}
-                  max={LENGTH_RANGE[unitPref].max}
-                  format={(v) => v.toFixed(1)}
-                />
-              </View>
-            </Animated.View>
-          ))}
+          <View style={styles.rows}>
+            {MEASUREMENT_FIELDS.map(({ key, label }, i) => (
+              <Animated.View key={key} entering={enterUp(Math.min(i + 1, 8))}>
+                <View style={styles.fieldRow}>
+                  <View style={styles.fieldInfo}>
+                    <AppText variant="bodyBold">{label}</AppText>
+                    <Tag variant="dim" label={unitChip} />
+                  </View>
+                  <Stepper
+                    value={values[key]}
+                    onChange={(next) => setValues({ ...values, [key]: next })}
+                    step={0.5}
+                    min={LENGTH_RANGE[unitPref].min}
+                    max={LENGTH_RANGE[unitPref].max}
+                    format={(v) => v.toFixed(1)}
+                  />
+                </View>
+              </Animated.View>
+            ))}
+          </View>
 
           <Animated.View entering={enterUp(Math.min(MEASUREMENT_FIELDS.length + 1, 8))}>
             {saved ? (
@@ -150,6 +184,11 @@ export default function MeasureScreen() {
                     unitPref === 'kg' ? 'cm' : 'inches'
                   }.`}
                 </AppText>
+                {error !== null ? (
+                  <AppText variant="caption" color={colors.error} style={styles.hint}>
+                    {error}
+                  </AppText>
+                ) : null}
                 <Button
                   label="Save"
                   onPress={() => void save()}

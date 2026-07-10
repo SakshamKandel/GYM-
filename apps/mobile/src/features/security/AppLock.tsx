@@ -6,6 +6,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { Image } from 'expo-image';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
+import { AppStartupScreen } from '../../components/experience/AppStartupScreen';
 import { AppText, PressableScale, enterUp } from '../../components/ui';
 import { useSecurity } from '../../state/security';
 
@@ -64,9 +65,16 @@ export function AppLock({ children }: { children: ReactNode }) {
   const enabled = useSecurity((s) => s.biometricLock);
   const native = Platform.OS !== 'web';
   const [hydrated, setHydrated] = useState(() => useSecurity.persist.hasHydrated());
-  const [locked, setLocked] = useState(false);
+  // Lock BEFORE first paint when the lock could be on — MMKV reads are
+  // synchronous, so the persisted preference is already available here. Waiting
+  // for the post-paint arm effect would flash a frame of protected content.
+  const [locked, setLocked] = useState(() => native && useSecurity.getState().biometricLock);
   const [prompting, setPrompting] = useState(false);
   const armed = useRef(false);
+  // Mirror `locked` into a ref so the AppState listener (which we don't want to
+  // re-subscribe on every lock toggle) always sees the current value.
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
 
   useEffect(() => {
     if (hydrated) return;
@@ -99,19 +107,24 @@ export function AppLock({ children }: { children: ReactNode }) {
     }
   }, [hydrated, native, enabled, tryUnlock]);
 
-  // Re-lock when the app is backgrounded.
+  // Re-lock when the app leaves the foreground and re-prompt when it returns.
+  // 'inactive' (not just 'background') covers the app-switcher snapshot so the
+  // unlocked content is masked there; 'active' auto-fires the biometric prompt.
   useEffect(() => {
     if (!native) return;
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'background' && useSecurity.getState().biometricLock) {
+      if (!useSecurity.getState().biometricLock) return;
+      if (state === 'inactive' || state === 'background') {
         setLocked(true);
+      } else if (state === 'active' && lockedRef.current) {
+        void tryUnlock();
       }
     });
     return () => sub.remove();
-  }, [native]);
+  }, [native, tryUnlock]);
 
   if (!native) return <>{children}</>;
-  if (!hydrated) return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
+  if (!hydrated) return <AppStartupScreen message="Checking app security" />;
   if (!locked) return <>{children}</>;
 
   return (

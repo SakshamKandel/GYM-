@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import type { BadgeProgressStats } from '@gym/shared';
 import { getAwardedBadges, toGamificationError, type AwardedBadge } from '../../lib/api/badges';
 import { mmkvStorage } from '../../lib/mmkvStorage';
 import { useAuth } from '../../state/auth';
@@ -25,6 +26,9 @@ interface GamificationBadgesState {
   accountId: string | null;
   badges: AwardedBadge[];
   challengeTitles: Record<string, string>;
+  /** Own badge-progress stats (locked-tile progress bars) — null until the
+   * first successful hydrate against a stats-capable server. */
+  stats: BadgeProgressStats | null;
   /** Badge ids earned since the last hydrate the UI hasn't acknowledged yet. */
   newlyEarnedIds: string[];
   /**
@@ -47,6 +51,7 @@ export const useGamificationBadges = create<GamificationBadgesState>()(
       accountId: null,
       badges: [],
       challengeTitles: {},
+      stats: null,
       newlyEarnedIds: [],
       hasHydratedOnce: false,
 
@@ -61,6 +66,7 @@ export const useGamificationBadges = create<GamificationBadgesState>()(
             accountId: auth.user.id,
             badges: [],
             challengeTitles: {},
+            stats: null,
             newlyEarnedIds: [],
             hasHydratedOnce: false,
           });
@@ -68,6 +74,18 @@ export const useGamificationBadges = create<GamificationBadgesState>()(
 
         try {
           const result = await getAwardedBadges(auth.token);
+          // The account changed while getAwardedBadges() was in flight (sign-out
+          // or switch) — a late response must not write one member's badges into
+          // another's store (nor seed a spurious earned-diff). Mirrors auth.ts
+          // refresh()'s token-recheck guard.
+          const cur = useAuth.getState();
+          if (
+            cur.status !== 'signedIn' ||
+            cur.user?.id !== auth.user.id ||
+            get().accountId !== auth.user.id
+          ) {
+            return;
+          }
           const { badges: prevBadges, hasHydratedOnce } = get();
           const prevIds = new Set(prevBadges.map((b) => b.badgeId));
           const freshIds = result.badges.map((b) => b.badgeId);
@@ -81,13 +99,22 @@ export const useGamificationBadges = create<GamificationBadgesState>()(
           set((state) => ({
             badges: result.badges,
             challengeTitles: result.challengeTitles,
+            // Keep the last known stats when an older server omits them —
+            // a cached progress bar beats a vanished one.
+            stats: result.stats ?? state.stats,
             hasHydratedOnce: true,
             // Accumulate rather than overwrite: if the screen hasn't cleared
             // the previous batch yet, don't drop it mid-celebration.
             newlyEarnedIds: [...new Set([...state.newlyEarnedIds, ...newlyEarned])],
           }));
         } catch (err) {
-          toGamificationError(err); // swallow — cached badges stand alone offline
+          // A 401 means the cached session may be dead — hand it to the auth
+          // store's guarded refresh (health-probe-gated, stale-token safe) so
+          // the app recovers instead of silently serving stale data forever.
+          if (toGamificationError(err).code === 'unauthorized') {
+            void useAuth.getState().refresh();
+          }
+          // Otherwise swallow — cached badges stand alone offline.
         }
       },
 
@@ -101,6 +128,7 @@ export const useGamificationBadges = create<GamificationBadgesState>()(
         accountId: s.accountId,
         badges: s.badges,
         challengeTitles: s.challengeTitles,
+        stats: s.stats,
         hasHydratedOnce: s.hasHydratedOnce,
       }),
     },

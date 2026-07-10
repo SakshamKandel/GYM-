@@ -5,6 +5,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { greeceCoachReply } from '@/lib/groqCoach';
 import { json, preflight, readJson } from '@/lib/http';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -75,6 +76,16 @@ export async function POST(req: Request) {
   if (!token) return json({ error: 'unauthorized' }, 401);
   const user = await userForToken(token);
   if (!user) return json({ error: 'unauthorized' }, 401);
+
+  // Each send can trigger a Groq completion — 10/min/account caps the spend.
+  const limited = rateLimit({
+    route: 'coach/messages',
+    limit: 10,
+    windowMs: 60_000,
+    accountId: user.id,
+    ip: clientIp(req),
+  });
+  if (limited) return limited;
 
   // Sending is the Elite promise made real — gate it server-side (client
   // checks are UI-only, PROJECT_PLAN §8).

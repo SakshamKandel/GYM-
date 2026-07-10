@@ -91,6 +91,16 @@ export interface Repo {
   getWaterMl(date: string): Promise<number>;
   addWater(date: string, deltaMl: number): Promise<number>;
 
+  // ── Steps ───────────────────────────────────────────────────
+  /** Step count for a date (yyyy-mm-dd); 0 when nothing logged. */
+  getSteps(date: string): Promise<number>;
+  /** Absolute overwrite of a day's steps (iOS full-day pedometer query). */
+  setSteps(date: string, steps: number): Promise<void>;
+  /** Increment a day's steps (Android watch deltas, manual adds); returns the new total. */
+  addSteps(date: string, delta: number): Promise<number>;
+  /** Logged days within [startDate, endDate], ascending by date; missing days omitted. */
+  getStepsBetween(startDate: string, endDate: string): Promise<Array<{ date: string; steps: number }>>;
+
   // ── Streak ──────────────────────────────────────────────────
   getStreak(): Promise<Streak>;
   setStreak(s: Streak): Promise<void>;

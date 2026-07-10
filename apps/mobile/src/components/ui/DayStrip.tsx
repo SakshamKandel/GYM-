@@ -6,8 +6,9 @@ import { AppText } from './AppText';
 import { PressableScale } from './PressableScale';
 
 /**
- * Horizontal day selector (reference: 21 Mon · 22 Tue · [23 Wed] · …).
- * Selected day = raised block. A red dot marks days with activity.
+ * Horizontal day selector (revamp): pill-shaped day cells; the selected day
+ * is a solid signal-red pill with BLACK text (block language). A red dot
+ * marks days with activity — it flips to black on the selected red pill.
  */
 interface Props {
   selected: string; // ISO date
@@ -21,14 +22,14 @@ interface Props {
 const styles = StyleSheet.create({
   row: { gap: spacing.sm, paddingVertical: spacing.xs },
   cell: {
-    width: 64,
+    width: 56,
     height: 84,
-    borderRadius: radius.md,
+    borderRadius: radius.full,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 2,
   },
-  cellSelected: { backgroundColor: colors.surfaceRaised },
+  cellSelected: { backgroundColor: colors.accent },
   dotSlot: { height: 8, justifyContent: 'center' },
   dot: {
     width: 6,
@@ -36,6 +37,7 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     backgroundColor: colors.accent,
   },
+  dotSelected: { backgroundColor: colors.onBlock },
 });
 
 export function DayStrip({
@@ -79,14 +81,27 @@ export function DayStrip({
             style={[styles.cell, isSelected && styles.cellSelected]}
           >
             <View style={styles.dotSlot}>
-              {markedDates?.has(date) ? <View style={styles.dot} /> : null}
+              {markedDates?.has(date) ? (
+                <View style={[styles.dot, isSelected && styles.dotSelected]} />
+              ) : null}
             </View>
-            <AppText variant="display" style={{ fontSize: 26, lineHeight: 32 }} tabular>
+            <AppText
+              variant="display"
+              color={isSelected ? colors.onBlock : colors.text}
+              style={{ fontSize: 26, lineHeight: 32 }}
+              tabular
+            >
               {date.slice(8)}
             </AppText>
             <AppText
               variant="caption"
-              color={isToday ? colors.accent : isSelected ? colors.text : colors.textDim}
+              color={
+                isSelected
+                  ? colors.onBlock
+                  : isToday
+                    ? colors.accent
+                    : colors.textDim
+              }
             >
               {dayLabel(date).charAt(0) + dayLabel(date).slice(1).toLowerCase()}
             </AppText>
