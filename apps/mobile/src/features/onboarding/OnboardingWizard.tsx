@@ -1,5 +1,4 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
@@ -27,6 +26,7 @@ import {
 import { todayIso } from '../../lib/dates';
 import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
+import { resetStackTo } from '../../lib/nav';
 import { syncProfileNow } from '../../lib/profileSync';
 import { getRepo } from '../../lib/repo';
 import { getPlan } from '../../lib/seed/plans';
@@ -191,7 +191,9 @@ export function OnboardingWizard() {
       // signed out; the next sign-in backs it up.
       syncProfileNow();
       successHaptic();
-      router.replace('/');
+      // Reset the WHOLE stack: a plain replace left Welcome underneath, so
+      // Android back from the fresh dashboard reopened "Get started".
+      resetStackTo('/');
     } catch {
       // Persistence failed — leave the user on this screen with a clear retry
       // path instead of a silently re-enabled button.

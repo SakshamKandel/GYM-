@@ -8,11 +8,11 @@ import {
 } from '@react-native-google-signin/google-signin';
 import { colors } from '@gym/ui-tokens';
 import { AppText, enterFade } from '../../../components/ui';
-import { toApiError } from '../../../lib/api/client';
+import { ApiError, toApiError } from '../../../lib/api/client';
 import { successHaptic, warnHaptic } from '../../../lib/haptics';
 import { useAuth } from '../../../state/auth';
 import { enterApp } from '../nav';
-import { describeGoogleError, GooglePill, googleStyles } from './googleShared';
+import { describeGoogleError, GoogleLinkPrompt, GooglePill, googleStyles } from './googleShared';
 
 /**
  * Native Google sign-in (Android/iOS) via the platform Google SDK — the
@@ -62,16 +62,20 @@ export function NativeGoogleSignIn({ webClientId }: { webClientId: string }) {
   const signInWithGoogle = useAuth((s) => s.signInWithGoogle);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The Google ID token held while the link-password prompt is open (409
+  // link_required: the email already has a password account).
+  const [linkToken, setLinkToken] = useState<string | null>(null);
 
   async function press(): Promise<void> {
     if (busy) return;
     setBusy(true);
     setError(null);
+    setLinkToken(null);
+    let idToken: string | null = null;
     try {
       ensureConfigured(webClientId);
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
-      const result = await GoogleSignin.signIn();
-      const idToken = extractIdToken(result);
+      idToken = extractIdToken(await GoogleSignin.signIn());
       if (!idToken) {
         // User closed the account picker — stay quiet.
         return;
@@ -83,6 +87,20 @@ export function NativeGoogleSignIn({ webClientId }: { webClientId: string }) {
       enterApp();
     } catch (err) {
       warnHaptic();
+      // Our own API errors FIRST: ApiError extends Error and carries a `code`
+      // property, so the SDK's isErrorWithCode() matches it too — checking the
+      // SDK branch first swallowed every server error (link_required included)
+      // as "Google setup mismatch" on native.
+      if (err instanceof ApiError) {
+        if (err.code === 'link_required' && idToken) {
+          // Same email, existing password account — ask for that password to
+          // link Google onto it instead of surfacing an error.
+          setLinkToken(idToken);
+          return;
+        }
+        setError(describeGoogleError(err.code));
+        return;
+      }
       if (isErrorWithCode(err)) {
         if (err.code === statusCodes.SIGN_IN_CANCELLED) return;
         if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
@@ -109,6 +127,9 @@ export function NativeGoogleSignIn({ webClientId }: { webClientId: string }) {
             {error}
           </AppText>
         </Animated.View>
+      ) : null}
+      {linkToken ? (
+        <GoogleLinkPrompt idToken={linkToken} onCancel={() => setLinkToken(null)} />
       ) : null}
     </View>
   );

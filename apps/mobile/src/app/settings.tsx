@@ -41,6 +41,7 @@ import {
   scheduleWorkoutReminders,
 } from '../lib/notifications';
 import { deleteAccount, logoutAll, toApiError } from '../lib/api/client';
+import { resetStackTo } from '../lib/nav';
 import { patchWeeklyTarget, toGamificationError } from '../lib/api/gamification';
 import { getPublicLeaderboard, setPublicBoardHidden } from '../lib/api/social';
 import { getRepo } from '../lib/repo';
@@ -745,7 +746,9 @@ export default function SettingsScreen() {
     setDeleteStep('idle');
     setDeleteText('');
     await signOut(); // never throws; clears local account state
-    router.replace('/welcome');
+    // Whole-stack reset: back from the front door must not reopen the
+    // deleted account's dashboard sitting underneath.
+    resetStackTo('/welcome');
   }
 
   const recalcKg = latestKg ?? startWeightKg;

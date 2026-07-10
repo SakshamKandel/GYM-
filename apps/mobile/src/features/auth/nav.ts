@@ -1,6 +1,7 @@
 import { router, type Href } from 'expo-router';
+import { resetStackTo } from '../../lib/nav';
 import { useAuth } from '../../state/auth';
-import { replaceStaff, STAFF_ROUTES } from '../staff/nav';
+import { STAFF_ROUTES } from '../staff/nav';
 
 /**
  * Typed-routes escape hatch (same pattern as features/training/nav.ts).
@@ -24,11 +25,11 @@ export function replacePath(path: string): void {
  * settled here. EVERY sign-in flow (email form AND both Google buttons) must
  * route through this — a bare router.replace('/') bounced staff accounts to
  * /welcome, which read as "login did nothing".
+ *
+ * Resets the WHOLE stack (not just the top route): plain replace left the
+ * Welcome poster underneath, so Android back from the dashboard reopened
+ * "Get started" right after signing in.
  */
 export function enterApp(): void {
-  if (useAuth.getState().staffRole !== null) {
-    replaceStaff(STAFF_ROUTES.hub);
-    return;
-  }
-  router.replace('/');
+  resetStackTo(useAuth.getState().staffRole !== null ? STAFF_ROUTES.hub : '/');
 }
