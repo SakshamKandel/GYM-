@@ -4,7 +4,7 @@ A coach-brandable fitness app — workout logging, calorie & macro tracking, and
 
 > Full product spec: [PROJECT_PLAN.md](PROJECT_PLAN.md) · Engineering rules: [CLAUDE.md](CLAUDE.md) · UI language: [apps/mobile/DESIGN-BRIEF.md](apps/mobile/DESIGN-BRIEF.md)
 
-## Monorepo
+## Monorepo Structure
 
 ```
 apps/
