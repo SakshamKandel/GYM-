@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useFocusEffect } from 'expo-router';
 import { displayWeight, inputToKg, unitLabel } from '@gym/shared';
-import { colors, radius, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
   AppTextInput,
@@ -63,18 +63,20 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   optionRow: { flexDirection: 'row', gap: spacing.sm },
+  // Scale chips follow the interactive-chip spec (brief §6): outlined pill on
+  // dark, selected = solid red fill with BLACK label. ≥48dp tap target.
   option: {
     flex: 1,
-    height: 44,
+    minHeight: touch.min,
     borderRadius: radius.full,
     borderWidth: 1.5,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
   optionSelected: {
     borderColor: colors.accent,
-    backgroundColor: colors.surfaceRaised,
+    backgroundColor: colors.accent,
   },
   note: {
     minHeight: 80,
@@ -124,7 +126,7 @@ function ScaleRow({
               }}
               style={[styles.option, selected && styles.optionSelected]}
             >
-              <AppText variant="bodyBold" color={selected ? colors.text : colors.textDim}>
+              <AppText variant="bodyBold" color={selected ? colors.onBlock : colors.textDim}>
                 {v}
               </AppText>
             </PressableScale>
@@ -223,7 +225,7 @@ export function CheckInCard({ stagger = 0 }: { stagger?: number }) {
   if (phase === 'done') {
     return (
       <Animated.View entering={enterUp(stagger)} style={styles.wrap}>
-        <HeroCard mascot>
+        <HeroCard mascot variant="charcoal">
           <AppText variant="label">Weekly check-in</AppText>
           <AppText variant="title">Sent to your coach</AppText>
           <AppText variant="caption">The reply will show up right here.</AppText>
@@ -239,7 +241,7 @@ export function CheckInCard({ stagger = 0 }: { stagger?: number }) {
     if (coachReply === null) return null;
     return (
       <Animated.View entering={enterUp(stagger)} style={styles.wrap}>
-        <HeroCard mascot>
+        <HeroCard mascot variant="charcoal">
           <AppText variant="label">Coach reply</AppText>
           <AppText variant="body" style={styles.replyBody}>
             {coachReply.body}
@@ -256,7 +258,7 @@ export function CheckInCard({ stagger = 0 }: { stagger?: number }) {
     const allAnswered = sleep !== null && energy !== null && soreness !== null;
     return (
       <Animated.View entering={enterUp(stagger)} style={styles.wrap}>
-        <HeroCard>
+        <HeroCard variant="charcoal">
           <AppText variant="label">Weekly check-in</AppText>
           <Animated.View entering={enterFade(0)} style={styles.form}>
             {summary !== null ? (
@@ -306,7 +308,7 @@ export function CheckInCard({ stagger = 0 }: { stagger?: number }) {
   // Due — a quiet prompt; the form only opens on demand.
   return (
     <Animated.View entering={enterUp(stagger)} style={styles.wrap}>
-      <HeroCard>
+      <HeroCard variant="charcoal">
         <AppText variant="label">Weekly check-in</AppText>
         <AppText variant="title">How was your week?</AppText>
         <AppText variant="caption">

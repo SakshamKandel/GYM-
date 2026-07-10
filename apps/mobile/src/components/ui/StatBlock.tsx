@@ -3,8 +3,10 @@ import { colors } from '@gym/ui-tokens';
 import { AppText } from './AppText';
 
 /**
- * The signature stat unit: uppercase micro-label above a big Bebas number
- * with a small unit suffix. Lime only when the value is "achieved/current".
+ * The signature stat unit: uppercase Oswald eyebrow above a big condensed
+ * number with a small dim unit suffix (brief §7: big numbers always get an
+ * eyebrow label). Red only when the value is "achieved/current". Inline —
+ * it lives INSIDE blocks/rows, so it stays fill-free.
  */
 interface Props {
   label: string;

@@ -1,10 +1,43 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { accounts, admins, sessions } from '@gym/db';
 import { type StaffRole, effectiveTier } from '@gym/shared';
-import { and, eq, gt } from 'drizzle-orm';
+import { and, eq, gt, lt } from 'drizzle-orm';
 import { getDb } from './db';
 
 const SESSION_DAYS = 30;
+
+/**
+ * The sessions table stores only a SHA-256 hash of the bearer token, never the
+ * token itself. The plaintext is handed to the client once (in createSession)
+ * and re-hashed on every request before the lookup — so a read-only leak of the
+ * sessions table (SQL-injection read, stale backup, compromised replica) yields
+ * only hashes, which are useless as `Authorization: Bearer <token>`.
+ */
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+/**
+ * Session hygiene: expired rows are invisible to the auth queries below (they
+ * filter on expires_at > now) but pile up forever. Opportunistically sweep
+ * them at most once per instance per hour — fire-and-forget, so the sweep can
+ * never add latency or failure to an auth call.
+ */
+const SESSION_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+let lastSessionPruneAt = 0;
+
+function maybePruneExpiredSessions(): void {
+  const now = Date.now();
+  if (now - lastSessionPruneAt < SESSION_PRUNE_INTERVAL_MS) return;
+  lastSessionPruneAt = now;
+  void getDb()
+    .delete(sessions)
+    .where(lt(sessions.expiresAt, new Date(now)))
+    .then(
+      () => undefined,
+      () => undefined, // best-effort — next hour's sweep retries
+    );
+}
 
 export interface PublicUser {
   id: string;
@@ -27,7 +60,9 @@ export interface StaffPrincipal {
 export async function createSession(accountId: string): Promise<string> {
   const token = randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
-  await getDb().insert(sessions).values({ token, accountId, expiresAt });
+  await getDb()
+    .insert(sessions)
+    .values({ token: hashToken(token), accountId, expiresAt });
   return token;
 }
 
@@ -48,6 +83,8 @@ export function bearerToken(req: Request): string | null {
  * route that gates on user.tier sees the lapsed value automatically.
  */
 export async function userForToken(token: string): Promise<PublicUser | null> {
+  maybePruneExpiredSessions();
+  const tokenHash = hashToken(token);
   const rows = await getDb()
     .select({
       id: accounts.id,
@@ -60,7 +97,7 @@ export async function userForToken(token: string): Promise<PublicUser | null> {
     .innerJoin(accounts, eq(sessions.accountId, accounts.id))
     .where(
       and(
-        eq(sessions.token, token),
+        eq(sessions.token, tokenHash),
         gt(sessions.expiresAt, new Date()),
         eq(accounts.status, 'active'),
       ),
@@ -78,6 +115,8 @@ export async function userForToken(token: string): Promise<PublicUser | null> {
  * mirrors userForToken's PublicUser.
  */
 export async function staffForToken(token: string): Promise<StaffPrincipal | null> {
+  maybePruneExpiredSessions();
+  const tokenHash = hashToken(token);
   const rows = await getDb()
     .select({
       id: accounts.id,
@@ -92,7 +131,7 @@ export async function staffForToken(token: string): Promise<StaffPrincipal | nul
     .innerJoin(admins, eq(admins.accountId, accounts.id))
     .where(
       and(
-        eq(sessions.token, token),
+        eq(sessions.token, tokenHash),
         gt(sessions.expiresAt, new Date()),
         eq(accounts.status, 'active'),
       ),
@@ -113,5 +152,5 @@ export async function staffForToken(token: string): Promise<StaffPrincipal | nul
 }
 
 export async function deleteSession(token: string): Promise<void> {
-  await getDb().delete(sessions).where(eq(sessions.token, token));
+  await getDb().delete(sessions).where(eq(sessions.token, hashToken(token)));
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -14,7 +14,6 @@ import type { FoodItem } from '@gym/shared';
 import {
   AppText,
   AppTextInput,
-  Divider,
   enterDown,
   enterFade,
   enterUp,
@@ -48,11 +47,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   inputWrap: { flex: 1, justifyContent: 'center' },
+  // Full-pill search field (block language): 56dp, filled, no fixed height so
+  // large font scales never clip.
   input: {
-    minHeight: touch.min,
-    height: touch.min,
+    minHeight: touch.primary,
     borderRadius: radius.full,
-    paddingLeft: spacing.lg,
+    paddingLeft: spacing.gutter,
     // Room for the clear button so long queries never run under it.
     paddingRight: 44,
   },
@@ -60,6 +60,8 @@ const styles = StyleSheet.create({
   clearBtn: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   list: { flex: 1 },
   listContent: { paddingBottom: spacing.xxl },
+  // Rounded charcoal rows separated by gaps — replaces Divider hairlines.
+  rows: { gap: spacing.sm },
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -72,6 +74,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     minHeight: touch.min,
+    paddingHorizontal: spacing.lg,
+    marginTop: spacing.md,
   },
 });
 
@@ -84,6 +88,13 @@ export default function FoodSearchScreen() {
   const trimmed = query.trim();
   const searching = trimmed.length >= 2;
   const { local, remote, loading, error } = useFoodSearch(query);
+  // Mirror useFoodSearch's 350ms debounce so the empty state can't flash before
+  // the query has actually been dispatched to the search hook.
+  const [queried, setQueried] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setQueried(trimmed), 350);
+    return () => clearTimeout(t);
+  }, [trimmed]);
   const { recent, loaded: recentLoaded } = useRecentFoods(12);
   const [saving, setSaving] = useState(false);
 
@@ -177,12 +188,13 @@ export default function FoodSearchScreen() {
             {local.length > 0 ? (
               <>
                 <SectionLabel>My foods</SectionLabel>
-                {local.map((item, i) => (
-                  <Animated.View key={item.id} entering={enterUp(0)} layout={layoutSpring}>
-                    {i > 0 ? <Divider /> : null}
-                    <FoodRow item={item} onPress={(f) => void pick(f)} />
-                  </Animated.View>
-                ))}
+                <View style={styles.rows}>
+                  {local.map((item) => (
+                    <Animated.View key={item.id} entering={enterUp(0)} layout={layoutSpring}>
+                      <FoodRow item={item} onPress={(f) => void pick(f)} />
+                    </Animated.View>
+                  ))}
+                </View>
               </>
             ) : null}
             <SectionLabel>Results</SectionLabel>
@@ -201,20 +213,20 @@ export default function FoodSearchScreen() {
                 </AppText>
               </View>
             ) : null}
-            {!loading && !error && remote.length === 0 && local.length === 0 ? (
+            {queried === trimmed && !loading && !error && remote.length === 0 && local.length === 0 ? (
               <View style={styles.statusRow}>
                 <AppText variant="caption" color={colors.textDim}>
                   No matches — try a simpler name
                 </AppText>
               </View>
             ) : null}
-            {remote.map((item, i) => (
-              <Animated.View key={item.id} entering={enterUp(0)} layout={layoutSpring}>
-                {i > 0 ? <Divider /> : null}
-                <FoodRow item={item} onPress={(f) => void pick(f)} />
-              </Animated.View>
-            ))}
-            <Divider />
+            <View style={styles.rows}>
+              {remote.map((item) => (
+                <Animated.View key={item.id} entering={enterUp(0)} layout={layoutSpring}>
+                  <FoodRow item={item} onPress={(f) => void pick(f)} />
+                </Animated.View>
+              ))}
+            </View>
             {customRow}
           </Animated.View>
         ) : (
@@ -225,13 +237,17 @@ export default function FoodSearchScreen() {
                 Foods you log will appear here
               </AppText>
             ) : null}
-            {recent.map((item, i) => (
-              <Animated.View key={item.id} entering={enterUp(Math.min(i, 6))} layout={layoutSpring}>
-                {i > 0 ? <Divider /> : null}
-                <FoodRow item={item} onPress={(f) => void pick(f)} />
-              </Animated.View>
-            ))}
-            <Divider />
+            <View style={styles.rows}>
+              {recent.map((item, i) => (
+                <Animated.View
+                  key={item.id}
+                  entering={enterUp(Math.min(i, 6))}
+                  layout={layoutSpring}
+                >
+                  <FoodRow item={item} onPress={(f) => void pick(f)} />
+                </Animated.View>
+              ))}
+            </View>
             {customRow}
           </Animated.View>
         )}

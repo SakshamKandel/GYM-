@@ -3,17 +3,17 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router } from 'expo-router';
 import { hasEntitlement } from '@gym/shared';
-import { colors, radius, spacing, type } from '@gym/ui-tokens';
+import { colors, spacing, type } from '@gym/ui-tokens';
 import {
   AppText,
+  Card,
   enterUp,
-  PressableScale,
   SectionLabel,
   UpgradePrompt,
 } from '../../components/ui';
 import { todayIso } from '../../lib/dates';
 import { getRepo } from '../../lib/repo';
-import { useProfile } from '../../state/profile';
+import { useEffectiveTier } from '../../lib/tier';
 import { defaultMealForHour, type DayTotals } from './logic';
 import { portionHref } from './nav';
 import { suggestFoods, type FoodSuggestion } from './suggestions';
@@ -23,6 +23,9 @@ import { suggestFoods, type FoodSuggestion } from './suggestions';
  * Renders on the Food tab for TODAY only; below Gold it sells the feature.
  * Tap a card → the food is saved locally and the portion screen opens,
  * so logging a pick is two taps.
+ *
+ * Block language: a horizontal rail of cream mini-blocks — black ink on
+ * `blockCream`, secondary text `creamDim`, Oswald kcal (brief §2/§11).
  */
 
 interface Props {
@@ -36,15 +39,12 @@ const styles = StyleSheet.create({
   row: { gap: spacing.md },
   card: {
     width: 200,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
     gap: spacing.sm,
     justifyContent: 'space-between',
     flexGrow: 1,
   },
-  kcalRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
-  kcal: { fontFamily: type.display, fontSize: 24, lineHeight: 28, color: colors.text },
+  kcalRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs },
+  kcal: { fontFamily: type.display, fontSize: 24, lineHeight: 28, color: colors.onBlock },
 });
 
 function portionText(s: FoodSuggestion): string {
@@ -61,7 +61,7 @@ function logSuggestion(s: FoodSuggestion, date: string): void {
 }
 
 export function SuggestionsSection({ remaining, date }: Props) {
-  const tier = useProfile((s) => s.tier);
+  const tier = useEffectiveTier();
   const isToday = date === todayIso();
   const unlocked = hasEntitlement({ tier }, 'food_suggestions');
 
@@ -98,30 +98,30 @@ export function SuggestionsSection({ remaining, date }: Props) {
       >
         {suggestions.map((s, i) => (
           <Animated.View key={s.food.id} entering={enterUp(i)}>
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel={`${s.food.name}, ${portionText(s)}, ${s.kcal} calories. Tap to log.`}
+            <Card
+              variant="cream"
               onPress={() => logSuggestion(s, date)}
+              accessibilityLabel={`${s.food.name}, ${portionText(s)}, ${s.kcal} calories. Tap to log.`}
               style={styles.card}
             >
-              <AppText variant="bodyBold" numberOfLines={2}>
+              <AppText variant="bodyBold" color={colors.onBlock} numberOfLines={2}>
                 {s.food.name}
               </AppText>
-              <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+              <AppText variant="caption" color={colors.creamDim} numberOfLines={1}>
                 {portionText(s)}
               </AppText>
               <View style={styles.kcalRow}>
                 <AppText style={styles.kcal} tabular>
                   {s.kcal}
                 </AppText>
-                <AppText variant="caption" color={colors.textFaint}>
+                <AppText variant="caption" color={colors.creamDim}>
                   kcal
                 </AppText>
               </View>
-              <AppText variant="caption" color={colors.textDim} numberOfLines={2}>
+              <AppText variant="caption" color={colors.creamDim} numberOfLines={2}>
                 {s.line}
               </AppText>
-            </PressableScale>
+            </Card>
           </Animated.View>
         ))}
       </ScrollView>

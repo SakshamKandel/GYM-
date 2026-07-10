@@ -93,6 +93,9 @@ const leaderboardRowSchema = z.object({
   sessionDays: z.number(),
   isMe: z.boolean(),
   tier: tierSchema,
+  // Competition position (ties share) — newer servers only; the component
+  // falls back to computing it client-side from sessionDays.
+  position: z.number().nullable().catch(null),
 });
 
 export type LeaderboardRow = z.infer<typeof leaderboardRowSchema>;
@@ -238,6 +241,10 @@ const publicRowSchema = z.object({
   rank: rankSchema,
   sessionDays: z.number(),
   position: z.number(),
+  // 7-day position movement: positive = climbed, null = new to the board (or
+  // movement not applicable — first week of the month / last-month view).
+  // .catch keeps older servers (no delta field) rendering fine.
+  delta: z.number().nullable().catch(null),
   isMe: z.boolean(),
 });
 
@@ -248,6 +255,8 @@ const publicMeSchema = z.object({
   position: z.number().nullable().catch(null),
   sessionDays: z.number(),
   hidden: z.boolean(),
+  /** Same 7-day movement as row deltas, for the caller's summary card. */
+  delta: z.number().nullable().catch(null),
 });
 
 const publicLeaderboardResultSchema = z.object({
@@ -261,22 +270,44 @@ const publicLeaderboardResultSchema = z.object({
     }),
   ),
   me: publicMeSchema,
+  /** Total members on the board this month — null on older servers. */
+  totalRanked: z.number().nullable().catch(null),
 });
 
 export interface PublicLeaderboardResult {
   month: string;
   rows: PublicLeaderboardRow[];
   me: z.infer<typeof publicMeSchema>;
+  totalRanked: number | null;
+}
+
+/** Scope for the public board: the live month or last month's final standings. */
+export type LeaderboardScope = 'current' | 'previous';
+
+/** yyyy-mm for this or last month, matching the server's UTC month keys. */
+export function leaderboardMonthKey(scope: LeaderboardScope): string {
+  const d = new Date();
+  if (scope === 'previous') d.setUTCMonth(d.getUTCMonth() - 1, 1);
+  return d.toISOString().slice(0, 7);
 }
 
 /**
- * GET /api/leaderboard/public — top 50 accounts gym-wide by session-days this
- * calendar month (sort = sessionDays ONLY — never kg, XP, or tier), plus the
- * caller's own absolute position even when outside the top 50. Members hidden
- * via the opt-out flag never appear.
+ * GET /api/leaderboard/public[?month=yyyy-mm] — top 50 accounts gym-wide by
+ * session-days in the scoped calendar month (sort = sessionDays ONLY — never
+ * kg, XP, or tier), plus the caller's own absolute position even when outside
+ * the top 50. Members hidden via the opt-out flag never appear. Scope
+ * 'previous' shows last month's FINAL standings (movement deltas are null
+ * there by design).
  */
-export async function getPublicLeaderboard(token: string): Promise<PublicLeaderboardResult> {
-  const data = await request({ method: 'GET', path: '/api/leaderboard/public', token });
+export async function getPublicLeaderboard(
+  token: string,
+  scope: LeaderboardScope = 'current',
+): Promise<PublicLeaderboardResult> {
+  const path =
+    scope === 'previous'
+      ? `/api/leaderboard/public?month=${leaderboardMonthKey('previous')}`
+      : '/api/leaderboard/public';
+  const data = await request({ method: 'GET', path, token });
   return parseAs(publicLeaderboardResultSchema, data);
 }
 

@@ -10,12 +10,13 @@ import {
   AppText,
   AppTextInput,
   Button,
-  enterDown,
+  Card,
   enterUp,
+  IconChip,
   Screen,
+  ScreenHeader,
   SectionLabel,
   Sheet,
-  StatBlock,
   Tag,
 } from '../../components/ui';
 import {
@@ -37,9 +38,10 @@ import { getPlanWorkout } from '../../lib/seed/plans';
 import { useProfile } from '../../state/profile';
 
 /**
- * Editorial recap: duration · volume · sets (· effort), vs-last-time deltas,
- * the PR ledger, and a per-exercise breakdown. A post-workout glance screen —
- * everything scannable, nothing demanding.
+ * Celebration recap in the block language (REVAMP-BRIEF): one red hero block
+ * carrying the headline volume with time / sets / PR count riding under it,
+ * a charcoal vs-last-time card, the PR ledger and per-exercise breakdown as
+ * rounded charcoal rows — no hairlines anywhere, separation by fill contrast.
  */
 
 /** The previous finished run of this same workout, for the comparison card. */
@@ -49,44 +51,53 @@ interface PreviousRun {
 }
 
 const styles = StyleSheet.create({
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    padding: spacing.lg,
-    marginTop: spacing.xl,
-    gap: spacing.sm,
+  // Red hero block — the screen's single energetic center (brief §2/§11b).
+  hero: {
+    marginTop: spacing.xl + spacing.xs,
+    gap: spacing.md,
   },
+  heroVolumeRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: spacing.sm,
+    minWidth: 0,
+  },
+  heroVolume: { flexShrink: 1 },
+  // Large text on red at 0.6 black — same treatment the brief sanctions for
+  // fraction denominators on the hero block.
+  heroUnit: { opacity: 0.6 },
+  heroStatsRow: {
+    flexDirection: 'row',
+    gap: spacing.xl,
+    marginTop: spacing.xs,
+  },
+  heroStat: { flexShrink: 1, minWidth: 0, gap: 2 },
+  heroStatValue: {
+    fontFamily: type.display,
+    fontSize: 26,
+    color: colors.onBlock,
+  },
+  // PR ledger rows — rounded charcoal rows (brief §11c), stroke-free.
   prRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    borderLeftWidth: 3,
-    borderLeftColor: colors.accent,
-    paddingLeft: spacing.md,
-    paddingVertical: spacing.sm,
-    marginBottom: spacing.sm,
     gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    minHeight: 64,
+    marginBottom: spacing.sm,
   },
-  prNumbers: { fontFamily: type.display, fontSize: 24, color: colors.text, flexShrink: 0 },
+  prNumbers: { fontFamily: type.display, fontSize: 20, color: colors.text, flexShrink: 0 },
   prName: { flex: 1, minWidth: 0 },
   statValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, minWidth: 0 },
-  // Each recap stat gets an equal, shrinkable share of the row so a big
-  // volume number can't push its neighbours off the card edge.
-  statCol: { flexShrink: 1, minWidth: 0 },
-  compareCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    padding: spacing.lg,
-    gap: spacing.sm,
-  },
+  compareCard: { gap: spacing.sm },
   compareRow: { flexDirection: 'row', gap: spacing.md },
   compareCol: { flex: 1, minWidth: 0 },
   compareNumbers: { fontFamily: type.display, fontSize: 26, color: colors.text },
   exCard: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
     marginBottom: spacing.md,
     gap: spacing.xs,
@@ -195,43 +206,79 @@ export default function WorkoutCompleteScreen() {
 
   return (
     <Screen scroll>
-      <Animated.View entering={enterDown(0)}>
-        <AppText variant="label" color={colors.textDim}>
-          {workout?.name ?? ''}
-        </AppText>
-        <AppText variant="heading">Workout complete</AppText>
+      <ScreenHeader
+        eyebrow={workout?.name}
+        title="Workout complete"
+        meta={workout ? <Tag label={posterDate(workout.date)} variant="dim" /> : null}
+      />
+
+      {/* Red hero: headline volume, with time / sets / PRs (· effort) below.
+          Black ink only on the red block (brand law). */}
+      <Animated.View entering={enterUp(0)}>
+        <Card variant="red" style={styles.hero}>
+          <View
+            accessible
+            accessibilityLabel={`Total volume ${volume.toLocaleString('en-US')} ${unitPref}`}
+          >
+            <AppText variant="label" color={colors.onBlock}>
+              Total volume
+            </AppText>
+            <View style={styles.heroVolumeRow}>
+              <AnimatedNumber
+                value={volume}
+                grouped
+                variant="stat"
+                color={colors.onBlock}
+                style={styles.heroVolume}
+              />
+              <AppText variant="title" color={colors.onBlock} style={styles.heroUnit}>
+                {unitPref}
+              </AppText>
+            </View>
+          </View>
+          <View style={styles.heroStatsRow}>
+            <View style={styles.heroStat}>
+              <AppText variant="label" color={colors.onBlock} numberOfLines={1}>
+                Time
+              </AppText>
+              <AppText style={styles.heroStatValue} tabular numberOfLines={1}>
+                {formatClock(workout?.durationSec ?? 0)}
+              </AppText>
+            </View>
+            <View style={styles.heroStat}>
+              <AppText variant="label" color={colors.onBlock} numberOfLines={1}>
+                Sets
+              </AppText>
+              <AppText style={styles.heroStatValue} tabular numberOfLines={1}>
+                {String(sets.length)}
+              </AppText>
+            </View>
+            <View style={styles.heroStat}>
+              <AppText variant="label" color={colors.onBlock} numberOfLines={1}>
+                PRs
+              </AppText>
+              <AppText style={styles.heroStatValue} tabular numberOfLines={1}>
+                {String(prSets.length)}
+              </AppText>
+            </View>
+            {avgRpe !== null ? (
+              <View style={styles.heroStat}>
+                <AppText variant="label" color={colors.onBlock} numberOfLines={1}>
+                  Effort
+                </AppText>
+                <AppText style={styles.heroStatValue} tabular numberOfLines={1}>
+                  {formatWeightNumber(avgRpe)}
+                </AppText>
+              </View>
+            ) : null}
+          </View>
+        </Card>
       </Animated.View>
 
-      <View style={styles.statsRow}>
-        <Animated.View entering={enterUp(0)} style={styles.statCol}>
-          <StatBlock label="time" value={formatClock(workout?.durationSec ?? 0)} />
-        </Animated.View>
-        <Animated.View entering={enterUp(1)} style={styles.statCol}>
-          <AppText variant="label" numberOfLines={1}>volume</AppText>
-          <View style={styles.statValueRow}>
-            <AnimatedNumber value={volume} grouped variant="display" style={styles.statCol} />
-            <AppText variant="caption" color={colors.textDim}>
-              {unitPref}
-            </AppText>
-          </View>
-        </Animated.View>
-        <Animated.View entering={enterUp(2)} style={styles.statCol}>
-          <AppText variant="label" numberOfLines={1}>sets</AppText>
-          <View style={styles.statValueRow}>
-            <AnimatedNumber value={sets.length} variant="display" style={styles.statCol} />
-          </View>
-        </Animated.View>
-        {avgRpe !== null ? (
-          <Animated.View entering={enterUp(3)} style={styles.statCol}>
-            <StatBlock label="effort" value={formatWeightNumber(avgRpe)} unit="rpe" />
-          </Animated.View>
-        ) : null}
-      </View>
-
       {previous && volumeDelta !== null ? (
-        <Animated.View entering={enterUp(4)}>
+        <Animated.View entering={enterUp(1)}>
           <SectionLabel>Vs last time</SectionLabel>
-          <View style={styles.compareCard}>
+          <Card style={styles.compareCard}>
             <View style={styles.compareRow}>
               <View style={styles.compareCol}>
                 <AppText variant="label" numberOfLines={1}>volume</AppText>
@@ -256,17 +303,18 @@ export default function WorkoutCompleteScreen() {
             <AppText variant="caption" color={colors.textFaint} numberOfLines={1}>
               {`Compared with ${posterDate(previous.workout.date)}`}
             </AppText>
-          </View>
+          </Card>
         </Animated.View>
       ) : null}
 
       {prSets.length > 0 ? (
         <>
-          <Animated.View entering={enterUp(5)}>
+          <Animated.View entering={enterUp(2)}>
             <SectionLabel>New records</SectionLabel>
           </Animated.View>
           {prSets.map((s, i) => (
-            <Animated.View key={s.id} entering={enterUp(Math.min(6 + i, 8))} style={styles.prRow}>
+            <Animated.View key={s.id} entering={enterUp(Math.min(3 + i, 6))} style={styles.prRow}>
+              <IconChip icon="trophy" color={colors.surfaceRaised} iconColor={colors.accent} />
               <AppText variant="bodyBold" numberOfLines={1} style={styles.prName}>
                 {s.exerciseName}
               </AppText>
@@ -280,13 +328,13 @@ export default function WorkoutCompleteScreen() {
 
       {exerciseGroups.length > 0 ? (
         <>
-          <Animated.View entering={enterUp(6)}>
+          <Animated.View entering={enterUp(3)}>
             <SectionLabel>Exercises</SectionLabel>
           </Animated.View>
           {exerciseGroups.map((g, gi) => (
             <Animated.View
               key={g.exerciseId}
-              entering={enterUp(Math.min(7 + gi, 8))}
+              entering={enterUp(Math.min(4 + gi, 8))}
               style={styles.exCard}
             >
               <View style={styles.exHeader}>
@@ -311,7 +359,7 @@ export default function WorkoutCompleteScreen() {
                     </AppText>
                   ) : null}
                   <View style={styles.exSetSpacer} />
-                  {s.isPr ? <Tag label="PR" /> : null}
+                  {s.isPr ? <Tag label="PR" variant="filled" /> : null}
                 </View>
               ))}
             </Animated.View>
@@ -331,7 +379,7 @@ export default function WorkoutCompleteScreen() {
         />
       ) : null}
 
-      <Animated.View entering={enterUp(7)} style={styles.footer}>
+      <Animated.View entering={enterUp(8)} style={styles.footer}>
         {sets.length > 0 ? (
           templateSaved ? (
             <AppText variant="caption" color={colors.textDim} center>

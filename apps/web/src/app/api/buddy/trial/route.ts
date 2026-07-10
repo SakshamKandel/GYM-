@@ -1,9 +1,11 @@
-import { accounts, trialUsage } from '@gym/db';
+import { trialUsage } from '@gym/db';
+import { compareTiers } from '@gym/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { setAccountTier } from '@/lib/tier';
 
 export const runtime = 'nodejs';
 
@@ -54,6 +56,16 @@ export async function POST(req: Request) {
   const db = getDb();
   const tier = parsed.data.tier;
 
+  // A trial may only ever be an UPGRADE. `me.tier` is the EFFECTIVE tier
+  // (userForToken already collapsed a lapsed paid tier to 'starter'), so if the
+  // account is already at or above the requested tier we refuse WITHOUT touching
+  // accounts or burning the one-time trial — otherwise a Gold/Elite member who
+  // taps a lower-tier trial card would be silently DOWNGRADED (and, for a paid
+  // member, keep the old future expiry, losing paid features until re-purchase).
+  if (compareTiers(me.tier, tier) >= 0) {
+    return json({ error: 'not_an_upgrade', currentTier: me.tier }, 409);
+  }
+
   // Check if trial already used for this tier.
   const existing = await db
     .select({ id: trialUsage.id, expiresAt: trialUsage.expiresAt })
@@ -75,11 +87,14 @@ export async function POST(req: Request) {
     expiresAt,
   });
 
-  // Apply the tier to the account for the trial duration.
-  await db
-    .update(accounts)
-    .set({ tier })
-    .where(eq(accounts.id, me.id));
+  // Apply the tier THROUGH the audited writer, with the SAME expiry window as
+  // the trial_usage row — effectiveTier() collapses it back to 'starter' at
+  // the auth choke point the moment the trial lapses (no cron needed). The old
+  // code wrote accounts.tier directly with NO expiry: a permanent free upgrade.
+  await setAccountTier(me.id, tier, { id: me.id }, 'buddy_trial', {
+    startsAt: now,
+    expiresAt,
+  });
 
   return json({ ok: true, tier, expiresAt }, 201);
 }

@@ -135,6 +135,8 @@ export interface Targets {
   carbs: number;
   fat: number;
   waterMl: number;
+  /** Daily step goal (see stepsGoal in logic/macros.ts). */
+  steps: number;
 }
 
 export interface Streak {

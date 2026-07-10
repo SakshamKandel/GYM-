@@ -21,11 +21,12 @@ interface Props {
 }
 
 const styles = StyleSheet.create({
-  // Same rounded framing as the exercise image block on the detail screen.
+  // Media frames are inner elements in the block language → radius.md,
+  // charcoal fill, no border.
   frame: {
     width: '100%',
     aspectRatio: 4 / 3,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     backgroundColor: colors.surface,
     overflow: 'hidden',
   },
@@ -70,7 +71,7 @@ export function ExerciseVideo({ url, posterUri, label }: Props) {
           />
         ) : null}
       </View>
-      <AppText variant="caption" color={colors.textDim} style={styles.caption}>
+      <AppText variant="label" color={colors.textDim} style={styles.caption}>
         {label ?? "Greece's demo"}
       </AppText>
     </View>

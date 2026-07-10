@@ -108,11 +108,10 @@ export function ChallengeCard({ challenge, onJoin, onJoined }: Props) {
 }
 
 const styles = StyleSheet.create({
+  // Borderless charcoal card — separation by fill contrast (REVAMP-BRIEF §1).
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
     padding: spacing.lg,
     gap: spacing.md,
   },

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { BadgeProgressStats } from '@gym/shared';
 
 /**
  * Badges API client — GET /api/gamification/badges. Same philosophy as
@@ -64,6 +65,27 @@ const awardedBadgeSchema = z.object({
 
 export type AwardedBadge = z.infer<typeof awardedBadgeSchema>;
 
+// The caller's OWN badge-progress stats (feeds the pure badgeProgress()
+// evaluator for locked-badge progress bars). Shape mirrors @gym/shared's
+// BadgeProgressStats; .catch(null) keeps older servers (no stats field)
+// rendering the grid fine, just without progress bars.
+const badgeStatsSchema: z.ZodType<BadgeProgressStats, z.ZodTypeDef, unknown> = z.object({
+  bestE1RmByLift: z
+    .object({
+      bench: z.number().optional(),
+      squat: z.number().optional(),
+      deadlift: z.number().optional(),
+      ohp: z.number().optional(),
+    })
+    .catch({}),
+  lifetimeSessionDays: z.number(),
+  lifetimeTonnageKg: z.number(),
+  prCount: z.number(),
+  streakWeeksBest: z.number(),
+  checkInCount: z.number(),
+  hasBuddy: z.boolean(),
+});
+
 const badgesResultSchema = z.object({
   badges: z.array(z.unknown()).transform((arr) =>
     arr.flatMap((raw): AwardedBadge[] => {
@@ -74,11 +96,14 @@ const badgesResultSchema = z.object({
   // challengeTitles is additive metadata for challenge:<id> extras — the
   // badges screen only needs a display name fallback, so keep this loose.
   challengeTitles: z.record(z.string()).catch({}),
+  stats: badgeStatsSchema.nullable().catch(null),
 });
 
 export interface BadgesResult {
   badges: AwardedBadge[];
   challengeTitles: Record<string, string>;
+  /** Null on old servers — the UI simply omits progress bars. */
+  stats: BadgeProgressStats | null;
 }
 
 /**

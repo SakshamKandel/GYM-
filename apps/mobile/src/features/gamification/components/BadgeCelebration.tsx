@@ -1,19 +1,24 @@
 import { useEffect, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
+import Animated, { FadeOut, ReduceMotion, ZoomIn } from 'react-native-reanimated';
 import type { BadgeDef } from '@gym/shared';
-import { colors, radius, spacing } from '@gym/ui-tokens';
+import { spacing } from '@gym/ui-tokens';
 import { AppText, Button, Sheet } from '../../../components/ui';
-import { BadgeGlyph } from '../../../components/ui/badges/glyphs';
+import { BadgeMedal } from '../../../components/ui/badges/BadgeMedal';
 import { PrCelebration } from '../../training/components/PrCelebration';
 import { successHaptic } from '../../../lib/haptics';
 
 /**
- * Restrained new-badge moment — reuses the existing PR celebration's particle
- * burst ONCE (no loop, no repeated bursts per badge in a batch) behind a
- * simple sheet naming the badge just earned. Mounted from the Badges screen,
- * keyed on the first id of the current `newlyEarnedIds` batch; when a batch
- * has more than one newly-earned badge, the sheet just lists all of them —
- * the burst still plays only once for the whole moment.
+ * Restrained new-badge moment — the earned BadgeMedal lands center-stage with
+ * a single spring scale-in (one-shot, reduced-motion aware, no loops), the
+ * existing PR celebration particle burst plays ONCE behind it, and the sheet
+ * names the badge. When a batch has more than one newly-earned badge the
+ * sheet leads with the first and counts the rest — the burst and the spring
+ * still play only once for the whole moment.
+ *
+ * Block-language layout (REVAMP-BRIEF §4/§5): centered eyebrow micro-label →
+ * medal → the badge name as a big Oswald display title, uppercase. Same
+ * sanctioned motion as before — nothing new animates, nothing loops.
  *
  * Strength-club badges start 'logged' — this celebrates the earning moment
  * regardless of verification status; verification gets its own quiet push
@@ -24,6 +29,15 @@ interface Props {
   badges: BadgeDef[];
   onClose: () => void;
 }
+
+const MEDAL_SIZE = 104;
+const BURST_SIZE = 200;
+
+// Matches Sheet's shortest own close timing (its backdrop/reduced-motion
+// fade) so the medal and burst fade out alongside the sheet's dismiss instead
+// of popping away the instant the sheet BEGINS closing — Sheet keeps its
+// Modal mounted for its own ~160-220ms close, which is what makes this safe.
+const SHEET_CLOSE_MS = 160;
 
 export function BadgeCelebration({ visible, badges, onClose }: Props) {
   const firedRef = useRef(false);
@@ -40,20 +54,40 @@ export function BadgeCelebration({ visible, badges, onClose }: Props) {
   const [first, ...rest] = badges;
 
   return (
-    <Sheet visible={visible} onClose={onClose} title="New badge earned">
-      <View style={styles.burstWrap} pointerEvents="none">
-        {visible ? <PrCelebration onDone={() => {}} size={160} /> : null}
-      </View>
-      <View style={styles.badgeRow}>
-        <View style={styles.glyphTile}>
-          <BadgeGlyph icon={first!.icon} size={34} color={colors.bg} />
-        </View>
-        <View style={styles.info}>
-          <AppText variant="title">{first!.name}</AppText>
-          {rest.length > 0 ? (
-            <AppText variant="caption">+ {rest.length} more badge{rest.length === 1 ? '' : 's'}</AppText>
+    <Sheet visible={visible} onClose={onClose}>
+      <View style={styles.stage}>
+        <AppText variant="label" center>
+          New badge earned
+        </AppText>
+        <View style={styles.medalStage}>
+          <View style={styles.burstWrap} pointerEvents="none">
+            {visible ? (
+              <Animated.View exiting={FadeOut.duration(SHEET_CLOSE_MS)}>
+                <PrCelebration onDone={() => {}} size={BURST_SIZE} />
+              </Animated.View>
+            ) : null}
+          </View>
+          {visible ? (
+            <Animated.View
+              key={first!.id}
+              entering={ZoomIn.springify()
+                .damping(14)
+                .stiffness(160)
+                .reduceMotion(ReduceMotion.System)}
+              exiting={FadeOut.duration(SHEET_CLOSE_MS)}
+            >
+              <BadgeMedal badge={first!} status="logged" size={MEDAL_SIZE} />
+            </Animated.View>
           ) : null}
         </View>
+        <AppText variant="display" center style={styles.name}>
+          {first!.name}
+        </AppText>
+        {rest.length > 0 ? (
+          <AppText variant="caption" center>
+            + {rest.length} more badge{rest.length === 1 ? '' : 's'}
+          </AppText>
+        ) : null}
       </View>
       <Button label="Nice" onPress={onClose} style={styles.doneBtn} />
     </Sheet>
@@ -61,25 +95,22 @@ export function BadgeCelebration({ visible, badges, onClose }: Props) {
 }
 
 const styles = StyleSheet.create({
-  burstWrap: {
-    position: 'absolute',
-    top: -20,
-    alignSelf: 'center',
-  },
-  badgeRow: {
-    flexDirection: 'row',
+  stage: {
     alignItems: 'center',
     gap: spacing.md,
     marginBottom: spacing.lg,
   },
-  glyphTile: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.lg,
-    backgroundColor: colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
+  // Fixed square so the absolute burst stays centered on the medal — holds
+  // no text, so the fixed dimensions can't clip anything under font scaling.
+  medalStage: {
+    width: MEDAL_SIZE,
+    height: MEDAL_SIZE,
   },
-  info: { flex: 1, gap: 2 },
+  burstWrap: {
+    position: 'absolute',
+    top: (MEDAL_SIZE - BURST_SIZE) / 2,
+    left: (MEDAL_SIZE - BURST_SIZE) / 2,
+  },
+  name: { textTransform: 'uppercase' },
   doneBtn: { marginTop: spacing.sm },
 });

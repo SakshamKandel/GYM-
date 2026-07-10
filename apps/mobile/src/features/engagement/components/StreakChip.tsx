@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { StyleSheet } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { colors, radius, type } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import { AppText, enterFade, PressableScale, Sheet, StreakFlame } from '../../../components/ui';
 import type { WeeklyStreakData } from '../../streak/hooks';
 import { StreakDetailSheet } from './StreakDetailSheet';
@@ -17,9 +17,9 @@ const styles = StyleSheet.create({
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    height: 44,
-    paddingHorizontal: 14,
+    gap: spacing.sm,
+    height: touch.min,
+    paddingHorizontal: spacing.lg,
     borderRadius: radius.full,
     backgroundColor: colors.surface,
   },

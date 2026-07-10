@@ -14,9 +14,12 @@ import {
   AppText,
   enterDown,
   enterUp,
+  FractionStat,
+  IconChip,
   layoutSpring,
   PressableScale,
   Screen,
+  ScreenHeader,
   Tag,
 } from '../../../components/ui';
 import { useAuth } from '../../../state/auth';
@@ -37,16 +40,19 @@ import {
 
 /**
  * Coach inbox — the assigned-client roster, the first screen of Greece's phone
- * workflow. One row per active client with a tier chip and an unread badge;
- * rows with unread messages float to the top. Tapping a row opens that client's
- * thread. Loading is a quiet spinner, errors a tappable retry line, and a
- * pull-to-refresh keeps the roster fresh after replying.
+ * workflow. Block language (REVAMP-BRIEF): icon-button bar → poster header →
+ * ONE red hero block (the attention count, shown only when clients are
+ * waiting) → the roster as borderless charcoal rows. Rows with unread float to
+ * the top and carry a thin red attention bar down their left edge plus a red
+ * count badge with black ink (black-on-red law). Loading is a quiet spinner,
+ * errors a tappable retry line, and a pull-to-refresh keeps the roster fresh
+ * after replying.
  */
 
 const TIER_COLOR: Record<Tier, string> = {
   starter: colors.textDim,
   silver: colors.blue,
-  gold: colors.fat,
+  gold: colors.warning,
   elite: colors.accent,
 };
 
@@ -71,7 +77,19 @@ function shortName(row: CoachInboxRow): string {
   return local && local.length > 0 ? local : 'Client';
 }
 
-/** One client row — avatar-initial, name + email, tier tag, unread badge. */
+/** Outlined meta pill for the header row (counts, status). Not a tap target. */
+function MetaChip({ label }: { label: string }) {
+  return (
+    <View style={styles.metaChip}>
+      <AppText variant="label" color={colors.text}>
+        {label}
+      </AppText>
+    </View>
+  );
+}
+
+/** One client row — attention bar (unread), avatar-initial, name + email,
+ * tier tag, unread badge. Borderless charcoal block per the row sketch. */
 function ClientRow({ row, index }: { row: CoachInboxRow; index: number }) {
   const name = shortName(row);
   const initial = name.charAt(0).toUpperCase();
@@ -93,8 +111,11 @@ function ClientRow({ row, index }: { row: CoachInboxRow; index: number }) {
         }
         style={styles.row}
       >
+        {/* Thin red attention bar — the sanctioned accent detail on dark. */}
+        {unread ? <View style={styles.attentionBar} /> : null}
+
         <View style={[styles.avatar, unread && styles.avatarUnread]}>
-          <AppText variant="bodyBold" color={unread ? colors.onAccent : colors.text}>
+          <AppText variant="bodyBold" color={unread ? colors.onBlock : colors.text}>
             {initial}
           </AppText>
         </View>
@@ -120,7 +141,7 @@ function ClientRow({ row, index }: { row: CoachInboxRow; index: number }) {
             accessibilityLabel={`${row.unreadForCoach} unread`}
             style={styles.badge}
           >
-            <AppText variant="label" color={colors.onAccent} tabular>
+            <AppText variant="label" color={colors.onBlock} tabular>
               {row.unreadForCoach > 99 ? '99+' : String(row.unreadForCoach)}
             </AppText>
           </View>
@@ -187,26 +208,18 @@ export default function CoachInboxScreen() {
 
   return (
     <Screen edges={{ bottom: false }}>
-      <Animated.View entering={enterDown()} style={styles.header}>
-        {/* Back → the staff hub (always reachable, never an app-exit). */}
+      {/* Icon-button bar: back → the staff hub (always reachable, never an
+          app-exit), then the console actions on the right. */}
+      <Animated.View entering={enterDown()} style={styles.topBar}>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Back to staff console"
           onPress={() => pushStaff(STAFF_ROUTES.hub)}
-          style={styles.backBtn}
+          style={styles.iconBtn}
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <View style={styles.headerText}>
-          <AppText variant="heading">Inbox</AppText>
-          <AppText variant="caption">
-            {rows.length === 0
-              ? 'Your assigned clients'
-              : totalUnread > 0
-                ? `${totalUnread} client${totalUnread === 1 ? '' : 's'} waiting on you`
-                : 'All caught up'}
-          </AppText>
-        </View>
+        <View style={styles.topBarSpacer} />
         {/* Leave the console for the member app (stay signed in) — the fix for
             the back button dead-ending after a fresh coach login. */}
         <StaffHeaderAction
@@ -218,7 +231,7 @@ export default function CoachInboxScreen() {
           accessibilityRole="button"
           accessibilityLabel="Coaching profile"
           onPress={() => pushStaff(STAFF_ROUTES.coachProfile)}
-          style={styles.backBtn}
+          style={styles.iconBtn}
         >
           <Ionicons name="person-circle-outline" size={24} color={colors.text} />
         </PressableScale>
@@ -229,19 +242,44 @@ export default function CoachInboxScreen() {
         />
       </Animated.View>
 
+      <ScreenHeader
+        eyebrow="Coach console"
+        title="Inbox"
+        meta={
+          rows.length > 0 ? (
+            <>
+              <MetaChip label={`${rows.length} client${rows.length === 1 ? '' : 's'}`} />
+              <MetaChip
+                label={totalUnread > 0 ? `${totalUnread} waiting` : 'All caught up'}
+              />
+            </>
+          ) : undefined
+        }
+        style={styles.header}
+      />
+
+      {/* The ONE red hero block: the attention count, only when someone is
+          actually waiting — black ink on red, never white. */}
+      {totalUnread > 0 ? (
+        <Animated.View entering={enterUp(0)} style={styles.hero}>
+          <FractionStat label="Needs reply" value={totalUnread} total={rows.length} onBlock />
+          <AppText variant="caption" color={colors.onBlock} style={styles.heroDim}>
+            client{totalUnread === 1 ? '' : 's'} waiting on you
+          </AppText>
+        </Animated.View>
+      ) : null}
+
       {/* ── videos-feature: link to the coach video library (owned by the
           videos/subscription slice — kept as its own block below the header for
           a clean merge with the header/sign-out work). ── */}
-      <Animated.View entering={enterDown()}>
+      <Animated.View entering={enterUp(1)}>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Open the plan-video library"
           onPress={() => pushStaff(STAFF_ROUTES.coachVideos)}
           style={styles.videosLink}
         >
-          <View style={styles.videosIcon}>
-            <Ionicons name="film-outline" size={20} color={colors.accent} />
-          </View>
+          <IconChip icon="film-outline" color={colors.accentFaint} iconColor={colors.accent} />
           <View style={styles.videosText}>
             <AppText variant="bodyBold">Video library</AppText>
             <AppText variant="caption" color={colors.textDim}>
@@ -325,13 +363,14 @@ export default function CoachInboxScreen() {
 }
 
 const styles = StyleSheet.create({
-  header: {
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.md,
-    paddingBottom: spacing.lg,
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
   },
-  backBtn: {
+  topBarSpacer: { flex: 1 },
+  iconBtn: {
     width: touch.min,
     height: touch.min,
     borderRadius: radius.full,
@@ -339,26 +378,37 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerText: { flex: 1, gap: 2 },
-  // videos-feature: the video-library link block (own styles for clean merge).
+  header: { marginBottom: spacing.gutter },
+  // Outlined meta pill (chips may carry strokes — the no-border law is cards).
+  metaChip: {
+    minHeight: 34,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Red hero block — no border, chunky radius, black ink (brief §2/§11b).
+  hero: {
+    backgroundColor: colors.blockRed,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  // 13px caption: black at 0.8 over red stays ≥4.5:1.
+  heroDim: { opacity: 0.8 },
+  // videos-feature: the video-library link block (borderless charcoal row).
   videosLink: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.md,
+    minHeight: 64,
     marginBottom: spacing.lg,
-  },
-  videosIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.full,
-    backgroundColor: colors.accentFaint,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   videosText: { flex: 1, gap: 2 },
   centre: {
@@ -378,15 +428,22 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingBottom: spacing.md,
   },
+  // Borderless charcoal row (brief §11c) — separation by fill, not strokes.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.md,
+    minHeight: 64,
+  },
+  // The red-left-bar attention mark on unread rows (thin accent bar on dark).
+  attentionBar: {
+    width: 4,
+    alignSelf: 'stretch',
+    borderRadius: radius.full,
+    backgroundColor: colors.accent,
   },
   avatar: {
     width: 48,

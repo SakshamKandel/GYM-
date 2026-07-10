@@ -1,11 +1,12 @@
 import { accounts } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
-import { and, eq, isNull } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { createSession } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { allowedGoogleClientIds, verifyGoogleIdToken } from '@/lib/google';
 import { json, preflight, readJson } from '@/lib/http';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 /**
  * POST /api/auth/google — exchange a verified Google ID token for a session.
@@ -31,6 +32,15 @@ export function OPTIONS() {
 }
 
 export async function POST(req: Request) {
+  // Token-guessing damping: 10 attempts/min per IP (in-memory, per instance).
+  const limited = rateLimit({
+    route: 'auth/google',
+    limit: 10,
+    windowMs: 60_000,
+    ip: clientIp(req),
+  });
+  if (limited) return limited;
+
   const allowedAuds = allowedGoogleClientIds();
   if (allowedAuds.length === 0) return json({ error: 'not_configured' }, 503);
 
@@ -51,16 +61,27 @@ export async function POST(req: Request) {
       .limit(1)
   )[0];
 
-  // 2. Existing password account with the same (verified) email — link it.
-  //    Only when unlinked, so one Google identity can't steal another's row.
+  // 2. An account already claims this (verified) email. We must NOT silently
+  //    merge googleSub onto it: registration never proves email ownership, so
+  //    an attacker could pre-create a password account under the victim's
+  //    email and inherit their Google sign-in (account pre-hijacking). Refuse
+  //    to auto-link a password account — linking Google requires proving the
+  //    password first, via an explicit authenticated link step.
   if (!user) {
-    user = (
+    const existing = (
       await db
-        .update(accounts)
-        .set({ googleSub: identity.sub })
-        .where(and(eq(accounts.email, identity.email), isNull(accounts.googleSub)))
-        .returning(publicColumns)
+        .select({ id: accounts.id, passwordHash: accounts.passwordHash })
+        .from(accounts)
+        .where(eq(accounts.email, identity.email))
+        .limit(1)
     )[0];
+
+    if (existing) {
+      if (existing.passwordHash) return json({ error: 'link_required' }, 409);
+      // Same email, no password, but not matched by our sub in step 1: another
+      // Google subject already owns this row. Never merge across subjects.
+      return json({ error: 'bad_credentials' }, 401);
+    }
   }
 
   // 3. First sign-in — create a Google-only account (passwordHash stays null).

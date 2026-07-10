@@ -20,15 +20,28 @@ import { getRepo } from '../../lib/repo';
 import { parseDateParam, parseMealParam } from '../../features/nutrition/logic';
 import { customHref, portionHref } from '../../features/nutrition/nav';
 
+/**
+ * Barcode scanner — block-language chrome (REVAMP-BRIEF): the camera feed is
+ * the "photo", darkened by a sanctioned black scrim with a clear scan window.
+ * Four signal-red corner brackets frame the window (scanner motif — chrome,
+ * not a card, so strokes are allowed), a charcoal hint pill floats below, and
+ * lookup misses raise a chunky `radius.block` result sheet with the screen's
+ * one red CTA.
+ */
+
 type ScanPhase =
   | { kind: 'scanning' }
   | { kind: 'busy' }
   | { kind: 'notFound' }
   | { kind: 'error' };
 
-const OVERLAY = 'rgba(19, 20, 22, 0.55)';
+// Sanctioned rgba: photo scrim over the live camera feed (brief §2).
+const OVERLAY = 'rgba(0, 0, 0, 0.6)';
 const FRAME_W = 260;
 const FRAME_H = 160;
+/** Corner-bracket arm length / stroke — scanner chrome, not a card border. */
+const CORNER_ARM = 34;
+const CORNER_STROKE = 4;
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
@@ -37,12 +50,42 @@ const styles = StyleSheet.create({
   frame: {
     width: FRAME_W,
     height: FRAME_H,
-    borderRadius: radius.lg,
-    borderWidth: 2.5,
-    borderColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
+  },
+  corner: {
+    position: 'absolute',
+    width: CORNER_ARM,
+    height: CORNER_ARM,
+    borderColor: colors.accent,
+  },
+  cornerTL: {
+    top: 0,
+    left: 0,
+    borderTopWidth: CORNER_STROKE,
+    borderLeftWidth: CORNER_STROKE,
+    borderTopLeftRadius: radius.md,
+  },
+  cornerTR: {
+    top: 0,
+    right: 0,
+    borderTopWidth: CORNER_STROKE,
+    borderRightWidth: CORNER_STROKE,
+    borderTopRightRadius: radius.md,
+  },
+  cornerBL: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: CORNER_STROKE,
+    borderLeftWidth: CORNER_STROKE,
+    borderBottomLeftRadius: radius.md,
+  },
+  cornerBR: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: CORNER_STROKE,
+    borderRightWidth: CORNER_STROKE,
+    borderBottomRightRadius: radius.md,
   },
   // Brief signal-red wash the instant a barcode is captured.
   // (absoluteFillObject spelled out — RN 0.86 types no longer export it.)
@@ -52,18 +95,28 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+    borderRadius: radius.md,
     backgroundColor: colors.accent,
   },
-  hint: { marginTop: spacing.sm },
   bottomOverlay: {
     flex: 1,
     backgroundColor: OVERLAY,
     alignItems: 'center',
-    paddingTop: spacing.lg,
+    paddingTop: spacing.gutter,
+    paddingHorizontal: spacing.gutter,
+  },
+  // Charcoal hint pill — solid fill so the instruction stays readable over
+  // any camera feed.
+  hintPill: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.gutter,
+    paddingVertical: spacing.sm,
   },
   backBtn: {
     position: 'absolute',
-    left: spacing.lg,
+    left: spacing.gutter,
     width: touch.min,
     height: touch.min,
     borderRadius: radius.full,
@@ -78,14 +131,15 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     alignItems: 'center',
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.gutter,
   },
+  // Result sheet: chunky borderless block (brief §1/§3).
   sheet: {
     width: '100%',
     maxWidth: 600,
     backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    padding: spacing.xl,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     gap: spacing.md,
     alignItems: 'center',
   },
@@ -126,7 +180,7 @@ export default function ScanScreen() {
           <AppText variant="title" center>
             Barcode scanning needs the phone app
           </AppText>
-          <AppText variant="caption" color={colors.textDim} center>
+          <AppText variant="body" color={colors.textDim} center>
             Search for the food by name instead
           </AppText>
           <Button label="Go back" variant="secondary" onPress={() => router.back()} />
@@ -211,12 +265,16 @@ export default function ScanScreen() {
         onBarcodeScanned={phase.kind === 'scanning' ? onBarcodeScanned : undefined}
       />
 
-      {/* Dark overlay with a transparent scan-frame cutout */}
+      {/* Dark scrim with a clear scan window, framed by red corner brackets */}
       <View style={StyleSheet.absoluteFill}>
         <View style={styles.overlayFill} />
         <View style={styles.overlayMidRow}>
           <View style={styles.overlayFill} />
           <Animated.View style={[styles.frame, frameStyle]}>
+            <View pointerEvents="none" style={[styles.corner, styles.cornerTL]} />
+            <View pointerEvents="none" style={[styles.corner, styles.cornerTR]} />
+            <View pointerEvents="none" style={[styles.corner, styles.cornerBL]} />
+            <View pointerEvents="none" style={[styles.corner, styles.cornerBR]} />
             <Animated.View
               pointerEvents="none"
               style={[styles.captureFlash, flashStyle]}
@@ -231,9 +289,11 @@ export default function ScanScreen() {
           <AppText variant="label" color={colors.text}>
             Scan barcode
           </AppText>
-          <AppText variant="caption" color={colors.textDim} style={styles.hint}>
-            {phase.kind === 'busy' ? 'Looking it up…' : 'Line the barcode up inside the frame'}
-          </AppText>
+          <View style={styles.hintPill}>
+            <AppText variant="body" color={colors.text} center>
+              {phase.kind === 'busy' ? 'Looking it up…' : 'Line the barcode up inside the frame'}
+            </AppText>
+          </View>
         </View>
       </View>
 
@@ -243,7 +303,7 @@ export default function ScanScreen() {
         onPress={() => router.back()}
         // Camera overlay bypasses <Screen> — keep the button clear of the top
         // edge even when the status-bar inset is 0.
-        style={[styles.backBtn, { top: insets.top + spacing.lg }]}
+        style={[styles.backBtn, { top: insets.top + spacing.gutter }]}
       >
         <Ionicons name="chevron-back" size={24} color={colors.text} />
       </PressableScale>
@@ -257,7 +317,7 @@ export default function ScanScreen() {
             <AppText variant="title" center>
               {phase.kind === 'notFound' ? 'Not in the database' : 'Couldn’t reach food database'}
             </AppText>
-            <AppText variant="caption" color={colors.textDim} center>
+            <AppText variant="body" color={colors.textDim} center>
               {phase.kind === 'notFound'
                 ? 'You can create it once and reuse it forever'
                 : 'Check your connection and try again'}

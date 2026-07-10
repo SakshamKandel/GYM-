@@ -6,9 +6,10 @@ import {
   AppText,
   enterDown,
   enterUp,
-  HeroCard,
+  IconChip,
   PressableScale,
   Screen,
+  ScreenHeader,
 } from '../../components/ui';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
@@ -35,6 +36,10 @@ import {
  *
  * Reached via router.replace('/staff') straight after a staff sign-in (skipping
  * onboarding) or from the Settings "Staff console" row.
+ *
+ * Block language (REVAMP-BRIEF): utility action row → ScreenHeader → the ONE
+ * red hero block (welcome greeting, black ink) → charcoal console rows —
+ * fill-contrast separation, no card borders.
  */
 
 /** A tappable console card — icon, title, one-line blurb, chevron. */
@@ -59,9 +64,7 @@ function ConsoleCard({
         onPress={onPress}
         style={styles.card}
       >
-        <View style={styles.cardIcon}>
-          <Ionicons name={icon} size={22} color={colors.accent} />
-        </View>
+        <IconChip icon={icon} iconColor={colors.accent} />
         <View style={styles.cardText}>
           <AppText variant="bodyBold" numberOfLines={1}>
             {title}
@@ -90,7 +93,7 @@ export default function StaffHubScreen() {
 
   return (
     <Screen scroll>
-      <Animated.View entering={enterDown()} style={styles.headerRow}>
+      <Animated.View entering={enterDown()} style={styles.actionRow}>
         {/* Leave the console for the member app (stay signed in). Replaces the
             old back-chevron, which dead-ended (exited the app) after a fresh
             staff login because the console is the app root then. */}
@@ -99,9 +102,7 @@ export default function StaffHubScreen() {
           label="Switch to member app"
           onPress={switchToMemberApp}
         />
-        <AppText variant="heading" style={styles.headerTitle}>
-          Staff console
-        </AppText>
+        <View style={styles.actionSpacer} />
         <StaffHeaderAction
           icon="log-out-outline"
           label="Sign out of the staff console"
@@ -109,14 +110,19 @@ export default function StaffHubScreen() {
         />
       </Animated.View>
 
+      <ScreenHeader title="Staff console" style={styles.header} />
+
+      {/* The screen's ONE red hero block — black ink on red (brief §2). */}
       <Animated.View entering={enterUp(0)} style={styles.hero}>
-        <HeroCard>
-          <AppText variant="label">{roleLabel(staffRole)}</AppText>
-          <AppText variant="title">Welcome back, {firstName}</AppText>
-          <AppText variant="caption">
-            Manage your clients and the platform from one place.
-          </AppText>
-        </HeroCard>
+        <AppText variant="label" color={colors.onBlock}>
+          {roleLabel(staffRole)}
+        </AppText>
+        <AppText variant="title" color={colors.onBlock}>
+          Welcome back, {firstName}
+        </AppText>
+        <AppText variant="body" color={colors.onBlock} style={styles.heroCopy}>
+          Manage your clients and the platform from one place.
+        </AppText>
       </Animated.View>
 
       {showCoach ? (
@@ -154,11 +160,9 @@ export default function StaffHubScreen() {
           accessibilityRole="button"
           accessibilityLabel="Switch to member app"
           onPress={switchToMemberApp}
-          style={styles.exitRow}
+          style={styles.card}
         >
-          <View style={styles.exitIcon}>
-            <Ionicons name="phone-portrait-outline" size={20} color={colors.text} />
-          </View>
+          <IconChip icon="phone-portrait-outline" />
           <View style={styles.cardText}>
             <AppText variant="bodyBold" numberOfLines={1}>
               Switch to member app
@@ -174,11 +178,9 @@ export default function StaffHubScreen() {
           accessibilityRole="button"
           accessibilityLabel="Sign out of the staff console"
           onPress={signOut.requestSignOut}
-          style={styles.exitRow}
+          style={styles.card}
         >
-          <View style={styles.exitIcon}>
-            <Ionicons name="log-out-outline" size={20} color={colors.accent} />
-          </View>
+          <IconChip icon="log-out-outline" iconColor={colors.accent} />
           <View style={styles.cardText}>
             <AppText variant="bodyBold" numberOfLines={1} color={colors.accent}>
               Sign out
@@ -201,52 +203,35 @@ export default function StaffHubScreen() {
 }
 
 const styles = StyleSheet.create({
-  headerRow: {
+  actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingBottom: spacing.lg,
+    marginBottom: spacing.lg,
   },
-  headerTitle: { flex: 1 },
-  hero: { marginBottom: spacing.xl },
+  actionSpacer: { flex: 1 },
+  header: { marginBottom: spacing.gutter },
+  // The one red block: sticker-chunky, flat fill, no border (brief §1/§3).
+  hero: {
+    backgroundColor: colors.blockRed,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+    gap: spacing.sm,
+    marginBottom: spacing.xl,
+  },
+  heroCopy: { opacity: 0.75 },
+  // Charcoal list row (brief §11c): fill contrast, no hairlines.
   card: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
+    minHeight: 64,
     marginBottom: spacing.md,
-  },
-  cardIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.full,
-    backgroundColor: colors.accentFaint,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   cardText: { flex: 1, gap: 2 },
   empty: { marginTop: spacing.xl, paddingHorizontal: spacing.md },
-  exitGroup: { marginTop: spacing.xl, gap: spacing.md },
-  exitRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-  },
-  exitIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.full,
-    backgroundColor: colors.surfaceRaised,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  exitGroup: { marginTop: spacing.xl },
 });

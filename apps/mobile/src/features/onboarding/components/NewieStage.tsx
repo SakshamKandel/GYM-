@@ -16,9 +16,10 @@ import { AppText, enterFade } from '../../../components/ui';
 import { fontScaleMultiplier, useProfile } from '../../../state/profile';
 
 /**
- * Newie's voice — a first-class card in the app's card family (surface,
- * 1px border, radius.md — same anatomy as every other tile) instead of a
- * cartoon speech bubble. A rounded-square avatar chip + Oswald micro-label
+ * Newie's voice — the screen's CREAM counterpoint block (REVAMP-BRIEF §2):
+ * warm paper fill, chunky `radius.block` corners, NO border — separation by
+ * fill contrast. Black ink (`onBlock`) for the message, `creamDim` for
+ * secondary text. A rounded-square avatar chip + Oswald micro-label
  * ("NEWIE · COACH") attribute the message; the chat-app behavior survives:
  * a short typing indicator, then the FULL text lands at once as plain,
  * always-visible AppText. NOTHING else is ever hidden or gated; inputs and
@@ -127,9 +128,10 @@ export function CoachCard({
             <Image source={MASCOT} style={styles.avatarImg} contentFit="cover" />
           </Animated.View>
         ) : null}
-        <AppText variant="label">
+        {/* Black ink on cream — never red text on cream (brief §2). */}
+        <AppText variant="label" color={colors.creamDim}>
           Newie{' '}
-          <AppText variant="label" color={colors.accent}>
+          <AppText variant="label" color={colors.onBlock}>
             · Coach
           </AppText>
         </AppText>
@@ -138,11 +140,16 @@ export function CoachCard({
       <View style={[styles.messageSlot, { minHeight: lineHeight * reserveLines }]}>
         {shown ? (
           <Animated.View entering={enterFade()}>
-            <AppText variant="bodyBold" style={{ lineHeight }} tabular={false}>
+            <AppText
+              variant="bodyBold"
+              color={colors.onBlock}
+              style={{ lineHeight }}
+              tabular={false}
+            >
               {text}
             </AppText>
             {caption ? (
-              <AppText variant="caption" style={styles.caption}>
+              <AppText variant="caption" color={colors.creamDim} style={styles.caption}>
                 {caption}
               </AppText>
             ) : null}
@@ -187,13 +194,12 @@ export function NewieStage({
 }
 
 const styles = StyleSheet.create({
+  // Cream color block: chunky corners, flat fill, no border (brief §1/§3).
   card: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    backgroundColor: colors.blockCream,
+    borderRadius: radius.block,
+    paddingHorizontal: spacing.gutter,
+    paddingVertical: spacing.lg,
   },
   headerRow: {
     flexDirection: 'row',
@@ -223,7 +229,7 @@ const styles = StyleSheet.create({
     width: 7,
     height: 7,
     borderRadius: radius.full,
-    backgroundColor: colors.textDim,
+    backgroundColor: colors.creamDim,
   },
 
   // Onboarding rhythm: question card, then answers directly below.

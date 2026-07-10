@@ -47,7 +47,10 @@ export const useReminders = create<RemindersState>()(
       hour: 18,
       minute: 0,
       morningNudgeOn: false,
-      checkInReminderOn: true,
+      // Default OFF like the other reminder switches: nothing is scheduled at
+      // launch, so persisting ON would show the Settings switch enabled while
+      // no Sunday check-in notification ever exists.
+      checkInReminderOn: false,
 
       setWorkoutRemindersOn: (on) => set({ workoutRemindersOn: on }),
       setWeekdays: (weekdays) => set({ weekdays }),

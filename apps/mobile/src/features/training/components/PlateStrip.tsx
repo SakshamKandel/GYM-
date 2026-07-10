@@ -1,14 +1,16 @@
 import { StyleSheet, View } from 'react-native';
 import Svg, { Circle, Line, Rect } from 'react-native-svg';
 import { DEFAULT_BAR_KG, platesFor } from '@gym/shared';
-import { colors, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText } from '../../../components/ui';
 import { formatWeightNumber, plateColor } from '../logic';
 
 /**
  * Barbell side view: bar line + colored plate rectangles per side, from
  * platesFor(). Standard plate colors (25 red · 20 blue · 15 yellow ·
- * 10 green · 5 white · fractionals dim). Flat, crisp, no decoration.
+ * 10 green · 5 white · fractionals dim). Drawn inside a canvas-dip inner
+ * tile (`radius.md`, `colors.bg`) — nested-tile chrome per the block
+ * language; separation by fill contrast, no strokes.
  */
 
 interface Props {
@@ -32,12 +34,19 @@ function plateSize(kg: number): { w: number; h: number } {
 
 const styles = StyleSheet.create({
   root: { marginVertical: spacing.sm },
+  /** Canvas-colored inner tile framing the barbell drawing. */
+  tile: {
+    backgroundColor: colors.bg,
+    borderRadius: radius.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
   captionRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     gap: spacing.sm,
-    marginTop: 2,
+    marginTop: spacing.xs,
   },
 });
 
@@ -59,7 +68,8 @@ export function PlateStrip({ weightKg }: Props) {
 
   return (
     <View style={styles.root} accessibilityLabel={`Plate calculator. ${caption}`}>
-      <Svg width="100%" height={VB_H} viewBox={`0 0 ${VB_W} ${VB_H}`}>
+      <View style={styles.tile}>
+        <Svg width="100%" height={VB_H} viewBox={`0 0 ${VB_W} ${VB_H}`}>
         {/* bar */}
         <Line
           x1={8}
@@ -92,7 +102,8 @@ export function PlateStrip({ weightKg }: Props) {
             fill={plateColor(p.kg)}
           />
         ))}
-      </Svg>
+        </Svg>
+      </View>
       <View style={styles.captionRow}>
         <AppText variant="caption" color={colors.textDim} tabular>
           {caption}

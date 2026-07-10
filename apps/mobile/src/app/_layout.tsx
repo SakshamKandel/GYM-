@@ -9,13 +9,14 @@ import {
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
-import { AppState, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { colors } from '@gym/ui-tokens';
 import { hydrateCheckIns } from '../features/checkin/store';
 import { registerPushRefresh } from '../features/realtime/pushRefresh';
 import { AppLock } from '../features/security/AppLock';
+import { AppStartupScreen } from '../components/experience/AppStartupScreen';
 import { syncWorkouts } from '../features/sync/workoutSync';
 import {
   registerForPushNotificationsAsync,
@@ -26,7 +27,13 @@ import { useAuth } from '../state/auth';
 
 void SplashScreen.preventAutoHideAsync();
 
+// Fonts are bundled locally and normally arrive almost immediately. Keep a
+// short cap nonetheless: a delayed font request must not look like a frozen
+// black launch screen on a cold start.
+const FONT_LOAD_FALLBACK_MS = 750;
+
 export default function RootLayout() {
+  const [fontFallbackReady, setFontFallbackReady] = useState(false);
   const [fontsLoaded, fontsError] = useFonts({
     Oswald_400Regular,
     Oswald_500Medium,
@@ -37,8 +44,16 @@ export default function RootLayout() {
   });
 
   useEffect(() => {
-    if (fontsLoaded || fontsError) void SplashScreen.hideAsync();
-  }, [fontsLoaded, fontsError]);
+    const timeout = setTimeout(() => setFontFallbackReady(true), FONT_LOAD_FALLBACK_MS);
+    return () => clearTimeout(timeout);
+  }, []);
+
+  // The first React frame is always AppStartupScreen, so it is safe to release
+  // the native splash immediately instead of holding a dark static frame while
+  // fonts settle in the background.
+  useEffect(() => {
+    void SplashScreen.hideAsync();
+  }, []);
 
   // Re-validate the server session whenever the app returns to the foreground.
   useEffect(() => {
@@ -79,8 +94,8 @@ export default function RootLayout() {
     }
   }, [authStatus]);
 
-  if (!fontsLoaded && !fontsError) {
-    return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
+  if (!fontsLoaded && !fontsError && !fontFallbackReady) {
+    return <AppStartupScreen message="Loading your training" />;
   }
 
   return (

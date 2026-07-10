@@ -1,23 +1,28 @@
 import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { RefreshControl, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { catchUpHint, daysLeftInMonth, ordinalLabel } from '@gym/shared';
 import { colors, spacing, touch, radius } from '@gym/ui-tokens';
 import {
   AppText,
+  Chip,
   enterDown,
   enterFade,
   enterUp,
   PressableScale,
   Screen,
+  ScreenHeader,
 } from '../components/ui';
 import { BuddySummarySheet } from '../features/buddy/components/BuddySummarySheet';
+import { MovementMark } from '../features/buddy/components/LeaderboardBits';
 import { PublicLeaderboard } from '../features/buddy/components/PublicLeaderboard';
 import { useBuddyData } from '../features/buddy/hooks';
 import {
   getPublicLeaderboard,
   toGamificationError,
+  type LeaderboardScope,
   type PublicLeaderboardResult,
 } from '../lib/api/social';
 import { todayIso } from '../lib/dates';
@@ -28,11 +33,20 @@ import { useGamificationDisplay } from '../state/gamification';
  * /leaderboard — the public gym-wide consistency board, pushed from the
  * Buddy tab's "Gym leaderboard" entry card. Same screen skeleton as
  * /badges: Screen scroll, back header, load-on-focus, quiet stale/retry
- * row instead of a blocking error state.
+ * row instead of a blocking error state — plus pull-to-refresh.
  *
- * Ranking, privacy filtering, and the caller's absolute position all come
- * from GET /api/leaderboard/public (server-authoritative). Buddy rows reuse
- * the existing tap-through sheet; strangers' rows are not tappable.
+ * Structure, top to bottom:
+ *  1. Scope chips — the live month vs. last month's FINAL standings (the
+ *     only two windows the server serves; no attendance-history trawling).
+ *  2. "Your standing" card (live month only): absolute position, session
+ *     count, 7-day movement, days left in the month, and an actionable
+ *     catch-up line ("2 more sessions catch 4th").
+ *  3. The board itself (top 50 + pinned own row when ranked below).
+ *
+ * Ranking, tie-sharing, privacy filtering, movement deltas, and the
+ * caller's absolute position all come from GET /api/leaderboard/public
+ * (server-authoritative). Buddy rows reuse the existing tap-through sheet;
+ * strangers' rows are not tappable.
  */
 
 export default function PublicLeaderboardScreen() {
@@ -40,8 +54,12 @@ export default function PublicLeaderboardScreen() {
   const token = useAuth((s) => s.token);
   // Accepted buddies gate the tap-through; their feed events power the sheet.
   const { list, events } = useBuddyData();
-  const [result, setResult] = useState<PublicLeaderboardResult | null>(null);
+  const [scope, setScope] = useState<LeaderboardScope>('current');
+  const [results, setResults] = useState<Partial<Record<LeaderboardScope, PublicLeaderboardResult>>>(
+    {},
+  );
   const [stale, setStale] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [summaryBuddy, setSummaryBuddy] = useState<{ id: string; name: string } | null>(null);
 
   const buddyIds = useMemo(
@@ -49,45 +67,71 @@ export default function PublicLeaderboardScreen() {
     [list],
   );
 
-  const reload = useCallback(() => {
-    if (status !== 'signedIn' || token === null) return;
-    void (async () => {
-      try {
-        const next = await getPublicLeaderboard(token);
-        // The session changed while the fetch was in flight — a late response
-        // must not render the previous account's board.
-        const current = useAuth.getState();
-        if (current.status !== 'signedIn' || current.token !== token || current.user === null) {
-          return;
+  const reload = useCallback(
+    (which: LeaderboardScope) => {
+      if (status !== 'signedIn' || token === null) return;
+      void (async () => {
+        try {
+          const next = await getPublicLeaderboard(token, which);
+          // The session changed while the fetch was in flight — a late response
+          // must not render the previous account's board.
+          const current = useAuth.getState();
+          if (current.status !== 'signedIn' || current.token !== token || current.user === null) {
+            return;
+          }
+          setResults((prev) => ({ ...prev, [which]: next }));
+          setStale(false);
+          // Server is the source of truth for the opt-out flag — reconcile the
+          // account-scoped local mirror the settings toggle reads.
+          useGamificationDisplay.getState().setPublicBoardHidden(current.user.id, next.me.hidden);
+        } catch (err) {
+          if (toGamificationError(err).code === 'unauthorized') {
+            void useAuth.getState().refresh();
+          }
+          setStale(true);
+        } finally {
+          setRefreshing(false);
         }
-        setResult(next);
-        setStale(false);
-        // Server is the source of truth for the opt-out flag — reconcile the
-        // account-scoped local mirror the settings toggle reads.
-        useGamificationDisplay.getState().setPublicBoardHidden(current.user.id, next.me.hidden);
-      } catch (err) {
-        if (toGamificationError(err).code === 'unauthorized') {
-          void useAuth.getState().refresh();
-        }
-        setStale(true);
-      }
-    })();
-  }, [status, token]);
+      })();
+    },
+    [status, token],
+  );
 
   useFocusEffect(
     useCallback(() => {
-      reload();
-    }, [reload]),
+      reload(scope);
+    }, [reload, scope]),
   );
+
+  function switchScope(next: LeaderboardScope): void {
+    if (next === scope) return;
+    setScope(next);
+    if (!results[next]) reload(next);
+  }
 
   function goBack(): void {
     if (router.canGoBack()) router.back();
     else router.replace('/');
   }
 
+  const result = results[scope] ?? null;
+  const isFinal = scope === 'previous';
+
   return (
-    <Screen scroll>
-      <Animated.View entering={enterDown()} style={styles.headerRow}>
+    <Screen
+      scroll
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true);
+            reload(scope);
+          }}
+          tintColor={colors.textDim}
+        />
+      }
+    >
+      <Animated.View entering={enterDown()} style={styles.backRow}>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Go back"
@@ -96,8 +140,13 @@ export default function PublicLeaderboardScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppText variant="heading">Gym leaderboard</AppText>
       </Animated.View>
+
+      <ScreenHeader
+        eyebrow="Consistency · whole gym"
+        title="Gym leaderboard"
+        style={styles.header}
+      />
 
       {status !== 'signedIn' ? (
         <Animated.View entering={enterUp(0)} style={styles.notice}>
@@ -107,12 +156,26 @@ export default function PublicLeaderboardScreen() {
         </Animated.View>
       ) : (
         <>
+          {/* ── Scope: live month vs. last month's final standings ── */}
+          <Animated.View entering={enterUp(0)} style={styles.scopeRow}>
+            <Chip
+              label="This month"
+              selected={scope === 'current'}
+              onPress={() => switchScope('current')}
+            />
+            <Chip
+              label="Last month"
+              selected={scope === 'previous'}
+              onPress={() => switchScope('previous')}
+            />
+          </Animated.View>
+
           {stale ? (
             <Animated.View entering={enterFade(0)}>
               <PressableScale
                 accessibilityRole="button"
                 accessibilityLabel="Showing last known state. Tap to retry."
-                onPress={reload}
+                onPress={() => reload(scope)}
                 style={styles.staleRow}
               >
                 <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
@@ -126,9 +189,7 @@ export default function PublicLeaderboardScreen() {
 
           {result === null ? (
             stale ? null : (
-              <View style={styles.loading}>
-                <ActivityIndicator size="small" color={colors.textDim} />
-              </View>
+              <BoardSkeleton />
             )
           ) : (
             <Animated.View entering={enterUp(0)}>
@@ -141,13 +202,24 @@ export default function PublicLeaderboardScreen() {
                   </AppText>
                 </View>
               ) : null}
+
+              {!isFinal && !result.me.hidden ? <StandingCard result={result} /> : null}
+
               <PublicLeaderboard
                 rows={result.rows}
                 me={result.me}
                 month={result.month}
+                final={isFinal}
                 buddyIds={buddyIds}
                 onSelectBuddy={(id, name) => setSummaryBuddy({ id, name })}
               />
+
+              {result.totalRanked !== null && result.totalRanked > 0 ? (
+                <AppText variant="caption" color={colors.textFaint} style={styles.totalLine}>
+                  {result.totalRanked} lifter{result.totalRanked === 1 ? '' : 's'} ranked
+                  {isFinal ? ' that month' : ' so far this month'}.
+                </AppText>
+              ) : null}
             </Animated.View>
           )}
         </>
@@ -166,13 +238,114 @@ export default function PublicLeaderboardScreen() {
   );
 }
 
+// ════════════════════════════════════════════════════════════════
+// "Your standing" — the screen's ONE red hero block (REVAMP-BRIEF §2).
+// Live month only. Position is the hero numeral (Oswald, black-on-red);
+// movement sits in a near-black pill so MovementMark's dark-surface
+// colors keep their contrast; the catch-up line rides a near-black
+// inset tile with the accent icon. Black ink only — never white-on-red.
+// ════════════════════════════════════════════════════════════════
+
+function StandingCard({ result }: { result: PublicLeaderboardResult }) {
+  const { me, rows } = result;
+  const daysLeft = daysLeftInMonth(todayIso());
+  const meVisible = rows.some((r) => r.isMe);
+
+  // Actionable line under the numbers. Catch-up math is exact when the
+  // caller is on the visible board (everyone above them is visible too);
+  // below the top 50 we talk about reaching the board instead.
+  let actionLine: string | null = null;
+  if (me.position === null) {
+    actionLine = 'One ranked session puts you on the board.';
+  } else if (me.position === 1) {
+    actionLine = 'You lead the gym this month. Keep showing up.';
+  } else if (meVisible) {
+    const hint = catchUpHint(me.sessionDays, rows.map((r) => r.sessionDays));
+    if (hint !== null) {
+      actionLine = `${hint.sessionsNeeded} more session${hint.sessionsNeeded === 1 ? '' : 's'} catch ${ordinalLabel(hint.targetPosition)} place.`;
+    }
+  } else if (rows.length > 0) {
+    const lastVisible = rows[rows.length - 1]!;
+    const gap = lastVisible.sessionDays - me.sessionDays;
+    actionLine =
+      gap <= 0
+        ? 'One more session breaks into the top 50.'
+        : `${gap + 1} more session${gap + 1 === 1 ? '' : 's'} break into the top 50.`;
+  }
+
+  return (
+    <View
+      style={styles.standingCard}
+      accessible
+      accessibilityLabel={
+        me.position === null
+          ? `Not ranked yet — ${me.sessionDays} sessions this month`
+          : `Your standing: ${ordinalLabel(me.position)} with ${me.sessionDays} sessions this month`
+      }
+    >
+      <AppText variant="label" color={colors.onBlock}>
+        Your standing
+      </AppText>
+      <View style={styles.standingTop}>
+        <View style={styles.standingPosition}>
+          <AppText
+            variant="stat"
+            color={colors.onBlock}
+            style={me.position === null ? styles.standingUnranked : null}
+          >
+            {me.position === null ? '—' : ordinalLabel(me.position)}
+          </AppText>
+          {me.delta !== null ? (
+            <View style={styles.movementPill}>
+              <MovementMark delta={me.delta} available={me.delta !== null} />
+            </View>
+          ) : null}
+        </View>
+        <View style={styles.standingStats}>
+          <AppText variant="caption" color={colors.onBlock} style={styles.standingDim}>
+            {me.sessionDays} session-day{me.sessionDays === 1 ? '' : 's'} this month
+          </AppText>
+          <AppText variant="caption" color={colors.onBlock} style={styles.standingDim}>
+            {daysLeft === 0 ? 'Last day of the month' : `${daysLeft} day${daysLeft === 1 ? '' : 's'} left`}
+          </AppText>
+        </View>
+      </View>
+      {actionLine !== null ? (
+        <View style={styles.standingAction}>
+          <Ionicons name="trending-up" size={16} color={colors.accent} />
+          <AppText variant="body" color={colors.text} style={styles.standingActionText}>
+            {actionLine}
+          </AppText>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// Loading skeleton — six quiet placeholder rows instead of a spinner,
+// matching the row geometry so the board doesn't jump when data lands.
+// ════════════════════════════════════════════════════════════════
+
+function BoardSkeleton() {
+  return (
+    <Animated.View entering={enterFade(0)} style={styles.skeletonList} accessibilityLabel="Loading leaderboard">
+      {Array.from({ length: 6 }, (_, i) => (
+        <View key={i} style={styles.skeletonRow}>
+          <View style={styles.skeletonRank} />
+          <View style={styles.skeletonAvatar} />
+          <View style={styles.skeletonLines}>
+            <View style={styles.skeletonLineWide} />
+            <View style={styles.skeletonLineNarrow} />
+          </View>
+        </View>
+      ))}
+    </Animated.View>
+  );
+}
+
 const styles = StyleSheet.create({
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    marginBottom: spacing.md,
-  },
+  backRow: { marginBottom: spacing.lg },
   backBtn: {
     width: touch.min,
     height: touch.min,
@@ -181,15 +354,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  header: { marginBottom: spacing.gutter },
   notice: { paddingVertical: spacing.xxl },
-  loading: { paddingVertical: spacing.xxl, alignItems: 'center' },
+  scopeRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
   staleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: spacing.sm,
     backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
     minHeight: touch.min,
     paddingVertical: spacing.sm,
     marginBottom: spacing.md,
@@ -200,10 +378,96 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     backgroundColor: colors.surface,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     marginBottom: spacing.md,
   },
   hiddenNoteText: { flex: 1 },
+
+  // Your standing — the ONE red hero block. No border (block language:
+  // separation by fill contrast), chunky radius, black ink throughout.
+  standingCard: {
+    backgroundColor: colors.blockRed,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+    gap: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  standingTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.lg,
+  },
+  standingPosition: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flexShrink: 1,
+  },
+  // Large 56px numeral: black at 0.6 over red stays ≥3:1 (large-text bar).
+  standingUnranked: { opacity: 0.6 },
+  // Secondary 13px captions: black at 0.8 over red stays ≥4.5:1.
+  standingDim: { opacity: 0.8 },
+  // Near-black pill so MovementMark's dark-surface palette keeps contrast
+  // on the red block (filled chip-inside-block pattern, brief §6).
+  movementPill: {
+    backgroundColor: colors.onBlock,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  standingStats: { flex: 1, gap: 2, alignItems: 'flex-end' },
+  // Catch-up line: near-black inset tile (radius.md inside radius.block),
+  // light text on the near-black fill — never white directly on red.
+  standingAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.onBlock,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  standingActionText: { flex: 1 },
+
+  totalLine: { marginTop: spacing.md },
+
+  // Skeleton
+  skeletonList: { gap: spacing.sm },
+  skeletonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    minHeight: touch.min,
+    paddingVertical: spacing.sm,
+  },
+  skeletonRank: {
+    width: 28,
+    height: 14,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceRaised,
+  },
+  skeletonAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.surfaceRaised,
+  },
+  skeletonLines: { flex: 1, gap: 6 },
+  skeletonLineWide: {
+    width: '55%',
+    height: 12,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceRaised,
+  },
+  skeletonLineNarrow: {
+    width: '30%',
+    height: 10,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceRaised,
+  },
 });

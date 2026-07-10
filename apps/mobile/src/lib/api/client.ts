@@ -63,7 +63,7 @@ const errorBodySchema = z.object({ error: z.string() });
 // ── Fetch plumbing ────────────────────────────────────────────
 
 interface RequestOptions {
-  method: 'GET' | 'POST' | 'PUT';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   path: string;
   body?: Record<string, unknown>;
   token?: string;
@@ -174,8 +174,69 @@ export async function me(token: string): Promise<AuthUser> {
   return parseAs(meSchema, data).user;
 }
 
+const healthSchema = z.object({ ok: z.literal(true), app: z.literal('gym-tracker') });
+
+/**
+ * True only when GET /api/health identifies the host as the real GYM Tracker
+ * server. In dev, BASE_URL is a LAN host:port — if another app ever squats
+ * that port, its blanket 401s must not read as "session revoked" (a foreign
+ * 401 once signed users out — see state/auth.ts refresh()). Returns false on
+ * any failure: "couldn't confirm identity", and the caller keeps the session
+ * rather than wiping a valid one.
+ */
+export async function confirmGymTrackerServer(): Promise<boolean> {
+  try {
+    const res = await fetchWithTimeout(
+      `${BASE_URL}/api/health`,
+      { method: 'GET', headers: { Accept: 'application/json' } },
+      4_000,
+    );
+    if (!res.ok) return false;
+    return healthSchema.safeParse(await res.json()).success;
+  } catch {
+    return false;
+  }
+}
+
 export async function logout(token: string): Promise<void> {
   const data = await request({ method: 'POST', path: '/api/auth/logout', token });
+  parseAs(okSchema, data);
+}
+
+/**
+ * Set the account's subscription tier SERVER-SIDE (the paywall's "Choose
+ * plan"). The server is the tier authority — PUT /api/profile no longer
+ * writes accounts.tier — so gated features stay locked until this returns.
+ * Resolves with the updated user (same shape as GET /api/me) so the caller
+ * can adopt it into the auth store immediately, no extra round trip.
+ */
+export async function setSubscriptionTier(token: string, tier: Tier): Promise<AuthUser> {
+  const data = await request({
+    method: 'POST',
+    path: '/api/subscription/tier',
+    body: { tier },
+    token,
+  });
+  return parseAs(meSchema, data).user;
+}
+
+/**
+ * Permanently delete the signed-in account: the server hard-deletes the
+ * account, its owned data and every session. Throws ApiError on failure —
+ * deletion must never be presented as done when the server didn't confirm.
+ */
+export async function deleteAccount(token: string): Promise<void> {
+  const data = await request({ method: 'DELETE', path: '/api/me', token });
+  parseAs(okSchema, data);
+}
+
+/**
+ * Revoke EVERY session for this account (sign out on all devices), including
+ * the one making the call. Throws ApiError on failure so the caller can tell
+ * the user their other devices are still signed in.
+ */
+export async function logoutAll(token: string): Promise<void> {
+  const data = await request({ method: 'POST', path: '/api/auth/logout-all', token });
   parseAs(okSchema, data);
 }
 

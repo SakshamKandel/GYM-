@@ -84,6 +84,7 @@ export const DEFAULT_TARGETS: Targets = {
   carbs: 220,
   fat: 60,
   waterMl: 2500,
+  steps: 8000,
 };
 
 /**
@@ -129,6 +130,17 @@ export const useProfile = create<ProfileState>()(
     {
       name: 'gym-tracker-profile-v1',
       storage: createJSONStorage(() => mmkvStorage),
+      // Shallow spread + nested-targets backfill: a blob persisted before a
+      // Targets field existed (e.g. `steps`) would otherwise keep its stale
+      // nested object wholesale and leave the new field undefined at runtime.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<ProfileData>;
+        return {
+          ...current,
+          ...p,
+          targets: { ...DEFAULT_TARGETS, ...p.targets },
+        };
+      },
     },
   ),
 );

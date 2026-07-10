@@ -10,8 +10,10 @@ import {
   Button,
   enterDown,
   enterUp,
+  IconChip,
   PressableScale,
   Screen,
+  ScreenHeader,
   SectionLabel,
   Stepper,
   Tag,
@@ -50,6 +52,11 @@ import { useAuth } from '../../../state/auth';
  * `subscription.override` — whose meta also carries the expiry we surface as
  * each member's current window. Every override refetches both the affected
  * row's tier and the changes list.
+ *
+ * Block language (REVAMP-BRIEF): back row → ScreenHeader → charcoal member
+ * rows (no borders; tier pills keep their strokes — chips may carry borders) →
+ * charcoal override-history rows. The override sheet is a borderless charcoal
+ * panel with chunky block corners.
  */
 
 const TIERS: Tier[] = ['starter', 'silver', 'gold', 'elite'];
@@ -497,8 +504,9 @@ export default function AdminSubscriptionsScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppText variant="heading">Subscriptions</AppText>
       </Animated.View>
+
+      <ScreenHeader eyebrow="Admin console" title="Subscriptions" style={styles.header} />
 
       <AppTextInput
         value={query}
@@ -572,9 +580,7 @@ export default function AdminSubscriptionsScreen() {
             const tier = metaTier(e.meta);
             return (
               <View key={e.id} style={styles.changeRow}>
-                <View style={styles.changeIcon}>
-                  <Ionicons name="swap-horizontal" size={16} color={colors.accent} />
-                </View>
+                <IconChip icon="swap-horizontal" size={34} iconColor={colors.accent} />
                 <View style={styles.changeText}>
                   <AppText variant="body" numberOfLines={1}>
                     {e.actorEmail ?? 'Someone'}
@@ -620,17 +626,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  header: { marginBottom: spacing.gutter },
   list: { gap: spacing.md, marginTop: spacing.lg },
+  // Charcoal member row (brief §11c): fill contrast, no hairline borders.
   memberRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
+    minHeight: 64,
   },
   memberText: { flex: 1, gap: 2 },
   tierBadge: {
@@ -644,19 +651,14 @@ const styles = StyleSheet.create({
   },
   tierDot: { width: 8, height: 8, borderRadius: radius.full },
   changeList: { gap: spacing.sm },
+  // Override-history rows: charcoal cards, gaps instead of hairlines.
   changeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  changeIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: radius.full,
-    backgroundColor: colors.accentFaint,
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
   },
   changeText: { flex: 1, gap: 2 },
   loadingBlock: { paddingVertical: spacing.xxl, alignItems: 'center' },
@@ -679,12 +681,11 @@ const styles = StyleSheet.create({
     bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
+  // Borderless charcoal panel with block corners (no-border card law).
   sheetCard: {
     backgroundColor: colors.surface,
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderTopLeftRadius: radius.block,
+    borderTopRightRadius: radius.block,
     padding: spacing.xl,
     paddingBottom: spacing.xxl,
     gap: spacing.sm,
@@ -700,7 +701,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     borderWidth: 1.5,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     borderRadius: radius.full,
     paddingHorizontal: 16,
     height: touch.min,
@@ -714,7 +715,7 @@ const styles = StyleSheet.create({
   },
   durationPill: {
     borderWidth: 1.5,
-    borderColor: colors.border,
+    borderColor: colors.borderStrong,
     borderRadius: radius.full,
     paddingHorizontal: 16,
     height: touch.min,

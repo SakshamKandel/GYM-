@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { accountProfiles, accounts } from '@gym/db';
+import { accountProfiles } from '@gym/db';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
@@ -11,18 +11,13 @@ export const runtime = 'nodejs';
  * Cloud profile backup. GET restores the app's profile store on sign-in
  * (so returning users never re-run onboarding); PUT upserts it on change.
  *
- * PUT also mirrors the profile's `tier` onto the account row so SERVER-gated
- * features (coach chat, etc.) agree with the in-app tier. Tiers are a preview
- * selection today (no billing yet); a real payment webhook will own tier once
- * RevenueCat ships, at which point this mirror is removed.
+ * SECURITY: the profile blob is CLIENT-OWNED and untrusted. It may still carry
+ * a `tier` field for the app's own rendering, but it is NEVER mirrored onto
+ * accounts.tier — the old mirror let any signed-in user grant themselves Elite
+ * with a single PUT. accounts.tier is written exclusively by setAccountTier()
+ * (admin/coach console overrides, POST /api/subscription/tier, buddy trial),
+ * every path audited.
  */
-
-const TIERS = ['starter', 'silver', 'gold', 'elite'] as const;
-type Tier = (typeof TIERS)[number];
-function tierFromProfile(profile: Record<string, unknown>): Tier | null {
-  const t = profile['tier'];
-  return typeof t === 'string' && (TIERS as readonly string[]).includes(t) ? (t as Tier) : null;
-}
 
 export function OPTIONS() {
   return preflight();
@@ -61,8 +56,7 @@ export async function PUT(req: Request) {
   // Guardrail: the profile blob is small; reject anything bloated.
   if (JSON.stringify(profile).length > 20_000) return json({ error: 'invalid' }, 400);
 
-  const db = getDb();
-  await db
+  await getDb()
     .insert(accountProfiles)
     .values({ accountId: user.id, data: profile, updatedAt: new Date() })
     .onConflictDoUpdate({
@@ -70,11 +64,7 @@ export async function PUT(req: Request) {
       set: { data: profile, updatedAt: new Date() },
     });
 
-  // Mirror the preview tier onto the account so server-gated features agree.
-  const tier = tierFromProfile(profile);
-  if (tier !== null && tier !== user.tier) {
-    await db.update(accounts).set({ tier }).where(eq(accounts.id, user.id));
-  }
+  // NOTE: deliberately no accounts.tier write here — see the header comment.
 
   return json({ ok: true }, 200);
 }

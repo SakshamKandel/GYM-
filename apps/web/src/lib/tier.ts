@@ -1,7 +1,7 @@
 import { accounts } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
 import { eq, sql } from 'drizzle-orm';
-import { type Principal, logAudit } from './authz';
+import { type AuditActor, logAudit } from './authz';
 import { syncEliteCoachAssignment } from './coachAutoAssign';
 import { getDb } from './db';
 
@@ -34,12 +34,14 @@ export interface TierDates {
  *  4. Writes a 'subscription.override' audit row (incl. the dates) as `actor`.
  *
  * Callers must have gated on the appropriate permission first (this helper
- * gates nothing itself).
+ * gates nothing itself). `actor` is a staff Principal for console overrides,
+ * or `{ id: accountId }` for audited SELF-SERVE writes (subscription/tier,
+ * buddy trial) — never a client-supplied value.
  */
 export async function setAccountTier(
   accountId: string,
   tier: Tier,
-  actor: Principal,
+  actor: AuditActor,
   reason?: string,
   dates?: TierDates,
 ): Promise<void> {

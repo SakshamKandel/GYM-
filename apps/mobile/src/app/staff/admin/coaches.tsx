@@ -11,8 +11,10 @@ import {
   ConfirmDialog,
   enterDown,
   enterUp,
+  IconChip,
   PressableScale,
   Screen,
+  ScreenHeader,
   SectionLabel,
   Tag,
 } from '../../../components/ui';
@@ -40,6 +42,9 @@ import { useAuth } from '../../../state/auth';
  * member list rows (only on member detail), so when a result is selected we
  * fetch getMemberDetail to learn the member's current coach and offer the
  * correct action. Every mutation refetches so counts stay accurate.
+ *
+ * Block language (REVAMP-BRIEF): back row → ScreenHeader (meta chips carry the
+ * coach's status) → charcoal rows with Oswald client counts, no card borders.
  */
 
 const ERR_TEXT: Record<StaffErrorCode, string> = {
@@ -261,30 +266,29 @@ function CoachDetail({
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <View style={styles.headerText}>
-          <AppText variant="heading" numberOfLines={1}>
-            {coachDisplay(coach)}
-          </AppText>
-          <AppText variant="caption" numberOfLines={1}>
-            {coach.email}
-          </AppText>
-        </View>
       </Animated.View>
 
-      <Animated.View entering={enterUp(0)} style={styles.metaRow}>
-        <Tag
-          label={`${coach.activeClients} client${coach.activeClients === 1 ? '' : 's'}`}
-          variant="dim"
-        />
-        {coach.acceptingClients === false ? (
-          <Tag label="Not accepting" variant="outline" color={colors.warning} />
-        ) : (
-          <Tag label="Accepting" variant="outline" color={colors.success} />
-        )}
-        {coach.isActive === false ? (
-          <Tag label="Inactive" variant="outline" color={colors.textDim} />
-        ) : null}
-      </Animated.View>
+      <ScreenHeader
+        eyebrow={coach.email}
+        title={coachDisplay(coach)}
+        style={styles.header}
+        meta={
+          <>
+            <Tag
+              label={`${coach.activeClients} client${coach.activeClients === 1 ? '' : 's'}`}
+              variant="dim"
+            />
+            {coach.acceptingClients === false ? (
+              <Tag label="Not accepting" variant="outline" color={colors.warning} />
+            ) : (
+              <Tag label="Accepting" variant="outline" color={colors.success} />
+            )}
+            {coach.isActive === false ? (
+              <Tag label="Inactive" variant="outline" color={colors.textDim} />
+            ) : null}
+          </>
+        }
+      />
 
       <SectionLabel>Manage clients</SectionLabel>
       <AppTextInput
@@ -471,8 +475,9 @@ export default function AdminCoachesScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppText variant="heading">Coaches</AppText>
       </Animated.View>
+
+      <ScreenHeader eyebrow="Admin console" title="Coaches" style={styles.header} />
 
       {loading ? (
         <View style={styles.loadingBlock}>
@@ -496,9 +501,7 @@ export default function AdminCoachesScreen() {
                 onPress={() => setSelected(c)}
                 style={styles.coachRow}
               >
-                <View style={styles.avatar}>
-                  <Ionicons name="person" size={20} color={colors.accent} />
-                </View>
+                <IconChip icon="person" iconColor={colors.accent} />
                 <View style={styles.coachText}>
                   <AppText variant="bodyBold" numberOfLines={1}>
                     {coachDisplay(c)}
@@ -538,7 +541,6 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingBottom: spacing.lg,
   },
-  headerText: { flex: 1, gap: 2 },
   backBtn: {
     width: touch.min,
     height: touch.min,
@@ -547,31 +549,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  metaRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
+  header: { marginBottom: spacing.gutter },
   hint: { marginTop: spacing.sm, paddingHorizontal: spacing.xs },
   list: { gap: spacing.md },
+  // Charcoal list rows (brief §11c): fill contrast, no hairline borders.
   coachRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.full,
-    backgroundColor: colors.accentFaint,
-    alignItems: 'center',
-    justifyContent: 'center',
+    minHeight: 64,
   },
   coachText: { flex: 1, gap: 2 },
   coachMeta: { alignItems: 'center', minWidth: 48 },
@@ -581,11 +570,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
+    minHeight: 64,
   },
   memberText: { flex: 1, gap: 2 },
   rowRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },

@@ -6,6 +6,7 @@ import { createSession } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { verifyPassword } from '@/lib/password';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -14,11 +15,26 @@ const bodySchema = z.object({
   password: z.string(),
 });
 
+// Fixed decoy hash (valid 'scrypt$<salt>$<hash>' format) so login always runs
+// one scrypt comparison — even when the account is missing or Google-only —
+// keeping response time independent of account existence (anti-enumeration).
+const DUMMY_PASSWORD_HASH =
+  'scrypt$3641560fad7846eb0076eba7720d89cd$7ea23e33da09fecfc197b5895b37e7414eff348e0bf4ea36a7edbc78197bedce';
+
 export function OPTIONS() {
   return preflight();
 }
 
 export async function POST(req: Request) {
+  // Credential-stuffing damping: 10 attempts/min per IP (in-memory, per instance).
+  const limited = rateLimit({
+    route: 'auth/login',
+    limit: 10,
+    windowMs: 60_000,
+    ip: clientIp(req),
+  });
+  if (limited) return limited;
+
   const parsed = bodySchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
 
@@ -36,13 +52,13 @@ export async function POST(req: Request) {
     .where(eq(accounts.email, email))
     .limit(1);
 
-  // Google-only accounts have no passwordHash — password login always fails.
+  // Always run one scrypt comparison so response time doesn't reveal whether the
+  // email exists. Missing / Google-only accounts (null passwordHash) verify
+  // against a fixed decoy hash that can never match, then still fail with 401.
   const account = rows[0];
-  if (
-    !account ||
-    account.passwordHash === null ||
-    !verifyPassword(parsed.data.password, account.passwordHash)
-  ) {
+  const passwordHash = account?.passwordHash ?? DUMMY_PASSWORD_HASH;
+  const passwordOk = await verifyPassword(parsed.data.password, passwordHash);
+  if (!account || account.passwordHash === null || !passwordOk) {
     return json({ error: 'bad_credentials' }, 401);
   }
 

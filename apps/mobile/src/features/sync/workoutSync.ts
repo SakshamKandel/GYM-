@@ -199,13 +199,19 @@ export async function syncWorkouts(): Promise<void> {
   const initialAuth = useAuth.getState();
   if (initialAuth.status !== 'signedIn' || !initialAuth.user) return;
   inFlight = true;
+  // Pin the whole drain to the account whose backlog ownership we verify
+  // below. A mid-drain account switch (sign out + a different member signs
+  // in on a shared device) must NOT upload this account's still-unsynced
+  // rows under the new member's token.
+  const accountId = initialAuth.user.id;
   try {
     const repo = await getRepo();
-    await ensureBacklogOwnership(repo, initialAuth.user.id);
+    await ensureBacklogOwnership(repo, accountId);
     for (;;) {
-      // Re-read per batch so a mid-drain sign-out stops the upload cleanly.
+      // Re-read per batch so a mid-drain sign-out — or a switch to a
+      // different account — stops the upload cleanly.
       const auth = useAuth.getState();
-      if (auth.status !== 'signedIn' || !auth.token) return;
+      if (auth.status !== 'signedIn' || !auth.token || auth.user?.id !== accountId) return;
       const unitPref = useProfile.getState().unitPref;
 
       const pending = await repo.getUnsyncedFinishedWorkouts(MAX_WORKOUTS_PER_BATCH);

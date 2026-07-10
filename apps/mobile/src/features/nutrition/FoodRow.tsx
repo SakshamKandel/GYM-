@@ -1,28 +1,49 @@
+import type { ComponentProps } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing } from '@gym/ui-tokens';
+import type { Ionicons } from '@expo/vector-icons';
+import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import type { FoodItem } from '@gym/shared';
 import { AppText } from '../../components/ui/AppText';
+import { IconChip } from '../../components/ui/IconChip';
 import { PressableScale } from '../../components/ui/PressableScale';
 import { Tag } from '../../components/ui/Tag';
 import { sourceTagLabel } from './logic';
 
-/** Search/recents result row: name, brand · kcal/100g, macro caption, source tag. */
+/**
+ * Search/recents result row — a rounded charcoal tile in the block language
+ * (brief §11c): icon-chip anchor, name + brand/macros, kcal per 100 g in
+ * Oswald on the right rail. Rows in a stack are separated by gaps, never
+ * hairline dividers.
+ */
 
 interface Props {
   item: FoodItem;
   onPress: (item: FoodItem) => void;
 }
 
+/** Presentational anchor: where a food item comes from, as an icon. */
+const SOURCE_ICONS: Record<FoodItem['source'], ComponentProps<typeof Ionicons>['name']> = {
+  off: 'barcode-outline',
+  usda: 'library-outline',
+  custom: 'create-outline',
+  seed: 'nutrition-outline',
+};
+
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.md,
-    minHeight: 56,
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    minHeight: 64,
   },
-  info: { flex: 1, gap: 1 },
+  info: { flex: 1, minWidth: 0, gap: 2 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  name: { flexShrink: 1 },
+  kcalCol: { alignItems: 'flex-end', flexShrink: 0, gap: 2 },
+  kcal: { fontFamily: type.display, fontSize: 18, color: colors.text },
 });
 
 export function FoodRow({ item, onPress }: Props) {
@@ -36,19 +57,26 @@ export function FoodRow({ item, onPress }: Props) {
       onPress={() => onPress(item)}
       style={styles.row}
     >
+      <IconChip icon={SOURCE_ICONS[item.source]} />
       <View style={styles.info}>
-        <AppText variant="bodyBold" numberOfLines={1}>
-          {item.name}
-        </AppText>
-        <AppText variant="caption" numberOfLines={1}>
-          {sub}
-        </AppText>
-        <AppText variant="caption" color={colors.textFaint} tabular>
-          {macros}
+        <View style={styles.nameRow}>
+          <AppText variant="bodyBold" numberOfLines={1} style={styles.name}>
+            {item.name}
+          </AppText>
+          {tag !== null ? <Tag label={tag} variant="dim" /> : null}
+        </View>
+        <AppText variant="caption" numberOfLines={1} tabular>
+          {item.brand ? `${item.brand} · ${macros}` : macros}
         </AppText>
       </View>
-      {tag !== null ? <Tag label={tag} variant="dim" /> : null}
-      <Ionicons name="chevron-forward" size={16} color={colors.textFaint} />
+      <View style={styles.kcalCol}>
+        <AppText style={styles.kcal} tabular>
+          {Math.round(item.kcalPer100)}
+        </AppText>
+        <AppText variant="caption" color={colors.textFaint} tabular={false}>
+          kcal/100g
+        </AppText>
+      </View>
     </PressableScale>
   );
 }

@@ -48,7 +48,8 @@ export function TonnageChart({ weeks, unitPref, height = 150 }: Props) {
   const max = Math.max(...values, 1);
   const innerH = height - PAD_TOP - PAD_BOTTOM;
   const slot = n > 0 ? width / n : 0;
-  const barW = Math.min(22, Math.max(4, slot * 0.6));
+  // Thick pill bars (revamp §7 vocabulary translated to charts).
+  const barW = Math.min(26, Math.max(6, slot * 0.66));
   const unit = unitLabel(unitPref);
   const thisWeek = values[n - 1] ?? 0;
 
@@ -81,7 +82,7 @@ export function TonnageChart({ weeks, unitPref, height = 150 }: Props) {
                   y={PAD_TOP + innerH - h}
                   width={barW}
                   height={h}
-                  rx={3}
+                  rx={Math.min(barW / 2, h / 2)}
                   fill={i === n - 1 ? colors.accent : colors.borderStrong}
                 />
               );

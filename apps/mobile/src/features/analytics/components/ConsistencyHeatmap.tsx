@@ -22,7 +22,8 @@ const styles = StyleSheet.create({
   monthRow: { height: MONTH_ROW_H },
   month: { position: 'absolute', top: 0 },
   grid: { flexDirection: 'row' },
-  cell: { borderRadius: radius.sm - 8, marginBottom: GAP },
+  // Heatmap cells rounded 6 (revamp spec) — half the small radius token.
+  cell: { borderRadius: radius.sm / 2, marginBottom: GAP },
   rest: { backgroundColor: colors.surfaceRaised },
   done: { backgroundColor: colors.accent },
   future: { backgroundColor: 'transparent' },

@@ -24,9 +24,8 @@ const TIER_LABEL: Record<Tier, string> = {
 };
 
 const styles = StyleSheet.create({
+  // Borderless charcoal card — separation by fill contrast (REVAMP-BRIEF §1).
   card: {
-    borderWidth: 1.5,
-    borderColor: colors.border,
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
     padding: spacing.xl,

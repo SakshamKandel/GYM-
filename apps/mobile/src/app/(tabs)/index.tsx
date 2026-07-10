@@ -7,26 +7,27 @@ import { displayWeight, hasEntitlement, unitLabel, type PlanWorkout, type Tier }
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AITipCard,
-  AnimatedNumber,
   AnimatedTierRing,
   AppText,
   Button,
-  Divider,
+  Card,
   enterDown,
   enterFade,
   enterUp,
   FLOATING_TAB_SPACE,
-  HeroCard,
+  IconChip,
   PressableScale,
-  Ring,
   Screen,
+  ScreenHeader,
   SectionLabel,
+  Skeleton,
   Tag,
 } from '../../components/ui';
 import { posterDate } from '../../lib/dates';
 import { useAiTip } from '../../lib/ai/useAiTip';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
+import { ActivitySection } from '../../features/activity/components/ActivitySection';
 import { CheckInCard } from '../../features/checkin/components/CheckInCard';
 import { FirstWorkoutsQuest } from '../../features/engagement/components/FirstWorkoutsQuest';
 import {
@@ -48,6 +49,15 @@ import { useQuest } from '../../state/quest';
 /** Newie/mascot avatar — the coach entry reads as "from Greece", not the system. */
 const NEWIE = require('../../../assets/images/newie.png');
 
+/**
+ * Skeleton stand-in for the red hero block (eyebrow + display title + caption
+ * + 56dp pill CTA inside gutter padding ≈ 212dp). The real block is
+ * content-sized so font scaling never clips it.
+ */
+const SKELETON_HERO_H = 212;
+/** Matches the bento/stat tile minHeight so skeletons don't jump. */
+const TILE_HEIGHT = 148;
+
 const styles = StyleSheet.create({
   topRow: {
     flexDirection: 'row',
@@ -65,26 +75,31 @@ const styles = StyleSheet.create({
   },
   greet: { flex: 1 },
   iconBtn: {
-    width: 44,
-    height: 44,
+    width: touch.min,
+    height: touch.min,
     borderRadius: radius.full,
     backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headingWrap: { marginBottom: spacing.lg },
+  // Outlined meta pill (brief §6): chips may carry strokes — cards may not.
+  metaChip: {
+    minHeight: 34,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headingCopy: { marginTop: spacing.md, marginBottom: spacing.xl },
   questWrap: { marginBottom: spacing.lg },
-  // Prominent coach entry — surface row with the Newie avatar, sits right below
-  // the heading so "message Greece" is the first thing after the greeting.
+  // Coach entry row: Card supplies surface/radius/padding; this only
+  // lays out the avatar + text + trailing affordance.
   coachCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.lg,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
     marginBottom: spacing.lg,
   },
   coachAvatar: {
@@ -96,30 +111,38 @@ const styles = StyleSheet.create({
   coachText: { flex: 1, gap: 2 },
   // Trailing lock affordance for the gated (non-Elite) state: Elite tag + lock.
   coachLocked: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  heroCard: { marginBottom: spacing.lg },
-  /** The one big moment: workout name in huge condensed caps. */
-  heroName: { fontSize: 48, lineHeight: 56, marginTop: -4 },
-  volumeRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6 },
+  /**
+   * THE red hero block (brief §11b) — the screen's one energetic center.
+   * Flat blockRed fill, chunky corners, black ink, black pill CTA. Extra air
+   * around it per the brief's hero rhythm (28 = xl + xs).
+   */
+  hero: {
+    backgroundColor: colors.blockRed,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+    gap: spacing.md,
+    marginBottom: spacing.xl + spacing.xs,
+  },
+  /** Secondary ink on red: black at 0.75 ≈ 5.2:1 on blockRed — reads, quietly. */
+  heroDim: { opacity: 0.75 },
+  skelHero: { marginBottom: spacing.xl + spacing.xs },
   tileRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
   tileCell: { flex: 1 },
   tileWide: { marginBottom: spacing.lg },
   tipCard: { marginBottom: spacing.lg },
-  foodRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.lg,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-  },
-  foodText: { flex: 1 },
+  // Last-session zone: gap-separated rounded charcoal rows replace Divider
+  // hairlines (brief §11c).
+  rowStack: { gap: spacing.sm },
   lastRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     gap: spacing.md,
-    paddingVertical: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    minHeight: 64,
   },
+  lastMain: { flex: 1, gap: 2 },
   // Right-aligned meta must not be pushed off-screen by a long session name.
   lastMeta: { flexShrink: 0, textAlign: 'right' },
   historyRow: {
@@ -127,11 +150,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
     minHeight: touch.min,
-    paddingVertical: spacing.sm,
   },
 });
 
+/** Outlined meta pill for the header row (dates, counts). Not a tap target. */
+function MetaChip({ label }: { label: string }) {
+  return (
+    <View style={styles.metaChip}>
+      <AppText variant="label" color={colors.text}>
+        {label}
+      </AppText>
+    </View>
+  );
+}
+
+/**
+ * Red hero block — the screen's single red block AND its single primary CTA
+ * (a black "onBlock" pill, per the one-CTA law). Three states share one
+ * geometry: eyebrow/tag → Oswald display name → caption → full-width pill.
+ * All ink is black on red; secondary lines drop to 0.75 opacity.
+ */
 function Hero({
   planName,
   nextWorkout,
@@ -148,52 +191,109 @@ function Hero({
 }) {
   if (doneToday !== null) {
     return (
-      <HeroCard mascot style={styles.heroCard}>
-        <Tag label="✓ Done" variant="filled" />
-        <AppText variant="label">{planName ?? 'Workout'}</AppText>
-        <AppText variant="display" style={styles.heroName} numberOfLines={2}>
+      <View
+        accessibilityLabel={`Workout done today: ${doneToday.name}. ${formatCompact(volume)} ${unit} volume`}
+        style={styles.hero}
+      >
+        <Tag label="✓ Done" variant="onBlock" />
+        <AppText
+          variant="display"
+          color={colors.onBlock}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+        >
           {doneToday.name}
         </AppText>
-        <View style={styles.volumeRow}>
-          <AnimatedNumber value={volume} grouped variant="display" />
-          <AppText variant="caption">{unit} volume</AppText>
-        </View>
+        <AppText variant="caption" color={colors.onBlock} numberOfLines={1} style={styles.heroDim}>
+          {formatCompact(volume)} {unit} volume · {planName ?? 'Workout'}
+        </AppText>
         {nextWorkout !== null ? (
           <Button
             label="Go again"
-            variant="secondary"
+            variant="onBlock"
             onPress={() => router.push(toHref(`/workout/start?planWorkoutId=${nextWorkout.id}`))}
           />
         ) : null}
-      </HeroCard>
+      </View>
     );
   }
 
   if (nextWorkout === null) {
     return (
-      <HeroCard mascot style={styles.heroCard}>
-        <AppText variant="label">Next workout</AppText>
-        <AppText variant="display" style={styles.heroName} numberOfLines={2}>
+      <View
+        accessibilityLabel="No plan yet. Choose a plan to get your next workout here."
+        style={styles.hero}
+      >
+        <AppText variant="label" color={colors.onBlock}>
+          Next workout
+        </AppText>
+        <AppText
+          variant="display"
+          color={colors.onBlock}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+        >
           No plan yet
         </AppText>
-        <AppText variant="caption">Pick a plan to get your next workout here.</AppText>
-        <Button label="Choose a plan" variant="secondary" onPress={() => router.push('/(tabs)/train')} />
-      </HeroCard>
+        <AppText variant="caption" color={colors.onBlock} numberOfLines={1} style={styles.heroDim}>
+          Pick a plan to get your next workout here.
+        </AppText>
+        <Button
+          label="Choose a plan"
+          variant="onBlock"
+          onPress={() => router.push('/(tabs)/train')}
+        />
+      </View>
     );
   }
 
   return (
-    <HeroCard mascot style={styles.heroCard}>
-      <AppText variant="label">{planName ?? 'Next workout'}</AppText>
-      <AppText variant="display" style={styles.heroName} numberOfLines={2}>
+    <View
+      accessibilityLabel={`Next workout: ${nextWorkout.name}, ${nextWorkout.exercises.length} exercises`}
+      style={styles.hero}
+    >
+      <AppText variant="label" color={colors.onBlock}>
+        Next workout
+      </AppText>
+      <AppText
+        variant="display"
+        color={colors.onBlock}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
         {nextWorkout.name}
       </AppText>
-      <AppText variant="caption">{nextWorkout.exercises.length} exercises</AppText>
+      <AppText variant="caption" color={colors.onBlock} numberOfLines={1} style={styles.heroDim}>
+        {planName !== null ? `${planName} · ` : ''}
+        {nextWorkout.exercises.length} exercises
+      </AppText>
       <Button
         label="Start workout"
+        variant="onBlock"
         onPress={() => router.push(toHref(`/workout/start?planWorkoutId=${nextWorkout.id}`))}
       />
-    </HeroCard>
+    </View>
+  );
+}
+
+/**
+ * Skeleton geometry for everything data-driven: the red hero block, the
+ * two-tile stat row, and the wide PR tile — all at `radius.block` to match
+ * the new geometry. Static fade-in per design law — no shimmer.
+ */
+function HomeSkeleton() {
+  return (
+    <View>
+      <Skeleton height={SKELETON_HERO_H} radius={radius.block} style={styles.skelHero} />
+      <View style={styles.tileRow}>
+        <Skeleton height={TILE_HEIGHT} radius={radius.block} style={styles.tileCell} />
+        <Skeleton height={TILE_HEIGHT} radius={radius.block} style={styles.tileCell} />
+      </View>
+      <Skeleton height={TILE_HEIGHT} radius={radius.block} />
+    </View>
   );
 }
 
@@ -204,8 +304,7 @@ function Hero({
 function CoachEntry({ tier }: { tier: Tier }) {
   const unlocked = hasEntitlement({ tier }, 'coach_chat');
   return (
-    <PressableScale
-      accessibilityRole="button"
+    <Card
       accessibilityLabel={
         unlocked ? 'Chat with Greece, your one on one coach' : 'Chat with Greece — Elite plan'
       }
@@ -229,21 +328,20 @@ function CoachEntry({ tier }: { tier: Tier }) {
           <Ionicons name="lock-closed" size={14} color={colors.textFaint} />
         </View>
       )}
-    </PressableScale>
+    </Card>
   );
 }
 
 export default function HomeScreen() {
   const displayName = useProfile((s) => s.displayName);
   const planId = useProfile((s) => s.planId);
-  const targets = useProfile((s) => s.targets);
   const unitPref = useProfile((s) => s.unitPref);
   const goalType = useProfile((s) => s.goalType);
   const startWeightKg = useProfile((s) => s.startWeightKg);
   const targetWeightKg = useProfile((s) => s.targetWeightKg);
-  const tier = useProfile((s) => s.tier);
-  // Server-authoritative tier for the greeting ring — never useProfile.tier
-  // (local upgrade-only mirror, known to drift above the server's value).
+  // Server-authoritative tier for the greeting ring and coach-chat gate —
+  // never useProfile.tier (local upgrade-only mirror, known to drift above
+  // the server's value, which would route downgraded users into a dead-end).
   const serverTier = useAuth((s) => s.user?.tier ?? 'starter');
   const data = useHomeData(planId);
   const weeklyStreak = useWeeklyStreak();
@@ -253,6 +351,12 @@ export default function HomeScreen() {
   const unit = unitLabel(unitPref);
   const last = data?.lastSession ?? null;
   const showQuest = quest !== null && !quest.expired && !questDismissed;
+  const todayDescription = data?.doneToday
+    ? 'You showed up today. Keep the momentum going with one clear next step.'
+    : data?.nextWorkout
+      ? `${data.nextWorkout.name} is ready. Everything you need for today is below.`
+      : 'Set your plan, then let this screen keep your next move obvious.';
+  const sessionsThisWeek = data?.weekSessions ?? 0;
 
   const { state: tipState, refresh } = useAiTip(() => {
     const streak = weeklyStreak?.weeks ?? 0;
@@ -303,22 +407,30 @@ export default function HomeScreen() {
         </PressableScale>
       </Animated.View>
 
-      <Animated.View entering={enterDown(1)} style={styles.headingWrap}>
-        <AppText variant="label">{posterDate()}</AppText>
-        <AppText variant="heading">Today</AppText>
+      {/* Header pattern (brief §5): eyebrow → huge Oswald TODAY → meta chips.
+          The old CommandHeader content survives: badge → eyebrow, poster date
+          + sessions status → chips, description → the dim line below. */}
+      <ScreenHeader
+        eyebrow={data?.doneToday ? 'Done' : 'Focus'}
+        title="Today"
+        meta={
+          <>
+            <MetaChip label={posterDate()} />
+            <MetaChip
+              label={`${sessionsThisWeek} ${sessionsThisWeek === 1 ? 'session' : 'sessions'} this week`}
+            />
+          </>
+        }
+      />
+      <Animated.View entering={enterDown(1)}>
+        <AppText variant="body" color={colors.textDim} style={styles.headingCopy}>
+          {todayDescription}
+        </AppText>
       </Animated.View>
 
-      <Animated.View entering={enterUp(0)}>
-        <CoachEntry tier={tier} />
-      </Animated.View>
-
-      {showQuest ? (
-        <Animated.View entering={enterFade(0)} style={styles.questWrap}>
-          <FirstWorkoutsQuest progress={quest} />
-        </Animated.View>
-      ) : null}
-
-      {data !== null ? (
+      {data === null ? (
+        <HomeSkeleton />
+      ) : (
         <>
           <Animated.View entering={enterUp(0)}>
             <Hero
@@ -330,53 +442,75 @@ export default function HomeScreen() {
             />
           </Animated.View>
 
-          <Animated.View entering={enterUp(1)} style={styles.tileRow}>
-            <View style={styles.tileCell}>
-              <StatTile
-                title="Volume"
-                value={formatCompact(displayWeight(data.weekVolumeKg, unitPref))}
-                unit={unit}
-                icon="barbell"
-                color={colors.accent}
-                deepColor={colors.accentDim}
-                sheetTitle="Volume this week"
-              >
-                <VolumeDetail
-                  byDay={data.weekVolumeByDay}
-                  totalKg={data.weekVolumeKg}
-                  sessionCount={data.weekSessions}
-                  unitPref={unitPref}
-                />
-              </StatTile>
-            </View>
-            <View style={styles.tileCell}>
-              <StatTile
-                title="Sessions"
-                value={data.weekSessions}
-                icon="calendar"
-                color={colors.blue}
-                deepColor={colors.blueDeep}
-                sheetTitle="Sessions this week"
-              >
-                <SessionsDetail sessions={data.weekSessionList} unitPref={unitPref} />
-              </StatTile>
+          {/* Bento zone: cream steps block + charcoal calories block. */}
+          <ActivitySection stagger={1} />
+
+          <Animated.View entering={enterUp(2)}>
+            <SectionLabel>This week</SectionLabel>
+            <View style={styles.tileRow}>
+              <View style={styles.tileCell}>
+                <StatTile
+                  title="Volume"
+                  value={formatCompact(displayWeight(data.weekVolumeKg, unitPref))}
+                  unit={unit}
+                  icon="barbell"
+                  color={colors.surface}
+                  deepColor={colors.surfaceRaised}
+                  textColor={colors.text}
+                  sheetTitle="Volume this week"
+                >
+                  <VolumeDetail
+                    byDay={data.weekVolumeByDay}
+                    totalKg={data.weekVolumeKg}
+                    sessionCount={data.weekSessions}
+                    unitPref={unitPref}
+                  />
+                </StatTile>
+              </View>
+              <View style={styles.tileCell}>
+                <StatTile
+                  title="Sessions"
+                  value={data.weekSessions}
+                  icon="calendar"
+                  color={colors.surface}
+                  deepColor={colors.surfaceRaised}
+                  textColor={colors.text}
+                  sheetTitle="Sessions this week"
+                >
+                  <SessionsDetail sessions={data.weekSessionList} unitPref={unitPref} />
+                </StatTile>
+              </View>
             </View>
           </Animated.View>
-          <Animated.View entering={enterUp(2)} style={styles.tileWide}>
+          <Animated.View entering={enterUp(3)} style={styles.tileWide}>
             <StatTile
               title="PRs"
               value={data.prCount}
               icon="trophy"
-              color={colors.orange}
-              deepColor={colors.orangeDeep}
-              textColor={colors.onOrange}
+              color={colors.surface}
+              deepColor={colors.surfaceRaised}
+              textColor={colors.text}
               sheetTitle="Recent PRs"
             >
               <PrDetail prs={data.recentPrs} unitPref={unitPref} />
             </StatTile>
           </Animated.View>
 
-          <Animated.View entering={enterUp(3)} style={styles.tipCard}>
+          {showQuest ? (
+            <Animated.View entering={enterFade(0)} style={styles.questWrap}>
+              <FirstWorkoutsQuest progress={quest} />
+            </Animated.View>
+          ) : null}
+
+          <Animated.View entering={enterUp(4)}>
+            <SectionLabel>Coach</SectionLabel>
+            <CoachEntry tier={serverTier} />
+          </Animated.View>
+
+          <CheckInCard stagger={5} />
+          <WeeklyCheckIn stagger={5} />
+
+          <Animated.View entering={enterUp(6)} style={styles.tipCard}>
             <AITipCard
               title="Coach tip"
               tip={tipState.status === 'done' ? tipState.text : null}
@@ -386,69 +520,42 @@ export default function HomeScreen() {
             />
           </Animated.View>
 
-          <CheckInCard stagger={4} />
-          <WeeklyCheckIn stagger={4} />
-
-          <Animated.View entering={enterUp(5)}>
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel={`Food today: ${data.kcalEaten} of ${targets.kcal} kilocalories. Open Food`}
-              onPress={() => router.push('/(tabs)/food')}
-              style={styles.foodRow}
-            >
-              <Ring
-                progress={targets.kcal > 0 ? data.kcalEaten / targets.kcal : 0}
-                size={48}
-                strokeWidth={5}
-                color={colors.kcal}
-                delay={350}
-              />
-              <View style={styles.foodText}>
-                <AppText variant="bodyBold">Calories</AppText>
-                <AppText variant="caption">
-                  {data.kcalEaten} of {targets.kcal} kcal
-                </AppText>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
-            </PressableScale>
-          </Animated.View>
-
           {last !== null ? (
-            <Animated.View entering={enterUp(6)}>
+            <Animated.View entering={enterUp(7)}>
               <SectionLabel>Last session</SectionLabel>
-              <Divider />
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityLabel={`Last session: ${last.name}, ${posterDate(last.date)}. See details`}
-                onPress={() => void openLastSession()}
-                style={styles.lastRow}
-              >
-                <View style={{ flex: 1 }}>
-                  <AppText variant="bodyBold" numberOfLines={1}>
-                    {last.name}
+              <View style={styles.rowStack}>
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel={`Last session: ${last.name}, ${posterDate(last.date)}. See details`}
+                  onPress={() => void openLastSession()}
+                  style={styles.lastRow}
+                >
+                  <IconChip icon="barbell-outline" />
+                  <View style={styles.lastMain}>
+                    <AppText variant="bodyBold" numberOfLines={1}>
+                      {last.name}
+                    </AppText>
+                    <AppText variant="caption">{posterDate(last.date)}</AppText>
+                  </View>
+                  <AppText variant="caption" numberOfLines={1} style={styles.lastMeta}>
+                    {formatCompact(displayWeight(last.volumeKg, unitPref))} {unit} · {last.sets} sets
                   </AppText>
-                  <AppText variant="caption">{posterDate(last.date)}</AppText>
-                </View>
-                <AppText variant="caption" numberOfLines={1} style={styles.lastMeta}>
-                  {formatCompact(displayWeight(last.volumeKg, unitPref))} {unit} · {last.sets} sets
-                </AppText>
-                <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-              </PressableScale>
-              <Divider />
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityLabel="See all history"
-                onPress={() => pushHistory()}
-                style={styles.historyRow}
-              >
-                <AppText variant="bodyBold">See all history</AppText>
-                <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-              </PressableScale>
-              <Divider />
+                  <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                </PressableScale>
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel="See all history"
+                  onPress={() => pushHistory()}
+                  style={styles.historyRow}
+                >
+                  <AppText variant="bodyBold">See all history</AppText>
+                  <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                </PressableScale>
+              </View>
             </Animated.View>
           ) : null}
         </>
-      ) : null}
+      )}
     </Screen>
   );
 }

@@ -18,9 +18,10 @@ import { AppText } from '../../../components/ui';
 import { formatWeightNumber } from '../logic';
 
 /**
- * One set row in the logger.
- * - logged → committed numbers (Oswald 26) + subtle check, PR tag when earned
- * - current → raised, ghosted last-session numbers to beat (textFaint)
+ * One set row in the logger (Blocked language).
+ * - logged → DONE = red-filled pill (black Oswald numbers + check), quiet RPE
+ *   pill beside it, outlined PR stamp when earned (pills may carry strokes)
+ * - current → raised rounded row, ghosted last-session numbers to beat
  * - future → dim target only
  * PR moment: one-time red fill flash (opacity 0→1→0, ~450ms, no loop) and
  * the PR tag scale-settles 1.15→1.0. A stamp, not confetti.
@@ -54,10 +55,28 @@ const styles = StyleSheet.create({
     width: 28,
   },
   target: { flex: 1, marginLeft: spacing.sm },
-  numbers: {
+  /** DONE state — red-filled pill, black ink (black-on-red brand law). */
+  donePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: colors.accent,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    minHeight: 34,
+  },
+  doneNumbers: {
     fontFamily: type.display,
-    fontSize: 26,
-    color: colors.text,
+    fontSize: 20,
+    color: colors.onBlock,
+  },
+  /** Quiet raised pill for the optional effort rating. */
+  rpePill: {
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
   },
   ghostNumbers: {
     fontFamily: type.display,
@@ -68,8 +87,8 @@ const styles = StyleSheet.create({
   prTag: {
     borderWidth: 1.5,
     borderColor: colors.accent,
-    borderRadius: radius.sm - 6,
-    paddingHorizontal: 6,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
     paddingVertical: 1,
   },
   prTagText: {
@@ -159,15 +178,19 @@ export function SetRow({
                 </AppText>
               </Animated.View>
             ) : null}
-            <AppText style={styles.numbers} tabular>
-              {fmtSet(logged, unitPref)}
-            </AppText>
             {logged.rpe !== null ? (
-              <AppText variant="caption" color={colors.textFaint} tabular>
-                {`RPE ${logged.rpe}`}
-              </AppText>
+              <View style={styles.rpePill}>
+                <AppText variant="caption" color={colors.textDim} tabular>
+                  {`RPE ${logged.rpe}`}
+                </AppText>
+              </View>
             ) : null}
-            <Ionicons name="checkmark" size={16} color={colors.textDim} />
+            <View style={styles.donePill}>
+              <AppText style={styles.doneNumbers} tabular>
+                {fmtSet(logged, unitPref)}
+              </AppText>
+              <Ionicons name="checkmark" size={14} color={colors.onBlock} />
+            </View>
           </>
         ) : isCurrent ? (
           <AppText style={styles.ghostNumbers} tabular>

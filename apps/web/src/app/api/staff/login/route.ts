@@ -5,6 +5,7 @@ import { createSession } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { verifyPassword } from '@/lib/password';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { setStaffCookie } from '@/lib/staffSession';
 
 export const runtime = 'nodejs';
@@ -26,6 +27,15 @@ export function OPTIONS() {
  * account is not staff — no oracle for probing staff emails.
  */
 export async function POST(req: Request) {
+  // Staff creds are the crown jewels — same 10/min/IP damping as member login.
+  const limited = rateLimit({
+    route: 'staff/login',
+    limit: 10,
+    windowMs: 60_000,
+    ip: clientIp(req),
+  });
+  if (limited) return limited;
+
   const parsed = bodySchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
 
@@ -45,14 +55,11 @@ export async function POST(req: Request) {
     .limit(1);
 
   const account = rows[0];
-  if (
-    !account ||
-    account.status !== 'active' ||
-    account.passwordHash === null ||
-    !verifyPassword(parsed.data.password, account.passwordHash)
-  ) {
+  if (!account || account.status !== 'active' || account.passwordHash === null) {
     return json({ error: 'bad_credentials' }, 401);
   }
+  const passwordOk = await verifyPassword(parsed.data.password, account.passwordHash);
+  if (!passwordOk) return json({ error: 'bad_credentials' }, 401);
 
   const token = await createSession(account.id);
   await setStaffCookie(token);

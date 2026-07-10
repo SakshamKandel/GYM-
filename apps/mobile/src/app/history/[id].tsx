@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -8,13 +8,12 @@ import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import {
   AppText,
   Button,
+  Card,
   ConfirmDialog,
-  Divider,
+  EmptyState,
   enterDown,
   enterUp,
   Screen,
-  SectionLabel,
-  StatBlock,
   Tag,
 } from '../../components/ui';
 import { BackHeader } from '../../features/body/components/BackHeader';
@@ -63,21 +62,51 @@ function useIsFlagged(workoutId: string | undefined): boolean {
   return flagged;
 }
 
-/** Full session detail: header stats, every set per exercise, vs-last-time. */
+/**
+ * True when the primary session fetch rejects. useWorkoutDetail swallows this:
+ * if getWorkout/getSetsForWorkout throws it never flips `loaded`, so the screen
+ * would otherwise sit blank forever. This mirrors that same primary fetch purely
+ * to observe success vs. failure, letting the screen show an explicit error.
+ */
+function useWorkoutLoadError(workoutId: string | undefined): boolean {
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    setError(false);
+    if (workoutId === undefined) return;
+    let mounted = true;
+    void (async () => {
+      try {
+        const repo = await getRepo();
+        await Promise.all([repo.getWorkout(workoutId), repo.getSetsForWorkout(workoutId)]);
+      } catch {
+        if (mounted) setError(true);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [workoutId]);
+
+  return error;
+}
+
+/** Full session detail: red summary block, every set per exercise, vs-last-time. */
 
 const styles = StyleSheet.create({
-  headingWrap: { marginBottom: spacing.sm },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    padding: spacing.lg,
-    marginTop: spacing.md,
-  },
-  // Equal, shrinkable shares so a big volume number can't push "prs" off the card.
-  statCol: { flexShrink: 1, minWidth: 0 },
+  headingWrap: { marginBottom: spacing.lg, gap: spacing.sm },
+  title: { textTransform: 'uppercase' },
+  loadingWrap: { paddingVertical: spacing.xxl, alignItems: 'center' },
+  // The screen's ONE red block: date eyebrow, Oswald volume headline, meta pills.
+  summary: { gap: spacing.md },
+  volumeRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs },
+  volumeValue: { flexShrink: 1 },
+  volumeUnit: { opacity: 0.6 },
+  summaryChips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  breakdownLabel: { marginTop: spacing.xl, marginBottom: spacing.xs },
+  // Charcoal exercise blocks — fill contrast, no hairline dividers.
+  groupCard: { marginTop: spacing.md },
+  groupTitle: { marginBottom: spacing.xs },
   setRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -91,7 +120,7 @@ const styles = StyleSheet.create({
   flagRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: spacing.sm,
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     padding: spacing.md,
@@ -106,6 +135,7 @@ export default function HistoryDetailScreen() {
   const unitPref = useProfile((s) => s.unitPref);
   const unit = unitLabel(unitPref);
   const { workout, loaded, stats, groups, vsLast } = useWorkoutDetail(workoutId);
+  const loadError = useWorkoutLoadError(workoutId);
   const flagged = useIsFlagged(workoutId);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -120,40 +150,61 @@ export default function HistoryDetailScreen() {
     router.back();
   }
 
+  const prCount = stats?.prCount ?? 0;
+
   return (
     <Screen scroll>
       <BackHeader />
 
-      {workout === null ? (
-        loaded ? (
-          <AppText variant="body" color={colors.textDim}>
-            This session is no longer in your log.
-          </AppText>
-        ) : null
+      {loadError ? (
+        <EmptyState
+          icon="alert-circle-outline"
+          title="Couldn't open this session"
+          body="Something went wrong loading this workout. Head back and try again."
+        />
+      ) : !loaded ? (
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator color={colors.accent} />
+        </View>
+      ) : workout === null ? (
+        <AppText variant="body" color={colors.textDim}>
+          This session is no longer in your log.
+        </AppText>
       ) : (
         <>
           <Animated.View entering={enterDown(1)} style={styles.headingWrap}>
-            <AppText variant="label">{posterDate(workout.date)}</AppText>
-            <AppText variant="heading" numberOfLines={2}>
+            <AppText variant="label">Session</AppText>
+            <AppText variant="display" numberOfLines={2} style={styles.title}>
               {workout.name}
             </AppText>
           </Animated.View>
 
-          <Animated.View entering={enterUp(0)} style={styles.statsRow}>
-            <StatBlock label="time" value={clockLabel(workout.durationSec)} style={styles.statCol} />
-            <StatBlock
-              label="volume"
-              value={formatCompact(displayWeight(stats?.volumeKg ?? 0, unitPref))}
-              unit={unit}
-              style={styles.statCol}
-            />
-            <StatBlock label="sets" value={stats?.setCount ?? 0} style={styles.statCol} />
-            <StatBlock
-              label="prs"
-              value={stats?.prCount ?? 0}
-              accent={(stats?.prCount ?? 0) > 0}
-              style={styles.statCol}
-            />
+          <Animated.View entering={enterUp(0)}>
+            <Card variant="red" style={styles.summary}>
+              <AppText variant="label" color={colors.onBlock}>
+                {posterDate(workout.date)}
+              </AppText>
+              <View style={styles.volumeRow}>
+                <AppText
+                  variant="stat"
+                  color={colors.onBlock}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.6}
+                  style={styles.volumeValue}
+                >
+                  {formatCompact(displayWeight(stats?.volumeKg ?? 0, unitPref))}
+                </AppText>
+                <AppText variant="title" color={colors.onBlock} style={styles.volumeUnit}>
+                  {`${unit} total`}
+                </AppText>
+              </View>
+              <View style={styles.summaryChips}>
+                <Tag variant="onBlock" label={clockLabel(workout.durationSec)} />
+                <Tag variant="onBlock" label={`${stats?.setCount ?? 0} sets`} />
+                <Tag variant="onBlock" label={prCount === 1 ? '1 PR' : `${prCount} PRS`} />
+              </View>
+            </Card>
           </Animated.View>
 
           {flagged ? (
@@ -165,41 +216,49 @@ export default function HistoryDetailScreen() {
             </Animated.View>
           ) : null}
 
+          <Animated.View entering={enterUp(1)} style={styles.breakdownLabel}>
+            <AppText variant="label">
+              {`Exercise breakdown · ${groups.length}`}
+            </AppText>
+          </Animated.View>
+
           {groups.map((g, gi) => {
             const comparison = vsLast[g.exerciseId];
             return (
-              <Animated.View key={g.exerciseId} entering={enterUp(Math.min(gi + 1, 6))}>
-                <SectionLabel>{g.exerciseName}</SectionLabel>
-                <Divider />
-                {g.sets.map((s, si) => (
-                  <View key={s.id} style={styles.setRow}>
-                    <AppText variant="caption" color={colors.textFaint} tabular style={styles.setNo}>
-                      {si + 1}
-                    </AppText>
-                    <AppText style={styles.setNumbers} tabular numberOfLines={1}>
-                      {`${formatWeightNumber(displayWeight(s.weightKg, unitPref))} ${unit} × ${s.reps}`}
-                    </AppText>
-                    {s.rpe !== null ? <AppText variant="caption">{`RPE ${s.rpe}`}</AppText> : null}
-                    {s.isPr ? <Tag label="PR" variant="filled" /> : null}
-                  </View>
-                ))}
-                <Divider />
-                {comparison !== undefined ? (
-                  <AppText variant="caption" style={styles.vsLine}>
-                    {comparison.kind === 'first'
-                      ? 'First time logging this one — nothing to compare yet.'
-                      : vsLastLine(
-                          displayWeight(comparison.deltaVolumeKg, unitPref),
-                          displayWeight(comparison.deltaBestKg, unitPref),
-                          unit,
-                        )}
+              <Animated.View key={g.exerciseId} entering={enterUp(Math.min(gi + 2, 6))}>
+                <Card style={styles.groupCard}>
+                  <AppText variant="title" numberOfLines={2} style={styles.groupTitle}>
+                    {g.exerciseName}
                   </AppText>
-                ) : null}
+                  {g.sets.map((s, si) => (
+                    <View key={s.id} style={styles.setRow}>
+                      <AppText variant="caption" color={colors.textFaint} tabular style={styles.setNo}>
+                        {si + 1}
+                      </AppText>
+                      <AppText style={styles.setNumbers} tabular numberOfLines={1}>
+                        {`${formatWeightNumber(displayWeight(s.weightKg, unitPref))} ${unit} × ${s.reps}`}
+                      </AppText>
+                      {s.rpe !== null ? <AppText variant="caption">{`RPE ${s.rpe}`}</AppText> : null}
+                      {s.isPr ? <Tag label="PR" variant="filled" /> : null}
+                    </View>
+                  ))}
+                  {comparison !== undefined ? (
+                    <AppText variant="caption" style={styles.vsLine}>
+                      {comparison.kind === 'first'
+                        ? 'First time logging this one — nothing to compare yet.'
+                        : vsLastLine(
+                            displayWeight(comparison.deltaVolumeKg, unitPref),
+                            displayWeight(comparison.deltaBestKg, unitPref),
+                            unit,
+                          )}
+                    </AppText>
+                  ) : null}
+                </Card>
               </Animated.View>
             );
           })}
 
-          <Animated.View entering={enterUp(Math.min(groups.length + 1, 7))}>
+          <Animated.View entering={enterUp(Math.min(groups.length + 2, 7))}>
             <Button
               label="Delete workout"
               variant="danger"

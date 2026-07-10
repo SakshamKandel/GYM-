@@ -4,15 +4,21 @@ import { AppText } from './AppText';
 import { PressableScale } from './PressableScale';
 
 /**
- * Primary = solid red pill, white semibold label, 56dp tall.
- * Secondary = 1px outlined pill. Ghost = text only.
- * Red is reserved for "the action to take now" — one primary per view.
+ * Pill buttons (REVAMP-BRIEF §2/§6). One primary CTA per screen.
+ * - `primary` — solid red pill, BLACK label (black-on-red brand law), 56dp.
+ * - `onBlock` — near-black pill with light label, for CTAs sitting INSIDE a
+ *   red or cream block.
+ * - `secondary` — charcoal pill (`surfaceRaised`), white label, no border.
+ * - `ghost` — text only.
+ * - `danger` — outlined destructive pill (pills may carry strokes; cards may not).
  */
+
+type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'onBlock';
 
 interface Props {
   label: string;
   onPress: () => void;
-  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
+  variant?: Variant;
   disabled?: boolean;
   loading?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -30,11 +36,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   primary: { backgroundColor: colors.accent },
-  secondary: {
-    backgroundColor: 'transparent',
-    borderWidth: 1.5,
-    borderColor: colors.borderStrong,
-  },
+  onBlock: { backgroundColor: colors.onBlock },
+  secondary: { backgroundColor: colors.surfaceRaised },
   ghost: { backgroundColor: 'transparent', minHeight: touch.min },
   danger: {
     backgroundColor: 'transparent',
@@ -49,6 +52,14 @@ const styles = StyleSheet.create({
   },
 });
 
+const LABEL_COLOR: Record<Variant, string> = {
+  primary: colors.onBlock,
+  onBlock: colors.text,
+  secondary: colors.text,
+  ghost: colors.text,
+  danger: colors.error,
+};
+
 export function Button({
   label,
   onPress,
@@ -58,12 +69,7 @@ export function Button({
   style,
   accessibilityLabel,
 }: Props) {
-  const textColor =
-    variant === 'primary'
-      ? colors.onAccent
-      : variant === 'danger'
-        ? colors.error
-        : colors.text;
+  const textColor = LABEL_COLOR[variant];
   return (
     <PressableScale
       accessibilityRole="button"

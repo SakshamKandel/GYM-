@@ -85,14 +85,13 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginTop: spacing.lg,
   },
+  // Filled charcoal pills — block language separates by fill, not strokes.
   starter: {
     minHeight: touch.min,
     justifyContent: 'center',
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
+    paddingHorizontal: spacing.gutter,
+    borderRadius: radius.full,
     backgroundColor: colors.surface,
   },
   dayDivider: {
@@ -109,22 +108,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
     paddingVertical: spacing.sm,
+    minHeight: touch.min,
   },
   errorRow: { paddingHorizontal: spacing.xs, paddingBottom: spacing.xs },
+  // Composer: pill input beside the red send circle — no hairline above,
+  // the filled pill separates itself from the thread (no-border law).
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: spacing.sm,
     paddingTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
   },
-  input: { flex: 1, maxHeight: 120, paddingTop: 16, paddingBottom: 16 },
+  input: {
+    flex: 1,
+    maxHeight: 120,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.gutter,
+    borderRadius: radius.full,
+  },
   sendBtn: {
     width: touch.primary,
     height: touch.primary,
     borderRadius: radius.full,
-    backgroundColor: colors.accent,
+    backgroundColor: colors.blockRed,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -215,7 +222,7 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder, starters
           <AppText variant="title" center>
             {emptyTitle}
           </AppText>
-          <AppText variant="caption" center>
+          <AppText variant="body" color={colors.textDim} center>
             {emptyBody}
           </AppText>
           {starters && starters.length > 0 ? (
@@ -264,7 +271,7 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder, starters
 
       {sendError ? (
         <View style={styles.errorRow}>
-          <AppText variant="caption" color={colors.error}>
+          <AppText variant="body" color={colors.error}>
             {sendError === 'forbidden'
               ? 'Messaging is an Elite feature.'
               : "Couldn't send — check your connection and try again."}
@@ -292,9 +299,9 @@ export function CoachThread({ kind, emptyTitle, emptyBody, placeholder, starters
           style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]}
         >
           {sending ? (
-            <ActivityIndicator color={colors.onAccent} />
+            <ActivityIndicator color={colors.onBlock} />
           ) : (
-            <Ionicons name="arrow-up" size={22} color={colors.onAccent} />
+            <Ionicons name="arrow-up" size={22} color={colors.onBlock} />
           )}
         </PressableScale>
       </View>

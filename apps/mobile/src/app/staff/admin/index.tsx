@@ -8,11 +8,11 @@ import {
   AppText,
   enterDown,
   enterUp,
-  HeroCard,
+  IconChip,
   PressableScale,
   Screen,
+  ScreenHeader,
   SectionLabel,
-  StatBlock,
 } from '../../../components/ui';
 import { useAuth } from '../../../state/auth';
 import {
@@ -33,6 +33,10 @@ import {
  * stat grid, then lists the admin sub-consoles. Loading is a quiet spinner;
  * an error is a single retry line — no blocking modal. The Roles + Audit rows
  * only render for super_admin/main_admin (the screens re-gate themselves too).
+ *
+ * Block language (REVAMP-BRIEF): back/action row → ScreenHeader → the ONE red
+ * hero block (platform-overview stat grid, Oswald numerals in black ink) →
+ * charcoal nav rows, no card borders.
  */
 
 interface NavRow {
@@ -85,6 +89,20 @@ const NAV_ROWS: NavRow[] = [
   },
 ];
 
+/** One overview cell: Oswald numeral over an eyebrow, black ink on red. */
+function HeroStat({ label, value }: { label: string; value: number }) {
+  return (
+    <View style={styles.statCell}>
+      <AppText variant="label" color={colors.onBlock} numberOfLines={1}>
+        {label}
+      </AppText>
+      <AppText variant="display" color={colors.onBlock} numberOfLines={1}>
+        {value}
+      </AppText>
+    </View>
+  );
+}
+
 export default function AdminHomeScreen() {
   const token = useAuth((s) => s.token);
   const staffRole = useAuth((s) => s.staffRole);
@@ -122,7 +140,7 @@ export default function AdminHomeScreen() {
 
   return (
     <Screen scroll>
-      <Animated.View entering={enterDown()} style={styles.headerRow}>
+      <Animated.View entering={enterDown()} style={styles.actionRow}>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Back"
@@ -131,9 +149,7 @@ export default function AdminHomeScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppText variant="heading" style={styles.headerTitle}>
-          Admin
-        </AppText>
+        <View style={styles.actionSpacer} />
         {/* Leave the console for the member app (stay signed in). */}
         <StaffHeaderAction
           icon="phone-portrait-outline"
@@ -147,44 +163,35 @@ export default function AdminHomeScreen() {
         />
       </Animated.View>
 
+      <ScreenHeader eyebrow="Staff console" title="Admin" style={styles.header} />
+
+      {/* The screen's ONE red hero block — the headline stat grid. */}
       <Animated.View entering={enterUp(0)} style={styles.hero}>
-        <HeroCard>
-          <AppText variant="label">Platform overview</AppText>
-          {loading && !overview ? (
-            <View style={styles.heroLoading}>
-              <ActivityIndicator size="small" color={colors.textDim} />
-            </View>
-          ) : error && !overview ? (
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="Retry loading overview"
-              onPress={() => void load()}
-            >
-              <AppText variant="caption" color={colors.textDim}>
-                Couldn&apos;t load stats — tap to retry
-              </AppText>
-            </PressableScale>
-          ) : overview ? (
-            <View style={styles.statGrid}>
-              <View style={styles.statCell}>
-                <StatBlock label="Members" value={overview.totalMembers} size="display" />
-              </View>
-              <View style={styles.statCell}>
-                <StatBlock label="Coaches" value={overview.activeCoaches} size="display" />
-              </View>
-              <View style={styles.statCell}>
-                <StatBlock
-                  label="Assignments"
-                  value={overview.activeAssignments}
-                  size="display"
-                />
-              </View>
-              <View style={styles.statCell}>
-                <StatBlock label="Videos" value={overview.readyVideos} size="display" />
-              </View>
-            </View>
-          ) : null}
-        </HeroCard>
+        <AppText variant="label" color={colors.onBlock}>
+          Platform overview
+        </AppText>
+        {loading && !overview ? (
+          <View style={styles.heroLoading}>
+            <ActivityIndicator size="small" color={colors.onBlock} />
+          </View>
+        ) : error && !overview ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Retry loading overview"
+            onPress={() => void load()}
+          >
+            <AppText variant="body" color={colors.onBlock} style={styles.heroRetry}>
+              Couldn&apos;t load stats — tap to retry
+            </AppText>
+          </PressableScale>
+        ) : overview ? (
+          <View style={styles.statGrid}>
+            <HeroStat label="Members" value={overview.totalMembers} />
+            <HeroStat label="Coaches" value={overview.activeCoaches} />
+            <HeroStat label="Assignments" value={overview.activeAssignments} />
+            <HeroStat label="Videos" value={overview.readyVideos} />
+          </View>
+        ) : null}
       </Animated.View>
 
       <SectionLabel>Manage</SectionLabel>
@@ -196,9 +203,7 @@ export default function AdminHomeScreen() {
             onPress={() => pushStaff(row.route)}
             style={styles.card}
           >
-            <View style={styles.cardIcon}>
-              <Ionicons name={row.icon} size={20} color={colors.accent} />
-            </View>
+            <IconChip icon={row.icon} iconColor={colors.accent} />
             <View style={styles.cardText}>
               <AppText variant="bodyBold" numberOfLines={1}>
                 {row.title}
@@ -223,13 +228,13 @@ export default function AdminHomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  headerRow: {
+  actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    paddingBottom: spacing.lg,
+    marginBottom: spacing.lg,
   },
-  headerTitle: { flex: 1 },
+  actionSpacer: { flex: 1 },
   backBtn: {
     width: touch.min,
     height: touch.min,
@@ -238,33 +243,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  hero: { marginBottom: spacing.xl },
+  header: { marginBottom: spacing.gutter },
+  // The one red block (brief §2): flat fill, chunky corners, black ink.
+  hero: {
+    backgroundColor: colors.blockRed,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
+    gap: spacing.md,
+    marginBottom: spacing.xs,
+  },
   heroLoading: { paddingVertical: spacing.lg, alignItems: 'flex-start' },
+  heroRetry: { paddingVertical: spacing.sm },
   statGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     rowGap: spacing.lg,
-    marginTop: spacing.xs,
   },
-  statCell: { width: '50%' },
+  statCell: { width: '50%', gap: 2 },
+  // Charcoal nav row (brief §11c): fill contrast, no hairlines.
   card: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
+    minHeight: 64,
     marginBottom: spacing.md,
-  },
-  cardIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.full,
-    backgroundColor: colors.accentFaint,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   cardText: { flex: 1, gap: 2 },
 });

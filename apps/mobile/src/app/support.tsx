@@ -4,27 +4,30 @@ import Animated from 'react-native-reanimated';
 import { router, type Href } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { hasEntitlement } from '@gym/shared';
-import { colors, radius, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
   Button,
-  Divider,
-  HeroCard,
+  Card,
   IconChip,
   PressableScale,
   Screen,
+  ScreenHeader,
   SectionLabel,
   UpgradePrompt,
+  enterDown,
   enterFade,
+  enterUp,
   layoutSpring,
 } from '../components/ui';
 import { CoachThread } from '../features/coach/components/CoachThread';
 import { useProfile } from '../state/profile';
 
 /**
- * /support — Elite priority support. An Elite hero + the same chat thread
- * (kind 'support') plus quick-contact affordances (WhatsApp/email rows the
- * owner fills in later). Lower tiers see the upgrade sell.
+ * /support — Elite priority support in the color-blocked language: back pill →
+ * ScreenHeader → ONE red contact block (Elite hero) → charcoal contact rows →
+ * the same chat thread (kind 'support'). Lower tiers see the upgrade sell plus
+ * the FAQ as a stack of charcoal blocks (no hairlines — fill contrast only).
  */
 
 // Owner fills these later — plain placeholders, no dead links wired yet.
@@ -55,38 +58,39 @@ const FAQ_ITEMS: { q: string; a: string }[] = [
 ];
 
 const styles = StyleSheet.create({
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    marginBottom: spacing.sm,
-  },
+  backRow: { flexDirection: 'row', marginBottom: spacing.md },
   backBtn: {
-    width: 44,
-    height: 44,
+    width: touch.min,
+    height: touch.min,
     borderRadius: radius.full,
     backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerText: { flex: 1 },
-  gateWrap: { gap: spacing.lg, paddingTop: spacing.xl },
-  hero: { marginBottom: spacing.md },
-  heroBody: { marginTop: 4 },
+  header: { marginBottom: spacing.xl },
+  gateWrap: { gap: spacing.lg },
+
+  // Unlocked view — red contact block + charcoal contact rows over the thread.
+  hero: { marginBottom: spacing.md, gap: spacing.sm },
+  heroBody: { marginTop: spacing.xs },
+  contactStack: { gap: spacing.sm, marginBottom: spacing.sm },
   contactRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    marginTop: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    minHeight: 64,
   },
-  contactText: { flex: 1 },
+  contactText: { flex: 1, gap: 2 },
 
-  // FAQ accordion (gated view) — bordered surface, hairline-split rows.
+  // FAQ accordion (gated view) — borderless charcoal blocks in a gapped stack.
+  faqStack: { gap: spacing.sm },
   faqCard: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     paddingHorizontal: spacing.lg,
   },
   faqHeader: {
@@ -97,12 +101,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   faqQuestion: { flex: 1, minWidth: 0 },
-  faqAnswer: { paddingBottom: spacing.md },
+  faqAnswer: { paddingBottom: spacing.lg },
 });
 
-function Header({ title, caption }: { title: string; caption?: string }) {
+/** Round charcoal back button above the header block. */
+function BackRow() {
   return (
-    <View style={styles.header}>
+    <Animated.View entering={enterDown()} style={styles.backRow}>
       <PressableScale
         accessibilityRole="button"
         accessibilityLabel="Go back"
@@ -111,11 +116,7 @@ function Header({ title, caption }: { title: string; caption?: string }) {
       >
         <Ionicons name="chevron-back" size={22} color={colors.text} />
       </PressableScale>
-      <View style={styles.headerText}>
-        <AppText variant="title">{title}</AppText>
-        {caption ? <AppText variant="caption">{caption}</AppText> : null}
-      </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -127,12 +128,16 @@ function Header({ title, caption }: { title: string; caption?: string }) {
 function SupportFaq() {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   return (
-    <View style={styles.faqCard}>
+    <View style={styles.faqStack}>
       {FAQ_ITEMS.map((item, i) => {
         const open = openIndex === i;
         return (
-          <Animated.View key={item.q} layout={layoutSpring}>
-            {i > 0 ? <Divider /> : null}
+          <Animated.View
+            key={item.q}
+            entering={enterUp(i + 2)}
+            layout={layoutSpring}
+            style={styles.faqCard}
+          >
             <PressableScale
               accessibilityRole="button"
               accessibilityState={{ expanded: open }}
@@ -170,15 +175,16 @@ export default function SupportScreen() {
   if (!unlocked) {
     return (
       <Screen scroll>
-        <Header title="Priority support" />
-        <View style={styles.gateWrap}>
+        <BackRow />
+        <ScreenHeader eyebrow="Help & answers" title="Priority support" style={styles.header} />
+        <Animated.View entering={enterUp(1)} style={styles.gateWrap}>
           <UpgradePrompt
             requiredTier="elite"
             title="Priority support"
             description="Front-of-line help from the GM team whenever you need it."
           />
           <Button label="See plans" onPress={() => router.push('/subscribe' as Href)} />
-        </View>
+        </Animated.View>
         <SectionLabel>Common questions</SectionLabel>
         <SupportFaq />
       </Screen>
@@ -187,34 +193,35 @@ export default function SupportScreen() {
 
   return (
     <Screen edges={{ bottom: true }}>
-      <Header title="Priority support" caption="Front-of-line help from the GM team" />
+      <BackRow />
+      <ScreenHeader eyebrow="GM team" title="Priority support" style={styles.header} />
 
-      <HeroCard tone="red" style={styles.hero}>
-        <AppText variant="label" color={colors.onAccent}>
-          Elite priority
-        </AppText>
-        <AppText variant="title" color={colors.onAccent}>
-          You're at the front of the line
-        </AppText>
-        <AppText variant="caption" color={colors.onAccent} style={styles.heroBody}>
-          Send us anything — billing, plans, or a stuck feature. The GM team gets back within a few
-          hours.
-        </AppText>
+      <Animated.View entering={enterUp(1)}>
+        <Card variant="red" style={styles.hero}>
+          <AppText variant="label" color={colors.onBlock}>
+            Elite priority
+          </AppText>
+          <AppText variant="title" color={colors.onBlock}>
+            You're at the front of the line
+          </AppText>
+          <AppText variant="body" color={colors.onBlock} style={styles.heroBody}>
+            Send us anything — billing, plans, or a stuck feature. The GM team gets back within a
+            few hours.
+          </AppText>
+        </Card>
+      </Animated.View>
 
+      <Animated.View entering={enterUp(2)} style={styles.contactStack}>
         {QUICK_CONTACTS.map((c) => (
           <View key={c.label} style={styles.contactRow}>
-            <IconChip icon={c.icon} color={colors.onAccent} iconColor={colors.accent} size={40} />
+            <IconChip icon={c.icon} iconColor={colors.accent} size={40} />
             <View style={styles.contactText}>
-              <AppText variant="bodyBold" color={colors.onAccent}>
-                {c.label}
-              </AppText>
-              <AppText variant="caption" color={colors.onAccent}>
-                {c.value}
-              </AppText>
+              <AppText variant="bodyBold">{c.label}</AppText>
+              <AppText variant="caption">{c.value}</AppText>
             </View>
           </View>
         ))}
-      </HeroCard>
+      </Animated.View>
 
       <CoachThread
         kind="support"

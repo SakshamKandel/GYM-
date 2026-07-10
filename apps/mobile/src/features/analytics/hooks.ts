@@ -80,11 +80,21 @@ export interface AnalyticsData {
   nutrition: NutritionTrendData | null;
 }
 
-export function useAnalytics(): AnalyticsData | null {
+/**
+ * Discriminated dashboard state so the screen can tell a still-loading first
+ * paint apart from a repo failure — a bare null would strand it on a spinner
+ * forever if any query rejects.
+ */
+export type AnalyticsState =
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'ready'; data: AnalyticsData };
+
+export function useAnalytics(): AnalyticsState {
   const tier = useProfile((s) => s.tier);
   const daysPerWeek = useProfile((s) => s.daysPerWeek);
   const targets = useProfile((s) => s.targets);
-  const [data, setData] = useState<AnalyticsData | null>(null);
+  const [state, setState] = useState<AnalyticsState>({ status: 'loading' });
 
   const muscleUnlocked = hasEntitlement({ tier }, 'adaptive_progression');
   const nutritionUnlocked = hasEntitlement({ tier }, 'full_kcal_tracker');
@@ -93,74 +103,81 @@ export function useAnalytics(): AnalyticsData | null {
     useCallback(() => {
       let mounted = true;
       void (async () => {
-        const repo = await getRepo();
-        const today = todayIso();
-        const currentWeekStart = weekStartIso(today);
-        // First Monday of the 12-week window — also covers the 4-week
-        // lookback the neglected-muscles callout needs.
-        const windowStart = addDays(currentWeekStart, -7 * (ANALYTICS_WEEKS - 1));
+        try {
+          const repo = await getRepo();
+          const today = todayIso();
+          const currentWeekStart = weekStartIso(today);
+          // First Monday of the 12-week window — also covers the 4-week
+          // lookback the neglected-muscles callout needs.
+          const windowStart = addDays(currentWeekStart, -7 * (ANALYTICS_WEEKS - 1));
 
-        const [sets, workouts, e1rmHistories] = await Promise.all([
-          repo.getSetsBetween(windowStart, today),
-          repo.getWorkoutsBetween(windowStart, today),
-          Promise.all(BIG4_LIFTS.map((l) => repo.getE1RmHistory(l.exerciseId, 30))),
-        ]);
+          const [sets, workouts, e1rmHistories] = await Promise.all([
+            repo.getSetsBetween(windowStart, today),
+            repo.getWorkoutsBetween(windowStart, today),
+            Promise.all(BIG4_LIFTS.map((l) => repo.getE1RmHistory(l.exerciseId, 30))),
+          ]);
 
-        const workoutDates = workouts.map((w) => w.date);
-        const overview: OverviewData = {
-          workoutDates,
-          consistency: consistencyStats(workoutDates, ANALYTICS_WEEKS, today, daysPerWeek),
-          tonnage: weeklyTonnage(sets, ANALYTICS_WEEKS, today),
-          totalTonnageKg: Math.round(sets.reduce((sum, s) => sum + s.weightKg * s.reps, 0)),
-          avgSessionMin: avgSessionMinutes(workouts),
-        };
+          const workoutDates = workouts.map((w) => w.date);
+          const overview: OverviewData = {
+            workoutDates,
+            consistency: consistencyStats(workoutDates, ANALYTICS_WEEKS, today, daysPerWeek),
+            tonnage: weeklyTonnage(sets, ANALYTICS_WEEKS, today),
+            totalTonnageKg: Math.round(sets.reduce((sum, s) => sum + s.weightKg * s.reps, 0)),
+            avgSessionMin: avgSessionMinutes(workouts),
+          };
 
-        let muscle: MuscleBalanceData | null = null;
-        if (muscleUnlocked) {
-          const tagged: TaggedSet[] = sets.map((s) => {
-            const ex = getExercise(s.exerciseId);
+          let muscle: MuscleBalanceData | null = null;
+          if (muscleUnlocked) {
+            const tagged: TaggedSet[] = sets.map((s) => {
+              const ex = getExercise(s.exerciseId);
+              return {
+                workoutDate: s.workoutDate,
+                primaryMuscle: ex?.muscleGroup ?? '',
+                secondaryMuscles: ex?.secondaryMuscles ?? [],
+              };
+            });
+            const perMuscle = weeklySetsPerMuscle(tagged, currentWeekStart);
+            muscle = {
+              perMuscle,
+              ratio: pushPullRatio(perMuscle),
+              neglected: neglectedMuscles(tagged, currentWeekStart, NEGLECT_LOOKBACK_WEEKS),
+            };
+          }
+
+          const big4: Big4Row[] = BIG4_LIFTS.map((lift, i) => {
+            const history = e1rmHistories[i] ?? [];
+            const best = history.reduce((m, h) => Math.max(m, h.e1rm), 0);
             return {
-              workoutDate: s.workoutDate,
-              primaryMuscle: ex?.muscleGroup ?? '',
-              secondaryMuscles: ex?.secondaryMuscles ?? [],
+              key: lift.key,
+              label: lift.label,
+              bestE1RmKg: best > 0 ? best : null,
+              verdict: detectPlateau(history.map((h) => ({ date: h.date, value: h.e1rm }))),
             };
           });
-          const perMuscle = weeklySetsPerMuscle(tagged, currentWeekStart);
-          muscle = {
-            perMuscle,
-            ratio: pushPullRatio(perMuscle),
-            neglected: neglectedMuscles(tagged, currentWeekStart, NEGLECT_LOOKBACK_WEEKS),
-          };
+
+          let nutrition: NutritionTrendData | null = null;
+          if (nutritionUnlocked) {
+            const dates = lastNDays(NUTRITION_DAYS, today);
+            const [byDate, waterMls] = await Promise.all([
+              repo.getMacrosByDate(dates),
+              Promise.all(dates.map((d) => repo.getWaterMl(d))),
+            ]);
+            nutrition = {
+              days: dates.map((date) => ({ date, kcal: byDate[date]?.kcal ?? 0 })),
+              kcal: kcalAdherence(byDate, targets.kcal),
+              protein: proteinHitRate(byDate, targets.protein),
+              avgWaterMl: avgWaterMl(waterMls),
+            };
+          }
+
+          if (!mounted) return;
+          setState({ status: 'ready', data: { overview, muscle, big4, nutrition } });
+        } catch {
+          // Any rejected repo query surfaces as an error state instead of an
+          // eternal spinner — the screen can retry or show a message.
+          if (!mounted) return;
+          setState({ status: 'error' });
         }
-
-        const big4: Big4Row[] = BIG4_LIFTS.map((lift, i) => {
-          const history = e1rmHistories[i] ?? [];
-          const best = history.reduce((m, h) => Math.max(m, h.e1rm), 0);
-          return {
-            key: lift.key,
-            label: lift.label,
-            bestE1RmKg: best > 0 ? best : null,
-            verdict: detectPlateau(history.map((h) => ({ date: h.date, value: h.e1rm }))),
-          };
-        });
-
-        let nutrition: NutritionTrendData | null = null;
-        if (nutritionUnlocked) {
-          const dates = lastNDays(NUTRITION_DAYS, today);
-          const [byDate, waterMls] = await Promise.all([
-            repo.getMacrosByDate(dates),
-            Promise.all(dates.map((d) => repo.getWaterMl(d))),
-          ]);
-          nutrition = {
-            days: dates.map((date) => ({ date, kcal: byDate[date]?.kcal ?? 0 })),
-            kcal: kcalAdherence(byDate, targets.kcal),
-            protein: proteinHitRate(byDate, targets.protein),
-            avgWaterMl: avgWaterMl(waterMls),
-          };
-        }
-
-        if (!mounted) return;
-        setData({ overview, muscle, big4, nutrition });
       })();
       return () => {
         mounted = false;
@@ -168,5 +185,5 @@ export function useAnalytics(): AnalyticsData | null {
     }, [daysPerWeek, muscleUnlocked, nutritionUnlocked, targets.kcal, targets.protein]),
   );
 
-  return data;
+  return state;
 }

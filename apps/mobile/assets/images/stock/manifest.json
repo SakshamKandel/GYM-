@@ -1,0 +1,113 @@
+{
+  "license": "Unsplash License — free for commercial use, no attribution required. Source: images.unsplash.com",
+  "images": [
+    {
+      "file": "hero-barbell.jpg",
+      "describes": "Low-angle shot of a man in orange-striped shorts crouched setting up a barbell deadlift on dark teal-charcoal rubber gym tiles; moody, landscape, great for text overlay",
+      "tone": "dark",
+      "suggestedUse": ["hero", "train"]
+    },
+    {
+      "file": "deadlift-dark.jpg",
+      "describes": "Man's legs and hands gripping a loaded barbell mid-deadlift setup with yellow wrist straps and blue shoes on dark charcoal tiles; landscape with empty floor space at left",
+      "tone": "dark",
+      "suggestedUse": ["train", "hero", "card"]
+    },
+    {
+      "file": "barbell-grip-overhead.jpg",
+      "describes": "Top-down overhead view of a man's strapped hand gripping a barbell beside his blue shoe on near-black rubber flooring; graphic, lots of dark negative space, landscape",
+      "tone": "dark",
+      "suggestedUse": ["hero", "train", "card"]
+    },
+    {
+      "file": "pullups-bw.jpg",
+      "describes": "Dramatic black-and-white rear view of a muscular shirtless man doing pull-ups on a rig, back muscles highlighted; portrait orientation, intense mood",
+      "tone": "dark",
+      "suggestedUse": ["train", "progress", "hero"]
+    },
+    {
+      "file": "squat-woman-bw.jpg",
+      "describes": "Black-and-white rear view of a ponytailed woman with a loaded barbell across her shoulders (back squat) against a black background; landscape, gritty and powerful",
+      "tone": "dark",
+      "suggestedUse": ["train", "hero"]
+    },
+    {
+      "file": "woman-squat-portrait-bw.jpg",
+      "describes": "Moody black-and-white side profile of a focused woman with a barbell on her shoulders in a dim gym with hanging rope; portrait orientation, cinematic",
+      "tone": "dark",
+      "suggestedUse": ["train", "progress", "card"]
+    },
+    {
+      "file": "overhead-press-woman.jpg",
+      "describes": "Rear view of a woman in a white sports bra pressing a plate-loaded barbell overhead at a rack against a dark grey brick wall; landscape, strong and clean",
+      "tone": "dark",
+      "suggestedUse": ["train", "hero", "card"]
+    },
+    {
+      "file": "dumbbell-rack-grab.jpg",
+      "describes": "Close-up of a man in a grey tee and black watch lifting a pair of black dumbbells off a rack; charcoal-grey gym tones, landscape, shallow depth of field",
+      "tone": "dark",
+      "suggestedUse": ["train", "card"]
+    },
+    {
+      "file": "gym-dumbbells.jpg",
+      "describes": "Rows of black dumbbells on a rack in a bright daylight gym with a woman training blurred in the background; landscape, airy and clean",
+      "tone": "bright",
+      "suggestedUse": ["card", "train", "welcome"]
+    },
+    {
+      "file": "gym-interior-bright.jpg",
+      "describes": "Bright white modern gym interior with black-and-red spin bikes, benches and dumbbell racks, no people; landscape, red accents match app palette",
+      "tone": "bright",
+      "suggestedUse": ["welcome", "card"]
+    },
+    {
+      "file": "gym-empty-bw.jpg",
+      "describes": "Black-and-white empty gym with rows of treadmills, benches and floor-to-ceiling windows onto city buildings; landscape, calm and premium",
+      "tone": "dark",
+      "suggestedUse": ["welcome", "card", "hero"]
+    },
+    {
+      "file": "runner-track.jpg",
+      "describes": "Close-up of a sprinter in starting blocks holding a relay baton on a red running track in bright sunlight; landscape, red surface echoes app accent color",
+      "tone": "bright",
+      "suggestedUse": ["progress", "steps", "hero"]
+    },
+    {
+      "file": "runners-silhouette-blue.jpg",
+      "describes": "Three runners silhouetted against a deep blue sky and low sun on an open road at dawn; landscape, aspirational group-cardio mood",
+      "tone": "dark",
+      "suggestedUse": ["steps", "progress", "welcome"]
+    },
+    {
+      "file": "running-stairs.jpg",
+      "describes": "Close-up of legs in orange-grey sneakers running up weathered grey concrete stairs; landscape, literal step-climbing motif with a pop of orange",
+      "tone": "bright",
+      "suggestedUse": ["steps", "progress"]
+    },
+    {
+      "file": "situps-woman.jpg",
+      "describes": "Side view of a braided-hair woman in orange leggings and white top doing crunches on a black mat in front of bright backlit windows; landscape, energetic daylight",
+      "tone": "bright",
+      "suggestedUse": ["train", "welcome", "card"]
+    },
+    {
+      "file": "yoga.jpg",
+      "describes": "Woman silhouetted in a low-lunge yoga pose on a mat by the sea at sunset, pink-and-purple pastel sky; landscape, serene recovery mood",
+      "tone": "dark",
+      "suggestedUse": ["welcome", "card"]
+    },
+    {
+      "file": "food-bowl.jpg",
+      "describes": "Overhead flat-lay of a colorful vegan bowl — avocado, cherry tomatoes, chickpeas, sweet potato, greens and red cabbage — on rustic grey wood; landscape, vibrant",
+      "tone": "bright",
+      "suggestedUse": ["food", "card"]
+    },
+    {
+      "file": "food-healthy.jpg",
+      "describes": "Rustic flat-lay of a blue ceramic bowl with soft-boiled eggs, greens, tomatoes, radish and avocado on a weathered wooden table with white blossoms; landscape, warm",
+      "tone": "bright",
+      "suggestedUse": ["food", "card"]
+    }
+  ]
+}

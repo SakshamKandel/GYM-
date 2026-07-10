@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import type { Tier } from '@gym/shared';
+import type { Targets, Tier } from '@gym/shared';
 import { mmkvStorage } from '../lib/mmkvStorage';
 import {
   ApiError,
+  confirmGymTrackerServer,
   getProfileData,
   login,
   loginWithGoogle,
@@ -11,12 +12,13 @@ import {
   me,
   putProfileData,
   register,
+  type AuthSession,
   type AuthUser,
 } from '../lib/api/client';
 import { signOutGoogle } from '../features/auth/components/NativeGoogleSignIn';
 import { useBuddyStore } from '../features/buddy/store';
 import { getMeStaff, type StaffRole } from '../features/staff/api';
-import { DEFAULT_PROFILE_FIELDS, useProfile } from './profile';
+import { DEFAULT_PROFILE_FIELDS, DEFAULT_TARGETS, useProfile } from './profile';
 
 /**
  * Optional account on top of the local-first app. Signing in exists for
@@ -76,6 +78,72 @@ async function fetchStaffRole(token: string): Promise<StaffRole | null> {
   }
 }
 
+/** Delay before the one-shot background staff-role retry after sign-in. */
+const STAFF_ROLE_RETRY_MS = 5_000;
+
+/**
+ * One quiet background retry for the sign-in staff probe. fetchStaffRole
+ * resolves null on ANY failure, so a transient blip at sign-in used to hide
+ * the staff console until the next refresh() ("login did nothing" for staff).
+ * Non-blocking and stale-token guarded; a second null just stays hidden.
+ */
+function retryStaffRoleOnce(token: string): void {
+  setTimeout(() => {
+    void (async () => {
+      const state = useAuth.getState();
+      // Signed out / switched accounts since, or the role already resolved
+      // (e.g. an early refresh()) — nothing to retry.
+      if (state.token !== token || state.staffRole !== null) return;
+      const role = await fetchStaffRole(token);
+      if (role === null) return;
+      if (useAuth.getState().token !== token) return;
+      useAuth.setState({ staffRole: role });
+    })();
+  }, STAFF_ROLE_RETRY_MS);
+}
+
+/**
+ * Adopt a fresh server user (e.g. the response of POST /api/subscription/tier)
+ * through the SAME path refresh() uses, so anything reading useAuth's tier
+ * (home tier ring, gates) re-renders immediately instead of waiting for the
+ * next app foreground. Stale-token guarded like refresh(): a response that
+ * raced a sign-out or account switch is dropped.
+ */
+export function applyServerUser(user: AuthUser, token: string): void {
+  if (useAuth.getState().token !== token) return;
+  useAuth.setState({ status: 'signedIn', user });
+  adoptServerUser(user);
+}
+
+/**
+ * Shared tail of every sign-in flow. Adopts the session, then restores the
+ * cloud profile and probes the staff role CONCURRENTLY — they're independent
+ * server calls, and running them serially doubled sign-in latency. Both are
+ * still awaited: 'onboarded' must be restored and staffRole settled BEFORE
+ * the caller's navigation gate (enterApp) runs.
+ */
+async function establishSession(
+  session: AuthSession,
+  set: (partial: Partial<AuthState>) => void,
+  get: () => AuthState,
+): Promise<void> {
+  set({ status: 'signedIn', token: session.token, user: session.user });
+  adoptServerUser(session.user);
+  const [, staffRole] = await Promise.all([
+    restoreOrBackupProfile(session.token, session.user.id),
+    fetchStaffRole(session.token),
+  ]);
+  // Re-adopt after the restore: a fresh-account reset (or a stale blob) may
+  // have wiped the tier/name adopted above; this is upgrade-only, so it's a
+  // no-op otherwise.
+  adoptServerUser(session.user);
+  // The session changed while the calls were in flight (sign-out or account
+  // switch) — a late result must not touch the new session's state.
+  if (get().token !== session.token) return;
+  set({ staffRole });
+  if (staffRole === null) retryStaffRoleOnce(session.token);
+}
+
 /**
  * Cloud profile restore — the fix for "signed in but sent back to setup".
  * If the account has a saved profile, hydrate the local store from it
@@ -92,9 +160,25 @@ async function restoreOrBackupProfile(token: string, accountId: string): Promise
       // Defaults-first spread: any key the blob doesn't carry resets to the
       // app default instead of keeping the previous account's value.
       const tier = local.tier;
+      // Nested defaults-first for targets: a cloud blob saved before a Targets
+      // field existed (e.g. `steps`) replaces the whole object in the spread
+      // below, so new keys must be backfilled from DEFAULT_TARGETS explicitly.
+      const remoteTargets = remote['targets'];
+      const targets: Targets = {
+        ...DEFAULT_TARGETS,
+        ...(typeof remoteTargets === 'object' && !Array.isArray(remoteTargets)
+          ? (remoteTargets as Partial<Targets>)
+          : null),
+      };
       useProfile.setState(
         (s) =>
-          ({ ...s, ...DEFAULT_PROFILE_FIELDS, ...remote, syncAccountId: accountId }) as typeof s,
+          ({
+            ...s,
+            ...DEFAULT_PROFILE_FIELDS,
+            ...remote,
+            targets,
+            syncAccountId: accountId,
+          }) as typeof s,
       );
       if (TIER_RANK[tier] > TIER_RANK[useProfile.getState().tier]) {
         useProfile.getState().update({ tier });
@@ -152,26 +236,14 @@ export const useAuth = create<AuthState>()(
 
       signIn: async (email, password) => {
         const session = await login({ email: email.trim().toLowerCase(), password });
-        set({ status: 'signedIn', token: session.token, user: session.user });
-        adoptServerUser(session.user);
-        // Awaited: 'onboarded' must be restored BEFORE navigation gates run.
-        await restoreOrBackupProfile(session.token, session.user.id);
-        // Re-adopt after the restore: a fresh-account reset (or a stale blob)
-        // may have wiped the tier/name adopted above; this is upgrade-only,
-        // so it's a no-op otherwise.
-        adoptServerUser(session.user);
-        // Awaited too: AuthScreen reads staffRole right after this resolves to
-        // decide between the staff console and the onboarding-gated root.
-        set({ staffRole: await fetchStaffRole(session.token) });
+        // Awaited: 'onboarded' must be restored and staffRole settled BEFORE
+        // the caller's navigation gate (enterApp) runs.
+        await establishSession(session, set, get);
       },
 
       signInWithGoogle: async (idToken) => {
         const session = await loginWithGoogle(idToken);
-        set({ status: 'signedIn', token: session.token, user: session.user });
-        adoptServerUser(session.user);
-        await restoreOrBackupProfile(session.token, session.user.id);
-        adoptServerUser(session.user);
-        set({ staffRole: await fetchStaffRole(session.token) });
+        await establishSession(session, set, get);
       },
 
       signUp: async (email, password, displayName) => {
@@ -180,11 +252,7 @@ export const useAuth = create<AuthState>()(
           password,
           displayName: displayName.trim(),
         });
-        set({ status: 'signedIn', token: session.token, user: session.user });
-        adoptServerUser(session.user);
-        await restoreOrBackupProfile(session.token, session.user.id);
-        adoptServerUser(session.user);
-        set({ staffRole: await fetchStaffRole(session.token) });
+        await establishSession(session, set, get);
       },
 
       signOut: async () => {
@@ -227,20 +295,35 @@ export const useAuth = create<AuthState>()(
           if (get().token !== token) return;
           set({ status: 'signedIn', user });
           adoptServerUser(user);
-          // Re-probe staff role so a mid-session grant/revoke is reflected. A
-          // failed probe leaves the persisted value untouched (offline-first).
-          const role = await fetchStaffRole(token);
-          if (get().token !== token) return;
-          set({ staffRole: role });
+          // Re-probe staff role so a mid-session grant/revoke is reflected.
+          // Probe directly (not via fetchStaffRole, which collapses failures to
+          // null): a transient error must leave the persisted staffRole
+          // untouched (offline-first) rather than hide the staff console. Only a
+          // resolved probe — confirmed staff OR confirmed non-staff — overwrites.
+          try {
+            const role = await getMeStaff(token);
+            if (get().token !== token) return;
+            set({ staffRole: role });
+          } catch {
+            // Transient probe failure — keep the persisted staffRole.
+          }
         } catch (err) {
           // A stale failure must not touch the CURRENT session either — a
           // late 401 for the old token would otherwise wipe a fresh sign-in.
           if (get().token !== token) return;
           if (err instanceof ApiError && err.code === 'unauthorized') {
-            // Session expired or revoked server-side — quietly sign out and
-            // clear account-derived state so no stale identity lingers.
-            clearAccountState();
-            set({ status: 'signedOut', token: null, user: null, staffRole: null });
+            // A 401 alone isn't proof of revocation: in dev BASE_URL is a LAN
+            // host:port, and a foreign app squatting that port answers 401 to
+            // everything — that once wiped valid sessions. Only honor the 401
+            // when /api/health confirms we're talking to the real server.
+            const confirmed = await confirmGymTrackerServer();
+            if (get().token !== token) return;
+            if (confirmed) {
+              // Session expired or revoked server-side — quietly sign out and
+              // clear account-derived state so no stale identity lingers.
+              clearAccountState();
+              set({ status: 'signedOut', token: null, user: null, staffRole: null });
+            }
           }
           // Network errors keep the signed-in state — the app is offline-first.
         }

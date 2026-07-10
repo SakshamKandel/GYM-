@@ -1,4 +1,3 @@
-import { router } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -12,6 +11,7 @@ import { AppText, enterFade } from '../../../components/ui';
 import { toApiError } from '../../../lib/api/client';
 import { successHaptic, warnHaptic } from '../../../lib/haptics';
 import { useAuth } from '../../../state/auth';
+import { enterApp } from '../nav';
 import { describeGoogleError, GooglePill, googleStyles } from './googleShared';
 
 /**
@@ -78,7 +78,9 @@ export function NativeGoogleSignIn({ webClientId }: { webClientId: string }) {
       }
       await signInWithGoogle(idToken);
       successHaptic();
-      router.replace('/');
+      // Shared staff-aware landing — a bare router.replace('/') bounced
+      // staff accounts to /welcome ("login did nothing").
+      enterApp();
     } catch (err) {
       warnHaptic();
       if (isErrorWithCode(err)) {

@@ -34,6 +34,32 @@ export function tdee(bmrKcal: number, activity: ActivityLevel): number {
   return Math.round(bmrKcal * ACTIVITY_MULTIPLIER[activity]);
 }
 
+/**
+ * Daily step goal by activity level (heuristic, common walking guidance):
+ * sedentary 6000, light 8000, moderate 10000, high/active/very_active 12000.
+ * Takes a plain string so callers holding untyped or legacy level values
+ * still work; unknown values fall back to 8000.
+ *
+ * Defined here (not activity.ts) so computeTargets can use it without a
+ * runtime import cycle; activity.ts re-exports it.
+ */
+export function stepsGoal(activityLevel: string): number {
+  switch (activityLevel) {
+    case 'sedentary':
+      return 6000;
+    case 'light':
+      return 8000;
+    case 'moderate':
+      return 10000;
+    case 'high':
+    case 'active':
+    case 'very_active':
+      return 12000;
+    default:
+      return 8000;
+  }
+}
+
 const GOAL_ADJUST: Record<GoalType, number> = {
   fat_loss: -0.2, // 20% deficit
   muscle: 0.1, // 10% surplus
@@ -43,6 +69,7 @@ const GOAL_ADJUST: Record<GoalType, number> = {
 /**
  * Compute daily targets from body stats and goal.
  * Protein: 1.8 g/kg (fat loss: 2.2 to protect muscle). Fat: 25% kcal. Carbs: remainder.
+ * Steps: from activity level via stepsGoal.
  */
 export function computeTargets(args: {
   sex: Sex;
@@ -62,5 +89,5 @@ export function computeTargets(args: {
     Math.round((kcal - protein * KCAL_PER_G.protein - fat * KCAL_PER_G.fat) / KCAL_PER_G.carbs),
   );
   const waterMl = Math.round((args.kg * 35) / 250) * 250; // ~35 ml/kg rounded to a glass
-  return { kcal, protein, carbs, fat, waterMl };
+  return { kcal, protein, carbs, fat, waterMl, steps: stepsGoal(args.activity) };
 }

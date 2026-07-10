@@ -27,6 +27,7 @@ interface MemoryState {
   foods: FoodItem[];
   foodLogs: (FoodLog & { loggedAt: string })[];
   water: Record<string, number>;
+  steps: Record<string, number>;
   streak: Streak;
   /** Ids of workouts already backed up to the server (mirrors sqlite synced_at). */
   syncedWorkoutIds: string[];
@@ -43,6 +44,7 @@ function emptyState(): MemoryState {
     foods: [],
     foodLogs: [],
     water: {},
+    steps: {},
     streak: { current: 0, best: 0, lastWorkoutDate: null },
     syncedWorkoutIds: [],
   };
@@ -357,6 +359,26 @@ export async function createMemoryRepo(): Promise<Repo> {
       state.water[date] = Math.max(0, (state.water[date] ?? 0) + deltaMl);
       persist();
       return state.water[date] ?? 0;
+    },
+
+    // ── Steps ───────────────────────────────────────────────
+    async getSteps(date) {
+      return state.steps[date] ?? 0;
+    },
+    async setSteps(date, steps) {
+      state.steps[date] = Math.max(0, steps);
+      persist();
+    },
+    async addSteps(date, delta) {
+      state.steps[date] = Math.max(0, (state.steps[date] ?? 0) + delta);
+      persist();
+      return state.steps[date] ?? 0;
+    },
+    async getStepsBetween(startDate, endDate) {
+      return Object.entries(state.steps)
+        .filter(([date]) => date >= startDate && date <= endDate)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, steps]) => ({ date, steps }));
     },
 
     // ── Streak ──────────────────────────────────────────────

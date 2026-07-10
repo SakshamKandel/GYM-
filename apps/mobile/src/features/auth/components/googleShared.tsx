@@ -36,9 +36,9 @@ export function GooglePill({
       style={[googleStyles.pill, (disabled || busy) && googleStyles.pillDisabled]}
     >
       {busy ? (
-        <ActivityIndicator color={colors.text} />
+        <ActivityIndicator color={colors.onBlock} />
       ) : (
-        <Ionicons name="logo-google" size={18} color={colors.text} />
+        <Ionicons name="logo-google" size={18} color={colors.onBlock} />
       )}
       <AppText style={googleStyles.pillLabel} tabular={false}>
         Continue with Google
@@ -47,14 +47,14 @@ export function GooglePill({
   );
 }
 
+// Cream counterpoint pill (REVAMP-BRIEF §2): the screen's single cream
+// element, BLACK text/icon on it (`onBlock`), no stroke — fill carries it.
 export const googleStyles = StyleSheet.create({
   wrap: { gap: spacing.sm },
   pill: {
     minHeight: touch.primary,
     borderRadius: radius.full,
-    borderWidth: 1.5,
-    borderColor: colors.borderStrong,
-    backgroundColor: 'transparent',
+    backgroundColor: colors.blockCream,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -66,7 +66,7 @@ export const googleStyles = StyleSheet.create({
     fontFamily: type.bodySemiBold,
     fontSize: 16,
     letterSpacing: 0.3,
-    color: colors.text,
+    color: colors.onBlock,
   },
   centered: { textAlign: 'center' },
 });

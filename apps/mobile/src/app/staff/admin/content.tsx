@@ -16,6 +16,7 @@ import {
   enterUp,
   PressableScale,
   Screen,
+  ScreenHeader,
   Sheet,
   Tag,
 } from '../../../components/ui';
@@ -53,6 +54,10 @@ import { useAuth } from '../../../state/auth';
  *
  * Every mutation refetches so the list always reflects the server. Loading is
  * a spinner; failures surface as one quiet retry line.
+ *
+ * Block language (REVAMP-BRIEF): back row → ScreenHeader → charcoal upload
+ * panel and video cards (no borders, fill-contrast separation); sheet options
+ * are raised rows with gaps instead of hairlines; Remove reads in red.
  */
 
 const TIER_ORDER: Tier[] = ['starter', 'silver', 'gold', 'elite'];
@@ -516,8 +521,9 @@ export default function AdminContentScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppText variant="heading">Content</AppText>
       </Animated.View>
+
+      <ScreenHeader eyebrow="Admin console" title="Content" style={styles.header} />
 
       {/* Native upload — pick a video, fill the details, push to the host. */}
       <UploadPanel token={token} onUploaded={load} />
@@ -645,15 +651,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  header: { marginBottom: spacing.gutter },
+  // Borderless notice: the warning icon carries the tone, not a stroke.
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.warning,
     borderRadius: radius.md,
-    padding: spacing.md,
+    padding: spacing.lg,
     marginBottom: spacing.lg,
   },
   noteText: { flex: 1 },
@@ -661,11 +667,10 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     marginBottom: spacing.lg,
   },
+  // Charcoal upload panel — flat fill, no border (no-border card law).
   uploadForm: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
     gap: spacing.md,
   },
@@ -691,15 +696,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     height: touch.min,
   },
+  // Raised suggestion rows with gaps replace hairline separators.
   suggestion: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
     minHeight: touch.min,
-    paddingHorizontal: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    marginBottom: spacing.xs,
   },
   uploadActions: {
     flexDirection: 'row',
@@ -712,11 +719,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.lg,
   },
+  // Charcoal video card (brief §11c): fill contrast, no hairline borders.
   card: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
     marginBottom: spacing.md,
     gap: spacing.md,
@@ -728,9 +734,6 @@ const styles = StyleSheet.create({
   cardActions: {
     flexDirection: 'row',
     gap: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: spacing.md,
   },
   action: {
     flex: 1,
@@ -743,13 +746,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
   },
   actionDisabled: { opacity: 0.4 },
+  // Raised option rows with gaps replace hairline separators (brief §11c).
   tierOption: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    height: touch.primary,
-    paddingHorizontal: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    minHeight: touch.primary,
+    paddingHorizontal: spacing.lg,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    marginBottom: spacing.sm,
   },
 });

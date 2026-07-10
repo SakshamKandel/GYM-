@@ -168,6 +168,13 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (tier !== undefined) {
     const g = await requirePermission(req, 'subscription.override');
     if (g instanceof Response) return g;
+    // Rank guard: overriding the subscription tier of an account that holds an
+    // admin role the actor does not outrank would let a lower-ranked staffer
+    // rewrite a higher/peer staff account's tier (and, for 'elite', trigger a
+    // coach auto-assignment). Non-staff targets always pass.
+    const targetRole = await adminRoleOf(id);
+    const rankBlock = requireOutranks(base, targetRole);
+    if (rankBlock) return rankBlock;
   }
   if (status !== undefined) {
     const g = await requirePermission(req, 'members.suspend');

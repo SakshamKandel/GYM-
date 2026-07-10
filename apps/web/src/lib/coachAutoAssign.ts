@@ -1,6 +1,6 @@
 import { accounts, admins, coachAssignments } from '@gym/db';
 import { and, asc, eq } from 'drizzle-orm';
-import { type Principal, logAudit } from './authz';
+import { adminRoleOf, type AuditActor, logAudit } from './authz';
 import { getDb } from './db';
 
 /**
@@ -59,7 +59,7 @@ export async function resolveAutoCoachId(): Promise<string | null> {
 export async function syncEliteCoachAssignment(
   userId: string,
   effectiveTier: 'starter' | 'silver' | 'gold' | 'elite',
-  actor: Principal | null,
+  actor: AuditActor | null,
 ): Promise<void> {
   try {
     const coachId = await resolveAutoCoachId();
@@ -68,11 +68,19 @@ export async function syncEliteCoachAssignment(
     // A member is never their own coach (e.g. Greece hitting elite herself).
     if (coachId === userId) return;
 
+    // Auto-assignment targets TRUE members only. A staff/admin account (incl.
+    // super_admin) must never gain a coach_assignments row — otherwise
+    // requireCoachOwnsUser would grant the coach read access to staff data.
+    // Mirrors the guard in coach/subscriptions/route.ts.
+    if ((await adminRoleOf(userId)) !== null) return;
+
     const db = getDb();
-    // assignedBy is a NOT NULL FK → accounts.id. Every current setAccountTier
-    // caller passes a staff Principal (a real account). When actor is null
-    // (defensive / future system-initiated path) we stamp the coach's own
-    // account id so the FK always holds.
+    // assignedBy is a NOT NULL FK → accounts.id. setAccountTier callers pass a
+    // staff Principal (console overrides) or the member's own { id } for
+    // audited self-serve writes (subscription/tier, buddy trial) — both are
+    // real account ids. When actor is null (defensive / future
+    // system-initiated path) we stamp the coach's own account id so the FK
+    // always holds.
     const assignedBy = actor?.id ?? coachId;
 
     if (effectiveTier === 'elite') {

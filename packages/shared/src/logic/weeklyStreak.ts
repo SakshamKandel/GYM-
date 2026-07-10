@@ -119,7 +119,7 @@ export interface PlanShieldUseArgs {
  * full extra day of buffer (the week's 7 days + 1) means the week is only
  * shielded once it is unambiguously over even for timezones behind UTC.
  */
-const SAFE_ELAPSED_BUFFER_DAYS = 7;
+const SAFE_ELAPSED_BUFFER_DAYS = 8;
 
 export interface ShieldPlan {
   weekStart: string;

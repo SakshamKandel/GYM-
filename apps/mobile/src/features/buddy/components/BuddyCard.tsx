@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { type AccessibilityActionEvent, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import type { BuddyEvent, BuddyLink } from '../../../lib/api/client';
 import { AppText, Button, enterFade, PressableScale, TierAvatarFrame } from '../../../components/ui';
 import { todayIso } from '../../../lib/dates';
@@ -27,9 +27,11 @@ interface Props {
 const DOT = 8;
 
 const styles = StyleSheet.create({
+  // Rounded charcoal row-card — no border, `radius.md` list geometry so it
+  // stacks with sibling rows on gaps alone (brief §11c).
   card: {
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.md,
     padding: spacing.lg,
     gap: spacing.lg,
   },
@@ -53,16 +55,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
   },
   dotOn: { backgroundColor: colors.accent },
-  nudgeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  nudgeBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: radius.full,
-    backgroundColor: colors.surfaceRaised,
+  // Nudge = a pill (brief §6): raised charcoal at rest; done state flips to
+  // the red fill with BLACK icon/label (black-on-red law — never white).
+  nudgePill: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: spacing.sm,
+    minHeight: touch.min,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.gutter,
+    backgroundColor: colors.surfaceRaised,
+    alignSelf: 'flex-start',
   },
-  nudgeBtnDone: { backgroundColor: colors.accent },
+  nudgePillDone: { backgroundColor: colors.accent },
   removeRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -76,7 +81,11 @@ const styles = StyleSheet.create({
 export function BuddyCard({ link, events, nudged, onChanged }: Props) {
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
+  // Optimistic flip so the button reads as "nudged" in <100ms and rapid
+  // re-taps can't fire duplicate POSTs before the store/prop catches up.
+  const [pendingNudge, setPendingNudge] = useState(false);
   const today = todayIso();
+  const showNudged = nudged || pendingNudge;
 
   const dots = useMemo(
     () => weekDots(events, link.buddy.id, today),
@@ -88,9 +97,14 @@ export function BuddyCard({ link, events, nudged, onChanged }: Props) {
   );
 
   const nudge = (): void => {
-    if (nudged) return;
-    // The per-day ledger flips via the store on success (or on 429).
-    void sendNudge(link.linkId);
+    if (showNudged) return;
+    // Flip the visual immediately; the per-day ledger flips via the store on
+    // success (or on 429 = nudge_limit). Revert only on a hard failure.
+    setPendingNudge(true);
+    void (async () => {
+      const ok = await sendNudge(link.linkId);
+      if (!ok) setPendingNudge(false);
+    })();
   };
 
   const remove = (): void => {
@@ -106,14 +120,32 @@ export function BuddyCard({ link, events, nudged, onChanged }: Props) {
 
   return (
     <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel={`Buddy ${link.buddy.displayName}, ${trained}. Long press for options`}
+      // Not a button: a container that groups its children would make the
+      // inner Nudge/Remove controls unreachable to VoiceOver. Keep the
+      // long-press affordance for sighted users; screen readers reach the
+      // same toggle via the summary row's accessibility action below.
+      accessible={false}
       haptic={false}
       pressScale={0.99}
       onLongPress={() => setConfirmRemove((v) => !v)}
       style={styles.card}
     >
-      <View style={styles.topRow}>
+      <View
+        style={styles.topRow}
+        accessible
+        accessibilityLabel={`Buddy ${link.buddy.displayName}, ${trained}, trained ${dots.filter(Boolean).length} of 7 days this week`}
+        accessibilityActions={[
+          {
+            name: 'toggleRemove',
+            label: confirmRemove ? 'Hide remove option' : 'Show remove option',
+          },
+        ]}
+        onAccessibilityAction={(e: AccessibilityActionEvent) => {
+          if (e.nativeEvent.actionName === 'toggleRemove') {
+            setConfirmRemove((v) => !v);
+          }
+        }}
+      >
         {/* Tier identity on avatar rows = the STATIC ring on the avatar ONLY
             (design law) — list surface, so no glow/animation, no shield. */}
         <TierAvatarFrame tier={link.buddy.tier} size={48}>
@@ -129,38 +161,33 @@ export function BuddyCard({ link, events, nudged, onChanged }: Props) {
           </View>
           <AppText variant="caption">{trained}</AppText>
         </View>
-        <View
-          style={styles.dotRow}
-          accessibilityLabel={`Trained ${dots.filter(Boolean).length} of 7 days this week`}
-        >
+        <View style={styles.dotRow}>
           {dots.map((on, i) => (
             <View key={i} style={[styles.dot, on && styles.dotOn]} />
           ))}
         </View>
       </View>
 
-      <View style={styles.nudgeRow}>
-        <PressableScale
-          accessibilityRole="button"
-          accessibilityLabel={
-            nudged
-              ? `Nudged ${link.buddy.displayName} today`
-              : `Nudge ${link.buddy.displayName}`
-          }
-          accessibilityState={{ disabled: nudged }}
-          onPress={nudge}
-          style={[styles.nudgeBtn, nudged && styles.nudgeBtnDone]}
-        >
-          <Ionicons
-            name={nudged ? 'flash' : 'flash-outline'}
-            size={22}
-            color={nudged ? colors.onAccent : colors.text}
-          />
-        </PressableScale>
-        <AppText variant="caption">
-          {nudged ? 'Nudged today' : 'Nudge them to train'}
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={
+          showNudged
+            ? `Nudged ${link.buddy.displayName} today`
+            : `Nudge ${link.buddy.displayName}`
+        }
+        accessibilityState={{ disabled: showNudged }}
+        onPress={nudge}
+        style={[styles.nudgePill, showNudged && styles.nudgePillDone]}
+      >
+        <Ionicons
+          name={showNudged ? 'flash' : 'flash-outline'}
+          size={18}
+          color={showNudged ? colors.onBlock : colors.text}
+        />
+        <AppText variant="bodyBold" color={showNudged ? colors.onBlock : colors.text}>
+          {showNudged ? 'Nudged today' : 'Nudge'}
         </AppText>
-      </View>
+      </PressableScale>
 
       {confirmRemove ? (
         <Animated.View entering={enterFade(0)} style={styles.removeRow}>

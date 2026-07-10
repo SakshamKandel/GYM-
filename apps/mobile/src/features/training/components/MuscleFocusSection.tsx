@@ -5,7 +5,7 @@ import { Image } from 'expo-image';
 import Svg, { Path } from 'react-native-svg';
 import type { PlanWorkout } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
-import { AppText, Chip, Divider, PressableScale, Tag } from '../../../components/ui';
+import { AppText, Chip, PressableScale, Tag } from '../../../components/ui';
 import { allExercises, MUSCLE_GROUPS } from '../../../lib/exercises';
 import { pushPath } from '../nav';
 import { MALE_MUSCLE_MAP, MUSCLE_MAP_VIEW_BOX, type MuscleMapSide } from './muscleMapData';
@@ -107,11 +107,12 @@ const SOURCE_TO_APP_MUSCLE: Record<string, MuscleGroup> = {
 const VISUAL_ONLY_SLUGS = new Set(['head', 'hair', 'hands', 'feet', 'knees', 'tibialis', 'ankles']);
 
 const styles = StyleSheet.create({
+  // Borderless charcoal color-block (radius.block) — separation by fill only.
   card: {
     marginTop: spacing.md,
-    paddingTop: spacing.lg,
+    paddingTop: spacing.gutter,
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
+    borderRadius: radius.block,
     overflow: 'hidden',
   },
   header: {
@@ -123,8 +124,16 @@ const styles = StyleSheet.create({
   },
   headingCopy: { flex: 1, gap: spacing.xs },
   intro: { paddingHorizontal: spacing.lg, marginTop: spacing.xs },
+  sideSwitchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+  },
   mapPanel: {
-    marginTop: spacing.lg,
+    marginTop: spacing.md,
     marginHorizontal: spacing.lg,
     minHeight: 340,
     borderRadius: radius.md,
@@ -142,9 +151,6 @@ const styles = StyleSheet.create({
   },
   mapLabelText: { marginTop: 1 },
   sideSwitch: {
-    position: 'absolute',
-    top: spacing.sm,
-    left: spacing.sm,
     flexDirection: 'row',
     gap: spacing.xs,
   },
@@ -158,18 +164,22 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
   },
   resultCount: { flexShrink: 0 },
+  /** Rounded raised rows in a gapped stack — replaces Divider hairlines. */
+  list: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   exerciseRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     minHeight: 72,
-    paddingHorizontal: spacing.lg,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
   thumb: {
     width: 52,
     height: 52,
-    borderRadius: radius.sm,
+    borderRadius: radius.md,
     backgroundColor: colors.onAccent,
   },
   exerciseCopy: { flex: 1, gap: 1 },
@@ -178,9 +188,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.md,
     minHeight: touch.min,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
+    marginTop: spacing.xs,
   },
 });
 
@@ -270,11 +282,15 @@ export function MuscleFocusSection({ initialMuscle }: { initialMuscle: MuscleGro
         Tap the body or choose a muscle below. Your selected area is highlighted in red.
       </AppText>
 
-      <View style={styles.mapPanel}>
+      <View style={styles.sideSwitchRow}>
+        <AppText variant="label">Body view</AppText>
         <View style={styles.sideSwitch}>
           <Chip label="Front" selected={side === 'front'} onPress={() => setSide('front')} />
           <Chip label="Back" selected={side === 'back'} onPress={() => setSide('back')} />
         </View>
+      </View>
+
+      <View style={styles.mapPanel}>
         <MuscleMap side={side} selected={selected} onSelect={selectMuscle} />
         <View style={styles.mapLabel} pointerEvents="none">
           <AppText variant="label" color={colors.textDim}>
@@ -297,7 +313,6 @@ export function MuscleFocusSection({ initialMuscle }: { initialMuscle: MuscleGro
         ))}
       </ScrollView>
 
-      <Divider />
       <View style={styles.listHeader}>
         <AppText variant="title">{label} exercises</AppText>
         <AppText variant="caption" color={colors.textDim} style={styles.resultCount}>
@@ -306,10 +321,10 @@ export function MuscleFocusSection({ initialMuscle }: { initialMuscle: MuscleGro
       </View>
 
       {visibleExercises.length > 0 ? (
-        visibleExercises.map((exercise, index) => (
-          <View key={exercise.id}>
-            {index > 0 ? <Divider /> : null}
+        <View style={styles.list}>
+          {visibleExercises.map((exercise) => (
             <PressableScale
+              key={exercise.id}
               accessibilityRole="button"
               accessibilityLabel={`Open ${exercise.name}`}
               onPress={() => pushPath(`/exercises/${exercise.id}`)}
@@ -332,8 +347,8 @@ export function MuscleFocusSection({ initialMuscle }: { initialMuscle: MuscleGro
               </View>
               <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
             </PressableScale>
-          </View>
-        ))
+          ))}
+        </View>
       ) : (
         <View style={styles.empty}>
           <AppText variant="bodyBold">No exercises yet</AppText>
@@ -343,7 +358,6 @@ export function MuscleFocusSection({ initialMuscle }: { initialMuscle: MuscleGro
         </View>
       )}
 
-      <Divider />
       <PressableScale
         accessibilityRole="button"
         accessibilityLabel={`See all ${label} exercises`}

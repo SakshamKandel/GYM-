@@ -120,3 +120,9 @@ Every screen must move — but with ONE consistent vocabulary (`src/components/u
 - Do NOT edit: `src/app/_layout.tsx`, `src/app/(tabs)/_layout.tsx`, `packages/*`,
   `src/components/ui/*`, `src/lib/*` (read-only foundation).
 - Plain language: "Food", "Train", "Body weight" — no jargon.
+
+## SUPERSEDED (2026-07-10)
+This file is SUPERSEDED for layout, palette usage and color-blocking by
+`REVAMP-BRIEF.md` (color-blocked red/black language). Where the two conflict on
+layout/color, REVAMP-BRIEF.md wins. The motion vocabulary, accessibility rules
+and anti-glow/anti-pulse laws in this file still apply unchanged.

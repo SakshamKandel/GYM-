@@ -233,7 +233,11 @@ export function useSocialData(): SocialData {
         loadedOnce.current = true;
         setStale(false);
       } catch (err) {
-        toBuddyError(err);
+        // Same recovery as useBuddyData above: a 401 hands the session to the
+        // auth store's guarded refresh instead of going quietly stale.
+        if (toBuddyError(err).code === 'unauthorized') {
+          void useAuth.getState().refresh();
+        }
         if (mounted.current) setStale(true);
       } finally {
         if (mounted.current) setLoading(false);

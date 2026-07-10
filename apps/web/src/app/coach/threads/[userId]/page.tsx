@@ -60,6 +60,21 @@ export default async function CoachThreadPage({ params }: PageProps) {
     )
     .orderBy(asc(coachMessages.createdAt));
 
+  // Clear the coach-side unread flag on the inbound rows we just loaded so the
+  // inbox unread badge and 'Awaiting reply' / 'Unread messages' counts clear on
+  // open — mirrors GET /api/coach/threads/[userId].
+  await db
+    .update(coachMessages)
+    .set({ readByCoach: true })
+    .where(
+      and(
+        eq(coachMessages.accountId, userId),
+        eq(coachMessages.kind, 'coach_chat'),
+        eq(coachMessages.sender, 'user'),
+        eq(coachMessages.readByCoach, false),
+      ),
+    );
+
   const messages: ThreadMessage[] = messageRows.map((m) => ({
     id: m.id,
     sender: m.sender,

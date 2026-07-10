@@ -1,3 +1,5 @@
+'use client';
+
 import { EmptyState } from '@/components/console';
 
 export interface ThreadMessage {
@@ -49,6 +51,7 @@ function DayDivider({ label }: { label: string }) {
     >
       <span style={{ flex: 1, height: 1, background: 'var(--gt-border)' }} />
       <span
+        suppressHydrationWarning
         className="gt-numeric"
         style={{
           fontSize: 11,
@@ -124,6 +127,7 @@ export function MessageList({ messages }: { messages: ThreadMessage[] }) {
                 {m.body}
               </div>
               <span
+                suppressHydrationWarning
                 className="gt-numeric"
                 style={{
                   fontSize: 10.5,

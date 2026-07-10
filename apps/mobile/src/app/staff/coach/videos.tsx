@@ -16,6 +16,7 @@ import {
   enterUp,
   PressableScale,
   Screen,
+  ScreenHeader,
   Sheet,
   Tag,
 } from '../../../components/ui';
@@ -510,7 +511,7 @@ export default function CoachVideosScreen() {
 
   return (
     <Screen scroll>
-      <Animated.View entering={enterDown()} style={styles.headerRow}>
+      <Animated.View entering={enterDown()} style={styles.backRow}>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Back to inbox"
@@ -519,8 +520,9 @@ export default function CoachVideosScreen() {
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppText variant="heading">Videos</AppText>
       </Animated.View>
+
+      <ScreenHeader eyebrow="Plan-video library" title="Videos" style={styles.header} />
 
       {/* Native upload — pick a video, fill the details, push to the host. */}
       <UploadPanel token={token} onUploaded={load} />
@@ -634,12 +636,7 @@ function errorLine(code: string): string {
 }
 
 const styles = StyleSheet.create({
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingBottom: spacing.lg,
-  },
+  backRow: { marginBottom: spacing.lg },
   backBtn: {
     width: touch.min,
     height: touch.min,
@@ -648,15 +645,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  header: { marginBottom: spacing.gutter },
+  // Borderless charcoal note row — the warning icon carries the tone.
   banner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.warning,
     borderRadius: radius.md,
     padding: spacing.md,
+    minHeight: touch.min,
     marginBottom: spacing.lg,
   },
   noteText: { flex: 1 },
@@ -664,12 +662,11 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     marginBottom: spacing.lg,
   },
+  // Borderless charcoal block — chunky radius, separation by fill contrast.
   uploadForm: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     gap: spacing.md,
   },
   fileRow: {
@@ -682,6 +679,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
+  // Pills keep their strokes — the no-border law is for cards.
   exerciseChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -694,15 +692,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     height: touch.min,
   },
+  // Filled raised tiles instead of hairline dividers (block list look).
   suggestion: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
     minHeight: touch.min,
-    paddingHorizontal: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
   },
   uploadActions: {
     flexDirection: 'row',
@@ -715,12 +714,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.lg,
   },
+  // Video manager row — borderless charcoal block in a stack.
   card: {
     backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
+    borderRadius: radius.block,
+    padding: spacing.gutter,
     marginBottom: spacing.md,
     gap: spacing.md,
   },
@@ -732,10 +730,8 @@ const styles = StyleSheet.create({
   cardActions: {
     flexDirection: 'row',
     gap: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: spacing.md,
   },
+  // Filled raised pills — fill contrast separates them from the card.
   action: {
     flex: 1,
     flexDirection: 'row',
@@ -743,17 +739,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.xs,
     height: touch.min,
-    borderRadius: radius.md,
+    borderRadius: radius.full,
     backgroundColor: colors.surfaceRaised,
   },
   actionDisabled: { opacity: 0.4 },
+  // Sheet rows as filled tiles, not hairline-divided lines.
   tierOption: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     height: touch.primary,
-    paddingHorizontal: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+    marginBottom: spacing.sm,
   },
 });

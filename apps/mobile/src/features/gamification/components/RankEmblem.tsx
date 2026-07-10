@@ -3,6 +3,7 @@ import type { Rank } from '@gym/shared';
 import { colors, type } from '@gym/ui-tokens';
 import Svg, { Circle, Defs, LinearGradient, Stop } from 'react-native-svg';
 import { AppText } from '../../../components/ui';
+import { METAL_RAMP, METAL_STOP_OFFSETS } from '../../../components/ui/badges/achievementMetals';
 
 /**
  * Earned rank emblem — a thin metallic gradient ring, normally wrapped
@@ -25,18 +26,14 @@ interface Props {
   size?: number;
 }
 
-// Top-lit 4-stop metals at offsets 0% / 40% / 62% / 100%. Kept clearly apart
-// from the TIER_FRAME finishes: rank silver is cooler/darker than the frame's
-// brushed silver, rank elite is the bright accent red vs. the frame's
-// red-black lacquer.
-const RANK_GRADIENT: Record<Rank, readonly [string, string, string, string]> = {
-  bronze: ['#EBBA85', '#CE9255', '#A96F36', '#7C5124'],
-  silver: ['#D4D8DE', '#A6ABB3', '#84898F', '#62676F'],
-  gold: ['#F3D783', '#E3BE55', '#B8913A', '#96742B'],
-  elite: ['#FF7A6E', '#F5453A', '#C22D24', '#8F211B'],
-};
+// Top-lit 4-stop metals at offsets 0% / 40% / 62% / 100% — shared with the
+// achievement medals (see achievementMetals.ts). Kept clearly apart from the
+// TIER_FRAME finishes: rank silver is cooler/darker than the frame's brushed
+// silver, rank elite is the bright accent red vs. the frame's red-black
+// lacquer.
+const RANK_GRADIENT: Record<Rank, readonly [string, string, string, string]> = METAL_RAMP;
 
-const STOP_OFFSETS = ['0%', '40%', '62%', '100%'] as const;
+const STOP_OFFSETS = METAL_STOP_OFFSETS;
 const STROKE_WIDTH = 2.5;
 
 export function RankEmblem({ rank, level, size = 28 }: Props) {

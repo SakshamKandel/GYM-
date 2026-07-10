@@ -1,6 +1,7 @@
 import { Redirect, Tabs } from 'expo-router';
 import { colors } from '@gym/ui-tokens';
 import { FloatingTabBar } from '../../components/ui/FloatingTabBar';
+import { AppStartupScreen } from '../../components/experience/AppStartupScreen';
 import { useStoresHydrated } from '../../state/hydration';
 import { useProfile } from '../../state/profile';
 
@@ -13,7 +14,7 @@ export default function TabsLayout() {
   const hydrated = useStoresHydrated();
   const onboarded = useProfile((s) => s.onboarded);
 
-  if (!hydrated) return null; // black frame while stores rehydrate (<100ms)
+  if (!hydrated) return <AppStartupScreen message="Loading your plan" />;
   if (!onboarded) return <Redirect href="/welcome" />;
 
   return (

@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Tier } from '@gym/shared';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
-import { AppText, Divider, SectionLabel, Sheet, Tag } from '../../components/ui';
+import { AppText, SectionLabel, Sheet, Tag } from '../../components/ui';
 import { formatNprAmount, GM_TIERS, type GmTier } from './logic';
 
 /**
@@ -107,10 +107,8 @@ function Body({ detail }: { detail: TierDetail }) {
         </View>
       ) : null}
 
-      <View style={styles.dividerWrap}>
-        <Divider />
-      </View>
-
+      {/* No hairline here — SectionLabel's own top margin is the separation
+          (block language: gaps, not strokes). */}
       <SectionLabel>Everything you get</SectionLabel>
       <View style={styles.features}>
         {features.map((feature) => (
@@ -138,8 +136,8 @@ const styles = StyleSheet.create({
   },
   priceNumber: {
     fontFamily: type.display,
-    fontSize: 34,
-    lineHeight: 40,
+    fontSize: type.size.display,
+    lineHeight: 46,
     letterSpacing: 0.5,
     color: colors.text,
     flexShrink: 1,
@@ -165,7 +163,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
   },
   trialText: { flexShrink: 1 },
-  dividerWrap: { marginTop: spacing.xl },
   features: { gap: spacing.md },
   featureRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   featureIcon: { marginTop: 3 },

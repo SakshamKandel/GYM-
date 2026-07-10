@@ -11,16 +11,25 @@ type TipState =
   | { status: 'error' };
 
 /**
+ * Focus-refresh TTL: tab refocus within this window reuses the tip already on
+ * screen instead of refiring the LLM call (every tab switch was a Groq hit).
+ * Module-level so it also survives screen remounts. Manual "New tip" refresh
+ * is NOT throttled — it always fetches.
+ */
+const TIP_TTL_MS = 30 * 60 * 1000;
+let lastTipFetchAt = 0;
+
+/**
  * Fetch a short AI tip. The prompt is built by the caller via a function so the
  * tip refreshes when the inputs change. Generation runs SERVER-SIDE (the Groq
  * key never ships in the app), so a tip needs a signed-in token — signed-out
  * users simply get no tip (the card shows a quiet "unavailable" line).
  *
  * Freshness: the very first tip for a given prompt is cached so re-renders don't
- * re-hit the API, but every manual refresh AND every time the screen regains
- * focus bumps an internal nonce that FORCES a brand-new fact (bypassing the
- * cache and nudging the model for variety). That's what makes "New tip" and
- * reloading the dashboard actually produce a different fact each time.
+ * re-hit the API. Manual refresh always bumps an internal nonce that FORCES a
+ * brand-new fact (bypassing the cache and nudging the model for variety).
+ * Screen refocus does the same, but only once the 30-minute TTL has lapsed —
+ * within the TTL the tip already on screen is reused.
  */
 export function useAiTip(buildPrompt: () => AiTipMessage[], deps: unknown[]): {
   state: TipState;
@@ -66,6 +75,7 @@ export function useAiTip(buildPrompt: () => AiTipMessage[], deps: unknown[]): {
     const text = await getAiTip(outgoing, token);
     if (text) {
       if (nonce === 0) cache.current.set(key, text);
+      lastTipFetchAt = Date.now();
       setState({ status: 'done', text });
     } else {
       setState({ status: 'error' });
@@ -77,8 +87,10 @@ export function useAiTip(buildPrompt: () => AiTipMessage[], deps: unknown[]): {
     void fetchTip();
   }, [fetchTip]);
 
-  // Revisiting the screen surfaces a fresh fact. Skip the very first focus —
-  // the mount effect above already loaded the initial tip.
+  // Revisiting the screen surfaces a fresh fact — but only after the TTL has
+  // lapsed, so rapid tab-hopping reuses the tip instead of refiring the call.
+  // Skip the very first focus — the mount effect above already loaded the
+  // initial tip.
   const firstFocus = useRef(true);
   useFocusEffect(
     useCallback(() => {
@@ -86,6 +98,7 @@ export function useAiTip(buildPrompt: () => AiTipMessage[], deps: unknown[]): {
         firstFocus.current = false;
         return;
       }
+      if (Date.now() - lastTipFetchAt < TIP_TTL_MS) return;
       setNonce((n) => n + 1);
     }, []),
   );

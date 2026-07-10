@@ -12,7 +12,6 @@ import { colors, radius, spacing } from '@gym/ui-tokens';
 import {
   AnimatedNumber,
   AppText,
-  Divider,
   SectionLabel,
   StatBlock,
   StreakFlame,
@@ -115,10 +114,6 @@ export function StreakDetailSheet({ streak }: { streak: WeeklyStreakData }) {
           </AppText>
         </View>
       ) : null}
-
-      <View style={styles.dividerWrap}>
-        <Divider />
-      </View>
 
       <View style={styles.statRow}>
         <StatBlock
@@ -231,14 +226,13 @@ const styles = StyleSheet.create({
   graceText: {
     flexShrink: 1,
   },
-  dividerWrap: {
-    marginTop: spacing.xl,
-  },
+  // Hairline-free rhythm (brief §10): whitespace separates the stat band
+  // where a Divider used to sit.
   statRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.lg,
-    marginTop: spacing.lg,
+    marginTop: spacing.xl,
   },
   statHalf: {
     flex: 1,

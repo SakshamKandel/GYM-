@@ -14,6 +14,7 @@ import {
   enterUp,
   PressableScale,
   Screen,
+  ScreenHeader,
   SectionLabel,
   Stepper,
 } from '../../components/ui';
@@ -27,15 +28,22 @@ import {
 } from '../../features/nutrition/logic';
 import { portionHref } from '../../features/nutrition/nav';
 
+/**
+ * Custom food form — block language (REVAMP-BRIEF): back pill → "CUSTOM FOOD"
+ * ScreenHeader with a "per 100 g" meta chip → default AppTextInput (filled
+ * charcoal, focus ring) → borderless charcoal field rows (§11c) with steppers.
+ * The kcal-vs-macros sanity check renders as a red-text row inside the
+ * calories card. One primary CTA: the pinned red save pill.
+ */
+
 const styles = StyleSheet.create({
-  headerRow: {
+  backRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
     // Screen already adds insets.top + 16 of air — keep the extra nudge tiny.
     marginTop: spacing.xs,
+    marginBottom: spacing.md,
   },
-  iconBtn: {
+  backBtn: {
     width: touch.min,
     height: touch.min,
     borderRadius: radius.full,
@@ -43,25 +51,59 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  header: { marginBottom: spacing.xl },
+  // Meta chip on dark (brief §6): outlined pill — chips MAY carry borders,
+  // the no-border law is for cards. Informational, not pressable.
+  metaChip: {
+    minHeight: 34,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+  },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: spacing.xl },
-  input: {
-    marginTop: spacing.sm,
-    minHeight: touch.min,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.lg,
-  },
-  fieldRow: {
+  // Borderless charcoal field rows (brief §11c): fill contrast + gaps between
+  // rounded rows replace hairline dividers.
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.md,
-    paddingVertical: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    minHeight: 64,
   },
+  // Calories card is a column so the mismatch row can span the full width.
+  caloriesCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  caloriesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    minHeight: touch.min,
+  },
+  rowStack: { gap: spacing.sm },
+  servingGap: { marginTop: spacing.md },
   fieldInfo: { flexShrink: 1 },
   fieldLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  dot: { width: 10, height: 10, borderRadius: 5 },
-  mismatch: { marginTop: spacing.xs },
+  dot: { width: 10, height: 10, borderRadius: radius.full },
+  mismatchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  mismatchText: { flexShrink: 1 },
   // paddingBottom keeps the button off the screen edge when insets.bottom is 0 (web).
   pinned: { marginTop: 'auto', paddingTop: spacing.md, paddingBottom: spacing.md },
 });
@@ -120,16 +162,15 @@ export default function CustomFoodScreen() {
 
   return (
     <Screen keyboardAware>
-      <Animated.View entering={enterDown(0)} style={styles.headerRow}>
+      <Animated.View entering={enterDown(0)} style={styles.backRow}>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Back"
           onPress={() => router.back()}
-          style={styles.iconBtn}
+          style={styles.backBtn}
         >
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
-        <AppText variant="title">Custom food</AppText>
       </Animated.View>
 
       <ScrollView
@@ -138,60 +179,82 @@ export default function CustomFoodScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        <ScreenHeader
+          eyebrow="New food"
+          title="Custom food"
+          meta={
+            <View style={styles.metaChip}>
+              <AppText variant="label" color={colors.text}>
+                Per 100 g
+              </AppText>
+            </View>
+          }
+          style={styles.header}
+        />
+
         <Animated.View entering={enterUp(0)}>
           <AppTextInput
             value={name}
             onChangeText={setName}
             placeholder="Food name"
             autoCorrect={false}
-            style={styles.input}
             accessibilityLabel="Food name"
           />
         </Animated.View>
 
-        <Animated.View entering={enterUp(1)} style={styles.fieldRow}>
-          <View style={styles.fieldInfo}>
-            <AppText variant="body">Calories</AppText>
-            <AppText variant="caption" color={colors.textDim}>
-              kcal per 100 g
-            </AppText>
-            {implied !== null ? (
-              <Animated.View entering={enterFade(0)}>
-                <AppText variant="caption" color={colors.textFaint} style={styles.mismatch} tabular>
-                  macros imply {implied} kcal
-                </AppText>
-              </Animated.View>
-            ) : null}
+        <Animated.View entering={enterUp(1)} style={styles.caloriesCard}>
+          <View style={styles.caloriesRow}>
+            <View style={styles.fieldInfo}>
+              <AppText variant="body">Calories</AppText>
+              <AppText variant="caption" color={colors.textDim}>
+                kcal per 100 g
+              </AppText>
+            </View>
+            <Stepper value={kcal} onChange={setKcal} step={10} min={0} max={900} />
           </View>
-          <Stepper value={kcal} onChange={setKcal} step={10} min={0} max={900} />
+          {implied !== null ? (
+            <Animated.View entering={enterFade(0)} style={styles.mismatchRow}>
+              <Ionicons name="alert-circle" size={16} color={colors.error} />
+              <AppText
+                variant="body"
+                color={colors.error}
+                tabular
+                style={styles.mismatchText}
+              >
+                macros imply {implied} kcal
+              </AppText>
+            </Animated.View>
+          ) : null}
         </Animated.View>
 
         <Animated.View entering={enterUp(2)}>
           <SectionLabel>Macros</SectionLabel>
         </Animated.View>
 
-        {MACRO_FIELDS.map((field, i) => (
-          <Animated.View key={field.key} entering={enterUp(3 + i)} style={styles.fieldRow}>
-            <View style={styles.fieldInfo}>
-              <View style={styles.fieldLabelRow}>
-                <View style={[styles.dot, { backgroundColor: field.color }]} />
-                <AppText variant="body">{field.label}</AppText>
+        <View style={styles.rowStack}>
+          {MACRO_FIELDS.map((field, i) => (
+            <Animated.View key={field.key} entering={enterUp(3 + i)} style={styles.row}>
+              <View style={styles.fieldInfo}>
+                <View style={styles.fieldLabelRow}>
+                  <View style={[styles.dot, { backgroundColor: field.color }]} />
+                  <AppText variant="body">{field.label}</AppText>
+                </View>
+                <AppText variant="caption" color={colors.textDim}>
+                  grams per 100 g
+                </AppText>
               </View>
-              <AppText variant="caption" color={colors.textDim}>
-                grams per 100 g
-              </AppText>
-            </View>
-            <Stepper
-              value={macros[field.key]}
-              onChange={(next) => setMacros((m) => ({ ...m, [field.key]: next }))}
-              step={1}
-              min={0}
-              max={100}
-            />
-          </Animated.View>
-        ))}
+              <Stepper
+                value={macros[field.key]}
+                onChange={(next) => setMacros((m) => ({ ...m, [field.key]: next }))}
+                step={1}
+                min={0}
+                max={100}
+              />
+            </Animated.View>
+          ))}
+        </View>
 
-        <Animated.View entering={enterUp(6)} style={styles.fieldRow}>
+        <Animated.View entering={enterUp(6)} style={[styles.row, styles.servingGap]}>
           <View style={styles.fieldInfo}>
             <AppText variant="body">Serving size</AppText>
             <AppText variant="caption" color={colors.textDim}>

@@ -49,7 +49,8 @@ export function KcalChart({ days, targetKcal, today, height = 150 }: Props) {
   const max = Math.max(...kcals, targetKcal, 1) * 1.05;
   const innerH = height - PAD_TOP - PAD_BOTTOM;
   const slot = n > 0 ? width / n : 0;
-  const barW = Math.min(18, Math.max(3, slot * 0.55));
+  // Thick pill bars (revamp §7 vocabulary translated to charts).
+  const barW = Math.min(20, Math.max(5, slot * 0.6));
   const y = (v: number): number => PAD_TOP + (1 - v / max) * innerH;
 
   return (
@@ -80,7 +81,7 @@ export function KcalChart({ days, targetKcal, today, height = 150 }: Props) {
                   y={PAD_TOP + innerH - h}
                   width={barW}
                   height={h}
-                  rx={2}
+                  rx={Math.min(barW / 2, h / 2)}
                   fill={d.date === today ? colors.kcal : colors.borderStrong}
                 />
               );

@@ -12,14 +12,14 @@ import {
   enterUp,
   PressableScale,
   Screen,
+  ScreenHeader,
 } from '../../components/ui';
 import { toApiError, type ApiErrorCode } from '../../lib/api/client';
 import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { useAuth } from '../../state/auth';
 import { AuthField } from './components/AuthField';
 import { GoogleSignInButton } from './components/GoogleSignInButton';
-import { replaceStaff, STAFF_ROUTES } from '../staff/nav';
-import { replacePath } from './nav';
+import { enterApp, replacePath } from './nav';
 import { emailError, nameError, newPasswordError, passwordError } from './validation';
 
 /**
@@ -80,20 +80,6 @@ function describeApiError(code: ApiErrorCode): { field: keyof FieldErrors | null
   }
 }
 
-/**
- * Login is the app's front door. Staff members skip the onboarding-gated root
- * and land straight in the staff console; everyone else goes to '/'. The store
- * has already awaited the /api/me/staff probe by the time signIn/signUp
- * resolves, so staffRole is settled here.
- */
-function enterApp(): void {
-  if (useAuth.getState().staffRole !== null) {
-    replaceStaff(STAFF_ROUTES.hub);
-    return;
-  }
-  router.replace('/');
-}
-
 export function AuthScreen({ mode }: { mode: Mode }) {
   const copy = COPY[mode];
   const signIn = useAuth((s) => s.signIn);
@@ -152,21 +138,21 @@ export function AuthScreen({ mode }: { mode: Mode }) {
         </Animated.View>
       ) : null}
 
-      <Animated.View entering={enterDown(1)} style={styles.poster}>
-        <AppText variant="label">GM Method</AppText>
-        <AppText variant="heading">{copy.heading}</AppText>
-        <AppText variant="caption">{copy.caption}</AppText>
-      </Animated.View>
+      <View style={styles.poster}>
+        <ScreenHeader eyebrow="GM Method" title={copy.heading} />
+        <Animated.View entering={enterDown(1)}>
+          <AppText variant="body" color={colors.textDim}>
+            {copy.caption}
+          </AppText>
+        </Animated.View>
+      </View>
 
       <Animated.View entering={enterUp(1)} style={styles.google}>
         <GoogleSignInButton />
-        <View style={styles.orRow}>
-          <View style={styles.orLine} />
-          <AppText variant="caption" color={colors.textFaint}>
-            or
-          </AppText>
-          <View style={styles.orLine} />
-        </View>
+        {/* Fill contrast separates sections — no hairline "or" strokes. */}
+        <AppText variant="label" center>
+          or
+        </AppText>
       </Animated.View>
 
       <Animated.View entering={enterUp(2)} style={styles.form}>
@@ -217,7 +203,7 @@ export function AuthScreen({ mode }: { mode: Mode }) {
 
         {formError ? (
           <Animated.View entering={enterFade()}>
-            <AppText variant="caption" color={colors.error}>
+            <AppText variant="body" color={colors.error}>
               {formError}
             </AppText>
           </Animated.View>
@@ -233,14 +219,18 @@ export function AuthScreen({ mode }: { mode: Mode }) {
 
       <Animated.View entering={enterUp(3)} style={styles.footer}>
         <View style={styles.switchRow}>
-          <AppText variant="caption">{copy.switchPrompt}</AppText>
+          <AppText variant="body" color={colors.textDim}>
+            {copy.switchPrompt}
+          </AppText>
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel={copy.switchLabel}
             onPress={() => replacePath(copy.switchPath)}
             style={styles.switchBtn}
           >
-            <AppText variant="bodyBold">{copy.switchLabel}</AppText>
+            <AppText variant="bodyBold" color={colors.accent}>
+              {copy.switchLabel}
+            </AppText>
           </PressableScale>
         </View>
       </Animated.View>
@@ -265,20 +255,11 @@ const styles = StyleSheet.create({
   poster: {
     // lg (not xl): stacks with Screen's 16px top air when there's no back button.
     marginTop: spacing.lg,
-    marginBottom: spacing.xxl,
-    gap: spacing.xs,
-  },
-  google: { gap: spacing.lg, marginBottom: spacing.lg },
-  orRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    // 28 of air around the hero header (brief §3).
+    marginBottom: spacing.xl + spacing.xs,
     gap: spacing.md,
   },
-  orLine: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.border,
-  },
+  google: { gap: spacing.lg, marginBottom: spacing.lg },
   form: { gap: spacing.lg },
   submit: { marginTop: spacing.sm },
   footer: {
