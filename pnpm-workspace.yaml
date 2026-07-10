@@ -1,5 +1,10 @@
 packages:
   - apps/*
   - packages/*
+# Web deploys (Vercel) exclude apps/mobile, so this mobile-only patch is
+# "unused" there. Allow that instead of failing the build; it still applies
+# locally where apps/mobile is present.
+allowUnusedPatches: true
+allowNonAppliedPatches: true
 patchedDependencies:
   react-native-gesture-handler@2.32.0: patches/react-native-gesture-handler@2.32.0.patch
