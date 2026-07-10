@@ -234,10 +234,14 @@ function ExerciseRow({
 
 export default function ExerciseLibraryScreen() {
   const insets = useSafeAreaInsets();
-  const { select } = useLocalSearchParams<{ select?: string }>();
+  const { select, muscle: muscleQuery } = useLocalSearchParams<{ select?: string; muscle?: string }>();
   const selectMode = select === '1';
   const [query, setQuery] = useState('');
-  const [muscle, setMuscle] = useState<string | null>(null);
+  const requestedMuscle =
+    typeof muscleQuery === 'string' && MUSCLE_GROUPS.some((group) => group === muscleQuery)
+      ? muscleQuery
+      : null;
+  const [muscle, setMuscle] = useState<string | null>(requestedMuscle);
   const [searchFocused, setSearchFocused] = useState(false);
   const recent = useRecentExercises(RECENT_LIMIT);
   const showRecent = query.trim().length === 0 && muscle === null && recent.length > 0;
