@@ -1,8 +1,4 @@
 {
   "buildCommand": "pnpm build",
-  "installCommand": "pnpm install",
-  "env": {
-    "TURBO_TOKEN": "@TURBO_TOKEN",
-    "TURBO_TEAM": "@TURBO_TEAM"
-  }
+  "installCommand": "pnpm install"
 }
