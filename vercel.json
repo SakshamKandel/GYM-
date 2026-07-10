@@ -1,4 +1,6 @@
 {
-  "buildCommand": "npx pnpm@10.33.2 run build",
-  "installCommand": "npx pnpm@10.33.2 install --no-frozen-lockfile"
+  "framework": "nextjs",
+  "buildCommand": "npx pnpm@10.33.2 exec turbo run build --filter=web",
+  "installCommand": "npx pnpm@10.33.2 install --no-frozen-lockfile",
+  "outputDirectory": "apps/web/.next"
 }
