@@ -1,13 +1,16 @@
-# Android release APK — CI build for the Expo app (prebuilt android/ + Gradle).
+# Android release APK - CI build for the Expo app (prebuilt android/ + Gradle).
 #
 # Mirrors the local production recipe: minified release, arm64-v8a only,
-# production API URL baked in. Bytes never go through EAS — this builds on the
+# production API URL baked in. Bytes never go through EAS - this builds on the
 # GitHub runner with the repo's own Gradle project, so there is no Expo-account
 # queue or build-credit limit. (If you ever prefer Expo's cloud builders:
 # `eas build -p android --profile production --non-interactive` with an
 # EXPO_TOKEN secret is the drop-in alternative.)
 #
-# REQUIRED repository secrets (Settings → Secrets and variables → Actions):
+# pnpm version comes from package.json "packageManager" - do NOT also pass
+# `version:` to pnpm/action-setup (the action errors on a double spec).
+#
+# REQUIRED repository secrets (Settings -> Secrets and variables -> Actions):
 #   GOOGLE_SERVICES_JSON_B64  base64 of apps/mobile/google-services.json
 #   ANDROID_KEYSTORE_B64      base64 of apps/mobile/android/app/debug.keystore
 #     (must be the SAME keystore every build: Android updates require a stable
@@ -48,8 +51,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -65,8 +66,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -86,12 +85,12 @@ jobs:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
         run: |
           if [ -z "$GS_B64" ] || [ -z "$KS_B64" ]; then
-            echo "::error::Missing repo secrets GOOGLE_SERVICES_JSON_B64 and/or ANDROID_KEYSTORE_B64 — see the header of this workflow file for how to generate them."
+            echo "::error::Missing repo secrets GOOGLE_SERVICES_JSON_B64 and/or ANDROID_KEYSTORE_B64 - see the header of this workflow file for how to generate them."
             exit 1
           fi
-          echo "${{ secrets.GOOGLE_SERVICES_JSON_B64 }}" | base64 -d > apps/mobile/google-services.json
+          echo "$GS_B64" | base64 -d > apps/mobile/google-services.json
           cp apps/mobile/google-services.json apps/mobile/android/app/google-services.json
-          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > apps/mobile/android/app/debug.keystore
+          echo "$KS_B64" | base64 -d > apps/mobile/android/app/debug.keystore
 
       - name: Build release APK (arm64-v8a)
         working-directory: apps/mobile/android
