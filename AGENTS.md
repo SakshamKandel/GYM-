@@ -35,7 +35,8 @@ You are building a coach-branded fitness app: iOS + Android (Expo React Native) 
 - [x] ui-tokens + base components (charcoal/red reference design, Poppins+Oswald, motion vocabulary in components/ui/motion.ts)
 - [~] Auth: email/password vs Neon via apps/web API + optional sign-in on mobile (Google/Apple pending OAuth credentials)
 - [x] Onboarding quiz + targets (11-step wizard, computeTargets)
-- [x] Training: plans, logger, gym mode, rest timer, plate calculator, interactive MuscleMapJS-based muscle selector, PR detection (unit-tested)
+- [x] Training: plans, logger, gym mode, rest timer, plate calculator, true-3D Z-Anatomy selector with MuscleMapJS/SVG fallback, PR detection (unit-tested)
+- [x] True-3D anatomy (2026-07-11): shared offline Three.js WebView/iframe viewer; clean Z-Anatomy outer body, neutral pelvis closure, 17 red/orange heat-map highlights, tap/orbit/zoom/front-back controls, SVG runtime fallback, and CC BY-SA attribution
 - [x] Body: weight/trend (EWMA smoothing), measurements (photos pending)
 - [x] Nutrition: kcal tracker, Open Food Facts + USDA search, barcode scan, water, custom foods
 - [~] Subscription: GM Method tier catalog + paywall + hasEntitlement gating (RevenueCat pending store accounts)

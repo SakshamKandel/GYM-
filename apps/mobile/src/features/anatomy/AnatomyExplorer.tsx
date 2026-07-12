@@ -26,6 +26,7 @@ import {
 import type { MuscleMapSide } from '../../lib/muscleMapData';
 import { pushPath } from './nav';
 import { AnatomyBody } from './AnatomyBody';
+import { Anatomy3DViewer, ANATOMY_3D_ENABLED } from '../../components/anatomy';
 import { MUSCLE_KNOWLEDGE } from './knowledge';
 
 /**
@@ -40,9 +41,8 @@ const EXERCISE_PREVIEW_LIMIT = 5;
 const styles = StyleSheet.create({
   bodyCard: {
     marginTop: spacing.xl,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.bg,
     borderRadius: radius.block,
-    padding: spacing.sm,
     overflow: 'hidden',
   },
   chipStrip: { gap: spacing.sm, paddingVertical: spacing.lg },
@@ -156,14 +156,25 @@ export function AnatomyExplorer({ initialMuscle }: { initialMuscle: MuscleGroup 
         }
       />
 
-      {/* Rotatable body — the screen's centerpiece. */}
+      {/* Rotatable body — the screen's centerpiece. True-3D WebGL model when
+          enabled, with the SVG body as the universal fallback. */}
       <Animated.View entering={enterUp(0)} style={styles.bodyCard}>
-        <AnatomyBody
-          selected={selected}
-          onSelect={selectMuscle}
-          side={side}
-          onSideSettled={setSide}
-        />
+        {ANATOMY_3D_ENABLED ? (
+          <Anatomy3DViewer
+            selected={selected}
+            onSelect={selectMuscle}
+            side={side}
+            onSideChange={setSide}
+            height={440}
+          />
+        ) : (
+          <AnatomyBody
+            selected={selected}
+            onSelect={selectMuscle}
+            side={side}
+            onSideSettled={setSide}
+          />
+        )}
       </Animated.View>
 
       <Animated.View entering={enterDown(1)}>

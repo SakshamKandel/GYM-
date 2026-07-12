@@ -2,28 +2,29 @@ import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import Svg, { Path } from 'react-native-svg';
 import type { PlanWorkout } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import { AppText, Chip, PressableScale, Tag } from '../../../components/ui';
+import {
+  ANATOMY_3D_ENABLED,
+  Anatomy2DViewer,
+  Anatomy3DViewer,
+} from '../../../components/anatomy';
 import { allExercises, MUSCLE_GROUPS } from '../../../lib/exercises';
 import {
   isMuscleGroup,
   MUSCLE_LABELS,
   PREFERRED_SIDE,
-  SOURCE_MUSCLES,
-  SOURCE_TO_APP_MUSCLE,
-  VISUAL_ONLY_SLUGS,
   type MuscleGroup,
 } from '../../../lib/muscleMap';
 import { pushPath } from '../nav';
-import { MALE_MUSCLE_MAP, MUSCLE_MAP_VIEW_BOX, type MuscleMapSide } from '../../../lib/muscleMapData';
+import type { MuscleMapSide } from '../../../lib/muscleMapData';
 
 /**
- * Interactive workout muscle selector. The visual paths are adapted from the
- * MIT-licensed MuscleMapJS project so they render natively on iOS, Android,
- * and web without a browser canvas or network request. Muscle vocabulary and
- * slug mappings live in lib/muscleMap.ts, shared with the anatomy explorer.
+ * Interactive workout muscle selector. Renders the shared true-3D WebGL body
+ * (components/anatomy) — drag to rotate, pinch to zoom, tap a muscle — so the
+ * workout section and the anatomy explorer share one rotatable model. Muscle
+ * vocabulary lives in lib/muscleMap.ts.
  */
 
 export type { MuscleGroup } from '../../../lib/muscleMap';
@@ -46,30 +47,13 @@ const styles = StyleSheet.create({
   },
   headingCopy: { flex: 1, gap: spacing.xs },
   intro: { paddingHorizontal: spacing.lg, marginTop: spacing.xs },
-  sideSwitchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-    marginTop: spacing.md,
-    paddingHorizontal: spacing.lg,
-  },
+  // Positioning context for the 3D viewer + the Explore overlay pill.
   mapPanel: {
     marginTop: spacing.md,
     marginHorizontal: spacing.lg,
-    minHeight: 340,
-    borderRadius: radius.md,
-    backgroundColor: colors.bg,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderRadius: radius.block,
     overflow: 'hidden',
-  },
-  map: { width: 194, height: 340 },
-  mapLabel: {
-    position: 'absolute',
-    right: spacing.md,
-    bottom: spacing.md,
-    alignItems: 'flex-end',
+    position: 'relative',
   },
   /** Pill in the map's top-left → full anatomy explorer (/anatomy). */
   exploreBtn: {
@@ -79,15 +63,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    minHeight: 36,
+    minHeight: touch.min,
     paddingHorizontal: spacing.lg,
     borderRadius: radius.full,
     backgroundColor: colors.surfaceRaised,
-  },
-  mapLabelText: { marginTop: 1 },
-  sideSwitch: {
-    flexDirection: 'row',
-    gap: spacing.xs,
   },
   chipStrip: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.lg },
   listHeader: {
@@ -145,48 +124,6 @@ function matchingExercises(muscle: MuscleGroup) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function MuscleMap({
-  side,
-  selected,
-  onSelect,
-}: {
-  side: MuscleMapSide;
-  selected: MuscleGroup;
-  onSelect: (muscle: MuscleGroup) => void;
-}) {
-  const highlighted = new Set(SOURCE_MUSCLES[selected]);
-
-  return (
-    <Svg
-      width={194}
-      height={340}
-      viewBox={MUSCLE_MAP_VIEW_BOX[side]}
-      style={styles.map}
-      accessibilityLabel={`${side} body muscle map. ${MUSCLE_LABELS[selected]} highlighted.`}
-    >
-      {MALE_MUSCLE_MAP[side].flatMap((group) =>
-        group.paths.map((path, index) => {
-          const mappedMuscle = SOURCE_TO_APP_MUSCLE[group.slug];
-          const selectable = mappedMuscle !== undefined && !VISUAL_ONLY_SLUGS.has(group.slug);
-          const active = highlighted.has(group.slug);
-          return (
-            <Path
-              key={`${group.slug}-${index}`}
-              d={path}
-              fill={active ? colors.accent : colors.surfaceRaised}
-              stroke={active ? colors.onAccent : colors.borderStrong}
-              strokeWidth={active ? 3.2 : 1.6}
-              onPress={selectable ? () => onSelect(mappedMuscle) : undefined}
-              accessible={selectable}
-              accessibilityLabel={selectable ? `Show ${MUSCLE_LABELS[mappedMuscle]} exercises` : undefined}
-            />
-          );
-        }),
-      )}
-    </Svg>
-  );
-}
-
 export function MuscleFocusSection({ initialMuscle }: { initialMuscle: MuscleGroup }) {
   const [selected, setSelected] = useState<MuscleGroup>(initialMuscle);
   const [side, setSide] = useState<MuscleMapSide>(PREFERRED_SIDE[initialMuscle]);
@@ -210,27 +147,28 @@ export function MuscleFocusSection({ initialMuscle }: { initialMuscle: MuscleGro
         <Tag label={`${exercises.length} moves`} variant="dim" />
       </View>
       <AppText variant="caption" color={colors.textDim} style={styles.intro}>
-        Tap the body or choose a muscle below. Your selected area is highlighted in red.
+        Drag to rotate the body, pinch to zoom, or tap a muscle. Your selected area is
+        highlighted in red.
       </AppText>
 
-      <View style={styles.sideSwitchRow}>
-        <AppText variant="label">Body view</AppText>
-        <View style={styles.sideSwitch}>
-          <Chip label="Front" selected={side === 'front'} onPress={() => setSide('front')} />
-          <Chip label="Back" selected={side === 'back'} onPress={() => setSide('back')} />
-        </View>
-      </View>
-
       <View style={styles.mapPanel}>
-        <MuscleMap side={side} selected={selected} onSelect={selectMuscle} />
-        <View style={styles.mapLabel} pointerEvents="none">
-          <AppText variant="label" color={colors.textDim}>
-            Selected
-          </AppText>
-          <AppText variant="title" color={colors.accent} style={styles.mapLabelText}>
-            {label}
-          </AppText>
-        </View>
+        {ANATOMY_3D_ENABLED ? (
+          <Anatomy3DViewer
+            selected={selected}
+            onSelect={selectMuscle}
+            side={side}
+            onSideChange={setSide}
+            height={340}
+          />
+        ) : (
+          <Anatomy2DViewer
+            selected={selected}
+            onSelect={selectMuscle}
+            side={side}
+            onSideChange={setSide}
+            height={340}
+          />
+        )}
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel={`Explore ${label} anatomy: rotate the body, read how to train it`}

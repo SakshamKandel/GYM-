@@ -62,6 +62,12 @@ export const colors = {
   carbs: '#FF8A34',
   fat: '#FFC53D',
   water: '#5AC8FA',
+
+  // Interactive anatomy: warm neutral skin keeps the body human without
+  // assuming a literal complexion; deep muscle tissue sits beneath the brand
+  // red selection highlight.
+  anatomySkin: '#9A7B6A',
+  anatomyMuscle: '#70433D',
 } as const;
 
 export const spacing = {

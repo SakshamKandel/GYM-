@@ -1511,7 +1511,9 @@ export default function SettingsScreen() {
       {/* ── About ───────────────────────────────────────────── */}
       <Animated.View layout={layoutSpring}>
         <AppText variant="caption" color={colors.textFaint} center style={styles.about}>
-          v0.1.0 · Food data: Open Food Facts · Exercises: free-exercise-db · Anatomy art: MuscleMapJS (MIT)
+          v0.1.0 · Food data: Open Food Facts · Exercises: free-exercise-db · Anatomy art: MuscleMapJS
+          (MIT) · 3D anatomy: Z-Anatomy — The libre 3D atlas of anatomy (CC BY-SA 4.0), based on
+          BodyParts3D — The Database Center for Life Science (CC BY-SA 2.1 Japan); modified for this app
         </AppText>
       </Animated.View>
     </Screen>
