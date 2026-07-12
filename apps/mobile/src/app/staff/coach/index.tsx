@@ -5,11 +5,13 @@ import {
   type ListRenderItem,
   RefreshControl,
   StyleSheet,
+  Text,
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Animated from 'react-native-reanimated';
-import { colors, radius, spacing, touch } from '@gym/ui-tokens';
+import { formatMoney } from '@gym/shared';
+import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
   Button,
@@ -29,10 +31,12 @@ import {
   decideCoachRequest,
   getCoachInbox,
   getCoachRequests,
+  getCoachWallet,
   toStaffError,
   type CoachInboxRow,
   type CoachRequest,
   type CoachRequestAction,
+  type CoachWallet,
   type StaffErrorCode,
   type Tier,
 } from '../../../features/staff/api';
@@ -251,6 +255,113 @@ function RequestRow({
   );
 }
 
+/**
+ * Wallet + promo hero card — the coach's commission balance, own auto-issued
+ * promo code, and redemption count. Sits below the header alongside the
+ * video-library link. Loading is silent (the inbox spinner already covers the
+ * screen's first paint); a failure collapses to a quiet retry row so it never
+ * blocks the roster underneath.
+ *
+ * Copy-to-clipboard: `expo-clipboard` is not in this app's dependency tree
+ * (feature-module isolation — this track may only touch app/staff + features/
+ * staff, not package.json), so the code is rendered as native `selectable`
+ * text: long-press opens the OS "Copy" callout. No button needed.
+ */
+function WalletPromoCard({ token }: { token: string | null }) {
+  const [wallet, setWallet] = useState<CoachWallet | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!token) return;
+    setError(false);
+    try {
+      setWallet(await getCoachWallet(token));
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (loading) return null;
+
+  if (error || !wallet) {
+    return (
+      <Animated.View entering={enterUp(2)}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading your wallet"
+          onPress={() => void load()}
+          style={styles.walletRetry}
+        >
+          <Ionicons name="cloud-offline-outline" size={16} color={colors.textDim} />
+          <AppText variant="caption">Couldn&apos;t load your wallet · tap to retry</AppText>
+        </PressableScale>
+      </Animated.View>
+    );
+  }
+
+  const redemptions = wallet.code?.redemptionCount ?? 0;
+
+  return (
+    <Animated.View entering={enterUp(2)} style={styles.walletCard}>
+      <View style={styles.walletHeadRow}>
+        <AppText variant="label" color={colors.textDim}>
+          Your wallet
+        </AppText>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="View wallet ledger"
+          onPress={() => pushStaff(STAFF_ROUTES.coachWallet)}
+          style={styles.walletLedgerLink}
+        >
+          <AppText variant="caption" color={colors.accent}>
+            Ledger
+          </AppText>
+          <Ionicons name="chevron-forward" size={14} color={colors.accent} />
+        </PressableScale>
+      </View>
+
+      {wallet.balances.length > 0 ? (
+        <View style={styles.walletBalanceRow}>
+          {wallet.balances.map((b) => (
+            <AppText key={b.currency} variant="stat" tabular>
+              {formatMoney(b.amountMinor, b.currency)}
+            </AppText>
+          ))}
+        </View>
+      ) : (
+        <AppText variant="body" color={colors.textDim}>
+          No commission yet
+        </AppText>
+      )}
+
+      {wallet.code ? (
+        <View style={styles.walletCodeBlock}>
+          <AppText variant="label" color={colors.textFaint}>
+            Your promo code
+          </AppText>
+          <Text selectable style={styles.walletCodeText}>
+            {wallet.code.code}
+          </Text>
+          <AppText variant="caption" color={colors.textFaint}>
+            Long-press to copy · {redemptions} redemption{redemptions === 1 ? '' : 's'}
+          </AppText>
+        </View>
+      ) : null}
+
+      <AppText variant="caption" color={colors.textDim} style={styles.walletCaption}>
+        30% off for them — 30% to you.
+      </AppText>
+    </Animated.View>
+  );
+}
+
 export default function CoachInboxScreen() {
   const token = useAuth((s) => s.token);
   const signOut = useStaffSignOut();
@@ -426,6 +537,9 @@ export default function CoachInboxScreen() {
         </PressableScale>
       </Animated.View>
 
+      {/* promo-economy: commission wallet + own promo code. */}
+      <WalletPromoCard token={token} />
+
       {loading ? (
         <View style={styles.centre}>
           <ActivityIndicator color={colors.accent} />
@@ -576,6 +690,42 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   videosText: { flex: 1, gap: 2 },
+  // promo-economy: the wallet+code card (borderless charcoal block).
+  walletCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  walletHeadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  walletLedgerLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    minHeight: touch.min,
+    paddingHorizontal: spacing.xs,
+  },
+  walletBalanceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.lg },
+  walletCodeBlock: { marginTop: spacing.xs, gap: 2 },
+  walletCodeText: {
+    fontFamily: type.display,
+    fontSize: 24,
+    letterSpacing: 2,
+    color: colors.accent,
+  },
+  walletCaption: { marginTop: spacing.xs },
+  walletRetry: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.md,
+  },
   centre: {
     flex: 1,
     alignItems: 'center',

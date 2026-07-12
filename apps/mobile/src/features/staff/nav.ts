@@ -27,6 +27,8 @@ export const STAFF_ROUTES = {
   coachProfile: '/staff/coach/profile',
   /** The coach's plan-video library (view counts + tier). */
   coachVideos: '/staff/coach/videos',
+  /** The coach's commission wallet ledger (promo-economy work). */
+  coachWallet: '/staff/coach/wallet',
   /** One client's detail — set/extend their tier + expiry. Pass the user id. */
   coachClient: (userId: string): string => `/staff/coach/client/${userId}`,
 
@@ -41,6 +43,16 @@ export const STAFF_ROUTES = {
   adminCoaches: '/staff/admin/coaches',
   /** Plan-video library (screen file: staff/admin/content.tsx). */
   adminVideos: '/staff/admin/content',
+  /** Tier overrides + recent-override history (screen file: subscriptions.tsx). */
+  adminSubscriptions: '/staff/admin/subscriptions',
+  /** Coach application review queue (member_admin + super/main). */
+  adminApplications: '/staff/admin/applications',
+  /** Nepal manual-payment review queue (member_admin + super/main). */
+  adminPayments: '/staff/admin/payments',
+  /** Promo code management (super_admin + main_admin only). */
+  adminPromos: '/staff/admin/promos',
+  /** Support inbox (support_admin + super/main). */
+  adminSupport: '/staff/admin/support',
   /** Staff & roles management (super_admin + main_admin). */
   adminStaff: '/staff/admin/staff',
   /** Audit trail (super_admin + main_admin). */
@@ -86,4 +98,26 @@ export function canOpenAdminConsole(role: string | null): boolean {
     role === 'support_admin' ||
     role === 'nutrition_admin'
   );
+}
+
+/**
+ * Coach applications + Nepal payment-request review (SCALE-UP-PLAN §4):
+ * member_admin holds both permissions; super_admin/main_admin bypass the
+ * permission matrix entirely.
+ */
+export function canReviewApplications(role: string | null): boolean {
+  return isTopAdmin(role) || role === 'member_admin';
+}
+
+/** Alias — payments.review is granted to the same roles as coach.application.review. */
+export const canReviewPayments = canReviewApplications;
+
+/** Promo code + regional pricing management is super_admin/main_admin only. */
+export function canManagePromos(role: string | null): boolean {
+  return isTopAdmin(role);
+}
+
+/** Support inbox: mirrors the 'support.thread.read' grant (support_admin + super/main). */
+export function canReviewSupport(role: string | null): boolean {
+  return isTopAdmin(role) || role === 'support_admin';
 }

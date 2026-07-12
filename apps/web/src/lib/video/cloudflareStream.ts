@@ -20,11 +20,25 @@ import {
   type JsonWebKey,
 } from 'node:crypto';
 import type {
+  CreateImageUploadResult,
   CreateUploadMeta,
   CreateUploadResult,
   VideoProvider,
 } from './types';
 import { NotConfiguredError } from './types';
+
+/**
+ * Cloudflare Stream has no image product — this provider is video-only.
+ * Image methods always throw NotConfiguredError with a message naming the
+ * real fix (configure Cloudinary), rather than the generic "missing env"
+ * wording, so callers/logs see WHY images never work here even if every
+ * CF_STREAM_* var is set.
+ */
+const IMAGE_NOT_SUPPORTED_MESSAGE =
+  'Cloudflare Stream is video-only — image uploads/playback require the ' +
+  'Cloudinary provider (set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, ' +
+  'CLOUDINARY_API_SECRET, and VIDEO_PROVIDER=cloudinary if a video provider ' +
+  'is also configured)';
 
 const CF_API_BASE = 'https://api.cloudflare.com/client/v4';
 /** Cloudflare's customer subdomain for HLS manifests of signed videos. */
@@ -174,5 +188,13 @@ export class CloudflareStreamProvider implements VideoProvider {
       const body = (await res.json().catch(() => null)) as CfEnvelope<unknown> | null;
       throw new Error(cfErrorMessage(body, res.status));
     }
+  }
+
+  async createImageUpload(): Promise<CreateImageUploadResult> {
+    throw new NotConfiguredError([IMAGE_NOT_SUPPORTED_MESSAGE]);
+  }
+
+  async signedImageUrl(): Promise<string> {
+    throw new NotConfiguredError([IMAGE_NOT_SUPPORTED_MESSAGE]);
   }
 }

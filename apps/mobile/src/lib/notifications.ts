@@ -16,7 +16,13 @@ import { useAuth } from '../state/auth';
  * Rules honoured here:
  *  - No-op on web (expo-notifications scheduling is native-only here).
  *  - Never throws into the UI — every call is wrapped in try/catch.
- *  - Opt-in: we only ask for permission at the moment we schedule/register.
+ *  - Opt-in, with ONE explicit ask surface: onboarding's "Stay on track" step
+ *    (`requestPermission()` / prompting `registerForPushNotificationsAsync`)
+ *    and Settings toggles (workout/morning/check-in reminders, which the
+ *    user just flipped, so a prompt there is expected). Everywhere else
+ *    (cold-start push registration, the first-workouts quest, the streak
+ *    saver) only CHECKS the current permission via `hasPermission()` — no
+ *    surprise OS dialogs outside the two ask surfaces above.
  */
 
 /** Stable id so the reminder can always be found and cancelled. */
@@ -55,9 +61,26 @@ export async function requestPermission(): Promise<boolean> {
 }
 
 /**
+ * Passive permission check — never shows a system prompt. Reflects whatever
+ * the user already decided; callers that must not surprise the user with an
+ * OS dialog (cold-start push registration, background reminder reschedules
+ * outside a Settings toggle) use this instead of `requestPermission()`.
+ */
+async function hasPermission(): Promise<boolean> {
+  if (!isSupported()) return false;
+  try {
+    return (await Notifications.getPermissionsAsync()).granted;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Schedule the single "get your next workout in" reminder `daysFromNow` out.
- * Cancels any existing one first (so this is idempotent), requests permission,
- * then schedules with a stable identifier. Returns true if a notification was
+ * Cancels any existing one first (so this is idempotent), then schedules with
+ * a stable identifier — CHECK-ONLY (no OS prompt): this quest fires on its own
+ * timeline, not from a user-initiated ask surface, so it must never surprise
+ * the user with a permission dialog. Returns true if a notification was
  * actually scheduled.
  */
 export async function scheduleFirstWorkoutsReminder(
@@ -67,7 +90,7 @@ export async function scheduleFirstWorkoutsReminder(
 ): Promise<boolean> {
   if (!isSupported()) return false;
   try {
-    const granted = await requestPermission();
+    const granted = await hasPermission();
     if (!granted) return false;
 
     // Idempotent: drop any prior copy before re-scheduling.
@@ -177,23 +200,36 @@ async function currentDeviceToken(): Promise<string | null> {
  * pushes can arrive. No-ops (returns false) when signed out, unsupported, or
  * permission is denied. Never throws — the app works fine without remote push
  * (local reminders are unaffected).
+ *
+ * `askIfUndetermined` (default false) picks which permission check gates
+ * registration:
+ *  - false (cold start, `_layout.tsx`): `hasPermission()` only — never shows
+ *    an OS dialog; silently skips registration until permission is granted
+ *    elsewhere (onboarding or a Settings toggle).
+ *  - true (onboarding's "Stay on track" step): `requestPermission()` — shows
+ *    the OS dialog when undetermined. Resolved BEFORE the signed-in check
+ *    because onboarding runs signed out; the prompt must fire regardless of
+ *    session state, even though token registration itself still requires one.
  */
-export async function registerForPushNotificationsAsync(): Promise<boolean> {
+export async function registerForPushNotificationsAsync(
+  options: { askIfUndetermined?: boolean } = {},
+): Promise<boolean> {
+  const { askIfUndetermined = false } = options;
   if (!isSupported()) return false;
 
   // Let a just-fired sign-out unregister finish first, so its server-side
   // delete lands before (not after) the registration we're about to make.
   if (pendingUnregister) await pendingUnregister;
 
-  const auth = useAuth.getState();
-  if (auth.status !== 'signedIn' || auth.token === null) return false;
-  // Snapshot the account we're registering for; re-verified after every await
-  // below so a sign-out mid-flight can never be overtaken by this register.
-  const authToken = auth.token;
-
   try {
-    const granted = await requestPermission();
+    const granted = askIfUndetermined ? await requestPermission() : await hasPermission();
     if (!granted) return false;
+
+    const auth = useAuth.getState();
+    if (auth.status !== 'signedIn' || auth.token === null) return false;
+    // Snapshot the account we're registering for; re-verified after every await
+    // below so a sign-out mid-flight can never be overtaken by this register.
+    const authToken = auth.token;
 
     // Native device token = the raw FCM token on Android (Firebase must be
     // configured via google-services.json at build time for this to resolve).
@@ -203,8 +239,8 @@ export async function registerForPushNotificationsAsync(): Promise<boolean> {
     if (!deviceToken) return false;
 
     // Re-read auth AFTER the awaits: if the user signed out (or switched
-    // accounts) while the permission/token fetch was in flight, abort so we
-    // don't re-register the device to the just-signed-out account.
+    // accounts) while the token fetch was in flight, abort so we don't
+    // re-register the device to the just-signed-out account.
     const latest = useAuth.getState();
     if (latest.status !== 'signedIn' || latest.token !== authToken) return false;
 
@@ -376,7 +412,8 @@ function streakSaverSecondsFromNow(): number {
  * Schedule (or replace) the evening streak-saver reminder: "N sessions left
  * to keep your M-week streak". Idempotent (cancels any prior copy first).
  * Callers only invoke this when the week is genuinely short — see
- * features/streak/hooks.ts for the trigger condition.
+ * features/streak/hooks.ts for the trigger condition. CHECK-ONLY (no OS
+ * prompt): this fires from app-open focus, not a user-initiated ask surface.
  */
 export async function scheduleStreakSaverReminder(
   sessionsLeft: number,
@@ -387,7 +424,7 @@ export async function scheduleStreakSaverReminder(
   try {
     await Notifications.cancelScheduledNotificationAsync(STREAK_SAVER_ID);
 
-    const granted = await requestPermission();
+    const granted = await hasPermission();
     if (!granted) return false;
 
     const sessionWord = sessionsLeft === 1 ? 'session' : 'sessions';

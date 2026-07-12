@@ -26,10 +26,26 @@
  *     Cloudinary's default signed-URL scheme.
  *   - Auth token: HMAC-SHA256 (key from hex) over "exp=<ts>~url=<escaped>",
  *     Cloudinary's token-based authentication scheme.
+ *
+ * Images (SCALE-UP-PLAN §4.5): `createImageUpload` mirrors createDirectUpload
+ * but resource_type=image and a `folder` per kind. `type: 'upload'` (public
+ * kinds — avatars, exercise/diet images) is readable at a stable unsigned URL
+ * the instant the upload lands. `type: 'authenticated'` (progress photos,
+ * payment receipts) has no public URL; `signedImageUrl` mints one on demand
+ * with the SAME signed-delivery scheme as `signedPlaybackUrl`, just resource_
+ * type=image and a `f_auto,q_auto` transformation instead of an HLS manifest
+ * (the `.jpg` extension in the signed path is a URL-syntax requirement only —
+ * f_auto makes Cloudinary negotiate the real stored format regardless).
+ * Unlike `signedPlaybackUrl`, `signedImageUrl` REQUIRES CLOUDINARY_URL_SIGNING_KEY
+ * (throws NotConfiguredError without it) — authenticated images are progress
+ * photos and payment receipts, sensitive enough that a non-expiring link is
+ * not an acceptable default the way it arguably is for video.
  */
 
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import type {
+  CreateImageUploadOpts,
+  CreateImageUploadResult,
   CreateUploadMeta,
   CreateUploadResult,
   VideoProvider,
@@ -166,6 +182,17 @@ interface CloudinaryDestroyResult {
   error?: { message?: string };
 }
 
+/**
+ * Safe Cloudinary `folder` segment for an image kind. Every real caller
+ * validates `kind` against a fixed zod enum before it reaches the provider,
+ * but the provider treats it as opaque input and sanitizes defensively rather
+ * than trusting that boundary.
+ */
+function sanitizeFolder(kind: string): string {
+  const cleaned = kind.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60);
+  return cleaned || 'misc';
+}
+
 export class CloudinaryProvider implements VideoProvider {
   async createDirectUpload(meta: CreateUploadMeta): Promise<CreateUploadResult> {
     const cfg = loadConfig();
@@ -285,6 +312,89 @@ export class CloudinaryProvider implements VideoProvider {
         `Cloudinary destroy failed (HTTP ${res.status})`;
       throw new Error(msg);
     }
+  }
+
+  async createImageUpload(
+    opts: CreateImageUploadOpts,
+  ): Promise<CreateImageUploadResult> {
+    const cfg = loadConfig();
+    const publicId = randomUUID();
+    const timestamp = Math.floor(Date.now() / 1000);
+    const folder = sanitizeFolder(opts.kind);
+    const type = opts.access === 'authenticated' ? 'authenticated' : 'upload';
+
+    // Params that MUST be signed (order-independent; signParams sorts them).
+    const signed: Record<string, string | number> = {
+      folder,
+      public_id: publicId,
+      timestamp,
+      type,
+    };
+    const signature = signParams(signed, cfg.apiSecret);
+
+    // Full set of form fields the browser attaches (besides the `file` blob).
+    // api_secret is deliberately absent — only the derived signature ships.
+    const fields: Record<string, string> = {
+      api_key: cfg.apiKey,
+      timestamp: String(timestamp),
+      public_id: publicId,
+      folder,
+      type,
+      signature,
+    };
+
+    const uploadUrl = `${CLOUDINARY_API_BASE}/${cfg.cloudName}/image/upload`;
+    // Cloudinary's true public_id is `folder/public_id` once a folder is set —
+    // that combined string is what signedImageUrl and delivery URLs need, so
+    // it's what we persist.
+    const uid = `${folder}/${publicId}`;
+
+    // Public assets (type=upload) are readable at a stable, unsigned URL the
+    // moment the upload completes — hand it back so the caller can store it
+    // with no further signing round-trip. Authenticated assets (progress
+    // photos / receipts) have NO public URL; playback always goes through
+    // signedImageUrl().
+    const deliveryUrl =
+      type === 'upload'
+        ? `${CLOUDINARY_DELIVERY_BASE}/${cfg.cloudName}/image/upload/${uid}`
+        : undefined;
+
+    return { uploadUrl, uid, fields, deliveryUrl };
+  }
+
+  async signedImageUrl(uid: string): Promise<string> {
+    const cfg = loadConfig();
+
+    // Authenticated images are progress photos and payment receipts —
+    // near-nude body imagery and financial documents. Cloudinary's default
+    // signed-URL scheme (the s--<sig>-- below) has NO per-request expiry, so
+    // without the private-CDN url-signing key there is no way to make the
+    // link ever stop working short of deleting the asset: a single capture
+    // (proxy/CDN log, mobile image cache, browser history, a shared
+    // screenshot of the address bar) would grant indefinite access. Treat the
+    // signing key as a hard prerequisite for this method rather than quietly
+    // degrading to a non-expiring link.
+    if (!cfg.urlSigningKey) throw new NotConfiguredError(['CLOUDINARY_URL_SIGNING_KEY']);
+
+    // Same signed-delivery scheme as signedPlaybackUrl, but resource_type=
+    // image and a f_auto,q_auto transformation instead of an HLS profile. The
+    // `.jpg` extension is a URL-syntax requirement, not a format directive —
+    // f_auto negotiates the real stored format (png/heic/webp/etc) regardless.
+    const transformation = 'f_auto,q_auto';
+    const publicIdWithExt = `${uid}.jpg`;
+
+    const toSign = `${transformation}/${publicIdWithExt}`;
+    const signature = signDeliveryComponent(toSign, cfg.apiSecret);
+
+    // Cloudinary signed authenticated image delivery URL:
+    //   https://res.cloudinary.com/<cloud>/image/authenticated/
+    //     s--<sig>--/<transformation>/<public_id>.jpg
+    const baseUrl =
+      `${CLOUDINARY_DELIVERY_BASE}/${cfg.cloudName}/image/authenticated/` +
+      `s--${signature}--/${transformation}/${publicIdWithExt}`;
+
+    const token = authTokenQuery(baseUrl, cfg.urlSigningKey, PLAYBACK_TTL_SECONDS);
+    return `${baseUrl}?${token}`;
   }
 }
 

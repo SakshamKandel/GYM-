@@ -30,6 +30,7 @@ import {
   getCoachDetail,
   toMentorshipError,
   type CoachDetail,
+  type CoachTier,
 } from '../../features/mentorship/api';
 import { useMyCoach } from '../../features/mentorship/hooks';
 import { pushPath } from '../../features/mentorship/nav';
@@ -49,6 +50,15 @@ import { pushPath } from '../../features/mentorship/nav';
 const MESSAGE_MAX = 500;
 
 const HERO_AVATAR = 64;
+
+/** Seniority badge label — NOT a billing tier (see coach_profiles.coachTier).
+ * Rendered `onBlock` (near-black chip) like its sibling hero chips: a
+ * filled-color chip (accent/cream) would blend into the red hero itself. */
+const COACH_TIER_LABEL: Record<CoachTier, string> = {
+  elite: 'Elite',
+  gold: 'Gold',
+  silver: 'Silver',
+};
 
 const styles = StyleSheet.create({
   backRow: { marginBottom: spacing.lg },
@@ -340,6 +350,7 @@ export default function CoachProfileScreen() {
                 {coach.headline}
               </AppText>
               <View style={styles.heroMeta}>
+                <Tag label={COACH_TIER_LABEL[coach.coachTier]} variant="onBlock" />
                 <Tag label={`${coach.yearsExperience} yrs`} variant="onBlock" />
                 <Tag
                   label={`${coach.activeClients} client${coach.activeClients === 1 ? '' : 's'}`}

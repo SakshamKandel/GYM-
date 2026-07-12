@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Badge,
+  Button,
   type Column,
   DataTable,
   PageHeader,
@@ -20,21 +21,33 @@ import type { CoachOption, MemberRow, Tier } from './types';
 const TIER_OPTIONS: (Tier | 'all')[] = ['all', 'starter', 'silver', 'gold', 'elite'];
 const STATUS_OPTIONS = ['all', 'active', 'suspended'] as const;
 
+interface ApiResponse {
+  members: MemberRow[];
+  nextCursor: string | null;
+}
+
 /**
- * Member directory: a searchable, tier/status-filterable table. Filtering is
- * client-side over the server-loaded rows (capped at 200); the row that opens
- * the drawer is passed by id. On any mutation inside the drawer we
- * router.refresh() so the table reflects the new tier/status/coach.
+ * Member directory: a searchable, tier/status-filterable table backed by
+ * server keyset pagination (GET /api/admin/members?q=&status=&tier=&cursor=,
+ * same idiom as the audit log's AuditTable). Seeded with server-rendered
+ * `initialMembers`/`initialCursor` (page 1) so the first paint has data with
+ * no client round-trip; changing a filter debounces a refetch of page 1,
+ * "Load more" appends the next keyset page. The row that opens the drawer is
+ * passed by id. On any mutation inside the drawer we router.refresh() so the
+ * server-rendered page 1 picks up the new tier/status/coach; the client list
+ * also gets a fresh page 1 fetch so an active filter reflects the change too.
  */
 export function MembersDirectory({
-  members,
+  initialMembers,
+  initialCursor,
   coaches,
   callerRole,
   canSuspend,
   canTier,
   canAssign,
 }: {
-  members: MemberRow[];
+  initialMembers: MemberRow[];
+  initialCursor: string | null;
   coaches: CoachOption[];
   callerRole: StaffRole;
   canSuspend: boolean;
@@ -42,23 +55,76 @@ export function MembersDirectory({
   canAssign: boolean;
 }) {
   const router = useRouter();
+  const [members, setMembers] = useState<MemberRow[]>(initialMembers);
+  const [cursor, setCursor] = useState<string | null>(initialCursor);
   const [q, setQ] = useState('');
   const [tier, setTier] = useState<Tier | 'all'>('all');
   const [status, setStatus] = useState<(typeof STATUS_OPTIONS)[number]>('all');
   const [openId, setOpenId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return members.filter((m) => {
-      if (tier !== 'all' && m.tier !== tier) return false;
-      if (status !== 'all' && m.status !== status) return false;
-      if (needle) {
-        const hay = `${m.email} ${m.displayName}`.toLowerCase();
-        if (!hay.includes(needle)) return false;
+  // Track whether the current entries reflect the untouched initial props, so
+  // we can skip the first effect run (which would refetch page 1 needlessly).
+  const primed = useRef(false);
+
+  const fetchPage = useCallback(
+    async (opts: {
+      q: string;
+      tier: Tier | 'all';
+      status: (typeof STATUS_OPTIONS)[number];
+      cursor: string | null;
+      append: boolean;
+    }) => {
+      const qs = new URLSearchParams();
+      if (opts.q) qs.set('q', opts.q);
+      if (opts.status !== 'all') qs.set('status', opts.status);
+      if (opts.tier !== 'all') qs.set('tier', opts.tier);
+      if (opts.cursor) qs.set('cursor', opts.cursor);
+
+      if (opts.append) setLoadingMore(true);
+      else setLoading(true);
+      setError(null);
+
+      try {
+        const res = await fetch(`/api/admin/members?${qs.toString()}`, {
+          credentials: 'include',
+        });
+        if (!res.ok) {
+          setError(res.status === 403 ? 'Not permitted.' : 'Failed to load members.');
+          return;
+        }
+        const data = (await res.json()) as ApiResponse;
+        setMembers((prev) => (opts.append ? [...prev, ...data.members] : data.members));
+        setCursor(data.nextCursor);
+      } catch {
+        setError('Network error.');
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
       }
-      return true;
-    });
-  }, [members, q, tier, status]);
+    },
+    [],
+  );
+
+  // Debounced refetch of page 1 whenever a filter changes. Skips the very
+  // first render so the server-seeded page 1 is not immediately clobbered.
+  useEffect(() => {
+    if (!primed.current) {
+      primed.current = true;
+      return;
+    }
+    const t = setTimeout(() => {
+      void fetchPage({ q, tier, status, cursor: null, append: false });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q, tier, status, fetchPage]);
+
+  const loadMore = useCallback(() => {
+    if (!cursor) return;
+    void fetchPage({ q, tier, status, cursor, append: true });
+  }, [q, tier, status, cursor, fetchPage]);
 
   const columns: Column<MemberRow>[] = [
     {
@@ -110,8 +176,13 @@ export function MembersDirectory({
     },
   ];
 
+  // A drawer mutation can change the row's tier/status/coach. router.refresh()
+  // re-runs the server component so page 1 reflects it; also re-fetch the
+  // client's current page 1 so an active filter/search stays in sync (e.g. a
+  // status change that would drop the row out of the current status filter).
   function onMutated() {
     router.refresh();
+    void fetchPage({ q, tier, status, cursor: null, append: false });
   }
 
   const selected = openId ? members.find((m) => m.id === openId) ?? null : null;
@@ -127,7 +198,7 @@ export function MembersDirectory({
         left={
           <div style={{ flex: '1 1 240px', minWidth: 0 }}>
             <SearchField
-              placeholder="Search by email or name…"
+              placeholder="Search by email…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
@@ -153,6 +224,23 @@ export function MembersDirectory({
         }
       />
 
+      {error ? (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 12,
+            padding: '10px 14px',
+            borderRadius: 10,
+            border: '1px solid rgba(255,107,96,0.30)',
+            background: 'rgba(255,107,96,0.10)',
+            color: '#ff8178',
+            fontSize: 13,
+          }}
+        >
+          {error}
+        </div>
+      ) : null}
+
       <div
         style={{
           color: 'var(--gt-text-dim)',
@@ -160,21 +248,42 @@ export function MembersDirectory({
           margin: '0 0 10px',
         }}
       >
-        {filtered.length} of {members.length} member
-        {members.length === 1 ? '' : 's'}
+        {members.length} member{members.length === 1 ? '' : 's'} shown
       </div>
 
-      <DataTable
-        columns={columns}
-        rows={filtered}
-        rowKey={(r) => r.id}
-        onRowClick={(r) => setOpenId(r.id)}
-        empty={
-          members.length === 0
-            ? 'No members yet.'
-            : 'No members match these filters.'
-        }
-      />
+      <div style={{ opacity: loading ? 0.55 : 1, transition: 'opacity 120ms' }}>
+        <DataTable
+          columns={columns}
+          rows={members}
+          rowKey={(r) => r.id}
+          onRowClick={(r) => setOpenId(r.id)}
+          empty={
+            q || tier !== 'all' || status !== 'all'
+              ? 'No members match these filters.'
+              : 'No members yet.'
+          }
+        />
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 12,
+          marginTop: 16,
+        }}
+      >
+        {cursor ? (
+          <Button variant="ghost" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </Button>
+        ) : members.length > 0 ? (
+          <span style={{ color: 'var(--gt-text-dim)', fontSize: 13 }}>
+            End of list — {members.length} member{members.length === 1 ? '' : 's'} shown.
+          </span>
+        ) : null}
+      </div>
 
       <MemberDrawer
         memberId={openId}

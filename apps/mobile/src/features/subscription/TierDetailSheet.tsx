@@ -1,10 +1,10 @@
 import { useRef } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { Tier } from '@gym/shared';
+import { formatMoney, type Tier } from '@gym/shared';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import { AppText, SectionLabel, Sheet, Tag } from '../../components/ui';
-import { formatNprAmount, GM_TIERS, type GmTier } from './logic';
+import { GM_TIERS, type GmTier, type TierPriceDisplay } from './logic';
 
 /**
  * Tap-to-reveal detail for a paywall tier. Where the card only lists what a
@@ -22,6 +22,8 @@ export interface TierDetail {
   isRecommended: boolean;
   /** Precomputed trial line (parent owns the buddy-trial coupling), or null. */
   trialLine: string | null;
+  /** Precomputed price (parent owns the catalog fetch), so the sheet stays catalog-free. */
+  price: TierPriceDisplay;
 }
 
 /** Cumulative feature set for a tier: every plan up to and including it, with
@@ -55,31 +57,44 @@ export function TierDetailSheet({
 }
 
 function Body({ detail }: { detail: TierDetail }) {
-  const { gmTier, isCurrent, isRecommended, trialLine } = detail;
-  const isFree = gmTier.pricePerMonthNpr <= 0;
+  const { gmTier, isCurrent, isRecommended, trialLine, price } = detail;
   const features = resolveFeatures(gmTier.tier);
+  const discountLabel =
+    price.discountPct !== null
+      ? price.discountSource === 'referral'
+        ? `Referral −${price.discountPct}%`
+        : `Promo −${price.discountPct}%`
+      : null;
 
   return (
     // Up to 15 cumulative feature rows can outgrow the sheet's 88% height cap
     // on small phones — scroll (no CTA here, so everything scrolls together).
     <ScrollView showsVerticalScrollIndicator={false}>
-      {isRecommended || isCurrent ? (
+      {isRecommended || isCurrent || discountLabel ? (
         <View style={styles.tags}>
           {isRecommended ? <Tag label="Most popular" variant="filled" /> : null}
           {isCurrent ? <Tag label="Current" variant="dim" /> : null}
+          {discountLabel ? <Tag label={discountLabel} variant="outline" color={colors.success} /> : null}
         </View>
       ) : null}
 
       <View style={styles.priceRow}>
-        {isFree ? (
+        {price.isFree ? (
           <AppText style={styles.priceNumber} numberOfLines={1}>
             Free
           </AppText>
         ) : (
           <>
-            <AppText variant="caption" color={colors.textDim}>
-              NPR
-            </AppText>
+            {price.discountedMinor !== null ? (
+              <AppText
+                variant="caption"
+                color={colors.textDim}
+                style={styles.strike}
+                numberOfLines={1}
+              >
+                {formatMoney(price.baseMinor, price.currency)}
+              </AppText>
+            ) : null}
             <AppText
               style={styles.priceNumber}
               tabular
@@ -87,7 +102,7 @@ function Body({ detail }: { detail: TierDetail }) {
               adjustsFontSizeToFit
               minimumFontScale={0.6}
             >
-              {formatNprAmount(gmTier.pricePerMonthNpr)}
+              {formatMoney(price.discountedMinor ?? price.baseMinor, price.currency)}
             </AppText>
             <AppText variant="caption" color={colors.textDim}>
               /mo
@@ -145,6 +160,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minWidth: 0,
   },
+  strike: { textDecorationLine: 'line-through' },
   tags: {
     flexDirection: 'row',
     alignItems: 'center',

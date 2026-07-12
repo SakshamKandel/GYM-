@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import {
   getCoachMessages,
@@ -10,23 +11,29 @@ import {
 import { useAuth } from '../../state/auth';
 
 /**
- * One async coach thread (coach_chat or support). Loads on focus, appends
- * optimistically on send, and is offline-tolerant: a failed load keeps the
- * last-known messages and flips `stale` so the screen shows a quiet retry row
- * instead of a blocking error. A failed send rolls the optimistic bubble back.
+ * One async coach thread (coach_chat or support). Loads on focus, polls
+ * lightly while the thread is open (support is now human-async — an admin
+ * can reply from the staff console while the member is sitting on this
+ * screen, so focus-only loading would leave the reply invisible until they
+ * navigate away and back), and appends optimistically on send. Offline
+ * tolerant: a failed load keeps the last-known messages and flips `stale` so
+ * the screen shows a quiet retry row instead of a blocking error. A failed
+ * send rolls the optimistic bubble back.
  *
  * The AI Greece reply is generated SERVER-SIDE (the Groq key never ships in the
  * app). While the send round-trips — which is when the server generates the
  * reply — a transient "typing" coach bubble shows so the member sees Greece is
  * thinking; it's swapped for the real reply when the server responds.
  *
- * No real-time otherwise — messaging here is deliberately async.
+ * Mirrors useBuddyChatThread's poll shape (features/buddy/hooks.ts).
  */
 
 /** Local-only optimistic id prefix so we can reconcile against server rows. */
 const OPTIMISTIC_PREFIX = 'local-';
 /** Transient "Greece is typing" bubble id — never persisted, never optimistic. */
 const TYPING_PREFIX = 'typing-';
+/** Foreground poll cadence while a thread is open — same as buddy DMs. */
+const THREAD_POLL_MS = 12_000;
 
 export interface CoachThread {
   /**
@@ -124,7 +131,38 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
 
   useFocusEffect(
     useCallback(() => {
+      let timer: ReturnType<typeof setInterval> | null = null;
+
+      const startTimer = () => {
+        if (timer === null) timer = setInterval(reload, THREAD_POLL_MS);
+      };
+      const stopTimer = () => {
+        if (timer !== null) {
+          clearInterval(timer);
+          timer = null;
+        }
+      };
+
       reload();
+      startTimer();
+
+      // Same AppState guard as useBuddyChatThread: pause polling while
+      // backgrounded, refresh immediately and resume on return to foreground
+      // — this is how a staff support reply (or a coach_chat one) shows up
+      // without the member having to leave and re-open the screen.
+      const sub = AppState.addEventListener('change', (state) => {
+        if (state === 'active') {
+          reload();
+          startTimer();
+        } else {
+          stopTimer();
+        }
+      });
+
+      return () => {
+        stopTimer();
+        sub.remove();
+      };
     }, [reload]),
   );
 

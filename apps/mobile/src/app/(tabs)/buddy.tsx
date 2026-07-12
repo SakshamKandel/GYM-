@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { FadeOut } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -9,6 +9,7 @@ import {
   AppTextInput,
   Button,
   Card,
+  ConfirmDialog,
   enterFade,
   enterUp,
   FLOATING_TAB_SPACE,
@@ -43,19 +44,23 @@ import {
   avatarLetter,
   BUDDY_LIMIT,
   inviteErrorLine,
+  isSessionParticipant,
+  joinedBuddies,
+  joinedBuddiesLabel,
   joinSessionErrorLine,
   lastTrainedLabel,
   referralErrorLine,
   referralStatusLabel,
   weekDots,
 } from '../../features/buddy/logic';
-import { nudgedToday, useBuddyStore } from '../../features/buddy/store';
+import { nudgedToday, unreadForLink, useBuddyStore } from '../../features/buddy/store';
 import { ChallengeCard } from '../../features/gamification/components/ChallengeCard';
 import type {
   BuddyErrorCode,
   BuddyEvent,
   BuddyLink,
   BuddySession,
+  BuddySessionParticipant,
   Referral,
 } from '../../lib/api/client';
 
@@ -159,6 +164,10 @@ function BuddyContent({
 }: ContentProps) {
   const tier = useProfile((s) => s.tier);
   const myId = useAuth((s) => s.user?.id ?? null);
+  // Fed by useBuddyData's 12s poll (getUnread) and by pushRefresh on an
+  // incoming 'buddy_message' push — reactive so a badge appears/clears
+  // without the buddy needing to re-open the tab.
+  const unread = useBuddyStore((s) => s.unread);
   const [summaryBuddy, setSummaryBuddy] = useState<{ id: string; name: string } | null>(null);
   // Join gating must mirror the SERVER's check, which compares the host's
   // account tier against the caller's account tier (both from the DB). The
@@ -264,6 +273,7 @@ function BuddyContent({
               events={events}
               subtitle={lastTrainedLabel(events, link.buddy.id, todayIso())}
               tier={tier}
+              unread={unreadForLink(unread, link.linkId)}
               onNudge={async () => {
                 const ok = await sendNudge(link.linkId);
                 reload();
@@ -365,6 +375,7 @@ function BuddyContent({
         <LiveSessionSection
           sessions={buddySessions}
           tier={joinTier}
+          myId={myId}
           onJoin={async (sessionId) => {
             return joinLiveSession(sessionId);
           }}
@@ -492,6 +503,7 @@ function BuddyRow({
   events,
   subtitle,
   tier,
+  unread,
   onNudge,
   onRemove,
 }: {
@@ -499,6 +511,8 @@ function BuddyRow({
   events: BuddyEvent[];
   subtitle: string;
   tier: string;
+  /** Unread DM count from this buddy — feeds the chat button's badge. */
+  unread: number;
   onNudge: () => Promise<boolean>;
   onRemove: () => Promise<boolean>;
 }) {
@@ -507,6 +521,10 @@ function BuddyRow({
   // network can't queue duplicate nudges/removes from double-taps.
   const [busy, setBusy] = useState<'nudge' | 'remove' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Removing a buddy hard-deletes the pair's DM history for BOTH sides
+  // (buddy_messages cascades off buddy_links) — irreversible, so this needs
+  // an explicit confirm instead of a single tap.
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const today = todayIso();
   const nudged = nudgedToday(
     useBuddyStore.getState().nudgedByLink,
@@ -552,6 +570,31 @@ function BuddyRow({
           </AppText>
           <AppText variant="caption">{subtitle}</AppText>
         </View>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel={
+            unread > 0
+              ? `Message ${link.buddy.displayName || 'buddy'}, ${unread} unread`
+              : `Message ${link.buddy.displayName || 'buddy'}`
+          }
+          onPress={() =>
+            pushPath(
+              `/buddy/chat/${encodeURIComponent(link.linkId)}?name=${encodeURIComponent(
+                link.buddy.displayName || 'Buddy',
+              )}`,
+            )
+          }
+          style={styles.iconBtn}
+        >
+          <Ionicons name="chatbubble-outline" size={20} color={colors.textDim} />
+          {unread > 0 ? (
+            <View style={styles.chatBadge} accessibilityLabel={`${unread} unread`}>
+              <AppText variant="label" color={colors.onBlock} tabular>
+                {unread > 9 ? '9+' : String(unread)}
+              </AppText>
+            </View>
+          ) : null}
+        </PressableScale>
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel={showActions ? 'Hide details' : 'Show details'}
@@ -601,7 +644,7 @@ function BuddyRow({
               variant="danger"
               disabled={busy !== null}
               loading={busy === 'remove'}
-              onPress={handleRemove}
+              onPress={() => setConfirmingRemove(true)}
               style={styles.actionBtn}
             />
           </View>
@@ -614,6 +657,20 @@ function BuddyRow({
           ) : null}
         </Animated.View>
       ) : null}
+
+      <ConfirmDialog
+        visible={confirmingRemove}
+        title={`Remove ${link.buddy.displayName || 'this buddy'}?`}
+        message="This permanently deletes your chat history with them for both of you — it can't be undone."
+        confirmLabel="Remove"
+        cancelLabel="Keep buddy"
+        danger
+        onConfirm={() => {
+          setConfirmingRemove(false);
+          void handleRemove();
+        }}
+        onCancel={() => setConfirmingRemove(false)}
+      />
     </Animated.View>
   );
 }
@@ -751,17 +808,46 @@ function LiveDot() {
 }
 
 // ════════════════════════════════════════════════════════════════
+// Participant chips — compact "who's in this session" row.
+// ════════════════════════════════════════════════════════════════
+
+function ParticipantChips({
+  participants,
+  chipStyle,
+}: {
+  participants: BuddySessionParticipant[];
+  /** Override the chip fill — needed on surfaceRaised cards (my-session) so
+   * the chip doesn't disappear against a same-tone background. */
+  chipStyle?: StyleProp<ViewStyle>;
+}) {
+  if (participants.length === 0) return null;
+  return (
+    <View style={styles.participantChips}>
+      {participants.map((p) => (
+        <View key={p.accountId} style={[styles.participantChip, chipStyle]}>
+          <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+            {p.displayName}
+          </AppText>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
 // Live session section
 // ════════════════════════════════════════════════════════════════
 
 function LiveSessionSection({
   sessions,
   tier,
+  myId,
   onJoin,
   onReload,
 }: {
   sessions: BuddySession[];
   tier: string;
+  myId: string | null;
   onJoin: (sessionId: string) => Promise<BuddyErrorCode | null>;
   onReload: () => void;
 }) {
@@ -800,54 +886,59 @@ function LiveSessionSection({
           </AppText>
         </Animated.View>
       ) : null}
-      {sessions.map((session) => (
-        <View key={session.id} style={styles.sessionCard}>
-          <View style={styles.sessionTop}>
-            <LiveDot />
-            <AppText variant="label" color={colors.accent}>
-              LIVE
-            </AppText>
-          </View>
-          <View style={styles.sessionBody}>
-            <View style={styles.avatar}>
-              <AppText variant="title" color={colors.accent}>
-                {avatarLetter(session.host.displayName)}
+      {sessions.map((session) => {
+        const alreadyJoined = isSessionParticipant(session, myId);
+        const others = joinedBuddies(session);
+        return (
+          <View key={session.id} style={styles.sessionCard}>
+            <View style={styles.sessionTop}>
+              <LiveDot />
+              <AppText variant="label" color={colors.accent}>
+                LIVE
               </AppText>
             </View>
-            <View style={styles.buddyInfo}>
-              <AppText variant="bodyBold">
-                {session.host.displayName}
-              </AppText>
-              <AppText variant="caption">{session.workoutName}</AppText>
-              <View style={styles.tierRow}>
-                <Tag
-                  label={session.host.tier.toUpperCase()}
-                  variant="dim"
-                  color={colors.textDim}
-                />
-                {session.host.tier === tier ? (
-                  <Tag label="SAME PLAN" variant="outline" color={colors.success} />
-                ) : (
-                  <Tag label="DIFFERENT PLAN" variant="dim" color={colors.warning} />
-                )}
+            <View style={styles.sessionBody}>
+              <View style={styles.avatar}>
+                <AppText variant="title" color={colors.accent}>
+                  {avatarLetter(session.host.displayName)}
+                </AppText>
+              </View>
+              <View style={styles.buddyInfo}>
+                <AppText variant="bodyBold">
+                  {session.host.displayName}
+                </AppText>
+                <AppText variant="caption">{session.workoutName}</AppText>
+                <View style={styles.tierRow}>
+                  <Tag
+                    label={session.host.tier.toUpperCase()}
+                    variant="dim"
+                    color={colors.textDim}
+                  />
+                  {session.host.tier === tier ? (
+                    <Tag label="SAME PLAN" variant="outline" color={colors.success} />
+                  ) : (
+                    <Tag label="DIFFERENT PLAN" variant="dim" color={colors.warning} />
+                  )}
+                </View>
               </View>
             </View>
+            <ParticipantChips participants={others} />
+            <Button
+              label={alreadyJoined ? 'Joined' : joining === session.id ? 'Joining…' : 'Join session'}
+              variant={alreadyJoined ? 'secondary' : 'primary'}
+              loading={joining === session.id}
+              onPress={() => handleJoin(session.id)}
+              disabled={alreadyJoined || session.host.tier !== tier}
+              style={styles.formBtn}
+            />
+            {!alreadyJoined && session.host.tier !== tier ? (
+              <AppText variant="body" color={colors.warning} style={styles.formMsg}>
+                {joinSessionErrorLine('tier_mismatch')}
+              </AppText>
+            ) : null}
           </View>
-          <Button
-            label={joining === session.id ? 'Joining…' : 'Join session'}
-            variant="primary"
-            loading={joining === session.id}
-            onPress={() => handleJoin(session.id)}
-            disabled={session.host.tier !== tier}
-            style={styles.formBtn}
-          />
-          {session.host.tier !== tier ? (
-            <AppText variant="body" color={colors.warning} style={styles.formMsg}>
-              {joinSessionErrorLine('tier_mismatch')}
-            </AppText>
-          ) : null}
-        </View>
-      ))}
+        );
+      })}
     </View>
   );
 }
@@ -894,6 +985,7 @@ function StartSessionForm({
   }
 
   if (mySession) {
+    const buddies = joinedBuddies(mySession);
     return (
       <View style={styles.mySessionCard}>
         <View style={styles.sessionTop}>
@@ -905,6 +997,10 @@ function StartSessionForm({
         <AppText variant="title">
           {mySession.workoutName}
         </AppText>
+        <AppText variant="caption" color={colors.textDim}>
+          {joinedBuddiesLabel(mySession)}
+        </AppText>
+        <ParticipantChips participants={buddies} chipStyle={styles.participantChipOnRaised} />
         <Button
           label={ending ? 'Ending…' : 'End session'}
           variant="danger"
@@ -1170,6 +1266,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Unread pip on the chat icon button — same accent-fill badge language as
+  // the staff coach console's roster badge (app/staff/coach/index.tsx).
+  chatBadge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    minWidth: 20,
+    height: 20,
+    borderRadius: radius.full,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
   buddyActions: {
     flexDirection: 'row',
     gap: spacing.md,
@@ -1234,6 +1344,20 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginTop: spacing.xs,
   },
+  participantChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  participantChip: {
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs / 2,
+  },
+  // mySessionCard's own background IS surfaceRaised, so its chips need the
+  // next step up the ramp to stay visible.
+  participantChipOnRaised: { backgroundColor: colors.surfacePressed },
   mySessionCard: {
     backgroundColor: colors.surfaceRaised,
     borderRadius: radius.block,

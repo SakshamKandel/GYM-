@@ -42,6 +42,7 @@ export const GM_TIERS: GmTier[] = [
       'All standard training programs',
       'Progress photos',
       'No ads',
+      'Coach-assigned workouts',
     ],
   },
   {
@@ -54,6 +55,7 @@ export const GM_TIERS: GmTier[] = [
       'Adaptive progression — targets adjust to your weekly trend',
       'Meal plans & diet-break weeks',
       'Monthly plan refresh',
+      'Coach diet plans',
     ],
   },
   {

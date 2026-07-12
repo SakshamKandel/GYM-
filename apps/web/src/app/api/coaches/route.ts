@@ -11,11 +11,18 @@ export const runtime = 'nodejs';
  * Member-facing coach discovery hub.
  *
  *  - GET → every ACTIVE coach (admins.role='coach' + coach_profiles.isActive)
- *          with their public portfolio card and live capacity signal. Coaches
- *          who can take clients (accepting AND under capacity) sort first,
- *          then by experience. Emails are deliberately never selected —
- *          coach–member contact stays inside the app.
+ *          with their public portfolio card, coachTier badge, and live
+ *          capacity signal. Sorted elite > gold > silver, then by
+ *          activeClients desc within a tier (SCALE-UP-PLAN §4.2). Emails are
+ *          deliberately never selected — coach–member contact stays inside
+ *          the app.
  */
+
+const COACH_TIER_RANK: Record<'silver' | 'gold' | 'elite', number> = {
+  elite: 3,
+  gold: 2,
+  silver: 1,
+};
 
 export function OPTIONS() {
   return preflight();
@@ -53,6 +60,7 @@ export async function GET(req: Request) {
       displayName: coachProfiles.displayName,
       headline: coachProfiles.headline,
       avatarUrl: coachProfiles.avatarUrl,
+      coachTier: coachProfiles.coachTier,
       specialties: coachProfiles.specialties,
       yearsExperience: coachProfiles.yearsExperience,
       acceptingClients: coachProfiles.acceptingClients,
@@ -72,10 +80,9 @@ export async function GET(req: Request) {
       hasCapacity: coach.activeClients < capacity,
     }))
     .sort((a, b) => {
-      const aOpen = a.acceptingClients && a.hasCapacity ? 1 : 0;
-      const bOpen = b.acceptingClients && b.hasCapacity ? 1 : 0;
-      if (aOpen !== bOpen) return bOpen - aOpen;
-      return b.yearsExperience - a.yearsExperience;
+      const rankDiff = COACH_TIER_RANK[b.coachTier] - COACH_TIER_RANK[a.coachTier];
+      if (rankDiff !== 0) return rankDiff;
+      return b.activeClients - a.activeClients;
     });
 
   return json({ coaches }, 200);

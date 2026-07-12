@@ -66,6 +66,18 @@ const styles = StyleSheet.create({
   },
   retryText: { flex: 1 },
   list: { gap: spacing.sm },
+  becomeCoachRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    minHeight: touch.min,
+    marginTop: spacing.md,
+  },
+  becomeCoachText: { flex: 1 },
   skeletons: { gap: spacing.sm },
   skeletonRow: {
     backgroundColor: colors.surface,
@@ -76,6 +88,7 @@ const styles = StyleSheet.create({
 
 export default function CoachDirectoryScreen() {
   const status = useAuth((s) => s.status);
+  const staffRole = useAuth((s) => s.staffRole);
   const { coaches, loading, error, retry } = useCoachDirectory();
   const { request } = useMyCoach();
 
@@ -166,6 +179,26 @@ export default function CoachDirectoryScreen() {
               {coaches.map((coach) => (
                 <CoachCard key={coach.id} coach={coach} />
               ))}
+            </Animated.View>
+          ) : null}
+
+          {/* Hidden for accounts that already hold the staff coach role — the
+              API would 409 already_coach anyway, but there's nothing to apply
+              for. Any other staff role (or a plain member) still sees it. */}
+          {staffRole !== 'coach' ? (
+            <Animated.View entering={enterUp(1)}>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="Become a coach — apply to join the coach roster"
+                onPress={() => pushPath('/coaches/apply')}
+                style={styles.becomeCoachRow}
+              >
+                <Ionicons name="ribbon-outline" size={18} color={colors.textDim} />
+                <AppText variant="caption" style={styles.becomeCoachText}>
+                  Become a coach — apply to join the roster
+                </AppText>
+                <Ionicons name="chevron-forward" size={15} color={colors.textDim} />
+              </PressableScale>
             </Animated.View>
           ) : null}
         </>

@@ -45,6 +45,30 @@ function canContent(role: StaffRole): boolean {
 function canSubscriptions(role: StaffRole): boolean {
   return isTopAdmin(role) || role === 'member_admin';
 }
+/** Mirrors the 'coach.application.review' grant (super/main + member_admin). */
+function canApplications(role: StaffRole): boolean {
+  return isTopAdmin(role) || role === 'member_admin';
+}
+/** Mirrors the 'payments.review' grant (super/main + member_admin). */
+function canPayments(role: StaffRole): boolean {
+  return isTopAdmin(role) || role === 'member_admin';
+}
+/** Mirrors the 'support.thread.read' grant (super/main + support_admin). */
+function canSupport(role: StaffRole): boolean {
+  return isTopAdmin(role) || role === 'support_admin';
+}
+/** Mirrors the 'promo.manage' grant — super/main ONLY. */
+function canPromos(role: StaffRole): boolean {
+  return isTopAdmin(role);
+}
+/** Mirrors the 'wallet.manage' grant — super/main ONLY. */
+function canWallets(role: StaffRole): boolean {
+  return isTopAdmin(role);
+}
+/** Mirrors the 'pricing.manage' grant — super/main ONLY. */
+function canPricing(role: StaffRole): boolean {
+  return isTopAdmin(role);
+}
 function canStaff(role: StaffRole): boolean {
   return isTopAdmin(role);
 }
@@ -57,9 +81,16 @@ function navFor(role: StaffRole): NavItem[] {
   const items: NavItem[] = [{ href: '/admin', label: 'Overview', match: 'exact' }];
   if (canMembers(role)) items.push({ href: '/admin/members', label: 'Members' });
   if (canCoaches(role)) items.push({ href: '/admin/coaches', label: 'Coaches' });
+  if (canApplications(role))
+    items.push({ href: '/admin/applications', label: 'Applications' });
   if (canContent(role)) items.push({ href: '/admin/content', label: 'Content' });
   if (canSubscriptions(role))
     items.push({ href: '/admin/subscriptions', label: 'Subscriptions' });
+  if (canPayments(role)) items.push({ href: '/admin/payments', label: 'Payments' });
+  if (canSupport(role)) items.push({ href: '/admin/support', label: 'Support' });
+  if (canPromos(role)) items.push({ href: '/admin/promos', label: 'Promos' });
+  if (canWallets(role)) items.push({ href: '/admin/wallets', label: 'Wallets' });
+  if (canPricing(role)) items.push({ href: '/admin/pricing', label: 'Pricing' });
   if (canStaff(role)) items.push({ href: '/admin/staff', label: 'Staff' });
   if (canAudit(role)) items.push({ href: '/admin/audit', label: 'Audit' });
   return items;

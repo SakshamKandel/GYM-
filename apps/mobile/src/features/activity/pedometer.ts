@@ -53,8 +53,19 @@ import { getRepo } from '../../lib/repo';
  *   (≈1 event/step) can't hammer SQLite.
  *
  * Permission is NEVER requested at app launch — `subscribeSteps` only starts
- * the sensor watch when permission is already granted; the user-facing CTAs
- * call `requestStepPermission()` / `requestHealthConnectPermission()` lazily.
+ * the sensor watch when permission is already granted. The PRIMARY ask lives
+ * in onboarding's "Stay on track" step (`OnboardingWizard.tsx`): its "Allow"
+ * CTA calls `requestStepPermission()` directly, plus `requestHealthConnectPermission()`
+ * on Android (both no-op cleanly where unsupported) — skippable via "Later".
+ * The steps sheet's "Enable step tracking" button (`ActivitySection.tsx`) is
+ * the RE-ASK path only, shown when permission reads back denied/undetermined
+ * (declined or skipped in onboarding). Manual correction (+/- chips and the
+ * Add/Subtract stepper) works regardless of permission state, via
+ * `adjustManualSteps(delta)` — the exceptions are the two ABSOLUTE-overwrite
+ * branches, whose full-day aggregate is authoritative and hide manual
+ * controls entirely: Health Connect (`syncHealthConnectDay` below) and iOS
+ * CoreMotion (`syncIosDay` below). Only the Android sensor-fallback path is
+ * additive (`repo.addSteps`), so manual corrections stick there.
  */
 
 export type StepPermission = 'granted' | 'denied' | 'undetermined' | 'unavailable';

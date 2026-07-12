@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { SetLog, WorkoutLog } from '@gym/shared';
 import { checkPr, epley1Rm, updateStreak } from '@gym/shared';
-import { publishWorkoutActivity } from '../../lib/api/client';
+import { publishWorkoutActivity, type CoachWorkoutItem, type CoachWorkoutRow } from '../../lib/api/client';
 import { nowIso, secondsBetween, todayIso } from '../../lib/dates';
 import { getExercise } from '../../lib/exercises';
 import { logHaptic, prHaptic, successHaptic, warnHaptic } from '../../lib/haptics';
@@ -57,6 +57,8 @@ interface SessionState {
   start: (planWorkoutId: string | null) => Promise<void>;
   /** Create a workout from a saved custom template (or resume the active one). */
   startFromTemplate: (template: CustomTemplate) => Promise<void>;
+  /** Create a workout from a coach-assigned program (or resume the active one). */
+  startFromCoachPlan: (workout: CoachWorkoutRow) => Promise<void>;
   /** Rebuild from the repo's active workout. False when none exists. */
   hydrate: () => Promise<boolean>;
   setCurrent: (idx: number) => void;
@@ -108,6 +110,35 @@ function planExerciseToSession(pe: {
     targetSets: pe.sets,
     repRange: pe.repRange,
     restSec: pe.restSec,
+    loggedSets: [],
+    lastSets: [],
+  };
+}
+
+/**
+ * A coach-assigned item's `exerciseId` is optional (SCALE-UP-PLAN §4.3 — the
+ * coach console lets a coach type a free-text exercise name with no local-
+ * library match, same as the server's synced_sets pattern of not FK'ing the
+ * unseeded exercises table). When it's null, this synthesizes a stable id
+ * scoped to this workout + item position so repeated starts of the SAME
+ * assigned workout keep resolving ghost sets against the same slot, while
+ * still tolerating an id getExercise() doesn't recognise (equipment falls
+ * back to null) — the exact tolerance planExerciseToSession already relies on
+ * for ad-hoc exercises.
+ */
+function coachItemToSession(
+  item: CoachWorkoutItem,
+  workoutId: string,
+  index: number,
+): SessionExercise {
+  const exerciseId = item.exerciseId ?? `coach:${workoutId}:${index}`;
+  return {
+    exerciseId,
+    exerciseName: item.name,
+    equipment: item.exerciseId ? (getExercise(item.exerciseId)?.equipment ?? null) : null,
+    targetSets: item.sets,
+    repRange: item.repRange,
+    restSec: item.restSec,
     loggedSets: [],
     lastSets: [],
   };
@@ -202,6 +233,46 @@ export const useSession = create<SessionState>()((set, get) => {
       };
       await repo.startWorkout(log);
       const exercises = template.exercises.map(planExerciseToSession);
+      await Promise.all(
+        exercises.map(async (e) => {
+          e.lastSets = await repo.getLastSetsForExercise(e.exerciseId, log.id);
+        }),
+      );
+      stopRestTimer();
+      set({
+        status: 'active',
+        workoutId: log.id,
+        workoutName: log.name,
+        startedAt: log.startedAt,
+        exercises,
+        currentIdx: 0,
+        rest: null,
+        flashSetId: null,
+        pendingRpe: null,
+      });
+    },
+
+    startFromCoachPlan: async (workout) => {
+      const repo = await getRepo();
+      const active = await repo.getActiveWorkout();
+      if (active) {
+        // A workout is already running — resume it instead of stacking a new one.
+        if (get().workoutId !== active.id || get().status !== 'active') {
+          await get().hydrate();
+        }
+        return;
+      }
+      const log: Omit<WorkoutLog, 'finishedAt' | 'durationSec'> = {
+        id: uid(),
+        date: todayIso(),
+        planWorkoutId: null,
+        name: workout.title,
+        startedAt: nowIso(),
+      };
+      await repo.startWorkout(log);
+      const exercises = workout.items.map((item, index) =>
+        coachItemToSession(item, workout.id, index),
+      );
       await Promise.all(
         exercises.map(async (e) => {
           e.lastSets = await repo.getLastSetsForExercise(e.exerciseId, log.id);

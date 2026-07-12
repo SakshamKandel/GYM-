@@ -20,7 +20,15 @@ import {
   getAdminOverview,
   toStaffError,
 } from '../../../features/staff/api';
-import { isTopAdmin, pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import {
+  canManagePromos,
+  canReviewApplications,
+  canReviewPayments,
+  canReviewSupport,
+  isTopAdmin,
+  pushStaff,
+  STAFF_ROUTES,
+} from '../../../features/staff/nav';
 import {
   StaffHeaderAction,
   StaffSignOutDialog,
@@ -44,8 +52,8 @@ interface NavRow {
   title: string;
   blurb: string;
   route: string;
-  /** When true the row is only shown to super_admin / main_admin. */
-  topAdminOnly?: boolean;
+  /** When present, the row is hidden unless this returns true for the caller's role. */
+  visible?: (role: string | null) => boolean;
 }
 
 const NAV_ROWS: NavRow[] = [
@@ -70,22 +78,50 @@ const NAV_ROWS: NavRow[] = [
   {
     icon: 'card',
     title: 'Subscriptions',
-    blurb: 'Tier overrides live on each member.',
-    route: STAFF_ROUTES.adminMembers,
+    blurb: 'Tier overrides + recent changes.',
+    route: STAFF_ROUTES.adminSubscriptions,
+  },
+  {
+    icon: 'person-add',
+    title: 'Applications',
+    blurb: 'Review self-serve coach applications.',
+    route: STAFF_ROUTES.adminApplications,
+    visible: canReviewApplications,
+  },
+  {
+    icon: 'wallet',
+    title: 'Payments',
+    blurb: 'Nepal manual payment receipts awaiting review.',
+    route: STAFF_ROUTES.adminPayments,
+    visible: canReviewPayments,
+  },
+  {
+    icon: 'pricetag',
+    title: 'Promo codes',
+    blurb: 'House codes, coach codes, redemption stats.',
+    route: STAFF_ROUTES.adminPromos,
+    visible: canManagePromos,
+  },
+  {
+    icon: 'chatbubble-ellipses',
+    title: 'Support',
+    blurb: 'Reply to support tickets from any member.',
+    route: STAFF_ROUTES.adminSupport,
+    visible: canReviewSupport,
   },
   {
     icon: 'shield-checkmark',
     title: 'Roles',
     blurb: 'Grant or revoke staff access.',
     route: STAFF_ROUTES.adminStaff,
-    topAdminOnly: true,
+    visible: isTopAdmin,
   },
   {
     icon: 'receipt',
     title: 'Audit',
     blurb: 'Every privileged action, newest first.',
     route: STAFF_ROUTES.adminAudit,
-    topAdminOnly: true,
+    visible: isTopAdmin,
   },
 ];
 
@@ -107,7 +143,7 @@ export default function AdminHomeScreen() {
   const token = useAuth((s) => s.token);
   const staffRole = useAuth((s) => s.staffRole);
   const signOut = useStaffSignOut();
-  const navRows = NAV_ROWS.filter((row) => !row.topAdminOnly || isTopAdmin(staffRole));
+  const navRows = NAV_ROWS.filter((row) => !row.visible || row.visible(staffRole));
 
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [loading, setLoading] = useState(true);

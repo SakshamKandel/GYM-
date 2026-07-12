@@ -1,9 +1,10 @@
-import { accounts } from '@gym/db';
+import { accounts, revenuecatEvents } from '@gym/db';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { verifyRevenueCatAuth } from '@/lib/billing';
 import { getDb } from '@/lib/db';
 import { json } from '@/lib/http';
+import { resolveCatalogAmount, settlePromoOnPurchase } from '@/lib/promoEconomy';
 import { setAccountTier, type Tier } from '@/lib/tier';
 
 export const runtime = 'nodejs';
@@ -35,6 +36,7 @@ const PAID_TIERS = ['elite', 'gold', 'silver'] as const satisfies readonly Tier[
 
 const eventSchema = z.object({
   event: z.object({
+    id: z.string().min(1).nullish(),
     type: z.string(),
     app_user_id: z.string().min(1),
     entitlement_ids: z.array(z.string()).nullish(),
@@ -101,6 +103,43 @@ export async function POST(req: Request) {
     startsAt,
     expiresAt,
   });
+
+  // Promo/referral settlement (SCALE-UP-PLAN §4.1): a live PAID-tier
+  // entitlement grant consumes the account's active discount grant + credits
+  // the code-owning coach's wallet. RevenueCat's webhook payload does NOT
+  // include the actual price paid (price fields are stripped), so the
+  // catalog price for the account's region is the best available proxy for
+  // commission math — an intentional approximation until real store pricing
+  // is wired through. Best-effort — never fail the webhook ack (RevenueCat
+  // retries non-2xx, and the entitlement grant above already succeeded).
+  //
+  // Only INITIAL_PURCHASE represents an actual new sale. RENEWAL,
+  // UNCANCELLATION, PRODUCT_CHANGE, SUBSCRIPTION_EXTENDED and — critically —
+  // CANCELLATION (fired the moment a user turns off auto-renew, long before
+  // the entitlement actually lapses) must never settle: they'd consume
+  // whatever discount grant happens to be active at that later moment even
+  // though it was never used toward THIS purchase. RevenueCat also delivers
+  // at-least-once, so a redelivered INITIAL_PURCHASE is deduped via
+  // revenuecatEvents before settlement ever runs a second time for it.
+  if (tier !== 'starter' && event.type === 'INITIAL_PURCHASE') {
+    try {
+      let alreadyProcessed = false;
+      if (event.id) {
+        const inserted = await db
+          .insert(revenuecatEvents)
+          .values({ eventId: event.id })
+          .onConflictDoNothing({ target: revenuecatEvents.eventId })
+          .returning({ eventId: revenuecatEvents.eventId });
+        alreadyProcessed = inserted.length === 0;
+      }
+      if (!alreadyProcessed) {
+        const { amountMinor, currency } = await resolveCatalogAmount(account.id, tier);
+        await settlePromoOnPurchase(account.id, tier, amountMinor, currency, 'live');
+      }
+    } catch {
+      // Best-effort — see comment above.
+    }
+  }
 
   return json({ ok: true, tier }, 200);
 }

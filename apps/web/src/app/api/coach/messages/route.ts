@@ -16,11 +16,16 @@ export const runtime = 'nodejs';
  *
  *  - GET  ?kind=…  → the signed-in account's messages for that thread,
  *                    oldest → newest. Any authenticated tier can READ (so a
- *                    lapsed Elite user still sees their history).
- *  - POST {kind, body} → ELITE ONLY. Inserts the user's message, then an
- *                    auto-acknowledgement 'coach' row that references the
- *                    user's display name and sets reply expectations. Returns
- *                    both inserted messages.
+ *                    lapsed Elite user still sees their history). Marks
+ *                    coach-authored rows readByUser=true after serving.
+ *  - POST {kind, body} → 'coach_chat' stays Elite-or-assigned-member ONLY;
+ *                    'support' is open to ANY signed-in user (SCALE-UP-PLAN
+ *                    §4.4). Inserts the user's message, then — for
+ *                    coach_chat with no human coach, or support from an
+ *                    Elite user — an AI auto-acknowledgement 'coach' row.
+ *                    Non-Elite support tickets and coach_chat with an active
+ *                    human coach return just the user's message. Returns
+ *                    every inserted message.
  *
  * No real-time: the mobile app loads on focus and appends optimistically.
  */
@@ -69,6 +74,21 @@ export async function GET(req: Request) {
     .where(and(eq(coachMessages.accountId, user.id), eq(coachMessages.kind, kind)))
     .orderBy(asc(coachMessages.createdAt));
 
+  // Clear this thread's unread badge (/api/me/unread) now that it's been
+  // served — mirrors the coach-console mark-read-on-open convention, on the
+  // member side: only coach-authored rows count toward the badge.
+  await db
+    .update(coachMessages)
+    .set({ readByUser: true })
+    .where(
+      and(
+        eq(coachMessages.accountId, user.id),
+        eq(coachMessages.kind, kind),
+        eq(coachMessages.sender, 'coach'),
+        eq(coachMessages.readByUser, false),
+      ),
+    );
+
   return json({ messages: rows }, 200);
 }
 
@@ -78,35 +98,54 @@ export async function POST(req: Request) {
   const user = await userForToken(token);
   if (!user) return json({ error: 'unauthorized' }, 401);
 
-  // Each send can trigger a Groq completion — 10/min/account caps the spend.
-  const limited = rateLimit({
-    route: 'coach/messages',
-    limit: 10,
-    windowMs: 60_000,
-    accountId: user.id,
-    ip: clientIp(req),
-  });
+  const parsed = postSchema.safeParse(await readJson(req));
+  if (!parsed.success) return json({ error: 'invalid' }, 400);
+  const { kind } = parsed.data;
+
+  // 'support' is open to ANY signed-in user (no Elite/coach gate below) — a
+  // tighter 5/min budget keeps that wide-open door from being spammed.
+  // 'coach_chat' keeps its original AI-cost-driven 10/min budget, unchanged.
+  const limited =
+    kind === 'support'
+      ? rateLimit({
+          route: 'coach/messages/support',
+          limit: 5,
+          windowMs: 60_000,
+          accountId: user.id,
+          ip: clientIp(req),
+        })
+      : rateLimit({
+          route: 'coach/messages',
+          limit: 10,
+          windowMs: 60_000,
+          accountId: user.id,
+          ip: clientIp(req),
+        });
   if (limited) return limited;
 
   const db = getDb();
 
-  // One lookup serves the send gate AND the AI-suppression below: an active
-  // human-coach assignment (any coach) lets the member chat regardless of tier.
-  const assigned = await db
-    .select({ id: coachAssignments.id })
-    .from(coachAssignments)
-    .where(and(eq(coachAssignments.userId, user.id), eq(coachAssignments.status, 'active')))
-    .limit(1);
-  const hasCoach = assigned.length > 0;
+  // One lookup serves the coach_chat send gate AND the AI-suppression below:
+  // an active human-coach assignment (any coach) lets the member chat
+  // regardless of tier. Only relevant to 'coach_chat' — skip the round trip
+  // entirely for 'support' posts.
+  let hasCoach = false;
+  if (kind === 'coach_chat') {
+    const assigned = await db
+      .select({ id: coachAssignments.id })
+      .from(coachAssignments)
+      .where(and(eq(coachAssignments.userId, user.id), eq(coachAssignments.status, 'active')))
+      .limit(1);
+    hasCoach = assigned.length > 0;
+  }
 
-  // Sending is the Elite promise made real — gate it server-side (client
-  // checks are UI-only, PROJECT_PLAN §8). Assigned members also pass: their
-  // coach relationship, not their tier, is what earns the thread.
-  if (user.tier !== 'elite' && !hasCoach) return json({ error: 'forbidden' }, 403);
+  // coach_chat is still the Elite promise made real (or an assigned member) —
+  // gated server-side (client checks are UI-only, PROJECT_PLAN §8). 'support'
+  // has NO gate: any signed-in user may open a ticket (SCALE-UP-PLAN §4.4).
+  if (kind === 'coach_chat' && user.tier !== 'elite' && !hasCoach) {
+    return json({ error: 'forbidden' }, 403);
+  }
 
-  const parsed = postSchema.safeParse(await readJson(req));
-  if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { kind } = parsed.data;
   // Masked BEFORE storage — contact details never reach the database.
   const body = maskPii(parsed.data.body);
 
@@ -131,10 +170,16 @@ export async function POST(req: Request) {
   // coach assignment, a real coach owns the reply, so skip the AI auto-reply and
   // return just the user's message. The coach answers later via the console
   // (sender='coach', which the mobile app already renders on the left as a
-  // "Greece" message). The 'support' thread is a separate channel handled by
-  // support staff, so it KEEPS its auto-ack regardless of coach assignment.
-  // With no assignment, today's AI behavior is preserved exactly below.
+  // "Greece" message). With no assignment, today's AI behavior is preserved
+  // exactly below.
   if (kind === 'coach_chat' && hasCoach) {
+    return json({ messages: [userMsg] }, 201);
+  }
+
+  // 'support' concierge auto-reply is an Elite perk (SCALE-UP-PLAN §4.4): a
+  // non-Elite ticket just lands in the admin support inbox with no AI reply —
+  // a human answers via /api/admin/support/threads/[accountId].
+  if (kind === 'support' && user.tier !== 'elite') {
     return json({ messages: [userMsg] }, 201);
   }
 
@@ -157,7 +202,12 @@ export async function POST(req: Request) {
       kind,
       sender: 'coach',
       body: replyBody,
-      readByUser: false,
+      // Synchronously returned below and rendered into the open thread by
+      // the client (useCoachThread swaps it in from this POST response) —
+      // so it's already "seen" the moment it's inserted. readByUser:false
+      // here would leave a phantom unread badge until the next GET happens
+      // to run, even though the user watched the reply arrive.
+      readByUser: true,
     })
     .returning({
       id: coachMessages.id,

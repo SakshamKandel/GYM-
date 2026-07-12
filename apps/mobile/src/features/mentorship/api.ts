@@ -30,6 +30,12 @@ export type MentorshipErrorCode =
   | 'not_found'
   | 'invalid'
   | 'unauthorized'
+  /** POST /api/coach-applications: the caller already has a pending application. */
+  | 'already_open'
+  /** POST /api/coach-applications: the caller is already a staff coach. */
+  | 'already_coach'
+  /** POST /api/coach-applications: the caller already holds a different staff role. */
+  | 'already_staff'
   | 'network';
 
 export class MentorshipApiError extends Error {
@@ -49,6 +55,11 @@ export function toMentorshipError(err: unknown): MentorshipApiError {
 
 // ── Schemas ───────────────────────────────────────────────────
 
+/** Seniority badge (SCALE-UP-PLAN §1.4) — NOT a billing tier. `.catch` keeps an
+ * older server response (before this field shipped) from nuking the parse. */
+const coachTierSchema = z.enum(['silver', 'gold', 'elite']).catch('silver');
+export type CoachTier = z.infer<typeof coachTierSchema>;
+
 const coachCardSchema = z.object({
   id: z.string(),
   displayName: z.string(),
@@ -59,6 +70,7 @@ const coachCardSchema = z.object({
   acceptingClients: z.boolean(),
   hasCapacity: z.boolean(),
   activeClients: z.number(),
+  coachTier: coachTierSchema,
 });
 export type CoachCardData = z.infer<typeof coachCardSchema>;
 
@@ -190,7 +202,10 @@ function bodyErrorCode(raw: string): MentorshipErrorCode | null {
     raw === 'already_assigned' ||
     raw === 'not_accepting' ||
     raw === 'not_found' ||
-    raw === 'invalid'
+    raw === 'invalid' ||
+    raw === 'already_open' ||
+    raw === 'already_coach' ||
+    raw === 'already_staff'
     ? raw
     : null;
 }
@@ -319,4 +334,83 @@ export async function cancelCoachRequest(id: string, token: string): Promise<voi
 export async function getMyMilestones(token: string): Promise<CoachMilestone[]> {
   const data = await mentorshipRequest({ method: 'GET', path: '/api/me/milestones', token });
   return parse(milestoneListSchema, data).milestones;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach applications (SCALE-UP-PLAN §1.4 / §4.2) — self-serve coach
+// enrollment. Any member may apply from the app; admin reviews.
+// ════════════════════════════════════════════════════════════════
+
+const coachApplicationStatusSchema = z.enum(['pending', 'approved', 'rejected']);
+export type CoachApplicationStatus = z.infer<typeof coachApplicationStatusSchema>;
+
+const coachApplicationSchema = z.object({
+  id: z.string(),
+  status: coachApplicationStatusSchema,
+  reviewNote: z.string().nullable(),
+  createdAt: z.string(),
+  decidedAt: z.string().nullable(),
+  displayName: z.string(),
+  headline: z.string(),
+  bio: z.string(),
+  yearsExperience: z.number(),
+  specialties: z.array(z.string()),
+  certifications: z.array(certificationSchema),
+  achievements: z.array(z.string()),
+  avatarUrl: z.string().nullable(),
+});
+export type CoachApplication = z.infer<typeof coachApplicationSchema>;
+
+const coachApplicationEnvelope = z.object({ application: coachApplicationSchema.nullable() });
+
+/**
+ * GET /api/coach-applications → the caller's own latest application (any
+ * status — pending / approved / rejected), or null if they've never applied.
+ */
+export async function getMyCoachApplication(token: string): Promise<CoachApplication | null> {
+  const data = await mentorshipRequest({ method: 'GET', path: '/api/coach-applications', token });
+  return parse(coachApplicationEnvelope, data).application;
+}
+
+export interface CoachApplicationInput {
+  /** 1..80 chars. */
+  displayName: string;
+  /** ≤120 chars. */
+  headline: string;
+  /** ≤2000 chars — PII-masked server-side before storage. */
+  bio: string;
+  /** 0..60. */
+  yearsExperience: number;
+  /** ≤6 entries, each from COACH_SPECIALTIES in @gym/shared. */
+  specialties: string[];
+  /** ≤10 rows; title/issuer ≤80 chars each, year numeric or null. */
+  certifications: CoachCertification[];
+  /** ≤10 entries, each ≤120 chars — PII-masked server-side before storage. */
+  achievements: string[];
+  /** https URL from POST /api/uploads/image {kind:'application_avatar'}. */
+  avatarUrl?: string;
+}
+
+const createdApplicationSchema = z.object({
+  id: z.string(),
+  status: z.literal('pending'),
+});
+export type CreatedCoachApplication = z.infer<typeof createdApplicationSchema>;
+
+/**
+ * POST /api/coach-applications → submit a coach enrollment application.
+ * 'already_open' (409) when a pending application already exists;
+ * 'already_coach' (409) when the caller already holds the staff coach role.
+ */
+export async function submitCoachApplication(
+  input: CoachApplicationInput,
+  token: string,
+): Promise<CreatedCoachApplication> {
+  const data = await mentorshipRequest({
+    method: 'POST',
+    path: '/api/coach-applications',
+    token,
+    body: { ...input },
+  });
+  return parse(createdApplicationSchema, data);
 }

@@ -42,6 +42,8 @@ export type StaffErrorCode =
   | 'cannot_revoke_self'
   | 'full'
   | 'conflict'
+  | 'already_pending'
+  | 'not_an_upgrade'
   | 'not_configured'
   | 'network';
 
@@ -71,17 +73,34 @@ export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
 export type MemberStatus = 'active' | 'suspended';
 export type VideoStatus = 'processing' | 'ready' | 'removed';
 export type AssignmentStatus = 'active' | 'ended';
+// Coach seniority badge (SCALE-UP-PLAN §1.4) — NOT a billing tier. Never
+// includes 'starter'; every coach profile carries one of these three.
+export type CoachTier = 'silver' | 'gold' | 'elite';
+// Paid tiers a payment request / catalog can target — 'starter' is free and
+// never appears in a purchase flow.
+export type PayTier = 'silver' | 'gold' | 'elite';
+export type ApplicationStatus = 'pending' | 'approved' | 'rejected';
+export type TierRequestStatus = 'pending' | 'approved' | 'rejected';
+export type PaymentMethod = 'esewa' | 'khalti' | 'bank' | 'other';
+export type PaymentStatus = 'pending' | 'approved' | 'rejected';
+export type DecideAction = 'approve' | 'reject';
 
 const staffRoleSchema = z.enum(STAFF_ROLES);
 const tierSchema = z.enum(['starter', 'silver', 'gold', 'elite']);
+const coachTierSchema = z.enum(['silver', 'gold', 'elite']);
+const payTierSchema = z.enum(['silver', 'gold', 'elite']);
 const memberStatusSchema = z.enum(['active', 'suspended']);
 const videoStatusSchema = z.enum(['processing', 'ready', 'removed']);
 const assignmentStatusSchema = z.enum(['active', 'ended']);
+const applicationStatusSchema = z.enum(['pending', 'approved', 'rejected']);
+const tierRequestStatusSchema = z.enum(['pending', 'approved', 'rejected']);
+const paymentMethodSchema = z.enum(['esewa', 'khalti', 'bank', 'other']);
+const paymentStatusSchema = z.enum(['pending', 'approved', 'rejected']);
 
 // ── Fetch plumbing ────────────────────────────────────────────
 
 interface StaffRequestOptions {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   path: string;
   token: string;
   body?: Record<string, unknown>;
@@ -107,6 +126,8 @@ const BODY_ERROR_CODES: Partial<Record<string, StaffErrorCode>> = {
   cannot_target_self: 'cannot_target_self',
   cannot_revoke_self: 'cannot_revoke_self',
   full: 'full',
+  already_pending: 'already_pending',
+  not_an_upgrade: 'not_an_upgrade',
 };
 
 /** Perform the request; resolve with the parsed JSON (or null) of a 2xx body. */
@@ -276,6 +297,10 @@ const coachProfileSchema = z.object({
   achievements: z.array(z.string()).catch([]),
   yearsExperience: z.number().catch(0),
   capacity: z.number().catch(1),
+  // Seniority badge + public photo (promo-economy work). `.catch` defaults
+  // keep an older server response from nuking the whole profile parse.
+  coachTier: coachTierSchema.catch('silver'),
+  avatarUrl: z.string().nullable().catch(null),
 });
 export type CoachProfile = z.infer<typeof coachProfileSchema>;
 
@@ -304,6 +329,9 @@ export interface CoachProfilePatch {
   yearsExperience?: number;
   /** 1..200 — the roster cap enforced when accepting requests. */
   capacity?: number;
+  /** An https URL string (max 500 chars) from POST /api/uploads/image (kind
+   * 'coach_avatar')'s `deliveryUrl`. */
+  avatarUrl?: string;
 }
 
 /** PATCH /api/coach/profile → update the caller's own profile; returns it fresh. */
@@ -462,6 +490,295 @@ export async function deleteMilestone(id: string, token: string): Promise<void> 
   const data = await staffRequest({
     method: 'DELETE',
     path: `/api/coach/milestones/${encodeURIComponent(id)}`,
+    token,
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — client-assigned workouts (SCALE-UP-PLAN §4.3)
+// ════════════════════════════════════════════════════════════════
+
+// Shared by both the assigned-workout and diet-plan rows — 'archived' hides
+// the row from the client's Train/Food tab while keeping it in the console.
+const planStatusSchema = z.enum(['active', 'archived']);
+export type PlanStatus = z.infer<typeof planStatusSchema>;
+
+const assignedWorkoutItemSchema = z.object({
+  // null for a free-text/custom entry with no local-library match.
+  exerciseId: z.string().nullable(),
+  name: z.string(),
+  sets: z.number(),
+  repRange: z.string(),
+  restSec: z.number(),
+  note: z.string().optional(),
+  imageUrl: z.string().optional(),
+});
+export type AssignedWorkoutItem = z.infer<typeof assignedWorkoutItemSchema>;
+
+const clientWorkoutSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  notes: z.string().catch(''),
+  position: z.number(),
+  status: planStatusSchema,
+  items: z.array(assignedWorkoutItemSchema).catch([]),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ClientWorkout = z.infer<typeof clientWorkoutSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole list. */
+const clientWorkoutsSchema = z.object({
+  workouts: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): ClientWorkout[] => {
+      const parsed = clientWorkoutSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/**
+ * GET /api/coach/clients/[userId]/workouts → every workout the caller has
+ * assigned this client (active AND archived), position asc. 'forbidden' when
+ * the caller has no active assignment over the client.
+ */
+export async function getClientWorkouts(
+  userId: string,
+  token: string,
+): Promise<ClientWorkout[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/workouts`,
+    token,
+  });
+  return parse(clientWorkoutsSchema, data).workouts;
+}
+
+export interface WorkoutItemInput {
+  /** 1..60 chars, or null for a free-text entry. */
+  exerciseId: string | null;
+  /** 1..80 chars. */
+  name: string;
+  /** 1..10. */
+  sets: number;
+  /** e.g. '5' or '8-12'. */
+  repRange: string;
+  /** 15..600. */
+  restSec: number;
+  /** ≤200 chars. */
+  note?: string;
+  /** https URL, ≤500 chars — from a library exercise's stock photo, or from
+   * POST /api/uploads/image {kind:'custom_exercise'}'s `deliveryUrl`. */
+  imageUrl?: string;
+}
+
+export interface WorkoutInput {
+  /** 1..120 chars. */
+  title: string;
+  /** ≤1000 chars. */
+  notes?: string;
+  /** ≤15 entries. */
+  items: WorkoutItemInput[];
+}
+
+const clientWorkoutEnvelope = z.object({ workout: clientWorkoutSchema });
+
+/**
+ * POST /api/coach/clients/[userId]/workouts → assigns a new workout to one of
+ * the caller's OWN clients; returns the fresh row. The client gets a
+ * best-effort push.
+ */
+export async function createClientWorkout(
+  userId: string,
+  input: WorkoutInput,
+  token: string,
+): Promise<ClientWorkout> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/workouts`,
+    token,
+    body: {
+      title: input.title,
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      items: input.items,
+    },
+  });
+  return parse(clientWorkoutEnvelope, data).workout;
+}
+
+export interface WorkoutPatch {
+  title?: string;
+  notes?: string;
+  status?: PlanStatus;
+  /** Ordering among this client's workouts — lower shows first. */
+  position?: number;
+  items?: WorkoutItemInput[];
+}
+
+/**
+ * PATCH /api/coach/workouts/[id] → partial update; only the sent fields
+ * change. 'forbidden' when the row's client isn't currently assigned to the
+ * caller (ownership comes from the ROW, not the request).
+ */
+export async function updateClientWorkout(
+  id: string,
+  patch: WorkoutPatch,
+  token: string,
+): Promise<ClientWorkout> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/coach/workouts/${encodeURIComponent(id)}`,
+    token,
+    body: { ...patch },
+  });
+  return parse(clientWorkoutEnvelope, data).workout;
+}
+
+/** DELETE /api/coach/workouts/[id] → hard-removes the row. */
+export async function deleteClientWorkout(id: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/coach/workouts/${encodeURIComponent(id)}`,
+    token,
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — client diet plans (SCALE-UP-PLAN §4.3)
+// ════════════════════════════════════════════════════════════════
+
+const mealKindSchema = z.enum(['breakfast', 'lunch', 'dinner', 'snacks']);
+export type MealKind = z.infer<typeof mealKindSchema>;
+export const MEAL_KINDS: MealKind[] = ['breakfast', 'lunch', 'dinner', 'snacks'];
+
+const dietPlanItemSchema = z.object({
+  name: z.string(),
+  qty: z.string(),
+  kcal: z.number().optional(),
+  protein: z.number().optional(),
+  carbs: z.number().optional(),
+  fat: z.number().optional(),
+  note: z.string().optional(),
+});
+export type DietPlanItem = z.infer<typeof dietPlanItemSchema>;
+
+const dietPlanMealSchema = z.object({
+  meal: mealKindSchema,
+  items: z.array(dietPlanItemSchema).catch([]),
+});
+export type DietPlanMeal = z.infer<typeof dietPlanMealSchema>;
+
+const clientDietPlanSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  notes: z.string().catch(''),
+  status: planStatusSchema,
+  meals: z.array(dietPlanMealSchema).catch([]),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ClientDietPlan = z.infer<typeof clientDietPlanSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole list. */
+const clientDietPlansSchema = z.object({
+  plans: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): ClientDietPlan[] => {
+      const parsed = clientDietPlanSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/**
+ * GET /api/coach/clients/[userId]/diet-plans → every diet plan the caller has
+ * assigned this client (active AND archived), newest first. 'forbidden' when
+ * the caller has no active assignment over the client.
+ */
+export async function getClientDietPlans(
+  userId: string,
+  token: string,
+): Promise<ClientDietPlan[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/diet-plans`,
+    token,
+  });
+  return parse(clientDietPlansSchema, data).plans;
+}
+
+export interface DietPlanMealInput {
+  meal: MealKind;
+  /** ≤12 entries. */
+  items: DietPlanItem[];
+}
+
+export interface DietPlanInput {
+  /** 1..120 chars. */
+  title: string;
+  /** ≤1000 chars. */
+  notes?: string;
+  /** ≤6 entries. */
+  meals: DietPlanMealInput[];
+}
+
+const clientDietPlanEnvelope = z.object({ plan: clientDietPlanSchema });
+
+/**
+ * POST /api/coach/clients/[userId]/diet-plans → assigns a new diet plan to
+ * one of the caller's OWN clients; returns the fresh row. The client gets a
+ * best-effort push.
+ */
+export async function createClientDietPlan(
+  userId: string,
+  input: DietPlanInput,
+  token: string,
+): Promise<ClientDietPlan> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/diet-plans`,
+    token,
+    body: {
+      title: input.title,
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      meals: input.meals,
+    },
+  });
+  return parse(clientDietPlanEnvelope, data).plan;
+}
+
+export interface DietPlanPatch {
+  title?: string;
+  notes?: string;
+  status?: PlanStatus;
+  meals?: DietPlanMealInput[];
+}
+
+/**
+ * PATCH /api/coach/diet-plans/[id] → partial update; only the sent fields
+ * change. 'forbidden' when the row's client isn't currently assigned to the
+ * caller (ownership comes from the ROW, not the request).
+ */
+export async function updateClientDietPlan(
+  id: string,
+  patch: DietPlanPatch,
+  token: string,
+): Promise<ClientDietPlan> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/coach/diet-plans/${encodeURIComponent(id)}`,
+    token,
+    body: { ...patch },
+  });
+  return parse(clientDietPlanEnvelope, data).plan;
+}
+
+/** DELETE /api/coach/diet-plans/[id] → hard-removes the row. */
+export async function deleteClientDietPlan(id: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/coach/diet-plans/${encodeURIComponent(id)}`,
     token,
   });
   parse(okSchema, data);
@@ -1081,4 +1398,563 @@ export async function getAudit(
     token,
   });
   return parse(auditSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — wallet (promo commission + code)
+// ════════════════════════════════════════════════════════════════
+
+const walletBalanceSchema = z.object({ currency: z.string(), amountMinor: z.number() });
+export type WalletBalance = z.infer<typeof walletBalanceSchema>;
+
+const walletEntrySchema = z.object({
+  id: z.string(),
+  type: z.enum(['commission', 'adjustment', 'payout']),
+  amountMinor: z.number(),
+  currency: z.string(),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type WalletEntry = z.infer<typeof walletEntrySchema>;
+
+const walletCodeSchema = z.object({
+  code: z.string(),
+  discountPct: z.number(),
+  commissionPct: z.number(),
+  redemptionCount: z.number(),
+});
+export type WalletCode = z.infer<typeof walletCodeSchema>;
+
+/** Resilient: an entry row this build can't parse is dropped, not fatal. */
+const coachWalletSchema = z.object({
+  balances: z.array(walletBalanceSchema).catch([]),
+  code: walletCodeSchema.nullable(),
+  entries: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): WalletEntry[] => {
+      const parsed = walletEntrySchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+export interface CoachWallet {
+  balances: WalletBalance[];
+  code: WalletCode | null;
+  entries: WalletEntry[];
+}
+
+/**
+ * GET /api/coach/wallet → the caller's own commission balances (per currency),
+ * their auto-generated promo code + redemption count, and the 50 newest
+ * ledger entries. `code` is null only for a coach whose code hasn't been
+ * generated yet (shouldn't happen post-approval, but tolerated defensively).
+ */
+export async function getCoachWallet(token: string): Promise<CoachWallet> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/wallet', token });
+  return parse(coachWalletSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — tier upgrade requests
+// ════════════════════════════════════════════════════════════════
+
+/** A coach may only ever request UP from their current badge — never silver. */
+export type RequestableCoachTier = 'gold' | 'elite';
+
+const coachTierRequestSchema = z.object({
+  id: z.string(),
+  requestedTier: coachTierSchema,
+  note: z.string().catch(''),
+  status: tierRequestStatusSchema,
+  decidedAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type CoachTierRequest = z.infer<typeof coachTierRequestSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole history. */
+const coachTierRequestsSchema = z.object({
+  requests: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): CoachTierRequest[] => {
+      const parsed = coachTierRequestSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/**
+ * GET /api/coach/tier-requests → the caller's own upgrade-request history,
+ * newest first.
+ */
+export async function getCoachTierRequests(token: string): Promise<CoachTierRequest[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/tier-requests', token });
+  return parse(coachTierRequestsSchema, data).requests;
+}
+
+const tierRequestCreateSchema = z.object({ id: z.string() });
+
+/**
+ * POST /api/coach/tier-requests {requestedTier, note?} → file a new seniority
+ * upgrade request (silver→gold/elite; gold→elite). 'already_pending' (409)
+ * when the caller already has one pending; 'not_an_upgrade' (400) when the
+ * requested tier is at or below the coach's current badge.
+ */
+export async function createCoachTierRequest(
+  requestedTier: RequestableCoachTier,
+  note: string | undefined,
+  token: string,
+): Promise<string> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/coach/tier-requests',
+    token,
+    body: { requestedTier, ...(note !== undefined ? { note } : {}) },
+  });
+  return parse(tierRequestCreateSchema, data).id;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — coach applications
+// ════════════════════════════════════════════════════════════════
+
+const applicationAccountSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  email: z.string(),
+});
+
+const coachApplicationRowSchema = z.object({
+  id: z.string(),
+  account: applicationAccountSchema,
+  displayName: z.string(),
+  headline: z.string().catch(''),
+  bio: z.string().catch(''),
+  yearsExperience: z.number().catch(0),
+  specialties: z.array(z.string()).catch([]),
+  certifications: z.array(coachCertificationSchema).catch([]),
+  achievements: z.array(z.string()).catch([]),
+  avatarUrl: z.string().nullable().catch(null),
+  status: applicationStatusSchema,
+  reviewNote: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type CoachApplicationRow = z.infer<typeof coachApplicationRowSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole queue. */
+const coachApplicationsSchema = z.object({
+  applications: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): CoachApplicationRow[] => {
+      const parsed = coachApplicationRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/**
+ * GET /api/admin/coach-applications?status= → the application queue, newest
+ * first. Omitting `status` returns every status (server default).
+ */
+export async function getAdminCoachApplications(
+  token: string,
+  status?: ApplicationStatus,
+): Promise<CoachApplicationRow[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/coach-applications${query}`,
+    token,
+  });
+  return parse(coachApplicationsSchema, data).applications;
+}
+
+/**
+ * POST /api/admin/coach-applications/[id] {action, coachTier?, reviewNote?} →
+ * approve (grants coach role, upserts coach_profiles, generates the promo
+ * code — coachTier defaults to 'silver' server-side when omitted) or reject
+ * (records reviewNote). 'not_found' for an unknown/already-decided id.
+ */
+export async function decideCoachApplication(
+  id: string,
+  action: DecideAction,
+  options: { coachTier?: CoachTier; reviewNote?: string } | undefined,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/coach-applications/${encodeURIComponent(id)}`,
+    token,
+    body: {
+      action,
+      ...(options?.coachTier !== undefined ? { coachTier: options.coachTier } : {}),
+      ...(options?.reviewNote !== undefined ? { reviewNote: options.reviewNote } : {}),
+    },
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — coach tier-upgrade requests
+// ════════════════════════════════════════════════════════════════
+
+const tierRequestCoachSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  coachTier: coachTierSchema,
+});
+
+const adminCoachTierRequestSchema = z.object({
+  id: z.string(),
+  coach: tierRequestCoachSchema,
+  requestedTier: coachTierSchema,
+  note: z.string().catch(''),
+  status: tierRequestStatusSchema,
+  createdAt: z.string(),
+});
+export type AdminCoachTierRequest = z.infer<typeof adminCoachTierRequestSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole queue. */
+const adminCoachTierRequestsSchema = z.object({
+  requests: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): AdminCoachTierRequest[] => {
+      const parsed = adminCoachTierRequestSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/** GET /api/admin/coach-tier-requests?status= → the upgrade-request queue. */
+export async function getAdminCoachTierRequests(
+  token: string,
+  status?: TierRequestStatus,
+): Promise<AdminCoachTierRequest[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/coach-tier-requests${query}`,
+    token,
+  });
+  return parse(adminCoachTierRequestsSchema, data).requests;
+}
+
+/**
+ * POST /api/admin/coach-tier-requests/[id] {action, note?} → approve (writes
+ * coach_profiles.coachTier) or reject. 'not_found' for an unknown/already-
+ * decided id.
+ */
+export async function decideCoachTierRequest(
+  id: string,
+  action: DecideAction,
+  note: string | undefined,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/coach-tier-requests/${encodeURIComponent(id)}`,
+    token,
+    body: { action, ...(note !== undefined ? { note } : {}) },
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — promo codes
+// ════════════════════════════════════════════════════════════════
+
+const promoOwnerCoachSchema = z.object({ id: z.string(), displayName: z.string() });
+
+const promoCodeRowSchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  ownerCoach: promoOwnerCoachSchema.nullable(),
+  discountPct: z.number(),
+  commissionPct: z.number(),
+  active: z.boolean(),
+  redemptionCount: z.number(),
+  maxRedemptions: z.number().nullable(),
+  expiresAt: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type PromoCodeRow = z.infer<typeof promoCodeRowSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole list. */
+const promoCodesSchema = z.object({
+  codes: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): PromoCodeRow[] => {
+      const parsed = promoCodeRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/** GET /api/admin/promo-codes → every code with its redemption stats. */
+export async function getAdminPromoCodes(token: string): Promise<PromoCodeRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/promo-codes', token });
+  return parse(promoCodesSchema, data).codes;
+}
+
+export interface PromoCodeCreateInput {
+  /** Omit to let the server auto-generate one (COACH-style pattern). */
+  code?: string;
+  /** Attach the code to a coach (their commission wallet). Omit for a house code. */
+  ownerCoachId?: string;
+  /** 5..90. */
+  discountPct: number;
+  /** 0..50. */
+  commissionPct?: number;
+  maxRedemptions?: number;
+  /** ISO instant. */
+  expiresAt?: string;
+}
+
+const promoCodeCreateSchema = z.object({ id: z.string(), code: z.string() });
+
+/**
+ * POST /api/admin/promo-codes → mint a house or coach code. 'conflict' (409)
+ * on a duplicate explicit `code`; 'invalid' (400) for an out-of-range pct.
+ */
+export async function createPromoCode(
+  input: PromoCodeCreateInput,
+  token: string,
+): Promise<{ id: string; code: string }> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/promo-codes',
+    token,
+    body: {
+      ...(input.code !== undefined ? { code: input.code } : {}),
+      ...(input.ownerCoachId !== undefined ? { ownerCoachId: input.ownerCoachId } : {}),
+      discountPct: input.discountPct,
+      ...(input.commissionPct !== undefined ? { commissionPct: input.commissionPct } : {}),
+      ...(input.maxRedemptions !== undefined ? { maxRedemptions: input.maxRedemptions } : {}),
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+    },
+  });
+  return parse(promoCodeCreateSchema, data);
+}
+
+export interface PromoCodePatch {
+  active?: boolean;
+  maxRedemptions?: number | null;
+  expiresAt?: string | null;
+}
+
+/** PATCH /api/admin/promo-codes/[id] → toggle active / adjust limits. */
+export async function updatePromoCode(
+  id: string,
+  patch: PromoCodePatch,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/promo-codes/${encodeURIComponent(id)}`,
+    token,
+    body: { ...patch },
+  });
+  // The route returns {code:{...}} (the updated row), never {ok:true}.
+  parse(z.object({ code: promoCodeRowSchema }), data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — payment requests (Nepal manual payments)
+// ════════════════════════════════════════════════════════════════
+
+const paymentAccountSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  displayName: z.string(),
+  tier: tierSchema,
+});
+
+const paymentRequestRowSchema = z.object({
+  id: z.string(),
+  account: paymentAccountSchema,
+  tier: payTierSchema,
+  months: z.number(),
+  amountMinor: z.number(),
+  currency: z.string(),
+  method: paymentMethodSchema,
+  // A signed URL minted per-request — never cache/store beyond this screen's
+  // lifetime (it expires; the row is refetched each visit).
+  receiptUrl: z.string(),
+  note: z.string().nullable(),
+  status: paymentStatusSchema,
+  reviewNote: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type PaymentRequestRow = z.infer<typeof paymentRequestRowSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole queue. */
+const paymentRequestsSchema = z.object({
+  requests: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): PaymentRequestRow[] => {
+      const parsed = paymentRequestRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/** GET /api/admin/payment-requests?status= → the manual-payment queue. */
+export async function getAdminPaymentRequests(
+  token: string,
+  status?: PaymentStatus,
+): Promise<PaymentRequestRow[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/payment-requests${query}`,
+    token,
+  });
+  return parse(paymentRequestsSchema, data).requests;
+}
+
+/**
+ * POST /api/admin/payment-requests/[id] {action, note?} → approve grants the
+ * dated tier window + settles any promo commission; reject records reviewNote.
+ * 'not_found' for an unknown/already-decided id.
+ */
+export async function decidePaymentRequest(
+  id: string,
+  action: DecideAction,
+  note: string | undefined,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/payment-requests/${encodeURIComponent(id)}`,
+    token,
+    body: { action, ...(note !== undefined ? { note } : {}) },
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — coach wallets
+// ════════════════════════════════════════════════════════════════
+
+const adminWalletRowSchema = z.object({
+  coach: tierRequestCoachSchema,
+  balances: z.array(walletBalanceSchema).catch([]),
+});
+export type AdminWalletRow = z.infer<typeof adminWalletRowSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole page. */
+const adminWalletsSchema = z.object({
+  wallets: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): AdminWalletRow[] => {
+      const parsed = adminWalletRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/** GET /api/admin/wallets → every coach's balances per currency. */
+export async function getAdminWallets(token: string): Promise<AdminWalletRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/wallets', token });
+  return parse(adminWalletsSchema, data).wallets;
+}
+
+export interface WalletEntryInput {
+  type: 'adjustment' | 'payout';
+  /** Payouts must be negative; adjustments may be either sign. */
+  amountMinor: number;
+  currency: string;
+  note?: string;
+}
+
+/**
+ * POST /api/admin/wallets/[coachId]/entries → append a manual ledger entry
+ * (a positive correction, or a negative payout record — payouts are recorded
+ * here, not disbursed; see SCALE-UP-PLAN §9). 'invalid' when a payout amount
+ * isn't negative.
+ */
+export async function addWalletEntry(
+  coachId: string,
+  input: WalletEntryInput,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/wallets/${encodeURIComponent(coachId)}/entries`,
+    token,
+    body: {
+      type: input.type,
+      amountMinor: input.amountMinor,
+      currency: input.currency,
+      ...(input.note !== undefined ? { note: input.note } : {}),
+    },
+  });
+  // The route returns 201 {entry:{...}}, never {ok:true}.
+  parse(z.object({ entry: walletEntrySchema }), data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — regional pricing
+// ════════════════════════════════════════════════════════════════
+
+const priceRegionSchema = z.enum(['NP', 'INTL']);
+export type PriceRegion = z.infer<typeof priceRegionSchema>;
+
+const priceRowSchema = z.object({
+  region: priceRegionSchema,
+  tier: tierSchema,
+  amountMinor: z.number(),
+  currency: z.string(),
+  active: z.boolean(),
+});
+export type PriceRow = z.infer<typeof priceRowSchema>;
+
+const pricesSchema = z.object({ prices: z.array(priceRowSchema) });
+
+/** GET /api/admin/pricing → every (region, tier) price row. */
+export async function getAdminPricing(token: string): Promise<PriceRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/pricing', token });
+  return parse(pricesSchema, data).prices;
+}
+
+export interface PricePatch {
+  region: PriceRegion;
+  tier: Tier;
+  /** New price in minor units; currency is derived server-side from region. */
+  amountMinor: number;
+}
+
+/**
+ * PUT /api/admin/pricing {prices} → upsert one or more (region, tier) rows.
+ * Currency is derived server-side (NP→NPR, INTL→USD) — never sent from here.
+ */
+export async function putAdminPricing(prices: PricePatch[], token: string): Promise<PriceRow[]> {
+  const data = await staffRequest({
+    method: 'PUT',
+    path: '/api/admin/pricing',
+    token,
+    body: { prices },
+  });
+  return parse(pricesSchema, data).prices;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — coach overrides (isActive / coachTier / capacity)
+// ════════════════════════════════════════════════════════════════
+
+export interface AdminCoachPatch {
+  isActive?: boolean;
+  coachTier?: CoachTier;
+  capacity?: number;
+}
+
+/**
+ * PATCH /api/admin/coaches/[id] {isActive?, coachTier?, capacity?} → override
+ * fields the coach can't otherwise change (or admin-only edits). Requires
+ * `coach.application.review`. 'not_found' for an unknown coach id.
+ */
+export async function updateAdminCoach(
+  id: string,
+  patch: AdminCoachPatch,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/coaches/${encodeURIComponent(id)}`,
+    token,
+    body: { ...patch },
+  });
+  parse(okSchema, data);
 }

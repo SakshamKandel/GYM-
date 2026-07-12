@@ -26,7 +26,17 @@ export type ApiErrorCode =
   | 'unauthorized'
   | 'not_configured'
   /** Live billing: paid tiers require a store purchase, not a self-serve pick. */
-  | 'billing_required';
+  | 'billing_required'
+  /** 403 — signed in, but not allowed (e.g. a non-coach reserving a coach-only upload kind). */
+  | 'forbidden'
+  /** POST /api/promo/redeem: the code doesn't exist, is inactive, or is the caller's own coach code. */
+  | 'invalid_code'
+  /** POST /api/promo/redeem: this account already redeemed that code. */
+  | 'already_used'
+  /** POST /api/promo/redeem: past its window or redemption cap. */
+  | 'expired'
+  /** POST /api/uploads/image: the image host (Cloudinary) isn't configured server-side. */
+  | 'image_not_configured';
 
 export class ApiError extends Error {
   readonly code: ApiErrorCode;
@@ -79,7 +89,12 @@ function serverErrorCode(raw: string): ApiErrorCode | null {
     raw === 'link_required' ||
     raw === 'invalid' ||
     raw === 'not_configured' ||
-    raw === 'billing_required'
+    raw === 'billing_required' ||
+    raw === 'forbidden' ||
+    raw === 'invalid_code' ||
+    raw === 'already_used' ||
+    raw === 'expired' ||
+    raw === 'image_not_configured'
     ? raw
     : null;
 }
@@ -145,6 +160,15 @@ async function request(opts: RequestOptions): Promise<unknown> {
 
 /** Validate a payload; a malformed body is indistinguishable from a bad server. */
 function parseAs<T>(schema: z.ZodType<T>, data: unknown): T {
+  const parsed = schema.safeParse(data);
+  if (!parsed.success) throw new ApiError('network', 'Unexpected server response');
+  return parsed.data;
+}
+
+/** Like parseAs, but for resilient-list schemas whose `.transform()` changes
+ * the input type (z.array(z.unknown()).transform(...)) — parseAs's stricter
+ * z.ZodType<T> can't type-check those. */
+function parseAsResilient<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown): T {
   const parsed = schema.safeParse(data);
   if (!parsed.success) throw new ApiError('network', 'Unexpected server response');
   return parsed.data;
@@ -496,12 +520,23 @@ export async function publishWorkoutActivity(
 
 export type BuddyTier = 'starter' | 'silver' | 'gold' | 'elite';
 
+const buddySessionParticipantSchema = z.object({
+  accountId: z.string(),
+  displayName: z.string(),
+  joinedAt: z.string(),
+});
+
+export type BuddySessionParticipant = z.infer<typeof buddySessionParticipantSchema>;
+
 const buddySessionSchema = z.object({
   id: z.string(),
   host: z.object({ id: z.string(), displayName: z.string(), tier: z.string() }),
   workoutName: z.string(),
   status: z.string(),
   startedAt: z.string(),
+  // Older deploys may omit this field entirely — default to [] so a stale
+  // server response still parses instead of failing the whole list.
+  participants: z.array(buddySessionParticipantSchema).default([]),
 });
 
 export type BuddySession = z.infer<typeof buddySessionSchema>;
@@ -920,4 +955,383 @@ export async function getPlanVideo(exerciseId: string, token: string): Promise<P
   if (res.status === 503) return { kind: 'not_configured' };
   // 401 (expired session) and anything else → fall back to the local seed.
   return { kind: 'unavailable' };
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach-assigned workouts & diet plans (SCALE-UP-PLAN §4.3)
+// GET /api/me/coach-workouts and GET /api/me/coach-diet mirror the
+// plan-videos playback lookup above: a locked 403 is a normal (not
+// exceptional) outcome that drives the UpgradePrompt affordance, so both
+// resolve to a discriminated result instead of throwing. NEVER throws —
+// any failure (offline, malformed body, unexpected status) resolves to
+// 'unavailable' so the section degrades quietly instead of crashing the
+// Train/Food tab.
+// ════════════════════════════════════════════════════════════════
+
+const coachInfoSchema = z.object({ id: z.string(), displayName: z.string() });
+export type CoachInfo = z.infer<typeof coachInfoSchema>;
+
+const coachWorkoutItemSchema = z.object({
+  exerciseId: z.string().nullable(),
+  name: z.string(),
+  sets: z.number(),
+  repRange: z.string(),
+  restSec: z.number(),
+  note: z.string().optional(),
+  imageUrl: z.string().optional(),
+});
+export type CoachWorkoutItem = z.infer<typeof coachWorkoutItemSchema>;
+
+const coachWorkoutRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  notes: z.string(),
+  position: z.number(),
+  status: z.enum(['active', 'archived']),
+  items: z.array(coachWorkoutItemSchema),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type CoachWorkoutRow = z.infer<typeof coachWorkoutRowSchema>;
+
+/** Resilient list — one unparseable row must not blank the whole section. */
+const myCoachWorkoutsOkSchema = z.object({
+  workouts: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): CoachWorkoutRow[] => {
+      const parsed = coachWorkoutRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+  coach: coachInfoSchema.nullable(),
+});
+
+const lockedSchema = z.object({ error: z.literal('locked'), requiredTier: tierSchema });
+
+export type MyCoachWorkoutsResult =
+  | { kind: 'ok'; workouts: CoachWorkoutRow[]; coach: CoachInfo | null }
+  | { kind: 'locked'; requiredTier: Tier }
+  | { kind: 'unavailable' };
+
+/** GET /api/me/coach-workouts → the Train tab's "From your coach" section. */
+export async function getMyCoachWorkouts(token: string): Promise<MyCoachWorkoutsResult> {
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(`${BASE_URL}/api/me/coach-workouts`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    return { kind: 'unavailable' };
+  }
+
+  if (res.ok) {
+    try {
+      const parsed = myCoachWorkoutsOkSchema.safeParse(await res.json());
+      if (!parsed.success) return { kind: 'unavailable' };
+      return { kind: 'ok', ...parsed.data };
+    } catch {
+      return { kind: 'unavailable' };
+    }
+  }
+
+  if (res.status === 403) {
+    try {
+      const parsed = lockedSchema.safeParse(await res.json());
+      if (parsed.success) return { kind: 'locked', requiredTier: parsed.data.requiredTier };
+    } catch {
+      // Body wasn't JSON — fall through to unavailable.
+    }
+    return { kind: 'unavailable' };
+  }
+
+  // 401 (expired session) and anything else → the section just stays hidden.
+  return { kind: 'unavailable' };
+}
+
+const coachDietItemSchema = z.object({
+  name: z.string(),
+  qty: z.string(),
+  kcal: z.number().optional(),
+  protein: z.number().optional(),
+  carbs: z.number().optional(),
+  fat: z.number().optional(),
+  note: z.string().optional(),
+});
+export type CoachDietItem = z.infer<typeof coachDietItemSchema>;
+
+const coachDietMealSchema = z.object({
+  meal: z.enum(['breakfast', 'lunch', 'dinner', 'snacks']),
+  items: z.array(coachDietItemSchema),
+});
+export type CoachDietMeal = z.infer<typeof coachDietMealSchema>;
+
+const coachDietPlanRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  notes: z.string(),
+  status: z.enum(['active', 'archived']),
+  meals: z.array(coachDietMealSchema),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type CoachDietPlanRow = z.infer<typeof coachDietPlanRowSchema>;
+
+/** Resilient list — one unparseable row must not blank the whole screen. */
+const myCoachDietOkSchema = z.object({
+  plans: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): CoachDietPlanRow[] => {
+      const parsed = coachDietPlanRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+  coach: coachInfoSchema.nullable(),
+});
+
+export type MyCoachDietResult =
+  | { kind: 'ok'; plans: CoachDietPlanRow[]; coach: CoachInfo | null }
+  | { kind: 'locked'; requiredTier: Tier }
+  | { kind: 'unavailable' };
+
+/** GET /api/me/coach-diet → the Food tab's "Coach diet plan" card / screen. */
+export async function getMyCoachDiet(token: string): Promise<MyCoachDietResult> {
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(`${BASE_URL}/api/me/coach-diet`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    return { kind: 'unavailable' };
+  }
+
+  if (res.ok) {
+    try {
+      const parsed = myCoachDietOkSchema.safeParse(await res.json());
+      if (!parsed.success) return { kind: 'unavailable' };
+      return { kind: 'ok', ...parsed.data };
+    } catch {
+      return { kind: 'unavailable' };
+    }
+  }
+
+  if (res.status === 403) {
+    try {
+      const parsed = lockedSchema.safeParse(await res.json());
+      if (parsed.success) return { kind: 'locked', requiredTier: parsed.data.requiredTier };
+    } catch {
+      // Body wasn't JSON — fall through to unavailable.
+    }
+    return { kind: 'unavailable' };
+  }
+
+  return { kind: 'unavailable' };
+}
+
+// ════════════════════════════════════════════════════════════════
+// Regional pricing catalog, promo codes, payment requests & image
+// uploads (SCALE-UP-PLAN §4.1 / §4.2 / §4.5). Same philosophy as the
+// rest of this client: zod at the boundary, typed ApiError codes.
+// ════════════════════════════════════════════════════════════════
+
+export type PriceRegion = 'NP' | 'INTL';
+
+const catalogTierSchema = z.object({
+  tier: tierSchema,
+  /** Pre-discount catalog price, minor units. */
+  amountMinor: z.number(),
+  /** Present only when the account has an active discount grant. */
+  discountedMinor: z.number().optional(),
+  discountPct: z.number().optional(),
+  discountSource: z.enum(['referral', 'promo']).optional(),
+});
+export type CatalogTier = z.infer<typeof catalogTierSchema>;
+
+const catalogSchema = z.object({
+  region: z.enum(['NP', 'INTL']),
+  currency: z.string(),
+  tiers: z.array(catalogTierSchema),
+  trialDays: z.number(),
+});
+export type SubscriptionCatalog = z.infer<typeof catalogSchema>;
+
+/**
+ * GET /api/subscription/catalog?region= → regional pricing + this account's
+ * best active discount. `region` is a raw ISO-3166 alpha-2 hint (e.g. from
+ * expo-localization) — the server clamps it to NP/INTL and persists it onto
+ * the account for next time. Requires a signed-in `token`.
+ */
+export async function getSubscriptionCatalog(
+  token: string,
+  region?: string,
+): Promise<SubscriptionCatalog> {
+  const query = region ? `?region=${encodeURIComponent(region)}` : '';
+  const data = await request({
+    method: 'GET',
+    path: `/api/subscription/catalog${query}`,
+    token,
+  });
+  return parseAs(catalogSchema, data);
+}
+
+const promoRedeemSchema = z.object({ code: z.string(), discountPct: z.number() });
+export type PromoRedeemResult = z.infer<typeof promoRedeemSchema>;
+
+/**
+ * POST /api/promo/redeem {code} → apply a promo code to this account. Throws
+ * ApiError with code 'invalid_code' | 'already_used' | 'expired' | 'unauthorized'
+ * on failure (uniform codes — the response never confirms code ownership).
+ */
+export async function redeemPromoCode(token: string, code: string): Promise<PromoRedeemResult> {
+  const data = await request({
+    method: 'POST',
+    path: '/api/promo/redeem',
+    body: { code },
+    token,
+  });
+  return parseAs(promoRedeemSchema, data);
+}
+
+// ── Nepal manual payments (eSewa/Khalti/bank) ─────────────────
+
+export type PaymentMethod = 'esewa' | 'khalti' | 'bank' | 'other';
+/** Only paid tiers may be purchased this way — 'starter' is always free. */
+export type PayableTier = 'silver' | 'gold' | 'elite';
+
+const paymentMethodSchema = z.enum(['esewa', 'khalti', 'bank', 'other']);
+const paymentStatusSchema = z.enum(['pending', 'approved', 'rejected']);
+
+export interface PaymentRequestInput {
+  tier: PayableTier;
+  months: 1 | 3 | 12;
+  method: PaymentMethod;
+  /** The `uid` returned by POST /api/uploads/image {kind:'payment_receipt'}. */
+  receiptUrl: string;
+  note?: string;
+  region?: string;
+}
+
+const createdPaymentRequestSchema = z.object({
+  id: z.string(),
+  status: z.literal('pending'),
+  amountMinor: z.number(),
+  currency: z.string(),
+});
+export type CreatedPaymentRequest = z.infer<typeof createdPaymentRequestSchema>;
+
+/**
+ * POST /api/payments/requests → submit a manual-payment receipt for review.
+ * The amount is computed SERVER-side from the live catalog (with any active
+ * discount applied) — never trusted from the client.
+ */
+export async function submitPaymentRequest(
+  input: PaymentRequestInput,
+  token: string,
+): Promise<CreatedPaymentRequest> {
+  const data = await request({
+    method: 'POST',
+    path: '/api/payments/requests',
+    token,
+    body: { ...input },
+  });
+  return parseAs(createdPaymentRequestSchema, data);
+}
+
+const paymentRequestRowSchema = z.object({
+  id: z.string(),
+  tier: tierSchema,
+  months: z.number(),
+  amountMinor: z.number(),
+  currency: z.string(),
+  method: paymentMethodSchema,
+  status: paymentStatusSchema,
+  reviewNote: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type PaymentRequestRow = z.infer<typeof paymentRequestRowSchema>;
+
+/** Resilient list: an unparseable row is dropped rather than failing the fetch. */
+const paymentRequestListSchema = z.object({
+  requests: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): PaymentRequestRow[] => {
+      const parsed = paymentRequestRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/** GET /api/payments/requests → the caller's own request history, newest first. */
+export async function getPaymentRequests(token: string): Promise<PaymentRequestRow[]> {
+  const data = await request({ method: 'GET', path: '/api/payments/requests', token });
+  return parseAsResilient(paymentRequestListSchema, data).requests;
+}
+
+// ── Image uploads (direct-to-Cloudinary, mirrors createVideo's handshake) ──
+
+export type ImageUploadKind =
+  | 'progress_photo'
+  | 'payment_receipt'
+  | 'application_avatar'
+  | 'coach_avatar'
+  | 'custom_exercise'
+  | 'diet_item';
+
+const imageUploadReservationSchema = z.object({
+  uploadUrl: z.string(),
+  fields: z.record(z.string(), z.string()).optional(),
+  uid: z.string(),
+  /** Present only for 'public'-access kinds (avatars, exercise/diet images). */
+  deliveryUrl: z.string().optional(),
+});
+export type ImageUploadReservation = z.infer<typeof imageUploadReservationSchema>;
+
+/**
+ * POST /api/uploads/image {kind} → reserve a direct-creator IMAGE upload slot.
+ * 'forbidden' when `kind` requires a coach role the caller doesn't hold;
+ * 'image_not_configured' (503) when the image host isn't set up server-side.
+ */
+export async function reserveImageUpload(
+  token: string,
+  kind: ImageUploadKind,
+): Promise<ImageUploadReservation> {
+  const data = await request({
+    method: 'POST',
+    path: '/api/uploads/image',
+    token,
+    body: { kind },
+  });
+  return parseAs(imageUploadReservationSchema, data);
+}
+
+/** Minimal file descriptor RN's FormData accepts as a multipart part. */
+export interface PickedFile {
+  uri: string;
+  name: string;
+  type: string;
+}
+
+/**
+ * Uploads picked file bytes straight to a reserved `uploadUrl` (bytes never
+ * pass through our API) — the same multipart handshake
+ * features/staff/api.ts's createVideo flow uses: every `fields` entry first,
+ * then the file under `file`. Throws ApiError('network') on any transport or
+ * host failure so the caller can retry without re-reserving.
+ */
+export async function uploadImageAsset(
+  reservation: ImageUploadReservation,
+  file: PickedFile,
+): Promise<void> {
+  const form = new FormData();
+  if (reservation.fields) {
+    for (const [key, value] of Object.entries(reservation.fields)) form.append(key, value);
+  }
+  form.append('file', { uri: file.uri, name: file.name, type: file.type } as unknown as Blob);
+
+  let res: Response;
+  try {
+    res = await fetch(reservation.uploadUrl, { method: 'POST', body: form });
+  } catch {
+    throw new ApiError('network', "Couldn't reach the upload host");
+  }
+  if (!res.ok) throw new ApiError('network', 'The file upload failed');
+  await res.json().catch(() => null);
 }

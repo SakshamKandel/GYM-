@@ -289,6 +289,10 @@ export const accounts = pgTable('accounts', {
   // Lives here (not account_profiles) beside the other server-authoritative
   // identity flags: account_profiles rows only exist after a profile sync.
   publicBoardHidden: boolean('public_board_hidden').notNull().default(false),
+  // ISO-3166 alpha-2 (e.g. 'NP', 'US'). Set from the client's expo-localization
+  // region hint at login/me refresh; drives regional pricing default + admin
+  // analytics. Nullable — unknown until the client sends a hint.
+  country: text('country'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -594,6 +598,12 @@ export const coachProfiles = pgTable('coach_profiles', {
   displayName: text('display_name').notNull().default(''),
   bio: text('bio').notNull().default(''),
   avatarUrl: text('avatar_url'),
+  // Seniority badge (NOT a money/billing tier — that's accounts.tier). Set to
+  // 'silver' on coach-application approval; admin can change anytime, or a
+  // coach can request an upgrade via coach_tier_requests.
+  coachTier: text('coach_tier', { enum: ['silver', 'gold', 'elite'] })
+    .notNull()
+    .default('silver'),
   /** One-line pitch under the name ("Hypertrophy coach · 8 yrs"). */
   headline: text('headline').notNull().default(''),
   /** Training specialties from the shared COACH_SPECIALTIES catalog. */
@@ -1046,4 +1056,410 @@ export const coachPicks = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('coach_picks_coach_month').on(t.coachId, t.monthKey)],
+);
+
+/**
+ * Self-serve coach applications (SCALE-UP-PLAN §1.4). Any member may apply
+ * once — one non-rejected application per account is route-enforced (same
+ * pattern as coach_requests: no partial-unique constraint here). Free-text
+ * fields (bio, achievements) are PII-masked before storage. Admin approval
+ * upserts coach_profiles from these fields (incl. avatarUrl), grants
+ * `admins.role = 'coach'`, and generates the coach's promo code.
+ */
+export const coachApplications = pgTable(
+  'coach_applications',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    displayName: text('display_name').notNull(),
+    headline: text('headline').notNull().default(''),
+    bio: text('bio').notNull().default(''),
+    yearsExperience: integer('years_experience').notNull().default(0),
+    specialties: jsonb('specialties').$type<string[]>().notNull().default([]),
+    certifications: jsonb('certifications').$type<CoachCertification[]>().notNull().default([]),
+    achievements: jsonb('achievements').$type<string[]>().notNull().default([]),
+    avatarUrl: text('avatar_url'),
+    status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+      .notNull()
+      .default('pending'),
+    reviewNote: text('review_note'),
+    decidedBy: text('decided_by').references(() => accounts.id, { onDelete: 'set null' }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('coach_applications_account_created').on(t.accountId, t.createdAt),
+    index('coach_applications_status').on(t.status, t.createdAt),
+  ],
+);
+
+/**
+ * Coach-requested seniority-tier upgrade (silver→gold→elite is a badge, not
+ * money — see coach_profiles.coachTier). One PENDING request per coach is
+ * route-enforced, same pattern as coach_applications.
+ */
+export const coachTierRequests = pgTable(
+  'coach_tier_requests',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    requestedTier: text('requested_tier', { enum: ['silver', 'gold', 'elite'] }).notNull(),
+    note: text('note').notNull().default(''),
+    status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+      .notNull()
+      .default('pending'),
+    decidedBy: text('decided_by').references(() => accounts.id, { onDelete: 'set null' }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('coach_tier_requests_coach_status').on(t.coachId, t.status, t.createdAt)],
+);
+
+/**
+ * Discount codes. Every VERIFIED coach auto-gets one code (ownerCoachId set)
+ * at a fixed 30% discount / 30% commission; admins can also mint "house" codes
+ * (ownerCoachId null, any discountPct, zero commission). `code` is always
+ * stored uppercase (see logic/promo.ts normalizePromoCode/generatePromoCode).
+ */
+export const promoCodes = pgTable(
+  'promo_codes',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    code: text('code').notNull().unique(),
+    // set null (not cascade): codes and their redemption history are financial
+    // records that must survive a coach account deletion.
+    ownerCoachId: text('owner_coach_id').references(() => accounts.id, { onDelete: 'set null' }),
+    discountPct: integer('discount_pct').notNull(),
+    commissionPct: integer('commission_pct').notNull().default(0),
+    active: boolean('active').notNull().default(true),
+    maxRedemptions: integer('max_redemptions'),
+    redemptionCount: integer('redemption_count').notNull().default(0),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    createdBy: text('created_by').references(() => accounts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('promo_codes_owner_coach').on(t.ownerCoachId)],
+);
+
+/**
+ * One redemption per (code, account) — starts 'reserved' at redeem time and
+ * flips to 'applied' once a paid grant actually lands and
+ * settlePromoOnPurchase runs (purchaseAmountMinor/currency/commissionMinor
+ * filled in then; referral-sourced grants never touch this table).
+ */
+export const promoRedemptions = pgTable(
+  'promo_redemptions',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    codeId: text('code_id')
+      .notNull()
+      .references(() => promoCodes.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: ['reserved', 'applied'] })
+      .notNull()
+      .default('reserved'),
+    purchaseAmountMinor: integer('purchase_amount_minor'),
+    currency: text('currency'),
+    commissionMinor: integer('commission_minor'),
+    appliedAt: timestamp('applied_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('promo_redemptions_code_account').on(t.codeId, t.accountId)],
+);
+
+/**
+ * Best-active-discount-wins ledger the pricing catalog reads at fetch time.
+ * Only one 'active' grant per account matters — redeeming a new code
+ * supersedes older active grants to 'expired' (POST /api/promo/redeem); a
+ * purchase consumes the winning grant to 'consumed'. Referral joins insert a
+ * pair of these (source 'referral', no promoCodeId) per SCALE-UP-PLAN §1.3.
+ */
+export const discountGrants = pgTable(
+  'discount_grants',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: ['referral', 'promo'] }).notNull(),
+    promoCodeId: text('promo_code_id').references(() => promoCodes.id, { onDelete: 'set null' }),
+    pct: integer('pct').notNull(),
+    status: text('status', { enum: ['active', 'consumed', 'expired'] })
+      .notNull()
+      .default('active'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('discount_grants_account_status').on(t.accountId, t.status)],
+);
+
+/**
+ * Append-only per-coach wallet ledger — balance = SUM(amountMinor) per coach
+ * per currency (no materialized balance column); amountMinor is negative for
+ * payouts. Idempotency for commission credits comes from the plain unique
+ * index below: Postgres never treats two NULLs as equal, so manual
+ * adjustments/payouts (sourceType/sourceId both null) never collide with each
+ * other — only a repeated concrete (sourceType, sourceId) pair does, which is
+ * exactly the "settle this redemption once" guarantee settlePromoOnPurchase
+ * needs. No WHERE-partial index required.
+ */
+export const walletLedger = pgTable(
+  'wallet_ledger',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    // restrict (not cascade): money history must never vanish with an account
+    // row; coaches with ledger entries can only be suspended, not hard-deleted.
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'restrict' }),
+    type: text('type', { enum: ['commission', 'adjustment', 'payout'] }).notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    currency: text('currency').notNull(),
+    sourceType: text('source_type'), // e.g. 'promo_redemption' | 'admin'
+    sourceId: text('source_id'),
+    note: text('note'),
+    createdBy: text('created_by').references(() => accounts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('wallet_ledger_coach_created').on(t.coachId, t.createdAt),
+    uniqueIndex('wallet_ledger_source').on(t.sourceType, t.sourceId),
+  ],
+);
+
+/**
+ * Idempotency ledger for the RevenueCat webhook (apps/web .../revenuecat/route.ts).
+ * RevenueCat delivers at-least-once (it retries on timeout even after a prior
+ * attempt succeeded), so the SAME event.id can arrive twice. The route inserts
+ * the event id here before running purchase settlement; onConflictDoNothing
+ * makes a redelivery a no-op instead of re-consuming whatever discount grant
+ * happens to be active at redelivery time.
+ */
+export const revenuecatEvents = pgTable('revenuecat_events', {
+  eventId: text('event_id').primaryKey(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Admin-editable regional pricing catalog. GET /api/subscription/catalog
+ * resolves a region then reads the (region, tier) row here, falling back to
+ * DEFAULT_TIER_PRICES in @gym/shared when no row exists yet (pre-seed safe).
+ * Amounts are minor units (paisa/cents) — see logic/pricing.ts.
+ */
+export const tierPrices = pgTable(
+  'tier_prices',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    region: text('region', { enum: ['NP', 'INTL'] }).notNull(),
+    tier: text('tier', { enum: ['starter', 'silver', 'gold', 'elite'] }).notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    currency: text('currency').notNull(),
+    active: boolean('active').notNull().default(true),
+    updatedBy: text('updated_by').references(() => accounts.id, { onDelete: 'set null' }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('tier_prices_region_tier').on(t.region, t.tier)],
+);
+
+/**
+ * Nepal manual-payment queue (eSewa/Khalti/bank) — the only paid path for NP
+ * until store billing exists (works in both preview and live BILLING_MODE).
+ * amountMinor is computed server-side from the catalog (with any active
+ * discount_grant applied) at submit time — never trusted from the client.
+ * Admin approve runs a dated setAccountTier for the window + the promo
+ * commission hook; reject just records reviewNote.
+ */
+export const paymentRequests = pgTable(
+  'payment_requests',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    tier: text('tier', { enum: ['starter', 'silver', 'gold', 'elite'] }).notNull(),
+    months: integer('months').notNull(),
+    region: text('region', { enum: ['NP', 'INTL'] }).notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    currency: text('currency').notNull(),
+    method: text('method', { enum: ['esewa', 'khalti', 'bank', 'other'] }).notNull(),
+    receiptUrl: text('receipt_url').notNull(),
+    note: text('note'),
+    promoCodeId: text('promo_code_id').references(() => promoCodes.id, { onDelete: 'set null' }),
+    status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+      .notNull()
+      .default('pending'),
+    reviewNote: text('review_note'),
+    decidedBy: text('decided_by').references(() => accounts.id, { onDelete: 'set null' }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('payment_requests_status_created').on(t.status, t.createdAt)],
+);
+
+/**
+ * One exercise line in a coach-assigned workout. exerciseId is optional —
+ * custom entries have no local-library match, matching the synced_sets
+ * pattern of not FK'ing the unseeded server `exercises` table.
+ */
+export interface CoachAssignedWorkoutItem {
+  exerciseId: string | null;
+  name: string;
+  sets: number;
+  repRange: string;
+  restSec: number;
+  note?: string;
+  imageUrl?: string;
+}
+
+/**
+ * Coach-assigned exercise program for one client (SCALE-UP-PLAN §1.2 —
+ * `coach_workouts` entitlement, silver+, AND an active coach assignment
+ * checked separately in the route, not via tier). `items` is the ordered
+ * exercise list rendered on the client's Train tab.
+ */
+export const coachAssignedWorkouts = pgTable(
+  'coach_assigned_workouts',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    clientId: text('client_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    notes: text('notes').notNull().default(''),
+    position: integer('position').notNull().default(0),
+    status: text('status', { enum: ['active', 'archived'] })
+      .notNull()
+      .default('active'),
+    items: jsonb('items').$type<CoachAssignedWorkoutItem[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('coach_assigned_workouts_client_status').on(t.clientId, t.status),
+    index('coach_assigned_workouts_coach_client').on(t.coachId, t.clientId),
+  ],
+);
+
+/** One food line item within a meal of a coach-assigned diet plan. */
+export interface CoachDietPlanItem {
+  name: string;
+  qty: string;
+  kcal?: number;
+  protein?: number;
+  carbs?: number;
+  fat?: number;
+  note?: string;
+}
+
+/** One meal (breakfast/lunch/dinner/snacks) in a coach-assigned diet plan. */
+export interface CoachDietPlanMeal {
+  meal: 'breakfast' | 'lunch' | 'dinner' | 'snacks';
+  items: CoachDietPlanItem[];
+}
+
+/**
+ * Coach-assigned diet plan for one client (SCALE-UP-PLAN §1.2 — `coach_diet`
+ * entitlement, gold+, AND an active coach assignment checked separately in
+ * the route). Same shape/index conventions as coach_assigned_workouts.
+ */
+export const coachDietPlans = pgTable(
+  'coach_diet_plans',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    clientId: text('client_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    notes: text('notes').notNull().default(''),
+    status: text('status', { enum: ['active', 'archived'] })
+      .notNull()
+      .default('active'),
+    meals: jsonb('meals').$type<CoachDietPlanMeal[]>().notNull().default([]),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('coach_diet_plans_client_status').on(t.clientId, t.status),
+    index('coach_diet_plans_coach_client').on(t.coachId, t.clientId),
+  ],
+);
+
+/**
+ * Friend-to-friend DMs on an accepted buddy_links pair. No PII masking here
+ * (mutually-accepted contacts, per SCALE-UP-PLAN §6.4) — body is
+ * trimmed/length-bounded at the route boundary instead. `readAt` null = still
+ * unread by the recipient.
+ */
+export const buddyMessages = pgTable(
+  'buddy_messages',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    linkId: text('link_id')
+      .notNull()
+      .references(() => buddyLinks.id, { onDelete: 'cascade' }),
+    senderAccountId: text('sender_account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    body: text('body').notNull(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('buddy_messages_link_created').on(t.linkId, t.createdAt)],
+);
+
+/**
+ * Member-captured progress photos (silver+ entitlement). `imageUrl` points at
+ * an 'authenticated'-delivery Cloudinary asset — always resolved to a signed
+ * URL per request, same pattern as plan_videos, never stored/served public.
+ */
+export const progressPhotos = pgTable(
+  'progress_photos',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    takenOn: date('taken_on', { mode: 'string' }).notNull(),
+    imageUrl: text('image_url').notNull(),
+    note: text('note').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('progress_photos_account_taken').on(t.accountId, t.takenOn)],
 );

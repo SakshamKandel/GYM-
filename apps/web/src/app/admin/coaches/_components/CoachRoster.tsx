@@ -2,8 +2,10 @@
 
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { Badge, EmptyState, SearchField } from '@/components/console';
+import { Badge, EmptyState, SearchField, TierChip } from '@/components/console';
 import { CoachDetail } from './CoachDetail';
+
+export type CoachTier = 'silver' | 'gold' | 'elite';
 
 export interface CoachSummary {
   id: string;
@@ -12,6 +14,10 @@ export interface CoachSummary {
   coachName: string | null;
   acceptingClients: boolean | null;
   isActive: boolean | null;
+  /** Seniority badge (SCALE-UP-PLAN §1.4) — not a money tier. */
+  coachTier: CoachTier;
+  /** Max active clients this coach will take. */
+  capacity: number;
   activeClients: number;
 }
 
@@ -22,6 +28,14 @@ export interface ClientAssignment {
   displayName: string;
   tier: string;
   assignedAt: string | null;
+}
+
+/** A pending coach_tier_requests row awaiting admin decision. */
+export interface TierRequest {
+  id: string;
+  requestedTier: CoachTier;
+  note: string;
+  createdAt: string;
 }
 
 /**
@@ -36,9 +50,13 @@ export interface ClientAssignment {
 export function CoachRoster({
   coaches,
   clientsByCoach,
+  tierRequestsByCoach,
+  canEdit,
 }: {
   coaches: CoachSummary[];
   clientsByCoach: Record<string, ClientAssignment[]>;
+  tierRequestsByCoach: Record<string, TierRequest[]>;
+  canEdit: boolean;
 }) {
   const router = useRouter();
   const [query, setQuery] = useState('');
@@ -163,6 +181,19 @@ export function CoachRoster({
                     </div>
                     <div
                       style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        marginBottom: 2,
+                      }}
+                    >
+                      <TierChip tier={c.coachTier} />
+                      {(tierRequestsByCoach[c.id]?.length ?? 0) > 0 ? (
+                        <Badge tone="warning">tier request</Badge>
+                      ) : null}
+                    </div>
+                    <div
+                      style={{
                         fontSize: 12,
                         color: 'var(--gt-text-dim)',
                         overflow: 'hidden',
@@ -199,6 +230,8 @@ export function CoachRoster({
           key={selected.id}
           coach={selected}
           clients={clientsByCoach[selected.id] ?? []}
+          tierRequests={tierRequestsByCoach[selected.id] ?? []}
+          canEdit={canEdit}
           onChanged={() => router.refresh()}
         />
       ) : (

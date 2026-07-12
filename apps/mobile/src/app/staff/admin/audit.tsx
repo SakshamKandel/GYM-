@@ -35,15 +35,23 @@ import { useAuth } from '../../../state/auth';
  * charcoal entry rows separated by gaps (no hairline dividers, no borders).
  */
 
-/** Common audit actions surfaced as one-tap filter chips (server free-text). */
+/**
+ * One-tap filter chips. `getAudit`'s `action` param is an EXACT match against
+ * `audit_log.action` (server: `eq(auditLog.action, action)`, not a prefix/
+ * substring test) — so each chip must send one real, fully-qualified action
+ * string a `logAudit(...)` call site actually writes, not a category guess.
+ * Sourced from the call sites in apps/web/src (coach.assign, roles.grant,
+ * subscription.override, account.suspend, content.video.create) plus the
+ * promo-economy work's coach.application.approve.
+ */
 const ACTION_FILTERS: { key: string; label: string }[] = [
   { key: '', label: 'All' },
-  { key: 'member', label: 'Members' },
-  { key: 'coach', label: 'Coaches' },
-  { key: 'assignment', label: 'Assignments' },
-  { key: 'video', label: 'Videos' },
-  { key: 'staff', label: 'Staff' },
-  { key: 'subscription', label: 'Tiers' },
+  { key: 'subscription.override', label: 'Tier changes' },
+  { key: 'coach.assign', label: 'Coach assigned' },
+  { key: 'coach.application.approve', label: 'Applications' },
+  { key: 'roles.grant', label: 'Roles granted' },
+  { key: 'account.suspend', label: 'Suspensions' },
+  { key: 'content.video.create', label: 'Videos added' },
 ];
 
 /** Short relative time ("3m", "2h", "5d") with an absolute fallback. */

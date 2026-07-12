@@ -13,12 +13,13 @@ export const runtime = 'nodejs';
  *
  *  - GET   → the caller's coach_profiles row (created lazily if missing so a
  *            freshly-promoted coach always has an editable row).
- *  - PATCH → update the card (displayName / bio / acceptingClients /
- *            replyWindowHours) and the portfolio (headline / specialties /
- *            certifications / achievements / yearsExperience / capacity) on
- *            the caller's OWN row only. Ownership is intrinsic: the row is keyed
- *            on accountId = principal.id, so a coach can never address anyone
- *            else's profile. Audited.
+ *  - PATCH → update the card (displayName / bio / avatarUrl /
+ *            acceptingClients / replyWindowHours) and the portfolio
+ *            (headline / specialties / certifications / achievements /
+ *            yearsExperience / capacity) on the caller's OWN row only.
+ *            Ownership is intrinsic: the row is keyed on accountId =
+ *            principal.id, so a coach can never address anyone else's
+ *            profile. Audited.
  *
  * Guarded by requirePermission('coach.user.read') — every coach holds it, and
  * super_admin passes via bypass. There is no cross-account targeting here, so
@@ -29,6 +30,10 @@ const MIN_REPLY_HOURS = 1;
 const MAX_REPLY_HOURS = 168; // one week
 const MAX_DISPLAY_NAME = 80;
 const MAX_BIO = 2000;
+const MAX_AVATAR_URL = 500;
+/** Must be an https URL (validated shape, not reachability) — from our own
+ * /api/uploads/image deliveryUrl response, never a client-typed arbitrary URL. */
+const HTTPS_URL_RE = /^https:\/\//i;
 
 /** Portfolio fields — everything here is member-visible via /api/coaches. */
 const portfolioSchema = z.object({
@@ -65,6 +70,7 @@ const PROFILE_COLUMNS = {
   acceptingClients: coachProfiles.acceptingClients,
   replyWindowHours: coachProfiles.replyWindowHours,
   isActive: coachProfiles.isActive,
+  coachTier: coachProfiles.coachTier,
 } as const;
 
 export function OPTIONS() {
@@ -123,6 +129,7 @@ export async function PATCH(req: Request) {
   const update: {
     displayName?: string;
     bio?: string;
+    avatarUrl?: string;
     acceptingClients?: boolean;
     replyWindowHours?: number;
     headline?: string;
@@ -152,6 +159,17 @@ export async function PATCH(req: Request) {
       return json({ error: 'bio_too_long' }, 400);
     }
     update.bio = body.bio;
+  }
+
+  if ('avatarUrl' in body) {
+    if (typeof body.avatarUrl !== 'string') {
+      return json({ error: 'avatarUrl_must_be_string' }, 400);
+    }
+    const url = body.avatarUrl.trim();
+    if (url.length > MAX_AVATAR_URL || !HTTPS_URL_RE.test(url)) {
+      return json({ error: 'avatarUrl_invalid' }, 400);
+    }
+    update.avatarUrl = url;
   }
 
   if ('acceptingClients' in body) {

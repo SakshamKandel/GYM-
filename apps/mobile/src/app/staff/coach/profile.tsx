@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { COACH_SPECIALTIES } from '@gym/shared';
@@ -15,15 +17,23 @@ import {
   SectionLabel,
   Screen,
   ScreenHeader,
+  Sheet,
   Stepper,
+  Tag,
 } from '../../../components/ui';
+import { toApiError, reserveImageUpload, uploadImageAsset } from '../../../lib/api/client';
 import { useAuth } from '../../../state/auth';
 import {
+  createCoachTierRequest,
   getCoachProfile,
+  getCoachTierRequests,
   updateCoachProfile,
   toStaffError,
   type CoachCertification,
   type CoachProfile,
+  type CoachTier,
+  type CoachTierRequest,
+  type RequestableCoachTier,
 } from '../../../features/staff/api';
 import { replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
 
@@ -47,6 +57,25 @@ const ACHIEVEMENT_MAX = 120;
 const ACHIEVEMENTS_MAX = 10;
 const CERT_FIELD_MAX = 80;
 const CERTS_MAX = 10;
+const UPGRADE_NOTE_MAX = 300;
+
+const COACH_TIER_LABEL: Record<CoachTier, string> = {
+  silver: 'Silver',
+  gold: 'Gold',
+  elite: 'Elite',
+};
+const COACH_TIER_COLOR: Record<CoachTier, string> = {
+  silver: colors.blue,
+  gold: colors.warning,
+  elite: colors.accent,
+};
+
+/** Tiers ABOVE `current` a coach may request — silver→[gold,elite], gold→[elite], elite→[]. */
+function upgradeTargetsFor(current: CoachTier): RequestableCoachTier[] {
+  if (current === 'silver') return ['gold', 'elite'];
+  if (current === 'gold') return ['elite'];
+  return [];
+}
 
 interface FormState {
   displayName: string;
@@ -120,6 +149,21 @@ export default function CoachProfileScreen() {
   const [achievementDraft, setAchievementDraft] = useState('');
   const [certDraft, setCertDraft] = useState({ title: '', issuer: '', year: '' });
 
+  // Avatar + coach tier live OUTSIDE FormState — both save/refresh immediately
+  // on their own actions rather than through the "Save changes" button.
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [coachTier, setCoachTier] = useState<CoachTier>('silver');
+
+  // Tier-upgrade request sheet.
+  const [tierRequests, setTierRequests] = useState<CoachTierRequest[]>([]);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const [upgradeChoice, setUpgradeChoice] = useState<RequestableCoachTier | null>(null);
+  const [upgradeNote, setUpgradeNote] = useState('');
+  const [upgradeSubmitting, setUpgradeSubmitting] = useState(false);
+  const [upgradeError, setUpgradeError] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     if (!token) {
       setLoadError('You are signed out.');
@@ -129,10 +173,17 @@ export default function CoachProfileScreen() {
     setLoadError(null);
     setLoading(true);
     try {
-      const profile = await getCoachProfile(token);
+      const [profile, requests] = await Promise.all([
+        getCoachProfile(token),
+        // Secondary data — a failure here must never blank the whole profile.
+        getCoachTierRequests(token).catch(() => []),
+      ]);
       const next = toForm(profile);
       setSaved(next);
       setForm(next);
+      setAvatarUrl(profile.avatarUrl);
+      setCoachTier(profile.coachTier);
+      setTierRequests(requests);
     } catch (err) {
       const e = toStaffError(err);
       setLoadError(
@@ -212,6 +263,101 @@ export default function CoachProfileScreen() {
     patch({ certifications: form.certifications.filter((_, i) => i !== index) });
   }
 
+  /**
+   * Pick a photo, upload it straight to the image host (uploads/image reserves
+   * the slot, uploadImageAsset ships the bytes), then PATCH avatarUrl. Saves
+   * immediately — independent of the "Save changes" button below.
+   */
+  async function pickAvatar(): Promise<void> {
+    if (!token || avatarUploading) return;
+    setAvatarError(null);
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      setAvatarError('Allow photo library access in Settings to change your photo.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.85,
+    });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    if (!asset) return;
+
+    setAvatarUploading(true);
+    try {
+      const reservation = await reserveImageUpload(token, 'coach_avatar');
+      if (!reservation.deliveryUrl) throw new Error('missing_delivery_url');
+      const ext = /\.(\w{2,4})$/.exec(asset.uri)?.[1] ?? 'jpg';
+      await uploadImageAsset(reservation, {
+        uri: asset.uri,
+        name: asset.fileName ?? `avatar.${ext}`,
+        type: asset.mimeType ?? 'image/jpeg',
+      });
+      const fresh = await updateCoachProfile({ avatarUrl: reservation.deliveryUrl }, token);
+      setAvatarUrl(fresh.avatarUrl);
+    } catch (err) {
+      const e = toApiError(err);
+      setAvatarError(
+        e.code === 'image_not_configured'
+          ? 'Photo uploads are not set up yet.'
+          : e.code === 'forbidden'
+            ? "You don't have coach access."
+            : "Couldn't update your photo. Try again.",
+      );
+    } finally {
+      setAvatarUploading(false);
+    }
+  }
+
+  const upgradeOptions = useMemo(() => upgradeTargetsFor(coachTier), [coachTier]);
+  const pendingUpgrade = tierRequests.find((r) => r.status === 'pending') ?? null;
+
+  function openUpgradeSheet(): void {
+    setUpgradeError(null);
+    setUpgradeNote('');
+    setUpgradeChoice(upgradeOptions[0] ?? null);
+    setUpgradeOpen(true);
+  }
+
+  async function submitUpgrade(): Promise<void> {
+    if (!token || !upgradeChoice || upgradeSubmitting) return;
+    setUpgradeSubmitting(true);
+    setUpgradeError(null);
+    try {
+      const id = await createCoachTierRequest(
+        upgradeChoice,
+        upgradeNote.trim() || undefined,
+        token,
+      );
+      setTierRequests((prev) => [
+        {
+          id,
+          requestedTier: upgradeChoice,
+          note: upgradeNote.trim(),
+          status: 'pending',
+          decidedAt: null,
+          createdAt: new Date().toISOString(),
+        },
+        ...prev,
+      ]);
+      setUpgradeOpen(false);
+    } catch (err) {
+      const e = toStaffError(err);
+      setUpgradeError(
+        e.code === 'already_pending'
+          ? 'You already have a pending request.'
+          : e.code === 'not_an_upgrade'
+            ? "That isn't higher than your current tier."
+            : "Couldn't send that request. Try again.",
+      );
+    } finally {
+      setUpgradeSubmitting(false);
+    }
+  }
+
   const dirty = form && saved ? isDirty(form, saved) : false;
 
   async function save(): Promise<void> {
@@ -273,7 +419,18 @@ export default function CoachProfileScreen() {
         </PressableScale>
       </Animated.View>
 
-      <ScreenHeader eyebrow="How clients see you" title="Profile" style={styles.header} />
+      <ScreenHeader
+        eyebrow="How clients see you"
+        title="Profile"
+        style={styles.header}
+        meta={
+          <Tag
+            label={COACH_TIER_LABEL[coachTier]}
+            variant="outline"
+            color={COACH_TIER_COLOR[coachTier]}
+          />
+        }
+      />
 
       {loading && form === null ? (
         <View style={styles.centerState}>
@@ -297,6 +454,72 @@ export default function CoachProfileScreen() {
         </View>
       ) : form ? (
         <Animated.View entering={enterUp(0)}>
+          <SectionLabel>Photo</SectionLabel>
+          <View style={styles.avatarRow}>
+            <View style={styles.avatarWrap}>
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.avatarImg} contentFit="cover" />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Ionicons name="person" size={32} color={colors.textDim} />
+                </View>
+              )}
+              {avatarUploading ? (
+                <View style={styles.avatarOverlay}>
+                  <ActivityIndicator color={colors.onBlock} />
+                </View>
+              ) : null}
+            </View>
+            <View style={styles.avatarText}>
+              <Button
+                label={avatarUrl ? 'Change photo' : 'Add photo'}
+                variant="secondary"
+                onPress={() => void pickAvatar()}
+                disabled={avatarUploading}
+                loading={avatarUploading}
+              />
+              {avatarError ? (
+                <AppText variant="caption" color={colors.error} style={styles.avatarErrorText}>
+                  {avatarError}
+                </AppText>
+              ) : (
+                <AppText variant="caption" color={colors.textFaint} style={styles.avatarErrorText}>
+                  Members see this on your coach card.
+                </AppText>
+              )}
+            </View>
+          </View>
+
+          {upgradeOptions.length > 0 ? (
+            <>
+              <SectionLabel>Coach tier</SectionLabel>
+              <View style={styles.tierRow}>
+                <Tag
+                  label={COACH_TIER_LABEL[coachTier]}
+                  variant="outline"
+                  color={COACH_TIER_COLOR[coachTier]}
+                />
+                {pendingUpgrade ? (
+                  <AppText variant="caption" color={colors.textDim}>
+                    {COACH_TIER_LABEL[pendingUpgrade.requestedTier]} upgrade pending review
+                  </AppText>
+                ) : (
+                  <PressableScale
+                    accessibilityRole="button"
+                    accessibilityLabel="Request a tier upgrade"
+                    onPress={openUpgradeSheet}
+                    style={styles.upgradeLink}
+                  >
+                    <AppText variant="bodyBold" color={colors.accent}>
+                      Request upgrade
+                    </AppText>
+                    <Ionicons name="chevron-forward" size={16} color={colors.accent} />
+                  </PressableScale>
+                )}
+              </View>
+            </>
+          ) : null}
+
           <SectionLabel>Display name</SectionLabel>
           <AppTextInput
             value={form.displayName}
@@ -554,6 +777,45 @@ export default function CoachProfileScreen() {
           />
         </Animated.View>
       ) : null}
+
+      <Sheet
+        visible={upgradeOpen}
+        onClose={() => setUpgradeOpen(false)}
+        title="Request a tier upgrade"
+      >
+        <AppText variant="caption" color={colors.textDim} style={styles.upgradeHint}>
+          An admin reviews every request — you can have one pending at a time.
+        </AppText>
+        <View style={styles.chips}>
+          {upgradeOptions.map((t) => (
+            <Chip
+              key={t}
+              label={COACH_TIER_LABEL[t]}
+              selected={upgradeChoice === t}
+              onPress={() => setUpgradeChoice(t)}
+            />
+          ))}
+        </View>
+        <AppTextInput
+          value={upgradeNote}
+          onChangeText={(t) => setUpgradeNote(t.slice(0, UPGRADE_NOTE_MAX))}
+          placeholder="Why should we bump your tier? (optional)"
+          multiline
+          style={styles.upgradeNoteInput}
+        />
+        {upgradeError ? (
+          <AppText variant="caption" color={colors.error} style={styles.upgradeError}>
+            {upgradeError}
+          </AppText>
+        ) : null}
+        <Button
+          label={upgradeSubmitting ? 'Sending…' : 'Send request'}
+          onPress={() => void submitUpgrade()}
+          loading={upgradeSubmitting}
+          disabled={!upgradeChoice || upgradeSubmitting}
+          style={styles.upgradeSubmitBtn}
+        />
+      </Sheet>
     </Screen>
   );
 }
@@ -569,6 +831,49 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   header: { marginBottom: spacing.sm },
+  avatarRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginBottom: spacing.sm },
+  avatarWrap: { width: 72, height: 72 },
+  avatarImg: { width: 72, height: 72, borderRadius: radius.full, backgroundColor: colors.surfaceRaised },
+  avatarFallback: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: radius.full,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: { flex: 1, gap: spacing.xs, alignItems: 'flex-start' },
+  avatarErrorText: { marginTop: 2 },
+  tierRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  upgradeLink: { flexDirection: 'row', alignItems: 'center', gap: 2, minHeight: touch.min },
+  upgradeHint: { marginBottom: spacing.md },
+  upgradeNoteInput: {
+    marginTop: spacing.md,
+    minHeight: 80,
+    paddingTop: 14,
+    textAlignVertical: 'top',
+  },
+  upgradeError: { marginTop: spacing.sm },
+  upgradeSubmitBtn: { marginTop: spacing.lg },
   bio: {
     minHeight: 120,
     paddingTop: 14,

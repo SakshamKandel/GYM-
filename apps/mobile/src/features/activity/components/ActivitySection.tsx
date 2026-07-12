@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, type Href } from 'expo-router';
 import { colors, radius, spacing } from '@gym/ui-tokens';
@@ -8,6 +8,7 @@ import {
   AppText,
   Button,
   Card,
+  Chip,
   Divider,
   enterFade,
   enterUp,
@@ -92,6 +93,10 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   controlText: { flex: 1, minWidth: 0 },
+  // Quick +/-500 corrections above the stepper amount (steps sheet, brief).
+  quickChipsRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  manualActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  manualActionButton: { flex: 1 },
   sheetButton: { marginTop: spacing.lg },
   explainer: { marginTop: spacing.lg },
   ioRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md },
@@ -396,17 +401,27 @@ function StepsSheetBody({
         />
       </View>
 
-      {activity.stepsSource === 'health-connect' ? (
-        // HC's full-day aggregate overwrites the stored total, so a manual add
-        // would silently revert — hide the control instead of faking it.
+      {activity.stepsSource === 'health-connect' ||
+      (Platform.OS === 'ios' && activity.stepsSource === 'sensor') ? (
+        // Both Health Connect (Android) and CoreMotion (iOS, pedometer.ts's
+        // syncIosDay) write an absolute full-day overwrite via repo.setSteps
+        // on every focus/foreground/watch tick, so a manual add or subtract
+        // would silently revert within seconds — hide the control instead of
+        // faking it. Only the Android sensor fallback (watchStepCount deltas
+        // via repo.addSteps) is additive and safe to correct manually.
         <AppText variant="caption" color={colors.textDim} style={styles.explainer}>
-          Steps are tracked automatically by Health Connect.
+          Steps are tracked automatically
+          {activity.stepsSource === 'health-connect' ? ' by Health Connect' : ''}.
         </AppText>
       ) : (
         <>
+          <View style={styles.quickChipsRow}>
+            <Chip label="−500" onPress={() => void activity.adjustManualSteps(-500)} />
+            <Chip label="+500" onPress={() => void activity.adjustManualSteps(500)} />
+          </View>
           <View style={styles.controlRow}>
             <View style={styles.controlText}>
-              <AppText variant="bodyBold">Add steps</AppText>
+              <AppText variant="bodyBold">Correct steps</AppText>
               <AppText variant="caption">manual entry</AppText>
             </View>
             <Stepper
@@ -419,18 +434,28 @@ function StepsSheetBody({
               onChange={setManual}
             />
           </View>
-          <Button
-            label={`Add ${grouped(manual)} steps`}
-            variant="secondary"
-            onPress={() => {
-              void activity.addManualSteps(manual);
-            }}
-            style={styles.sheetButton}
-          />
+          <View style={styles.manualActions}>
+            <Button
+              label={`Subtract ${grouped(manual)}`}
+              variant="secondary"
+              onPress={() => {
+                void activity.adjustManualSteps(-manual);
+              }}
+              style={styles.manualActionButton}
+            />
+            <Button
+              label={`Add ${grouped(manual)}`}
+              variant="secondary"
+              onPress={() => {
+                void activity.adjustManualSteps(manual);
+              }}
+              style={styles.manualActionButton}
+            />
+          </View>
         </>
       )}
 
-      {activity.supported && activity.permission !== 'granted' ? (
+      {activity.permission === 'denied' || activity.permission === 'undetermined' ? (
         <Button
           label="Enable step tracking"
           onPress={() => {

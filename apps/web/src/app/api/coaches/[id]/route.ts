@@ -40,6 +40,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       displayName: coachProfiles.displayName,
       headline: coachProfiles.headline,
       avatarUrl: coachProfiles.avatarUrl,
+      coachTier: coachProfiles.coachTier,
       specialties: coachProfiles.specialties,
       yearsExperience: coachProfiles.yearsExperience,
       acceptingClients: coachProfiles.acceptingClients,

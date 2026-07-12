@@ -22,13 +22,16 @@ import {
   Skeleton,
   Tag,
 } from '../../components/ui';
+import { CoachWorkoutsSection } from '../../features/training/components/CoachWorkoutsSection';
 import { WorkoutPreviewSheet } from '../../features/training/components/WorkoutPreviewSheet';
 import { MuscleFocusSection, muscleFocusForWorkout } from '../../features/training/components/MuscleFocusSection';
+import { useCoachWorkouts } from '../../features/training/coachWorkouts';
 import { useTrainData } from '../../features/training/hooks';
 import { estimateMinutesForExercises, estimateWorkoutMinutes } from '../../features/training/logic';
 import { pushPath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
 import { useTemplates, type CustomTemplate } from '../../features/training/templates';
+import type { CoachWorkoutRow } from '../../lib/api/client';
 import { allExercises } from '../../lib/exercises';
 import { getPlan, getPlanWorkouts, SEED_PLANS } from '../../lib/seed/plans';
 import { useProfile } from '../../state/profile';
@@ -168,6 +171,7 @@ export default function TrainScreen() {
   const update = useProfile((s) => s.update);
   const { nextWorkout, activeWorkout, loaded } = useTrainData(planId);
   const templates = useTemplates((s) => s.templates);
+  const coachWorkoutsSection = useCoachWorkouts();
 
   const plan = getPlan(planId);
   const workouts = getPlanWorkouts(planId);
@@ -210,6 +214,20 @@ export default function TrainScreen() {
         pushPath('/workout');
       } finally {
         startingTemplate.current = false;
+      }
+    })();
+  };
+
+  const startingCoachWorkout = useRef(false);
+  const startCoachWorkout = (w: CoachWorkoutRow): void => {
+    if (startingCoachWorkout.current) return;
+    startingCoachWorkout.current = true;
+    void (async () => {
+      try {
+        await useSession.getState().startFromCoachPlan(w);
+        pushPath('/workout');
+      } finally {
+        startingCoachWorkout.current = false;
       }
     })();
   };
@@ -435,9 +453,15 @@ export default function TrainScreen() {
         </PressableScale>
       </Animated.View>
 
+      {/* Coach-assigned workouts (SCALE-UP-PLAN §4.3) — sits above the plan
+          switcher; hidden entirely when there's nothing to show yet. */}
+      <Animated.View entering={enterUp(Math.min(tail + 3, 8))}>
+        <CoachWorkoutsSection section={coachWorkoutsSection} onStart={startCoachWorkout} />
+      </Animated.View>
+
       {/* Plan switcher — pill chips; selected = red fill (chips may be red,
           the one-red-BLOCK law is about cards). */}
-      <Animated.View entering={enterUp(Math.min(tail + 3, 8))}>
+      <Animated.View entering={enterUp(Math.min(tail + 4, 8))}>
         <SectionLabel>Plans</SectionLabel>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.planPills}>
           {SEED_PLANS.map((p) => (

@@ -29,6 +29,8 @@ import {
   type StaffErrorCode,
   type Tier,
 } from '../../../../features/staff/api';
+import { AssignedWorkoutsSection } from '../../../../features/staff/AssignedWorkoutsSection';
+import { DietPlanSection } from '../../../../features/staff/DietPlanSection';
 import {
   defaultCustomDateParts,
   DURATION_OPTIONS,
@@ -551,6 +553,10 @@ export default function CoachClientScreen() {
             disabled={!milestoneTitle.trim()}
           />
         </View>
+
+        {/* ── Coach-assigned programs (SCALE-UP-PLAN §4.3 / §5.2). ── */}
+        <AssignedWorkoutsSection userId={userId} token={token} />
+        <DietPlanSection userId={userId} token={token} />
 
         {/* ── End coaching — the one destructive action, at the very bottom. ── */}
         {endError ? (

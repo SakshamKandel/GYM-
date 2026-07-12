@@ -10,6 +10,8 @@ import type { CoachOption, MemberRow } from './_components/types';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const PAGE_SIZE = 50;
+
 /**
  * Roles allowed to view the member directory. Mirrors canMembers() in
  * admin/layout.tsx and the 'members.read' grant in authz.ts (super_admin +
@@ -29,13 +31,16 @@ const CAN_TIER: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_adm
 const CAN_ASSIGN: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
 
 /**
- * Loads the member directory directly via getDb — email, name, tier, status,
- * joined date, plus the account's staff role (left join admins) so the drawer
- * can rank-gate suspend/reactivate on staff accounts. Capped so the initial
- * render can't be unbounded; the table filters client-side and the API list
- * route (with ?q) backs deeper search.
+ * Loads page 1 of the member directory directly via getDb so the first paint
+ * has data with no client round-trip — email, name, tier, status, joined
+ * date, plus the account's staff role (left join admins) so the drawer can
+ * rank-gate suspend/reactivate on staff accounts. Shape MUST match GET
+ * /api/admin/members's `members` entries (createdAt as ISO string) so later
+ * client fetches (filters, "Load more") append seamlessly. Ordering is
+ * asc(accounts.email) — the same stable keyset (cursor = last row's email)
+ * the API pages on. Fetches PAGE_SIZE+1 to derive the initial cursor.
  */
-async function loadMembers(): Promise<MemberRow[]> {
+async function loadFirstPage(): Promise<{ members: MemberRow[]; cursor: string | null }> {
   const db = getDb();
   const rows = await db
     .select({
@@ -50,9 +55,14 @@ async function loadMembers(): Promise<MemberRow[]> {
     .from(accounts)
     .leftJoin(admins, eq(admins.accountId, accounts.id))
     .orderBy(asc(accounts.email))
-    .limit(200);
+    .limit(PAGE_SIZE + 1);
 
-  return rows.map((r) => ({
+  const hasMore = rows.length > PAGE_SIZE;
+  const page = hasMore ? rows.slice(0, PAGE_SIZE) : rows;
+  const last = page[page.length - 1];
+  const cursor = hasMore && last ? last.email : null;
+
+  const members: MemberRow[] = page.map((r) => ({
     id: r.id,
     email: r.email,
     displayName: r.displayName,
@@ -61,6 +71,8 @@ async function loadMembers(): Promise<MemberRow[]> {
     createdAt: r.createdAt.toISOString(),
     staffRole: r.staffRole ?? null,
   }));
+
+  return { members, cursor };
 }
 
 /**
@@ -96,12 +108,13 @@ export default async function AdminMembersPage() {
   if (!principal) redirect('/admin/login');
   if (!CAN_READ.includes(principal.role)) redirect('/admin');
 
-  const [members, coaches] = await Promise.all([loadMembers(), loadCoaches()]);
+  const [{ members, cursor }, coaches] = await Promise.all([loadFirstPage(), loadCoaches()]);
 
   return (
     <div style={{ maxWidth: 1080 }}>
       <MembersDirectory
-        members={members}
+        initialMembers={members}
+        initialCursor={cursor}
         coaches={coaches}
         callerRole={principal.role}
         canSuspend={CAN_SUSPEND.includes(principal.role)}

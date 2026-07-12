@@ -1,4 +1,9 @@
-import type { BuddyErrorCode, BuddyEvent } from '../../lib/api/client';
+import type {
+  BuddyErrorCode,
+  BuddyEvent,
+  BuddySession,
+  BuddySessionParticipant,
+} from '../../lib/api/client';
 import { addDays, toIsoDate } from '../../lib/dates';
 
 /** Pure buddy logic — no React, no network. Screens stay thin. */
@@ -180,3 +185,26 @@ export function isTrialActive(trial: { active: boolean }): boolean {
 
 /** Tiers available for trial (starter is free, no trial needed). */
 export const TRIAL_TIERS = ['silver', 'gold', 'elite'] as const;
+
+/** True when `accountId` (host or joiner) is already in this session. */
+export function isSessionParticipant(session: BuddySession, accountId: string | null): boolean {
+  if (accountId === null) return false;
+  // `participants` can be missing on sessions rehydrated from an older
+  // persisted cache (no store migration yet) — default to empty rather
+  // than crash the Buddy tab on first render after an update.
+  return (session.participants ?? []).some((p) => p.accountId === accountId);
+}
+
+/** Participants other than the host, in server order (joinedAt asc). */
+export function joinedBuddies(session: BuddySession): BuddySessionParticipant[] {
+  return (session.participants ?? []).filter((p) => p.accountId !== session.host.id);
+}
+
+/** Caption for the host's own live-session card — who's joined so far. */
+export function joinedBuddiesLabel(session: BuddySession): string {
+  const names = joinedBuddies(session).map((p) => p.displayName);
+  if (names.length === 0) return 'Waiting for a buddy to join…';
+  if (names.length === 1) return `${names[0]} joined`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} joined`;
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]} joined`;
+}

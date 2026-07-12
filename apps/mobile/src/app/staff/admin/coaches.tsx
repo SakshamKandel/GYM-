@@ -57,6 +57,8 @@ const ERR_TEXT: Record<StaffErrorCode, string> = {
   cannot_revoke_self: "You can't revoke your own access.",
   full: "That coach's roster is at capacity.",
   conflict: 'That conflicts with the current state.',
+  already_pending: 'There is already a pending request.',
+  not_an_upgrade: "That isn't higher than the current tier.",
   not_configured: 'This feature is not set up yet.',
   network: "Couldn't reach the server.",
 };

@@ -26,7 +26,6 @@ import {
   PressableScale,
   Screen,
   ScreenHeader,
-  Tag,
   enterDown,
   enterFade,
   enterUp,
@@ -54,6 +53,7 @@ import { useReminders } from '../state/reminders';
 import { useSecurity } from '../state/security';
 import { ProfileGamification } from '../features/gamification/components/ProfileGamification';
 import { useGamificationBadges } from '../features/gamification/store';
+import { getSupportUnread } from '../features/support/api';
 import { useWeeklyStreak } from '../features/streak/hooks';
 import { pushPath } from '../features/auth/nav';
 import { pushStaff, STAFF_ROUTES } from '../features/staff/nav';
@@ -389,9 +389,10 @@ export default function SettingsScreen() {
   const fontScale = useProfile((s) => s.fontScale);
   const targets = useProfile((s) => s.targets);
   const planId = useProfile((s) => s.planId);
-  // Effective tier (server-first) — gates the Priority support row below, so
-  // a paywall purchase unlocks it without waiting for a profile-store echo.
+  // Effective tier (server-first) — Elite just swaps the Support row's copy
+  // ("Priority support"); every tier may open the row (SCALE-UP-PLAN §4.4).
   const tier = useEffectiveTier();
+  const [supportUnread, setSupportUnread] = useState(0);
   const daysPerWeek = useProfile((s) => s.daysPerWeek);
   const update = useProfile((s) => s.update);
 
@@ -403,6 +404,19 @@ export default function SettingsScreen() {
   // Server-authoritative tier for the identity shield — never useProfile.tier
   // (local upgrade-only mirror, known to drift above the server's value).
   const serverTier = useAuth((s) => s.user?.tier ?? 'starter');
+
+  // Support unread badge — a plain focus fetch (SCALE-UP-PLAN §4.4),
+  // independent of any other feature's poll; getSupportUnread never throws
+  // (resolves to 0 on failure) so this can never break the settings screen.
+  useFocusEffect(
+    useCallback(() => {
+      if (authStatus !== 'signedIn' || authToken === null) {
+        setSupportUnread(0);
+        return;
+      }
+      void getSupportUnread(authToken).then(setSupportUnread);
+    }, [authStatus, authToken]),
+  );
 
   const hideGamification = useGamificationDisplay((s) => s.hideGamification);
   const setHideGamification = useGamificationDisplay((s) => s.setHideGamification);
@@ -1111,43 +1125,35 @@ export default function SettingsScreen() {
       ) : null}
 
       {/* ── Support ─────────────────────────────────────────── */}
-      {/* Coach chat moved to a prominent Home entry; support stays here. */}
+      {/* Coach chat moved to a prominent Home entry; support stays here.
+          Open to every tier (SCALE-UP-PLAN §4.4) — Elite just keeps the
+          priority-copy hero once inside; the row itself is never gated. */}
       <Animated.View entering={enterUp(5)} layout={layoutSpring}>
         <AppText variant="label" style={styles.sectionLabel}>
           Support
         </AppText>
         <View style={styles.group}>
-          {/* Priority support — Elite gated. */}
-          {hasEntitlement({ tier }, 'coach_chat') ? (
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="Priority support"
-              onPress={() => pushPath('/support')}
-              style={styles.row}
-            >
-              <IconChip icon="shield-checkmark" size={36} />
-              <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
-                Priority support
-              </AppText>
-              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-            </PressableScale>
-          ) : (
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="Priority support — Elite plan"
-              onPress={() => pushPath('/subscribe')}
-              style={styles.row}
-            >
-              <IconChip icon="shield-checkmark" size={36} />
-              <AppText style={styles.rowLabelGrow} numberOfLines={1}>
-                Priority support
-              </AppText>
-              <View style={styles.lockedValue}>
-                <Tag label="Elite" variant="dim" />
-                <Ionicons name="lock-closed" size={14} color={colors.textFaint} />
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={
+              supportUnread > 0 ? `Support, ${supportUnread} unread` : 'Support'
+            }
+            onPress={() => pushPath('/support')}
+            style={styles.row}
+          >
+            <IconChip icon="shield-checkmark" size={36} />
+            <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
+              {hasEntitlement({ tier }, 'coach_chat') ? 'Priority support' : 'Support'}
+            </AppText>
+            {supportUnread > 0 ? (
+              <View style={styles.unreadPill} accessibilityLabel={`${supportUnread} unread`}>
+                <AppText variant="label" color={colors.onBlock} tabular>
+                  {supportUnread > 9 ? '9+' : String(supportUnread)}
+                </AppText>
               </View>
-            </PressableScale>
-          )}
+            ) : null}
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+          </PressableScale>
         </View>
       </Animated.View>
 
@@ -1635,6 +1641,16 @@ const styles = StyleSheet.create({
   },
   // Trailing lock affordance for gated Elite rows (Tag + small lock icon).
   lockedValue: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  // Unread-count pill on the Support row (mirrors the buddy chat badge).
+  unreadPill: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: radius.full,
+    paddingHorizontal: 6,
+    backgroundColor: colors.blockRed,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // Mini chips (row-scale variant of ui/Chip)
   miniChip: {

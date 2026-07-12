@@ -9,7 +9,7 @@ import { computeTargets, inputToKg } from '@gym/shared';
 
 /** Pure onboarding/settings logic — no React, no IO. */
 
-export const TOTAL_STEPS = 11;
+export const TOTAL_STEPS = 12;
 
 /** Everything the wizard collects before it commits to the profile store. */
 export interface OnboardingDraft {

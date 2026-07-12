@@ -9,7 +9,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { router } from 'expo-router';
+import { router, type Href } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import type { FoodLog, Meal } from '@gym/shared';
@@ -52,6 +52,7 @@ import {
   sumKcal,
 } from '../../features/nutrition/logic';
 import { searchHref } from '../../features/nutrition/nav';
+import { useCoachDiet, type CoachDietSection } from '../../features/nutrition/coachDiet';
 import { FoodLogDetailSheet } from '../../features/nutrition/FoodLogDetailSheet';
 import { SuggestionsSection } from '../../features/nutrition/SuggestionsSection';
 import { useNutritionDay } from '../../features/nutrition/useNutritionDay';
@@ -202,6 +203,24 @@ function macroLine(protein: number, carbs: number, fat: number): string {
   return `P ${Math.round(protein)} · C ${Math.round(carbs)} · F ${Math.round(fat)}`;
 }
 
+/** The card's caption previews what /coach-diet will show — the screen itself owns the full gate. */
+function coachDietCaption(section: CoachDietSection): string {
+  switch (section.kind) {
+    case 'locked':
+      return 'Unlock with the Gold plan';
+    case 'no-coach':
+      return 'Get a coach for a custom diet plan';
+    case 'ready':
+      return section.plans.length > 0
+        ? `${section.plans.length} active plan${section.plans.length === 1 ? '' : 's'} from ${section.coach.displayName}`
+        : `${section.coach.displayName} hasn't assigned one yet`;
+    case 'error':
+      return "Couldn't load — tap to retry";
+    case 'hidden':
+      return '';
+  }
+}
+
 export default function FoodScreen() {
   const [selected, setSelected] = useState(todayIso());
   const [copying, setCopying] = useState(false);
@@ -216,6 +235,7 @@ export default function FoodScreen() {
   const targets = useProfile((s) => s.targets);
   const { loaded, logs, waterMl, marked, yesterdayLogs, addWater, deleteLog, copyLogs } =
     useNutritionDay(selected);
+  const coachDietSection = useCoachDiet();
 
   const totals = sumDayTotals(logs);
   const remaining = remainingMacros(targets, totals);
@@ -401,6 +421,28 @@ export default function FoodScreen() {
       {loaded ? (
         <Animated.View entering={enterUp(3)}>
           <SuggestionsSection remaining={remaining} date={selected} />
+        </Animated.View>
+      ) : null}
+
+      {/* Coach diet plan entry (SCALE-UP-PLAN §4.3) — the card is a light
+          teaser; /coach-diet owns the full locked/no-coach/plans gate. */}
+      {coachDietSection.kind !== 'hidden' ? (
+        <Animated.View entering={enterUp(4)}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Coach diet plan"
+            onPress={() => router.push('/coach-diet' as Href)}
+            style={styles.copyRow}
+          >
+            <IconChip icon="nutrition-outline" />
+            <View style={styles.copyInfo}>
+              <AppText variant="bodyBold">Coach diet plan</AppText>
+              <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+                {coachDietCaption(coachDietSection)}
+              </AppText>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+          </PressableScale>
         </Animated.View>
       ) : null}
 

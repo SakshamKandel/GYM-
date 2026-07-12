@@ -27,10 +27,12 @@ import { todayIso } from '../../lib/dates';
 import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
 import { resetStackTo } from '../../lib/nav';
+import { registerForPushNotificationsAsync } from '../../lib/notifications';
 import { syncProfileNow } from '../../lib/profileSync';
 import { getRepo } from '../../lib/repo';
 import { getPlan } from '../../lib/seed/plans';
 import { useProfile } from '../../state/profile';
+import { requestHealthConnectPermission, requestStepPermission } from '../activity/pedometer';
 import { CountUpStat } from './components/CountUpStat';
 import { NewieStage } from './components/NewieStage';
 import {
@@ -61,6 +63,8 @@ import {
 
 /** Steps whose OptionCards auto-advance (no bottom button). */
 const OPTION_STEPS = new Set([3, 6, 8, 9]);
+/** Permission step renders its own Allow/Later buttons — no shared footer. */
+const PERMISSION_STEP = 11;
 
 const SCRIPT: Record<number, { q: string; caption?: string }> = {
   1: { q: "I'm Newie — Greece built me to get you strong. 60 seconds of questions, then we lift." },
@@ -73,7 +77,12 @@ const SCRIPT: Record<number, { q: string; caption?: string }> = {
   8: { q: 'Now the big one — what are we chasing?' },
   9: { q: 'How active are you outside the gym?', caption: 'Workouts are counted separately.' },
   10: { q: 'How many days a week can you give me?', caption: 'Be honest — consistency beats ambition.' },
-  11: { q: "Here's your plan. The GM Method takes it from here." },
+  11: {
+    q: 'One more thing — stay on track?',
+    caption:
+      "I'll ping you when your coach replies or when you miss a day, and count your daily steps. Change this anytime in Settings.",
+  },
+  12: { q: "Here's your plan. The GM Method takes it from here." },
 };
 
 const REACT_LINES: Record<string, string> = {
@@ -97,6 +106,7 @@ export function OnboardingWizard() {
   const [reaction, setReaction] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState<string | null>(null);
+  const [permissionsBusy, setPermissionsBusy] = useState(false);
   const update = useProfile((s) => s.update);
   const completeOnboarding = useProfile((s) => s.completeOnboarding);
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -158,6 +168,28 @@ export function OnboardingWizard() {
     const name = draft.name.trim();
     setReaction(name ? `Good to meet you, ${name}.` : 'Athlete it is. I like the mystery.');
     advanceTimer.current = setTimeout(next, 850);
+  }
+
+  /**
+   * "Stay on track" step's primary CTA: ask for notification permission (the
+   * prompting variant — fires the OS dialog even though onboarding runs
+   * signed out), then step-sensor permission, then Health Connect on Android
+   * (a no-op there when the module/device doesn't support it). Never blocks
+   * progress — always advances once the requests settle, granted or not.
+   */
+  async function handleAllowPermissions(): Promise<void> {
+    if (permissionsBusy) return;
+    setPermissionsBusy(true);
+    try {
+      await registerForPushNotificationsAsync({ askIfUndetermined: true });
+      await requestStepPermission();
+      if (Platform.OS === 'android') {
+        await requestHealthConnectPermission();
+      }
+    } finally {
+      setPermissionsBusy(false);
+      next();
+    }
   }
 
   async function finish(): Promise<void> {
@@ -332,6 +364,22 @@ export function OnboardingWizard() {
             />
           </View>
         );
+      case 11:
+        return (
+          <View style={styles.permissionActions}>
+            <Button
+              label="Allow"
+              onPress={() => void handleAllowPermissions()}
+              loading={permissionsBusy}
+            />
+            <Button
+              label="Later"
+              variant="ghost"
+              disabled={permissionsBusy}
+              onPress={next}
+            />
+          </View>
+        );
       default: {
         const targets = draftTargets(draft);
         const plan = getPlan(planIdForGoal(draft.goal ?? 'muscle'));
@@ -428,7 +476,7 @@ export function OnboardingWizard() {
         </ScrollView>
 
         {/* Footer: OUTSIDE the scroll — always visible. */}
-        {OPTION_STEPS.has(step) ? null : (
+        {OPTION_STEPS.has(step) || step === PERMISSION_STEP ? null : (
           <View style={styles.footer}>
             {finishError ? (
               <AppText variant="caption" color={colors.error} style={styles.finishError}>
@@ -469,6 +517,9 @@ const styles = StyleSheet.create({
   finishError: { marginBottom: spacing.sm, textAlign: 'center' },
 
   cards: { gap: spacing.md },
+  // "Stay on track" step: Allow stacks full-width above the ghost "Later" —
+  // no shared footer, this IS the step's answer content.
+  permissionActions: { gap: spacing.sm, marginTop: spacing.xs },
   // Number steps: the big Oswald stepper sits centered in its own charcoal
   // block — flat fill, chunky corners, no border (block language).
   stepperWrap: {

@@ -2,8 +2,16 @@ import { StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText, IconChip, PressableScale, Tag } from '../../../components/ui';
-import type { CoachCardData } from '../api';
+import type { CoachCardData, CoachTier } from '../api';
 import { pushPath } from '../nav';
+
+/** Seniority badge — accent for elite, cream for gold, charcoal (dim) for
+ * silver. Tokens only; not a billing tier (see coach_profiles.coachTier). */
+function CoachTierBadge({ tier }: { tier: CoachTier }) {
+  if (tier === 'elite') return <Tag label="Elite" variant="filled" color={colors.accent} />;
+  if (tier === 'gold') return <Tag label="Gold" variant="filled" color={colors.blockCream} />;
+  return <Tag label="Silver" variant="dim" />;
+}
 
 /**
  * One coach in the discovery hub — a charcoal row card (block language:
@@ -34,6 +42,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
   },
   main: { flex: 1, gap: 2 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  nameText: { flexShrink: 1 },
   specialties: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -69,9 +79,12 @@ export function CoachCard({ coach }: { coach: CoachCardData }) {
       )}
 
       <View style={styles.main}>
-        <AppText variant="bodyBold" numberOfLines={1}>
-          {coach.displayName}
-        </AppText>
+        <View style={styles.nameRow}>
+          <AppText variant="bodyBold" numberOfLines={1} style={styles.nameText}>
+            {coach.displayName}
+          </AppText>
+          <CoachTierBadge tier={coach.coachTier} />
+        </View>
         <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
           {coach.headline}
         </AppText>

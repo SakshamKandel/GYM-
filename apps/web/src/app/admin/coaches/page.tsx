@@ -1,5 +1,11 @@
-import { accounts, admins, coachAssignments, coachProfiles } from '@gym/db';
-import { asc, eq, sql } from 'drizzle-orm';
+import {
+  accounts,
+  admins,
+  coachAssignments,
+  coachProfiles,
+  coachTierRequests,
+} from '@gym/db';
+import { asc, desc, eq, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import type { StaffRole } from '@/lib/auth';
@@ -8,6 +14,7 @@ import { staffFromCookie } from '@/lib/staffSession';
 import {
   type ClientAssignment,
   type CoachSummary,
+  type TierRequest,
   CoachRoster,
 } from './_components/CoachRoster';
 
@@ -47,6 +54,8 @@ async function loadCoaches(): Promise<CoachSummary[]> {
       coachName: coachProfiles.displayName,
       acceptingClients: coachProfiles.acceptingClients,
       isActive: coachProfiles.isActive,
+      coachTier: coachProfiles.coachTier,
+      capacity: coachProfiles.capacity,
       activeClients,
     })
     .from(admins)
@@ -62,8 +71,41 @@ async function loadCoaches(): Promise<CoachSummary[]> {
     coachName: r.coachName ?? null,
     acceptingClients: r.acceptingClients ?? null,
     isActive: r.isActive ?? null,
+    coachTier: (r.coachTier ?? 'silver') as CoachSummary['coachTier'],
+    capacity: r.capacity ?? 50,
     activeClients: Number(r.activeClients ?? 0),
   }));
+}
+
+/**
+ * Loads every PENDING coach_tier_requests row, grouped by coach — mirrors
+ * loadActiveClients below: one query, grouped client-side, so the roster can
+ * render each coach's pending request(s) without a per-coach round trip.
+ */
+async function loadPendingTierRequests(): Promise<Record<string, TierRequest[]>> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: coachTierRequests.id,
+      coachId: coachTierRequests.coachId,
+      requestedTier: coachTierRequests.requestedTier,
+      note: coachTierRequests.note,
+      createdAt: coachTierRequests.createdAt,
+    })
+    .from(coachTierRequests)
+    .where(eq(coachTierRequests.status, 'pending'))
+    .orderBy(desc(coachTierRequests.createdAt));
+
+  const byCoach: Record<string, TierRequest[]> = {};
+  for (const r of rows) {
+    (byCoach[r.coachId] ??= []).push({
+      id: r.id,
+      requestedTier: r.requestedTier as TierRequest['requestedTier'],
+      note: r.note,
+      createdAt: r.createdAt.toISOString(),
+    });
+  }
+  return byCoach;
 }
 
 /**
@@ -114,9 +156,10 @@ export default async function AdminCoachesPage() {
   if (!principal) redirect('/admin/login');
   if (!CAN_ASSIGN.includes(principal.role)) redirect('/admin');
 
-  const [coaches, clientsByCoach] = await Promise.all([
+  const [coaches, clientsByCoach, tierRequestsByCoach] = await Promise.all([
     loadCoaches(),
     loadActiveClients(),
+    loadPendingTierRequests(),
   ]);
 
   // Console-wide summary numbers for the stat row.
@@ -152,7 +195,12 @@ export default async function AdminCoachesPage() {
         <StatTile label="Assigned clients" value={assignedClients} />
       </div>
 
-      <CoachRoster coaches={coaches} clientsByCoach={clientsByCoach} />
+      <CoachRoster
+        coaches={coaches}
+        clientsByCoach={clientsByCoach}
+        tierRequestsByCoach={tierRequestsByCoach}
+        canEdit={CAN_ASSIGN.includes(principal.role)}
+      />
     </div>
   );
 }

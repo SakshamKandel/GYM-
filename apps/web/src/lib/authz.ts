@@ -39,7 +39,15 @@ export type Permission =
   | 'members.suspend' // suspend/reactivate a member account
   | 'subscription.override' // override a member's subscription tier
   | 'audit.read' // read the audit log
-  | 'roles.grant'; // grant/revoke staff roles
+  | 'roles.grant' // grant/revoke staff roles
+  | 'support.thread.read' // list/read support threads (org-wide, no ownership scoping)
+  | 'support.thread.reply' // reply into a support thread
+  | 'coach.application.review' // approve/reject coach enrollment applications + tier requests
+  | 'payments.review' // approve/reject manual payment requests
+  | 'promo.manage' // create/toggle promo codes
+  | 'pricing.manage' // edit regional tier prices
+  | 'wallet.manage' // view all wallets, record adjustments/payouts
+  | 'coach.wallet.read'; // a coach reading their OWN wallet (route self-scopes)
 
 /**
  * Hardcoded role → permission matrix. super_admin AND main_admin bypass all —
@@ -55,7 +63,8 @@ function roleHasPermission(role: StaffRole, perm: Permission): boolean {
       return (
         perm === 'coach.message.user' ||
         perm === 'coach.user.read' ||
-        perm === 'content.video.publish'
+        perm === 'content.video.publish' ||
+        perm === 'coach.wallet.read'
       );
     case 'content_admin':
       return perm === 'content.video.publish';
@@ -64,10 +73,16 @@ function roleHasPermission(role: StaffRole, perm: Permission): boolean {
         perm === 'members.read' ||
         perm === 'coach.assign' ||
         perm === 'members.suspend' ||
-        perm === 'subscription.override'
+        perm === 'subscription.override' ||
+        perm === 'coach.application.review' ||
+        perm === 'payments.review'
       );
     case 'support_admin':
-      return perm === 'members.read';
+      return (
+        perm === 'members.read' ||
+        perm === 'support.thread.read' ||
+        perm === 'support.thread.reply'
+      );
     default:
       return false;
   }

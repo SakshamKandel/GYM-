@@ -4,8 +4,10 @@ import { useAuth } from '../../state/auth';
 import {
   getCoachDirectory,
   getMyCoach,
+  getMyCoachApplication,
   getMyMilestones,
   type AssignedCoach,
+  type CoachApplication,
   type CoachCardData,
   type CoachMilestone,
   type PendingCoachRequest,
@@ -122,6 +124,77 @@ export function useMyCoach(): MyCoachData {
     request: valid ? snap.request : null,
     loaded: valid,
     reload,
+  };
+}
+
+// ── My coach application ───────────────────────────────────────
+
+export interface MyCoachApplicationData {
+  /** null = not loaded yet OR never applied — `loaded` disambiguates. */
+  application: CoachApplication | null;
+  /** True once a fetch for THIS session has resolved successfully. */
+  loaded: boolean;
+  /** The latest load failed — offer a retry (the FIRST load has no other way
+   * to leave the screen stuck on an indefinite spinner). */
+  error: boolean;
+  reload: () => void;
+  /**
+   * Optimistically sets the local snapshot right after a successful submit,
+   * without waiting on a follow-up GET. A submit's own 201 is the source of
+   * truth for "it worked" — a flaky refetch right after must never regress
+   * the screen back to a stale (e.g. still-rejected) snapshot or leave a
+   * first-time submitter looking at their own untouched form with no
+   * confirmation.
+   */
+  setApplication: (application: CoachApplication) => void;
+}
+
+export function useMyCoachApplication(): MyCoachApplicationData {
+  const status = useAuth((s) => s.status);
+  const token = useAuth((s) => s.token);
+  const [snap, setSnap] = useState<{
+    token: string;
+    application: CoachApplication | null;
+  } | null>(null);
+  const [errorToken, setErrorToken] = useState<string | null>(null);
+
+  const reload = useCallback(() => {
+    if (status !== 'signedIn' || token === null) return;
+    void (async () => {
+      try {
+        const next = await getMyCoachApplication(token);
+        if (useAuth.getState().token !== token) return;
+        setSnap({ token, application: next });
+        setErrorToken(null);
+      } catch {
+        if (useAuth.getState().token !== token) return;
+        setErrorToken(token);
+      }
+    })();
+  }, [status, token]);
+
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload]),
+  );
+
+  const setApplication = useCallback(
+    (application: CoachApplication) => {
+      if (token === null) return;
+      setSnap({ token, application });
+      setErrorToken(null);
+    },
+    [token],
+  );
+
+  const valid = snap !== null && snap.token === token;
+  return {
+    application: valid ? snap.application : null,
+    loaded: valid,
+    error: errorToken !== null && errorToken === token,
+    reload,
+    setApplication,
   };
 }
 

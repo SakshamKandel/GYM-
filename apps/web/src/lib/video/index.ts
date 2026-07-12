@@ -14,6 +14,16 @@
  * `isVideoConfigured()` is a cheap boolean check (no network) for feature-
  * gating UI or short-circuiting routes before doing work. It reflects the
  * SELECTED provider's env.
+ *
+ * `isImageConfigured()` is the image-side equivalent, BUT unlike video it is
+ * NOT selection-dependent: only Cloudinary implements images today (Cloudflare
+ * Stream is video-only, see cloudflareStream.ts), so this simply reports
+ * whether the Cloudinary env is present. A route should still catch
+ * NotConfiguredError around the real call — if VIDEO_PROVIDER is pinned to
+ * 'cf_stream' while Cloudinary keys also happen to exist, getVideoProvider()
+ * returns the Cloudflare instance and image calls will still throw even
+ * though this check reports true — this is a cheap early-exit UI hint, not
+ * the enforcement point.
  */
 
 import { CloudflareStreamProvider } from './cloudflareStream';
@@ -24,6 +34,8 @@ export type {
   VideoProvider,
   CreateUploadMeta,
   CreateUploadResult,
+  CreateImageUploadOpts,
+  CreateImageUploadResult,
 } from './types';
 export { NotConfiguredError } from './types';
 
@@ -84,4 +96,13 @@ export function isVideoConfigured(): boolean {
   return selectedProviderKind() === 'cloudinary'
     ? hasCloudinaryEnv()
     : hasCfStreamEnv();
+}
+
+/**
+ * True when the Cloudinary env (the only image-capable provider today) is
+ * present. See the module doc comment above for the selection-mismatch
+ * caveat — routes still catch NotConfiguredError around the real call.
+ */
+export function isImageConfigured(): boolean {
+  return hasCloudinaryEnv();
 }

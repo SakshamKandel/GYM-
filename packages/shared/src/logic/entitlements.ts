@@ -10,6 +10,11 @@ import type { Tier } from '../types';
  *    refresh. (The hero tier — where the coach's methodology is sold.)
  *  - ELITE: everything + 1-on-1 coach chat, video form checks, custom meal
  *    plan, priority support. (Limited seats.)
+ *
+ * SCALE-UP-PLAN §1.2: `coach_workouts` (silver+) and `coach_diet` (gold+) gate
+ * coach-assigned programs. Both ALSO require an active coach assignment,
+ * checked separately by the caller — this matrix only expresses the tier
+ * floor, not the assignment requirement.
  */
 
 export type Feature =
@@ -25,7 +30,9 @@ export type Feature =
   | 'meal_plans'
   | 'coach_chat'
   | 'form_checks'
-  | 'custom_meal_plan';
+  | 'custom_meal_plan'
+  | 'coach_workouts'
+  | 'coach_diet';
 
 const TIER_RANK: Record<Tier, number> = { starter: 0, silver: 1, gold: 2, elite: 3 };
 
@@ -43,6 +50,8 @@ const FEATURE_MIN_TIER: Record<Feature, Tier> = {
   coach_chat: 'elite',
   form_checks: 'elite',
   custom_meal_plan: 'elite',
+  coach_workouts: 'silver',
+  coach_diet: 'gold',
 };
 
 export function hasEntitlement(user: { tier: Tier }, feature: Feature): boolean {

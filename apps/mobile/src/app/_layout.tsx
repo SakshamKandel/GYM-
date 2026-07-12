@@ -77,6 +77,9 @@ export default function RootLayout() {
   // Register the device's Expo push token whenever we're signed in — this
   // effect re-runs on the signedOut→signedIn transition, so a fresh sign-in
   // registers too. Fire-and-forget: it never throws and no-ops when signed out.
+  // Default (no options) is CHECK-ONLY — it never shows an OS permission
+  // dialog on a cold start; only onboarding's "Stay on track" step and
+  // Settings reminder toggles are allowed to prompt.
   const authStatus = useAuth((s) => s.status);
   useEffect(() => {
     if (authStatus === 'signedIn') {

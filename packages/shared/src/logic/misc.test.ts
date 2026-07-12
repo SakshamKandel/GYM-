@@ -18,6 +18,17 @@ describe('entitlements (Feature Blueprint §05)', () => {
     assert.equal(hasEntitlement({ tier: 'gold' }, 'coach_chat'), false);
     assert.equal(minTierFor('coach_chat'), 'elite');
   });
+  it('coach_workouts (silver+) and coach_diet (gold+) gate on tier floor only', () => {
+    assert.equal(hasEntitlement({ tier: 'starter' }, 'coach_workouts'), false);
+    assert.equal(hasEntitlement({ tier: 'silver' }, 'coach_workouts'), true);
+    assert.equal(hasEntitlement({ tier: 'gold' }, 'coach_workouts'), true);
+    assert.equal(minTierFor('coach_workouts'), 'silver');
+
+    assert.equal(hasEntitlement({ tier: 'silver' }, 'coach_diet'), false);
+    assert.equal(hasEntitlement({ tier: 'gold' }, 'coach_diet'), true);
+    assert.equal(hasEntitlement({ tier: 'elite' }, 'coach_diet'), true);
+    assert.equal(minTierFor('coach_diet'), 'gold');
+  });
 });
 
 describe('platesFor', () => {

@@ -1,6 +1,6 @@
 import { accounts, buddyActivity, buddySessions, buddySessionParticipants } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { acceptedBuddyIds, authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
@@ -30,6 +30,11 @@ export async function GET(req: Request) {
   const buddyIds = await acceptedBuddyIds(db, me.id);
   const hostIds = [...buddyIds, me.id];
 
+  const now = new Date();
+  // Hygiene: a host that never explicitly ended a session (crash, killed app)
+  // would otherwise show as "live" forever — hide anything older than 12h.
+  const staleCutoff = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+
   const rows = await db
     .select({
       id: buddySessions.id,
@@ -47,11 +52,39 @@ export async function GET(req: Request) {
       and(
         inArray(buddySessions.hostId, hostIds),
         eq(buddySessions.status, 'active'),
+        gt(buddySessions.startedAt, staleCutoff),
       ),
     )
     .orderBy(desc(buddySessions.startedAt));
 
-  const now = new Date();
+  // Batch-fetch participants for every returned session in one query (no
+  // N+1) — host is a participant too (auto-joined on session create).
+  const sessionIds = rows.map((r) => r.id);
+  const participantRows =
+    sessionIds.length > 0
+      ? await db
+          .select({
+            sessionId: buddySessionParticipants.sessionId,
+            accountId: buddySessionParticipants.accountId,
+            displayName: accounts.displayName,
+            joinedAt: buddySessionParticipants.joinedAt,
+          })
+          .from(buddySessionParticipants)
+          .innerJoin(accounts, eq(buddySessionParticipants.accountId, accounts.id))
+          .where(inArray(buddySessionParticipants.sessionId, sessionIds))
+          .orderBy(asc(buddySessionParticipants.joinedAt))
+      : [];
+
+  const participantsBySession = new Map<
+    string,
+    Array<{ accountId: string; displayName: string; joinedAt: Date }>
+  >();
+  for (const p of participantRows) {
+    const list = participantsBySession.get(p.sessionId) ?? [];
+    list.push({ accountId: p.accountId, displayName: p.displayName, joinedAt: p.joinedAt });
+    participantsBySession.set(p.sessionId, list);
+  }
+
   const sessions = rows.map((r) => ({
     id: r.id,
     host: {
@@ -64,6 +97,7 @@ export async function GET(req: Request) {
     workoutName: r.workoutName,
     status: r.status,
     startedAt: r.startedAt,
+    participants: participantsBySession.get(r.id) ?? [],
   }));
 
   return json({ sessions }, 200);
@@ -98,19 +132,23 @@ export async function POST(req: Request) {
   const row = created[0];
   if (!row) return json({ error: 'invalid' }, 400);
 
-  // Same shape as the GET list items so clients need only one schema.
+  // Auto-join the host as a participant.
+  const participantRows = await db
+    .insert(buddySessionParticipants)
+    .values({ sessionId: row.id, accountId: me.id })
+    .returning({ joinedAt: buddySessionParticipants.joinedAt });
+  const hostJoinedAt = participantRows[0]?.joinedAt ?? new Date();
+
+  // Same shape as the GET list items (including `participants`) so clients
+  // need only one schema.
   const session = {
     id: row.id,
     host: { id: me.id, displayName: me.displayName, tier: me.tier },
     workoutName: row.workoutName,
     status: row.status,
     startedAt: row.startedAt,
+    participants: [{ accountId: me.id, displayName: me.displayName, joinedAt: hostJoinedAt }],
   };
-
-  // Auto-join the host as a participant.
-  await db
-    .insert(buddySessionParticipants)
-    .values({ sessionId: session.id, accountId: me.id });
 
   // Broadcast a live_session activity to buddies.
   const buddyIds = await acceptedBuddyIds(db, me.id);

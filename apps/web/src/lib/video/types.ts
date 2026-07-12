@@ -9,6 +9,12 @@
  *
  * Playback: `signedPlaybackUrl` mints a short-lived signed HLS URL AFTER the
  * caller has done its own tier check — never store or cache this URL.
+ *
+ * Images (SCALE-UP-PLAN §4.5): the same interface carries a parallel image
+ * upload/playback pair (`createImageUpload` / `signedImageUrl`). Today only
+ * CloudinaryProvider implements them for real — CloudflareStreamProvider is
+ * video-only and throws NotConfiguredError, since image support is orthogonal
+ * to which host serves video and callers should 503 the same way.
  */
 
 /** Metadata attached to a direct-creator-upload reservation. */
@@ -34,6 +40,38 @@ export interface CreateUploadResult {
   upload?: Record<string, string>;
 }
 
+/** Reservation opts for a direct-creator IMAGE upload. */
+export interface CreateImageUploadOpts {
+  /**
+   * Logical bucket the asset belongs to (e.g. 'progress_photo',
+   * 'coach_avatar') — routes validate this against a fixed enum; the provider
+   * treats it as an opaque folder segment (sanitized defensively).
+   */
+  kind: string;
+  /**
+   * 'public' → the asset is openly readable at `deliveryUrl` forever (avatars,
+   * exercise/diet images). 'authenticated' → no public URL is ever handed
+   * back; every read must go through `signedImageUrl` AFTER the caller's own
+   * authorization check (progress photos, payment receipts).
+   */
+  access: 'public' | 'authenticated';
+}
+
+export interface CreateImageUploadResult {
+  /** One-time URL the browser POSTs the file bytes to. */
+  uploadUrl: string;
+  /** Provider asset id — the value we persist. */
+  uid: string;
+  /** Signed form fields the browser must attach alongside the file (see CreateUploadResult.upload). */
+  fields?: Record<string, string>;
+  /**
+   * Present ONLY for access:'public' uploads — the stable, unsigned delivery
+   * URL, safe to store and render directly with no further signing. Absent
+   * for access:'authenticated' uploads; use `signedImageUrl(uid)` instead.
+   */
+  deliveryUrl?: string;
+}
+
 export interface VideoProvider {
   /** Reserve a direct-creator-upload slot; returns the browser upload URL + uid. */
   createDirectUpload(meta: CreateUploadMeta): Promise<CreateUploadResult>;
@@ -41,6 +79,10 @@ export interface VideoProvider {
   signedPlaybackUrl(uid: string): Promise<string>;
   /** Permanently delete a video by uid (idempotent — missing video is a no-op). */
   deleteVideo(uid: string): Promise<void>;
+  /** Reserve a direct-creator IMAGE upload slot (resource_type image). */
+  createImageUpload(opts: CreateImageUploadOpts): Promise<CreateImageUploadResult>;
+  /** Mint a short-lived (~2h) signed delivery URL for an authenticated-kind image uid. */
+  signedImageUrl(uid: string): Promise<string>;
 }
 
 /**

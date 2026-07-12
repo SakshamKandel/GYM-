@@ -1,15 +1,34 @@
 'use client';
 
 import { useState } from 'react';
-import { Badge, Card, CardHeader, ConfirmButton, TierChip } from '@/components/console';
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  ConfirmButton,
+  TierChip,
+} from '@/components/console';
 import { AssignClient } from './AssignClient';
-import type { ClientAssignment, CoachSummary } from './CoachRoster';
+import type {
+  ClientAssignment,
+  CoachSummary,
+  CoachTier,
+  TierRequest,
+} from './CoachRoster';
 
 type Tier = 'starter' | 'silver' | 'gold' | 'elite';
 const TIERS: readonly Tier[] = ['starter', 'silver', 'gold', 'elite'];
+const COACH_TIERS: readonly CoachTier[] = ['silver', 'gold', 'elite'];
 function asTier(t: string): Tier {
   return (TIERS as readonly string[]).includes(t) ? (t as Tier) : 'starter';
 }
+
+const REQUEST_DATE_FMT = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+});
 
 function formatAssigned(iso: string | null): string | null {
   if (!iso) return null;
@@ -34,15 +53,31 @@ function formatAssigned(iso: string | null): string | null {
 export function CoachDetail({
   coach,
   clients,
+  tierRequests,
+  canEdit,
   onChanged,
 }: {
   coach: CoachSummary;
   clients: ClientAssignment[];
+  tierRequests: TierRequest[];
+  canEdit: boolean;
   onChanged: () => void;
 }) {
   // Track the assignment id currently being ended so we can disable just its row.
   const [endingId, setEndingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Edit-coach form state, seeded from the current summary each time the
+  // selected coach changes (parent remounts this via key={coach.id}).
+  const [isActive, setIsActive] = useState(coach.isActive !== false);
+  const [coachTier, setCoachTier] = useState<CoachTier>(coach.coachTier);
+  const [capacity, setCapacity] = useState(String(coach.capacity));
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Tier-request review state: which request id is mid-decision.
+  const [decidingId, setDecidingId] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState<string | null>(null);
 
   // Ids already assigned to this coach — the search excludes them so you cannot
   // double-assign the same member.
@@ -51,6 +86,83 @@ export function CoachDetail({
   const coachLabel = coach.coachName || coach.displayName || coach.email;
   const notAccepting = coach.acceptingClients === false;
   const inactive = coach.isActive === false;
+
+  const editDirty =
+    isActive !== (coach.isActive !== false) ||
+    coachTier !== coach.coachTier ||
+    Number(capacity) !== coach.capacity;
+
+  async function saveEdit() {
+    const capacityNum = Number(capacity);
+    if (!Number.isInteger(capacityNum) || capacityNum < 0) {
+      setEditError('Capacity must be a whole number of 0 or more.');
+      return;
+    }
+    setSavingEdit(true);
+    setEditError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/coaches/${encodeURIComponent(coach.id)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            isActive,
+            coachTier,
+            capacity: capacityNum,
+          }),
+        },
+      );
+      if (!res.ok) {
+        setEditError(
+          res.status === 403
+            ? 'You are not allowed to edit coaches.'
+            : 'Could not save these changes. Try again.',
+        );
+        setSavingEdit(false);
+        return;
+      }
+      setSavingEdit(false);
+      onChanged();
+    } catch {
+      setEditError('Network error.');
+      setSavingEdit(false);
+    }
+  }
+
+  async function decideTierRequest(
+    requestId: string,
+    action: 'approve' | 'reject',
+  ) {
+    setDecidingId(requestId);
+    setRequestError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/coach-tier-requests/${encodeURIComponent(requestId)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ action }),
+        },
+      );
+      if (!res.ok) {
+        setRequestError(
+          res.status === 403
+            ? 'You are not allowed to review tier requests.'
+            : 'Could not save that decision. Try again.',
+        );
+        setDecidingId(null);
+        return;
+      }
+      setDecidingId(null);
+      onChanged();
+    } catch {
+      setRequestError('Network error.');
+      setDecidingId(null);
+    }
+  }
 
   async function endAssignment(assignmentId: string) {
     setEndingId(assignmentId);
@@ -113,6 +225,7 @@ export function CoachDetail({
           >
             {coachLabel}
           </h2>
+          <TierChip tier={coach.coachTier} />
           {inactive ? <Badge tone="neutral">inactive</Badge> : null}
           {notAccepting ? (
             <Badge tone="warning">not accepting</Badge>
@@ -123,6 +236,226 @@ export function CoachDetail({
         <div style={{ fontSize: 13, color: 'var(--gt-text-dim)', marginBottom: 18 }}>
           {coach.email}
         </div>
+
+        {canEdit ? (
+          <div
+            style={{
+              marginBottom: 20,
+              padding: 14,
+              borderRadius: 10,
+              border: '1px solid var(--gt-border)',
+            }}
+          >
+            <div
+              style={{
+                fontSize: 12,
+                letterSpacing: '0.03em',
+                textTransform: 'uppercase',
+                color: 'var(--gt-text-dim)',
+                fontFamily: 'var(--font-heading)',
+                marginBottom: 10,
+              }}
+            >
+              Edit coach
+            </div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <label
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  flex: '1 1 140px',
+                }}
+              >
+                <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                  Coach tier
+                </span>
+                <select
+                  className="gt-input"
+                  value={coachTier}
+                  onChange={(e) => setCoachTier(e.target.value as CoachTier)}
+                  disabled={savingEdit}
+                  style={{ textTransform: 'capitalize', cursor: 'pointer' }}
+                >
+                  {COACH_TIERS.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  flex: '1 1 100px',
+                }}
+              >
+                <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                  Capacity
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  className="gt-input"
+                  value={capacity}
+                  onChange={(e) => setCapacity(e.target.value)}
+                  disabled={savingEdit}
+                />
+              </label>
+
+              <label
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  flex: '1 1 100px',
+                  justifyContent: 'flex-end',
+                }}
+              >
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    fontSize: 13,
+                    cursor: savingEdit ? 'default' : 'pointer',
+                    padding: '9px 0',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isActive}
+                    disabled={savingEdit}
+                    onChange={(e) => setIsActive(e.target.checked)}
+                    style={{ accentColor: 'var(--gt-red)', cursor: 'inherit' }}
+                  />
+                  Active
+                </span>
+              </label>
+            </div>
+
+            {editError ? (
+              <div style={{ color: '#ff8178', fontSize: 13, marginTop: 10 }}>
+                {editError}
+              </div>
+            ) : null}
+
+            {editDirty ? (
+              <div style={{ marginTop: 12 }}>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={savingEdit}
+                  onClick={() => void saveEdit()}
+                >
+                  {savingEdit ? 'Saving…' : 'Save changes'}
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {tierRequests.length > 0 ? (
+          <div
+            style={{
+              marginBottom: 20,
+              padding: 14,
+              borderRadius: 10,
+              border: '1px solid var(--gt-border)',
+            }}
+          >
+            <div
+              style={{
+                fontSize: 12,
+                letterSpacing: '0.03em',
+                textTransform: 'uppercase',
+                color: 'var(--gt-text-dim)',
+                fontFamily: 'var(--font-heading)',
+                marginBottom: 10,
+              }}
+            >
+              Pending tier requests
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {tierRequests.map((r) => {
+                const busy = decidingId === r.id;
+                return (
+                  <div
+                    key={r.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      flexWrap: 'wrap',
+                      padding: '10px 12px',
+                      borderRadius: 10,
+                      border: '1px solid var(--gt-border)',
+                      opacity: busy ? 0.6 : 1,
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                          Requesting
+                        </span>
+                        <TierChip tier={r.requestedTier} />
+                      </div>
+                      {r.note ? (
+                        <div
+                          style={{
+                            fontSize: 13,
+                            marginTop: 4,
+                            color: 'var(--gt-text)',
+                          }}
+                        >
+                          &ldquo;{r.note}&rdquo;
+                        </div>
+                      ) : null}
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: 'var(--gt-text-dim)',
+                          marginTop: 4,
+                        }}
+                      >
+                        {REQUEST_DATE_FMT.format(new Date(r.createdAt))}
+                      </div>
+                    </div>
+                    {canEdit ? (
+                      <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => void decideTierRequest(r.id, 'reject')}
+                        >
+                          Reject
+                        </Button>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => void decideTierRequest(r.id, 'approve')}
+                        >
+                          {busy ? 'Saving…' : 'Approve'}
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+            {requestError ? (
+              <div style={{ color: '#ff8178', fontSize: 13, marginTop: 10 }}>
+                {requestError}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <AssignClient
           coachId={coach.id}

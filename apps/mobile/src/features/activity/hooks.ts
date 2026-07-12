@@ -68,7 +68,8 @@ export interface ActivityToday {
    */
   requestHealthConnectPermission: () => Promise<boolean>;
   refresh: () => Promise<void>;
-  addManualSteps: (n: number) => Promise<void>;
+  /** Correct today's manual total by `delta` — may be negative; sqlite clamps at 0. */
+  adjustManualSteps: (delta: number) => Promise<void>;
 }
 
 /** Raw async state — derived kcal math happens in the memo below. */
@@ -161,10 +162,11 @@ export function useActivityToday(): ActivityToday {
     setSnap(await load());
   }, [load]);
 
-  const addManualSteps = useCallback(async (n: number) => {
-    if (!Number.isFinite(n) || n <= 0) return;
+  const adjustManualSteps = useCallback(async (delta: number) => {
+    if (!Number.isFinite(delta) || delta === 0) return;
     const repo = await getRepo();
-    const total = await repo.addSteps(todayIso(), Math.round(n));
+    // Negative deltas are safe: repo.addSteps clamps the stored total at 0.
+    const total = await repo.addSteps(todayIso(), Math.round(delta));
     setSnap((s) => (s === null ? s : { ...s, steps: total }));
   }, []);
 
@@ -214,7 +216,7 @@ export function useActivityToday(): ActivityToday {
       stepsSource: snap?.source ?? 'manual-only',
       requestHealthConnectPermission,
       refresh,
-      addManualSteps,
+      adjustManualSteps,
     };
   }, [
     snap,
@@ -225,7 +227,7 @@ export function useActivityToday(): ActivityToday {
     activityLevel,
     targets,
     refresh,
-    addManualSteps,
+    adjustManualSteps,
     requestHealthConnectPermission,
   ]);
 }

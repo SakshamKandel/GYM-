@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, type Href } from 'expo-router';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { tapHaptic } from '../../lib/haptics';
+import { hasAnyBuddyUnread, useBuddyStore } from '../../features/buddy/store';
 import { useSession } from '../../features/training/session';
 
 /**
@@ -25,7 +26,9 @@ import { useSession } from '../../features/training/session';
  * slides between tabs on a spring, squashing along its travel axis while it
  * moves and settling with a soft overshoot (fluid-drop feel). Icon ink
  * crossfades in sync with the disc's arrival. Long-press keeps the per-tab
- * quick action. A small red dot on Train marks a live workout session.
+ * quick action. A small red dot marks a live workout session on Train, and
+ * an unread friend DM on Buddy (fed by the buddy store's 12s poll / push
+ * refresh — see features/buddy/hooks.ts).
  * No glow, no border — the pill separates from the canvas by fill contrast
  * alone (brief §9). Honors the system reduce-motion setting.
  */
@@ -144,12 +147,24 @@ interface TabItemProps {
   icons: { active: ComponentProps<typeof Ionicons>['name']; idle: ComponentProps<typeof Ionicons>['name'] };
   label: string;
   showLiveDot: boolean;
+  /** What the dot means, for the accessibility label (e.g. "workout in
+   * progress", "unread messages") — only read when showLiveDot is true. */
+  dotHint: string;
   reduceMotion: boolean;
   onPress: () => void;
   onLongPress: () => void;
 }
 
-function TabItem({ focused, icons, label, showLiveDot, reduceMotion, onPress, onLongPress }: TabItemProps) {
+function TabItem({
+  focused,
+  icons,
+  label,
+  showLiveDot,
+  dotHint,
+  reduceMotion,
+  onPress,
+  onLongPress,
+}: TabItemProps) {
   const active = useSharedValue(focused ? 1 : 0);
   const pressed = useSharedValue(0);
 
@@ -175,7 +190,7 @@ function TabItem({ focused, icons, label, showLiveDot, reduceMotion, onPress, on
   return (
     <Pressable
       accessibilityRole="tab"
-      accessibilityLabel={showLiveDot ? `${label}, workout in progress` : label}
+      accessibilityLabel={showLiveDot ? `${label}, ${dotHint}` : label}
       accessibilityState={{ selected: focused }}
       onPress={onPress}
       onLongPress={onLongPress}
@@ -237,6 +252,8 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
   const reduceMotion = useReducedMotion();
   // Live-workout marker on the Train tab — visible from any other tab.
   const sessionActive = useSession((s) => s.status === 'active');
+  // Unread friend-DM marker on the Buddy tab — visible from any other tab.
+  const buddyUnread = useBuddyStore((s) => hasAnyBuddyUnread(s.unread));
 
   return (
     <View
@@ -263,7 +280,11 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
               focused={focused}
               icons={icons}
               label={label}
-              showLiveDot={route.name === 'train' && sessionActive}
+              showLiveDot={
+                (route.name === 'train' && sessionActive) ||
+                (route.name === 'buddy' && buddyUnread)
+              }
+              dotHint={route.name === 'buddy' ? 'unread messages' : 'workout in progress'}
               reduceMotion={reduceMotion}
               onPress={() => {
                 const event = navigation.emit({

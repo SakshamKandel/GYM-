@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { billingMode } from '@/lib/billing';
 import { json, preflight, readJson } from '@/lib/http';
+import { resolveCatalogAmount, settlePromoOnPurchase } from '@/lib/promoEconomy';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { setAccountTier } from '@/lib/tier';
 
@@ -70,6 +71,22 @@ export async function POST(req: Request) {
     startsAt: new Date(),
     expiresAt: null,
   });
+
+  // Promo/referral settlement (SCALE-UP-PLAN §4.1): a PAID-tier self-serve
+  // pick consumes the account's active discount grant and closes out any
+  // referral. No real money moves in preview mode, so the catalog's base
+  // price stands in for the sale amount — but settlePromoOnPurchase itself
+  // never writes a real wallet_ledger commission credit for mode 'preview'
+  // (that would be free, farmable payable balance). Best-effort — never fail
+  // an already-successful tier grant for this.
+  if (tier !== 'starter') {
+    try {
+      const { amountMinor, currency } = await resolveCatalogAmount(user.id, tier);
+      await settlePromoOnPurchase(user.id, tier, amountMinor, currency, 'preview');
+    } catch {
+      // Best-effort — see comment above.
+    }
+  }
 
   // Same serializer as GET /api/me: re-resolve the token so the response is
   // the post-write effective user.

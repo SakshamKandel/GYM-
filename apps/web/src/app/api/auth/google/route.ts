@@ -1,13 +1,50 @@
-import { accounts } from '@gym/db';
+import { accounts, referrals } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { createSession } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { allowedGoogleClientIds, verifyGoogleIdToken } from '@/lib/google';
 import { json, preflight, readJson } from '@/lib/http';
 import { verifyPassword } from '@/lib/password';
+import { grantDiscount } from '@/lib/promoEconomy';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+
+/** Referral reward window (SCALE-UP-PLAN §1.3 / §7.2). */
+const REFERRAL_DISCOUNT_PCT = 20;
+const REFERRAL_GRANT_DAYS = 90;
+
+/**
+ * Same wiring as auth/register — NEW-ACCOUNT path only (step 3 below). If
+ * anyone invited this email, flip their still-'pending' referral(s) to
+ * 'joined' and grant BOTH parties a 20%/90-day discount. Best-effort: a
+ * failure here must never fail the sign-in itself.
+ */
+async function wireReferralsForNewAccount(accountId: string, email: string): Promise<void> {
+  try {
+    const db = getDb();
+    const joined = await db
+      .update(referrals)
+      .set({ inviteeId: accountId, status: 'joined' })
+      .where(and(eq(referrals.inviteeEmail, email), eq(referrals.status, 'pending')))
+      .returning({ referrerId: referrals.referrerId });
+
+    if (joined.length === 0) return;
+
+    const expiresAt = new Date(Date.now() + REFERRAL_GRANT_DAYS * 24 * 60 * 60 * 1000);
+    await grantDiscount({ accountId, source: 'referral', pct: REFERRAL_DISCOUNT_PCT, expiresAt });
+    for (const row of joined) {
+      await grantDiscount({
+        accountId: row.referrerId,
+        source: 'referral',
+        pct: REFERRAL_DISCOUNT_PCT,
+        expiresAt,
+      });
+    }
+  } catch {
+    // Best-effort — never fail sign-in for this.
+  }
+}
 
 /**
  * POST /api/auth/google — exchange a verified Google ID token for a session.
@@ -128,6 +165,7 @@ export async function POST(req: Request) {
   }
 
   // 3. First sign-in — create a Google-only account (passwordHash stays null).
+  let createdNewAccount = false;
   if (!user) {
     try {
       user = (
@@ -140,9 +178,12 @@ export async function POST(req: Request) {
           })
           .returning(publicColumns)
       )[0];
+      createdNewAccount = user !== undefined;
     } catch {
       // Unique race: the same sub/email landed between the checks above and
-      // this insert — re-read by sub.
+      // this insert — re-read by sub. Not treated as a new-account creation
+      // here: the concurrent request that actually won the insert is the one
+      // that runs the referral wiring below, so this request must not repeat it.
       user = (
         await db
           .select(publicColumns)
@@ -154,6 +195,10 @@ export async function POST(req: Request) {
   }
 
   if (!user) return json({ error: 'bad_credentials' }, 401);
+
+  if (createdNewAccount) {
+    await wireReferralsForNewAccount(user.id, user.email);
+  }
 
   const token = await createSession(user.id);
   // Strip the internal expiry column and return the EFFECTIVE tier (a lapsed

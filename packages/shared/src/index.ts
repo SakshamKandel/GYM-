@@ -6,6 +6,8 @@ export * from './logic/pr';
 export * from './logic/trend';
 export * from './logic/entitlements';
 export * from './logic/gmMethod';
+export * from './logic/pricing';
+export * from './logic/promo';
 export * from './logic/greeceReply';
 export * from './logic/projection';
 export * from './logic/streak';
