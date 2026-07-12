@@ -1,6 +1,12 @@
 packages:
   - apps/*
   - packages/*
+# @shopify/react-native-skia downloads its prebuilt native libs (libskia.a &
+# friends) via a postinstall script. pnpm 10 blocks dependency build scripts by
+# default, which left libs/android/*/libskia.a missing in CI and broke the
+# Android CMake step. Allow just this one so `pnpm install` fetches them.
+onlyBuiltDependencies:
+  - '@shopify/react-native-skia'
 # Web deploys (Vercel) exclude apps/mobile, so this mobile-only patch is
 # "unused" there. Allow that instead of failing the build; it still applies
 # locally where apps/mobile is present.

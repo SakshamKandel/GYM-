@@ -1,20 +1,26 @@
-# Android release APK - CI build for the Expo app (prebuilt android/ + Gradle).
+# Android release APK - CI build for the Expo app.
 #
-# Mirrors the local production recipe: minified release, arm64-v8a only,
-# production API URL baked in. Bytes never go through EAS - this builds on the
-# GitHub runner with the repo's own Gradle project, so there is no Expo-account
-# queue or build-credit limit. (If you ever prefer Expo's cloud builders:
-# `eas build -p android --profile production --non-interactive` with an
-# EXPO_TOKEN secret is the drop-in alternative.)
+# The native android/ project is NOT committed - this repo uses Expo Continuous
+# Native Generation (see .gitignore: apps/mobile/android/ + apps/mobile/ios/ are
+# generated). CI regenerates android/ from app.json with `expo prebuild`, then
+# builds a minified release APK (arm64-v8a) with the production API URL baked
+# in. Bytes never go through EAS - this builds on the GitHub runner with Gradle,
+# so there is no Expo-account queue or build-credit limit. (If you ever prefer
+# Expo's cloud builders: `eas build -p android --profile production
+# --non-interactive` with an EXPO_TOKEN secret is the drop-in alternative.)
 #
 # pnpm version comes from package.json "packageManager" - do NOT also pass
 # `version:` to pnpm/action-setup (the action errors on a double spec).
 #
 # REQUIRED repository secrets (Settings -> Secrets and variables -> Actions):
 #   GOOGLE_SERVICES_JSON_B64  base64 of apps/mobile/google-services.json
+#     (restored BEFORE prebuild; app.json android.googleServicesFile references
+#      it, so prebuild copies it into the generated android/app/ module)
 #   ANDROID_KEYSTORE_B64      base64 of apps/mobile/android/app/debug.keystore
 #     (must be the SAME keystore every build: Android updates require a stable
-#      signature, and the Google OAuth Android client is bound to its SHA-1)
+#      signature, and the Google OAuth Android client is bound to its SHA-1.
+#      The release build type signs with signingConfigs.debug = this keystore,
+#      so it overwrites the throwaway one prebuild generates.)
 #
 # Generate both values locally (PowerShell):
 #   [Convert]::ToBase64String([IO.File]::ReadAllBytes("apps/mobile/google-services.json")) | Set-Clipboard
@@ -78,7 +84,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Restore gitignored build inputs
+      # google-services.json must exist BEFORE prebuild: app.json's
+      # android.googleServicesFile points at it, and prebuild copies it into the
+      # generated android/app/ module. (Guard both secrets up front here too.)
+      - name: Restore google-services.json from secret
         shell: bash
         env:
           GS_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
@@ -89,8 +98,37 @@ jobs:
             exit 1
           fi
           echo "$GS_B64" | base64 -d > apps/mobile/google-services.json
-          cp apps/mobile/google-services.json apps/mobile/android/app/google-services.json
+
+      # The native android/ project is gitignored (Continuous Native
+      # Generation) - regenerate it from app.json on the runner.
+      - name: Prebuild native android project
+        working-directory: apps/mobile
+        env:
+          EXPO_NO_TELEMETRY: '1'
+        run: npx expo prebuild -p android --no-install
+
+      # prebuild drops a throwaway template debug.keystore; overwrite it with
+      # our stable release keystore (SHA-1 bound to the Google OAuth client).
+      - name: Install stable release keystore
+        shell: bash
+        env:
+          GS_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
           echo "$KS_B64" | base64 -d > apps/mobile/android/app/debug.keystore
+          # Safety net in case prebuild's googleServicesFile copy is skipped.
+          echo "$GS_B64" | base64 -d > apps/mobile/android/app/google-services.json
+
+      # Expo prebuild writes org.gradle.jvmargs=-Xmx2048m, which intermittently
+      # OOMs :app:packageRelease (IncrementalSplitterRunnable) when R8 minify +
+      # shrinkResources + Skia/native libs are all in play. ubuntu-latest has
+      # 16 GB, so give the build JVM a comfortable heap for deterministic
+      # packaging. (android/ is regenerated each run, so patch it here.)
+      - name: Raise Gradle heap for release packaging
+        shell: bash
+        run: |
+          sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx6144m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8/' apps/mobile/android/gradle.properties
+          grep '^org.gradle.jvmargs=' apps/mobile/android/gradle.properties
 
       - name: Build release APK (arm64-v8a)
         working-directory: apps/mobile/android
@@ -100,8 +138,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
+          # Sanitize ref name: branch names may contain '/' (e.g. ci/foo), which
+          # would otherwise make cp target a non-existent subdirectory.
+          SAFE_REF="${GITHUB_REF_NAME//\//-}"
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
-             "dist/gym-tracker-${GITHUB_REF_NAME}-r${GITHUB_RUN_NUMBER}.apk"
+             "dist/gym-tracker-${SAFE_REF}-r${GITHUB_RUN_NUMBER}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
