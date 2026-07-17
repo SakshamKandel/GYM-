@@ -21,12 +21,18 @@
 #      signature, and the Google OAuth Android client is bound to its SHA-1.
 #      The release build type signs with signingConfigs.debug = this keystore,
 #      so it overwrites the throwaway one prebuild generates.)
+# REQUIRED repository variable (Settings -> Secrets and variables -> Actions):
+#   GOOGLE_ANDROID_CERT_SHA1  SHA-1 registered on the Android OAuth client for
+#     package com.gmmethod.gymtracker. CI rejects a changed signing key.
 #
 # Generate both values locally (PowerShell):
 #   [Convert]::ToBase64String([IO.File]::ReadAllBytes("apps/mobile/google-services.json")) | Set-Clipboard
 #   [Convert]::ToBase64String([IO.File]::ReadAllBytes("apps/mobile/android/app/debug.keystore")) | Set-Clipboard
 
 name: android-build
+
+permissions:
+  contents: write
 
 on:
   workflow_dispatch:
@@ -119,6 +125,51 @@ jobs:
           # Safety net in case prebuild's googleServicesFile copy is skipped.
           echo "$GS_B64" | base64 -d > apps/mobile/android/app/google-services.json
 
+      - name: Verify Google OAuth build identity
+        shell: bash
+        env:
+          EXPECTED_SHA1: ${{ vars.GOOGLE_ANDROID_CERT_SHA1 }}
+        run: |
+          if [ -z "$EXPECTED_SHA1" ]; then
+            echo "::error::Missing repository variable GOOGLE_ANDROID_CERT_SHA1."
+            exit 1
+          fi
+
+          ACTUAL_SHA1="$(keytool -list -v \
+            -keystore apps/mobile/android/app/debug.keystore \
+            -alias androiddebugkey -storepass android -keypass android \
+            | sed -n 's/^[[:space:]]*SHA1: //p' \
+            | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          NORMALIZED_EXPECTED="$(printf '%s' "$EXPECTED_SHA1" \
+            | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+
+          if [ -z "$ACTUAL_SHA1" ] || [ "$ACTUAL_SHA1" != "$NORMALIZED_EXPECTED" ]; then
+            echo "::error::Release keystore SHA-1 does not match the Android OAuth credential."
+            exit 1
+          fi
+
+          node <<'NODE'
+          const app = require('./apps/mobile/app.json');
+          const services = require('./apps/mobile/google-services.json');
+          const web = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
+          const android = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
+          const suffix = '.apps.googleusercontent.com';
+          const packageName = app.expo?.android?.package;
+          const configuredPackages = (services.client ?? []).map(
+            (client) => client.client_info?.android_client_info?.package_name,
+          );
+
+          if (!web.endsWith(suffix) || !android.endsWith(suffix)) {
+            throw new Error('Google OAuth client IDs are missing or malformed');
+          }
+          if (web.split('-', 1)[0] !== android.split('-', 1)[0]) {
+            throw new Error('Google web and Android OAuth clients belong to different projects');
+          }
+          if (packageName !== 'com.gmmethod.gymtracker' || !configuredPackages.includes(packageName)) {
+            throw new Error('Google services package does not match the Android application id');
+          }
+          NODE
+
       # Expo prebuild writes org.gradle.jvmargs=-Xmx2048m, which intermittently
       # OOMs :app:packageRelease (IncrementalSplitterRunnable) when R8 minify +
       # shrinkResources + Skia/native libs are all in play. ubuntu-latest has
@@ -150,8 +201,30 @@ jobs:
           path: dist/*.apk
           retention-days: 30
 
-      # Tag pushes (v1.2.3) additionally publish the APK on a GitHub Release.
+      - name: Prepare release metadata
+        id: release
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          APP_VERSION="$(node -p "require('./apps/mobile/app.json').expo.version")"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            RELEASE_TAG="$GITHUB_REF_NAME"
+            RELEASE_NAME="GYM Tracker $GITHUB_REF_NAME"
+          else
+            RELEASE_TAG="v${APP_VERSION}-r${GITHUB_RUN_NUMBER}"
+            RELEASE_NAME="GYM Tracker v${APP_VERSION} (release ${GITHUB_RUN_NUMBER})"
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+
+      # Main and version-tag builds publish the verified APK as the latest
+      # GitHub Release; workflow_dispatch on another branch remains artifact-only.
       - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: ${{ steps.release.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          make_latest: true
           files: dist/*.apk

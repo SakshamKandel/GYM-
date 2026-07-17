@@ -7,7 +7,9 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://192.168.1.16:3055"
+        "EXPO_PUBLIC_API_URL": "http://192.168.1.16:3055",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "211501755130-7vppq78cbu2hg3nj3nb2eau4ug72njfd.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "211501755130-0udbbdmtor3mn6q6ssthm0eug46o80da.apps.googleusercontent.com"
       }
     },
     "preview": {
@@ -16,13 +18,17 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://gym-xi-tawny.vercel.app"
+        "EXPO_PUBLIC_API_URL": "https://gym-xi-tawny.vercel.app",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "211501755130-7vppq78cbu2hg3nj3nb2eau4ug72njfd.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "211501755130-0udbbdmtor3mn6q6ssthm0eug46o80da.apps.googleusercontent.com"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://gym-xi-tawny.vercel.app"
+        "EXPO_PUBLIC_API_URL": "https://gym-xi-tawny.vercel.app",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "211501755130-7vppq78cbu2hg3nj3nb2eau4ug72njfd.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "211501755130-0udbbdmtor3mn6q6ssthm0eug46o80da.apps.googleusercontent.com"
       }
     }
   },

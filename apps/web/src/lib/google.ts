@@ -35,10 +35,14 @@ export function allowedGoogleClientIds(): string[] {
   const raw = [process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_IDS]
     .filter((v): v is string => typeof v === 'string')
     .join(',');
-  return raw
-    .split(',')
-    .map((id) => id.trim())
-    .filter((id) => id.length > 0);
+  return [
+    ...new Set(
+      raw
+        .split(',')
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0),
+    ),
+  ];
 }
 
 /**
