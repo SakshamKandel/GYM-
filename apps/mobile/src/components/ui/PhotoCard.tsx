@@ -28,6 +28,20 @@ interface Props {
   onPress?: () => void;
   /** Required — describe the photo (or the tap action when pressable). */
   accessibilityLabel: string;
+  /**
+   * Marks the photo purely decorative — the Image is hidden from the screen
+   * reader (`accessible={false}`) so overlay text/controls carry the meaning.
+   * Use when the surrounding content already names what the photo depicts.
+   */
+  decorative?: boolean;
+  /**
+   * Extra full-bleed darkening (0–1) laid over the whole photo, beneath the
+   * bottom scrim. Guarantees white ink clears 4.5:1 even over the brightest
+   * region of a photo; the bottom gradient still does most of the work.
+   */
+  fullOverlay?: number;
+  /** Passed to expo-image so swapping the source recycles cleanly (no flash). */
+  recyclingKey?: string;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -48,6 +62,7 @@ const styles = StyleSheet.create({
   },
   frameInset: { borderRadius: radius.md },
   photo: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  fullOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   scrim: {
     position: 'absolute',
     left: 0,
@@ -69,6 +84,9 @@ export function PhotoCard({
   children,
   onPress,
   accessibilityLabel,
+  decorative = false,
+  fullOverlay,
+  recyclingKey,
   style,
 }: Props) {
   const inner = (
@@ -78,9 +96,16 @@ export function PhotoCard({
         style={styles.photo}
         contentFit="cover"
         transition={150}
-        accessible={!onPress}
-        accessibilityLabel={onPress ? undefined : accessibilityLabel}
+        recyclingKey={recyclingKey}
+        accessible={decorative ? false : !onPress}
+        accessibilityLabel={decorative || onPress ? undefined : accessibilityLabel}
       />
+      {fullOverlay !== undefined && fullOverlay > 0 ? (
+        <View
+          pointerEvents="none"
+          style={[styles.fullOverlay, { backgroundColor: `rgba(0,0,0,${fullOverlay})` }]}
+        />
+      ) : null}
       <LinearGradient colors={[...SCRIM]} style={styles.scrim} />
       <View style={styles.content}>{children}</View>
     </View>

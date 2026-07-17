@@ -37,7 +37,7 @@ import { useAuth } from '../state/auth';
 /**
  * Badges screen — block-language layout: back pill → "BADGES" ScreenHeader
  * with an earned-count meta chip → ONE red hero block carrying the headline
- * FractionStat ("12/44") over a thick progress bar → charcoal "Almost there"
+ * FractionStat ("12/42") over a thick progress bar → charcoal "Almost there"
  * rows → family grids on the canvas. Tiles are BadgeMedal silhouettes: tiered
  * metal hexagons for strength clubs, red enamel medals elsewhere; locked =
  * engraved charcoal (threshold badges carry a small in-medal progress bar),
@@ -45,7 +45,7 @@ import { useAuth } from '../state/auth';
  * Grids stay on the near-black canvas — locked medals engrave in
  * `colors.surface` and would vanish inside a charcoal card. Challenge badges
  * (`challenge:<id>`) are appended under crew as extras, NOT counted in the
- * "of 44" total (contract §5).
+ * "of 42" total (contract §5).
  *
  * Every tile taps through to a detail sheet: description, earned/verified
  * dates, or (locked threshold badges) a progress bar over the caller's OWN
@@ -97,7 +97,7 @@ export default function BadgesScreen() {
   );
 
   // Challenge extras earned by the caller but not in the launch catalog —
-  // shown under crew, excluded from the "of 44" total.
+  // shown under crew, excluded from the "of 42" total.
   const challengeExtras = useMemo(
     () =>
       badges

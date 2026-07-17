@@ -34,6 +34,7 @@ import {
   ScreenHeader,
   Sheet,
 } from '../../components/ui';
+import { EmptyArt } from '../../components/visual';
 import { logHaptic, tapHaptic } from '../../lib/haptics';
 import { posterDate, todayIso } from '../../lib/dates';
 import { uid } from '../../lib/id';
@@ -453,6 +454,7 @@ export default function FoodScreen() {
             icon="restaurant-outline"
             title="Nothing logged yet"
             body="Search a food or tap a meal below to start the day."
+            art={<EmptyArt variant="food" />}
             actionLabel="Log your first meal"
             onAction={() => addTo(defaultMealForHour(new Date().getHours()))}
           />

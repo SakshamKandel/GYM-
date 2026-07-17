@@ -146,6 +146,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
     overflow: 'hidden',
   },
+  // Image-less exercises get a quiet glyph tile instead of a blank square.
+  thumbFallback: { alignItems: 'center', justifyContent: 'center' },
   rowText: { flex: 1 },
   emptyWrap: {
     alignItems: 'center',
@@ -182,12 +184,18 @@ function RecentTile({
       onPress={onPress}
       style={styles.recentTile}
     >
-      <Image
-        source={exercise.imageUrls[0] ? { uri: exercise.imageUrls[0] } : undefined}
-        style={styles.recentThumb}
-        contentFit="cover"
-        transition={100}
-      />
+      {exercise.imageUrls[0] ? (
+        <Image
+          source={{ uri: exercise.imageUrls[0] }}
+          style={styles.recentThumb}
+          contentFit="cover"
+          transition={100}
+        />
+      ) : (
+        <View style={[styles.recentThumb, styles.thumbFallback]}>
+          <Ionicons name="barbell-outline" size={16} color={colors.textFaint} />
+        </View>
+      )}
       <View>
         <AppText variant="bodyBold" numberOfLines={1} style={styles.recentName}>
           {exercise.name}
@@ -221,13 +229,19 @@ function ExerciseRow({
         onPress={onPress}
         style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
       >
-        <Image
-          source={exercise.imageUrls[0] ? { uri: exercise.imageUrls[0] } : undefined}
-          style={styles.thumb}
-          contentFit="cover"
-          transition={100}
-          recyclingKey={exercise.id}
-        />
+        {exercise.imageUrls[0] ? (
+          <Image
+            source={{ uri: exercise.imageUrls[0] }}
+            style={styles.thumb}
+            contentFit="cover"
+            transition={100}
+            recyclingKey={exercise.id}
+          />
+        ) : (
+          <View style={[styles.thumb, styles.thumbFallback]}>
+            <Ionicons name="barbell-outline" size={22} color={colors.textFaint} />
+          </View>
+        )}
         <View style={styles.rowText}>
           <AppText variant="bodyBold" numberOfLines={1}>
             {exercise.name}

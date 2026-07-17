@@ -25,14 +25,14 @@ import { useAuth } from '../../state/auth';
  * reply — a transient "typing" coach bubble shows so the member sees Greece is
  * thinking; it's swapped for the real reply when the server responds.
  *
- * Mirrors useBuddyChatThread's poll shape (features/buddy/hooks.ts).
+ * Poll-driven thread: fetch on open, refresh on an interval, optimistic send.
  */
 
 /** Local-only optimistic id prefix so we can reconcile against server rows. */
 const OPTIMISTIC_PREFIX = 'local-';
 /** Transient "Greece is typing" bubble id — never persisted, never optimistic. */
 const TYPING_PREFIX = 'typing-';
-/** Foreground poll cadence while a thread is open — same as buddy DMs. */
+/** Foreground poll cadence while a thread is open. */
 const THREAD_POLL_MS = 12_000;
 
 export interface CoachThread {
@@ -146,7 +146,7 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
       reload();
       startTimer();
 
-      // Same AppState guard as useBuddyChatThread: pause polling while
+      // AppState guard: pause polling while
       // backgrounded, refresh immediately and resume on return to foreground
       // — this is how a staff support reply (or a coach_chat one) shows up
       // without the member having to leave and re-open the screen.

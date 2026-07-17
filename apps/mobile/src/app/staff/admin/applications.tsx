@@ -67,6 +67,20 @@ function errorLine(code: StaffErrorCode): string {
   return "Couldn't load the queue.";
 }
 
+/** G13: decide() failures are distinct from a queue-load failure — reuse of
+ * errorLine() previously mislabeled a rejected decision (e.g. an oversized
+ * note) as "Couldn't load the queue.", which describes the wrong operation
+ * and gives the admin no hint that trimming the note would fix it. */
+function decideErrorLine(code: StaffErrorCode): string {
+  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'forbidden') return "You don't have access to this.";
+  if (code === 'not_found' || code === 'conflict')
+    return 'This application was already decided — refresh the queue.';
+  if (code === 'invalid') return 'Review note is too long — shorten it and try again.';
+  if (code === 'rate_limited') return 'Too many attempts — wait a moment and try again.';
+  return "Couldn't submit that decision. Try again.";
+}
+
 /** Short relative age ("3m", "2h", "5d") with an absolute fallback. */
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -99,8 +113,8 @@ function RetryLine({ message, onRetry }: { message: string; onRetry: () => void 
 
 export default function AdminApplicationsScreen() {
   const token = useAuth((s) => s.token);
-  const staffRole = useAuth((s) => s.staffRole);
-  const allowed = canReviewApplications(staffRole);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
+  const allowed = canReviewApplications(staffPermissions);
 
   const [status, setStatus] = useState<ApplicationStatus>('pending');
   const [rows, setRows] = useState<CoachApplicationRow[]>([]);
@@ -174,7 +188,7 @@ export default function AdminApplicationsScreen() {
       // reverts to "Approve"/"Reject" with zero feedback and the admin keeps
       // re-firing the same failing request.
       setConfirmAction(null);
-      setDecideError(errorLine(toStaffError(e).code));
+      setDecideError(decideErrorLine(toStaffError(e).code));
     } finally {
       setDeciding(false);
     }
@@ -346,6 +360,7 @@ export default function AdminApplicationsScreen() {
                   onChangeText={setNote}
                   placeholder="Review note (optional)"
                   multiline
+                  maxLength={500}
                   style={styles.noteInput}
                 />
                 {decideError ? (

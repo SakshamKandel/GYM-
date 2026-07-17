@@ -3,6 +3,7 @@ import { desc, eq, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
 import { getDb } from '@/lib/db';
+import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
 import { AuditTable, type AuditEntry } from './_components/AuditTable';
 
@@ -79,8 +80,8 @@ async function loadDistinctActions(): Promise<string[]> {
 export default async function AdminAuditPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (principal.role !== 'super_admin' && principal.role !== 'main_admin')
-    redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  if (!permissions.has('audit.read')) redirect('/admin');
 
   const [{ entries, cursor }, actions] = await Promise.all([
     loadFirstPage(),

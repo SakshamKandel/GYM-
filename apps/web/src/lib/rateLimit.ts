@@ -18,21 +18,30 @@ import { CORS_HEADERS } from './http';
  * treat it as advisory since clients can forge the header).
  */
 
-const hits = new Map<string, number[]>();
+interface Bucket {
+  stamps: number[];
+  /** The largest window length that has keyed this bucket (its sweep horizon). */
+  windowMs: number;
+}
 
-/** Largest window any caller uses (buddy/invite: 1 hour). Sweeper horizon. */
-const MAX_WINDOW_MS = 60 * 60 * 1000;
+const hits = new Map<string, Bucket>();
+
 const SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 let lastSweepAt = 0;
 
-/** Drop identities idle past every window so the Map can't grow unbounded. */
+/**
+ * Drop identities idle past their OWN window so the Map can't grow unbounded
+ * (B12). A single global horizon (formerly 1h) was shorter than the payments
+ * routes' 24h window, so an idle payment caller's stamps were swept after ~1h
+ * and the "5/day" budget silently reset. Each bucket now records the widest
+ * window that has keyed it and is only evicted once idle past that window.
+ */
 function sweep(now: number): void {
   if (now - lastSweepAt < SWEEP_INTERVAL_MS) return;
   lastSweepAt = now;
-  const horizon = now - MAX_WINDOW_MS;
-  for (const [key, stamps] of hits) {
-    const newest = stamps[stamps.length - 1];
-    if (newest === undefined || newest < horizon) hits.delete(key);
+  for (const [key, bucket] of hits) {
+    const newest = bucket.stamps[bucket.stamps.length - 1];
+    if (newest === undefined || newest < now - bucket.windowMs) hits.delete(key);
   }
 }
 
@@ -51,7 +60,7 @@ export interface RateLimitArgs {
   route: string;
   /** Max requests per window. */
   limit: number;
-  /** Window length in milliseconds (must not exceed MAX_WINDOW_MS). */
+  /** Window length in milliseconds. The sweeper evicts idle keys per-window. */
   windowMs: number;
   /** Client IP (clientIp(req)) — the key for unauthenticated endpoints. */
   ip?: string | null;
@@ -73,10 +82,14 @@ export function rateLimit(args: RateLimitArgs): NextResponse | null {
   const subject = args.accountId ? `acct:${args.accountId}` : `ip:${args.ip ?? 'unknown'}`;
   const key = `${args.route}|${subject}`;
   const cutoff = now - args.windowMs;
-  const stamps = (hits.get(key) ?? []).filter((t) => t > cutoff);
+  const prev = hits.get(key);
+  const stamps = (prev?.stamps ?? []).filter((t) => t > cutoff);
+  // The sweeper horizon for this key is the widest window it has ever seen, so
+  // a longer-window caller's stamps survive until that window fully elapses.
+  const windowMs = Math.max(prev?.windowMs ?? 0, args.windowMs);
 
   if (stamps.length >= args.limit) {
-    hits.set(key, stamps);
+    hits.set(key, { stamps, windowMs });
     const oldest = stamps[0] ?? now;
     const retryAfterSec = Math.max(1, Math.ceil((oldest + args.windowMs - now) / 1000));
     return NextResponse.json(
@@ -86,6 +99,6 @@ export function rateLimit(args: RateLimitArgs): NextResponse | null {
   }
 
   stamps.push(now);
-  hits.set(key, stamps);
+  hits.set(key, { stamps, windowMs });
   return null;
 }

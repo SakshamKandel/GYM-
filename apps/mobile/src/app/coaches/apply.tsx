@@ -55,6 +55,9 @@ const ACHIEVEMENTS_MAX = 10;
 const CERT_FIELD_MAX = 80;
 const CERTS_MAX = 10;
 const DISPLAY_NAME_MAX = 80;
+/** Client-side cap on the picked photo (the square crop at quality 0.85
+ * usually lands far below this — the guard just refuses absurd originals). */
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 
 interface FormState {
   displayName: string;
@@ -183,6 +186,11 @@ export default function CoachApplyScreen() {
     if (result.canceled) return;
     const asset = result.assets[0];
     if (!asset) return;
+    // Guard against absurdly large originals before the bytes leave the phone.
+    if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_PHOTO_BYTES) {
+      setAvatarError('That photo is too large — pick one under 10 MB.');
+      return;
+    }
 
     setAvatarUploading(true);
     try {
@@ -384,6 +392,21 @@ export default function CoachApplyScreen() {
                 disabled={avatarUploading}
                 loading={avatarUploading}
               />
+              {avatarUrl && !avatarUploading ? (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove photo"
+                  onPress={() => {
+                    setAvatarError(null);
+                    setAvatarUrl(null);
+                  }}
+                  style={styles.removePhotoBtn}
+                >
+                  <AppText variant="bodyBold" color={colors.textDim}>
+                    Remove photo
+                  </AppText>
+                </PressableScale>
+              ) : null}
               {avatarError ? (
                 <AppText variant="caption" color={colors.error} style={styles.avatarErrorText}>
                   {avatarError}
@@ -727,6 +750,11 @@ const styles = StyleSheet.create({
   },
   avatarText: { flex: 1, gap: spacing.xs, alignItems: 'flex-start' },
   avatarErrorText: { marginTop: 2 },
+  removePhotoBtn: {
+    minHeight: touch.min,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
   bio: {
     minHeight: 120,
     paddingTop: 14,

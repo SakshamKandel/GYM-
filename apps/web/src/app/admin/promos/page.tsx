@@ -2,7 +2,7 @@ import { accounts, admins, coachProfiles, promoCodes } from '@gym/db';
 import { asc, desc, eq } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
-import type { StaffRole } from '@/lib/auth';
+import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
 import {
@@ -20,7 +20,6 @@ export const dynamic = 'force-dynamic';
  * SCALE-UP-PLAN §4: "promo + pricing super/main only". The layout hides the
  * nav link for anyone else, but we re-check here so the URL still fails safe.
  */
-const CAN_MANAGE: readonly StaffRole[] = ['super_admin', 'main_admin'];
 
 /**
  * Loads every promo code, newest first, with the owning coach's display label
@@ -93,7 +92,8 @@ async function loadCoaches(): Promise<CoachOption[]> {
 export default async function AdminPromosPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (!CAN_MANAGE.includes(principal.role)) redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  if (!permissions.has('promo.manage')) redirect('/admin');
 
   const [codes, coaches] = await Promise.all([loadCodes(), loadCoaches()]);
   const activeCount = codes.filter((c) => c.active).length;

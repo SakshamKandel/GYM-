@@ -2,6 +2,7 @@ import { accounts, admins, coachProfiles } from '@gym/db';
 import { asc, eq } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { getDb } from '@/lib/db';
+import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
 import { type StaffMember, StaffManager } from './_components/StaffManager';
 
@@ -55,8 +56,8 @@ async function loadStaff(): Promise<StaffMember[]> {
 export default async function AdminStaffPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (principal.role !== 'super_admin' && principal.role !== 'main_admin')
-    redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  if (!permissions.has('roles.grant')) redirect('/admin');
 
   const staff = await loadStaff();
 

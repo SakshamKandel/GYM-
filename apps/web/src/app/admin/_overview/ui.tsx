@@ -1,5 +1,6 @@
+import Link from 'next/link';
 import { Card, CardHeader, TierChip } from '@/components/console';
-import type { Tier } from './data';
+import type { OpsQueue, Tier } from './data';
 
 /** Formats a past Date as a compact relative label ("3m ago", "2h ago"). */
 export function relativeTime(date: Date): string {
@@ -15,6 +16,156 @@ export function relativeTime(date: Date): string {
   const mo = Math.floor(day / 30);
   if (mo < 12) return `${mo}mo ago`;
   return `${Math.floor(mo / 12)}y ago`;
+}
+
+/** Formats minor-unit sums per currency into a compact "NPR 12,300 · USD 45" line. */
+function formatRevenue(rows: { currency: string; amountMinor: number }[]): string {
+  if (rows.length === 0) return '—';
+  return rows
+    .map((r) => `${r.currency} ${Math.round(r.amountMinor / 100).toLocaleString()}`)
+    .join(' · ');
+}
+
+/**
+ * Pending-work tiles (P0-6). Each tile links to the queue that resolves it and
+ * only renders when the caller holds the permission (its value is non-null —
+ * the loader never even queries a section the caller can't see, A3). A tile with
+ * outstanding work gets a subtle accent so the operator sees the queue at a
+ * glance. Returns null when the caller has no ops permissions at all.
+ */
+export function OpsTiles({ ops }: { ops: OpsQueue }) {
+  const tiles: { href: string; label: string; value: number; hint?: string }[] = [];
+  if (ops.pendingApplications != null) {
+    tiles.push({
+      href: '/admin/applications',
+      label: 'Coach applications',
+      value: ops.pendingApplications,
+      hint: 'pending review',
+    });
+  }
+  if (ops.pendingTierRequests != null) {
+    tiles.push({
+      href: '/admin/coaches',
+      label: 'Tier requests',
+      value: ops.pendingTierRequests,
+      hint: 'pending review',
+    });
+  }
+  if (ops.pendingPayments != null) {
+    tiles.push({
+      href: '/admin/payments',
+      label: 'Payment requests',
+      value: ops.pendingPayments,
+      hint: 'awaiting approval',
+    });
+  }
+  if (ops.unreadSupport != null) {
+    tiles.push({
+      href: '/admin/support',
+      label: 'Support threads',
+      value: ops.unreadSupport,
+      hint: 'unread',
+    });
+  }
+
+  const showRevenue = ops.revenueThisMonth != null;
+  if (tiles.length === 0 && !showRevenue) return null;
+
+  return (
+    <section style={{ marginBottom: 24 }}>
+      <h2
+        style={{
+          fontFamily: 'var(--font-heading)',
+          fontWeight: 600,
+          fontSize: 15,
+          letterSpacing: '0.02em',
+          color: 'var(--gt-text)',
+          marginBottom: 12,
+        }}
+      >
+        Needs attention
+      </h2>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: 12,
+        }}
+      >
+        {tiles.map((t) => {
+          const active = t.value > 0;
+          return (
+            <Link
+              key={t.href + t.label}
+              href={t.href}
+              className="gt-card"
+              style={{
+                padding: 18,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                textDecoration: 'none',
+                color: 'inherit',
+                border: active ? '1px solid var(--gt-red)' : undefined,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 12,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  color: 'var(--gt-text-dim)',
+                  fontFamily: 'var(--font-heading)',
+                }}
+              >
+                {t.label}
+              </span>
+              <span
+                className="gt-numeric"
+                style={{
+                  fontSize: 34,
+                  lineHeight: 1,
+                  color: active ? 'var(--gt-text)' : 'var(--gt-text-dim)',
+                }}
+              >
+                {t.value.toLocaleString()}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--gt-text-dim)', minHeight: 16 }}>
+                {t.hint}
+              </span>
+            </Link>
+          );
+        })}
+        {showRevenue ? (
+          <div
+            className="gt-card"
+            style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 8 }}
+          >
+            <span
+              style={{
+                fontSize: 12,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+                color: 'var(--gt-text-dim)',
+                fontFamily: 'var(--font-heading)',
+              }}
+            >
+              Revenue this month
+            </span>
+            <span
+              className="gt-numeric"
+              style={{ fontSize: 22, lineHeight: 1.2, color: 'var(--gt-text)' }}
+            >
+              {formatRevenue(ops.revenueThisMonth ?? [])}
+            </span>
+            <span style={{ fontSize: 12, color: 'var(--gt-text-dim)', minHeight: 16 }}>
+              approved payments
+            </span>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
 }
 
 /**

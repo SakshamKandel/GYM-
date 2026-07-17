@@ -1,5 +1,6 @@
 'use client';
 
+import { effectiveTier } from '@gym/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -69,6 +70,13 @@ export function MembersDirectory({
   // we can skip the first effect run (which would refetch page 1 needlessly).
   const primed = useRef(false);
 
+  // Monotonic request sequence (mirrors StaffManager's GrantRoleModal search
+  // guard): a filter change bumps this before firing the new request, and the
+  // response only commits if it's still the newest one in flight. Without
+  // this a slow response for an earlier filter/search can land AFTER a faster
+  // response for a newer one and clobber both the list and the cursor.
+  const reqSeq = useRef(0);
+
   const fetchPage = useCallback(
     async (opts: {
       q: string;
@@ -83,6 +91,8 @@ export function MembersDirectory({
       if (opts.tier !== 'all') qs.set('tier', opts.tier);
       if (opts.cursor) qs.set('cursor', opts.cursor);
 
+      const mySeq = ++reqSeq.current;
+
       if (opts.append) setLoadingMore(true);
       else setLoading(true);
       setError(null);
@@ -91,6 +101,7 @@ export function MembersDirectory({
         const res = await fetch(`/api/admin/members?${qs.toString()}`, {
           credentials: 'include',
         });
+        if (mySeq !== reqSeq.current) return; // superseded by a newer request
         if (!res.ok) {
           setError(res.status === 403 ? 'Not permitted.' : 'Failed to load members.');
           return;
@@ -99,10 +110,13 @@ export function MembersDirectory({
         setMembers((prev) => (opts.append ? [...prev, ...data.members] : data.members));
         setCursor(data.nextCursor);
       } catch {
+        if (mySeq !== reqSeq.current) return;
         setError('Network error.');
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
+        if (mySeq === reqSeq.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [],
@@ -153,7 +167,17 @@ export function MembersDirectory({
     {
       key: 'tier',
       header: 'Tier',
-      render: (r) => <TierChip tier={r.tier} />,
+      render: (r) => {
+        const lapsed =
+          r.tier !== 'starter' &&
+          effectiveTier(r.tier, r.tierExpiresAt, new Date()) === 'starter';
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <TierChip tier={r.tier} />
+            {lapsed ? <Badge tone="warning">Lapsed</Badge> : null}
+          </span>
+        );
+      },
     },
     {
       key: 'status',
@@ -257,6 +281,9 @@ export function MembersDirectory({
           rows={members}
           rowKey={(r) => r.id}
           onRowClick={(r) => setOpenId(r.id)}
+          rowAriaLabel={(r) =>
+            `Open details for ${r.displayName?.trim() || r.email}`
+          }
           empty={
             q || tier !== 'all' || status !== 'all'
               ? 'No members match these filters.'

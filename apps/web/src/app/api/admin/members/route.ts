@@ -10,7 +10,10 @@ export const runtime = 'nodejs';
  * Admin console — the member directory.
  *
  *  GET /api/admin/members?q=&status=&tier=&cursor=
- *    - `q`      → case-insensitive substring match on email.
+ *    - `q`      → case-insensitive substring match on email. `%`/`_`/`\` are
+ *                 escaped before being wrapped in ILIKE wildcards so a literal
+ *                 percent or underscore in the query can't widen the match
+ *                 (an unescaped `%` alone would match every account).
  *    - `status` → exact filter, 'active' | 'suspended'.
  *    - `tier`   → exact filter, 'starter' | 'silver' | 'gold' | 'elite'
  *                 (added alongside pagination so the web console's tier
@@ -29,8 +32,21 @@ export const runtime = 'nodejs';
  *  mobile unless it later adopts them. Page size is PAGE_SIZE (was previously
  *  a flat 100-row cap with no way to reach further rows).
  *
+ *  Each member row also carries `tierExpiresAt` (ISO string | null,
+ *  contract §4.7, ADDITIVE) so callers can derive the EFFECTIVE tier
+ *  (`effectiveTier` from @gym/shared) instead of trusting the raw stored
+ *  `tier`, which does not collapse to 'starter' on expiry until the next
+ *  auth choke-point read.
+ *
  * Guarded by requirePermission('members.read'); super_admin passes too.
  */
+
+/** Escapes ILIKE metacharacters so user input can't widen or corrupt the
+ * pattern (ESCAPE '\' is Postgres's default for LIKE/ILIKE). Without this a
+ * literal '%' in the query matches every row and '_' matches any character. */
+function escapeLike(raw: string): string {
+  return raw.replace(/[\\%_]/g, '\\$&');
+}
 
 const PAGE_SIZE = 50;
 const TIERS = ['starter', 'silver', 'gold', 'elite'] as const;
@@ -51,7 +67,7 @@ export async function GET(req: Request) {
   const cursor = params.get('cursor')?.trim();
 
   const clauses: SQL[] = [];
-  if (q) clauses.push(ilike(accounts.email, `%${q}%`));
+  if (q) clauses.push(ilike(accounts.email, `%${escapeLike(q)}%`));
   if (status === 'active' || status === 'suspended') {
     clauses.push(eq(accounts.status, status));
   }
@@ -67,6 +83,7 @@ export async function GET(req: Request) {
       email: accounts.email,
       displayName: accounts.displayName,
       tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
       status: accounts.status,
       createdAt: accounts.createdAt,
       staffRole: admins.role,
@@ -88,6 +105,7 @@ export async function GET(req: Request) {
     email: r.email,
     displayName: r.displayName,
     tier: r.tier,
+    tierExpiresAt: r.tierExpiresAt ? r.tierExpiresAt.toISOString() : null,
     status: r.status,
     createdAt: r.createdAt.toISOString(),
     staffRole: r.staffRole ?? null,

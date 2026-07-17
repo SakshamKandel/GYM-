@@ -1,15 +1,16 @@
 import { useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { Image } from 'expo-image';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
   AppTextInput,
   Button,
   Card,
+  Divider,
   EmptyState,
   enterDown,
   enterFade,
@@ -20,6 +21,7 @@ import {
   SectionLabel,
   Sheet,
   Skeleton,
+  StatBlock,
   Tag,
 } from '../../components/ui';
 import { successHaptic } from '../../lib/haptics';
@@ -30,37 +32,55 @@ import {
   getCoachDetail,
   toMentorshipError,
   type CoachDetail,
-  type CoachTier,
 } from '../../features/mentorship/api';
+import { CoachHero } from '../../features/mentorship/components/CoachHero';
 import { useMyCoach } from '../../features/mentorship/hooks';
 import { pushPath } from '../../features/mentorship/nav';
 
 /**
- * /coaches/[id] — one coach's full profile: red hero block (avatar, name,
- * headline, experience pills), specialties, certifications, achievements and
- * bio, then ONE state-aware CTA:
+ * /coaches/[id] — one coach's full public profile, redesigned as a rich
+ * scrolling page:
  *
- *  your coach          → "Your coach" tag + Open chat
- *  pending → this coach → Cancel request
- *  pending → another    → quiet "already pending" note
- *  not taking clients   → disabled button
- *  otherwise            → Request coaching → intro sheet → POST
+ *   hero (photo + scrim, or the ONE red block when no photo) with name,
+ *   seniority badge and verified mark → 3-up big-number stat row →
+ *   availability strip → specialty chips → certifications → achievements →
+ *   recent client wins (anonymised coach-logged milestones) → about with
+ *   read-more → a STICKY state-aware CTA pinned to the bottom:
+ *
+ *    your coach          → "Your coach" tag + Open chat
+ *    pending → this coach → Cancel request
+ *    pending → another    → quiet "already pending" note
+ *    not taking clients   → disabled button
+ *    otherwise            → Request coaching → intro sheet → POST
+ *
+ * All request/cancel logic is unchanged from the pre-redesign screen.
  */
 
 const MESSAGE_MAX = 500;
 
-const HERO_AVATAR = 64;
+/** Scroll clearance so the last section never hides behind the pinned CTA. */
+const CTA_SPACE = 150;
 
-/** Seniority badge label — NOT a billing tier (see coach_profiles.coachTier).
- * Rendered `onBlock` (near-black chip) like its sibling hero chips: a
- * filled-color chip (accent/cream) would blend into the red hero itself. */
-const COACH_TIER_LABEL: Record<CoachTier, string> = {
-  elite: 'Elite',
-  gold: 'Gold',
-  silver: 'Silver',
-};
+/** Bios longer than this collapse behind a Read-more toggle. */
+const BIO_COLLAPSE_CHARS = 280;
+const BIO_COLLAPSED_LINES = 6;
+
+const MONTHS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+/** 'YYYY-MM-DD' → 'Mar 2026' — string math only, no Date/timezone traps. */
+function formatAchievedAt(iso: string): string {
+  const [y, m] = iso.split('-');
+  const year = Number(y);
+  const month = Number(m);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return iso;
+  return `${MONTHS[month - 1] ?? ''} ${year}`.trim();
+}
 
 const styles = StyleSheet.create({
+  shell: { flex: 1, backgroundColor: colors.bg },
   backRow: { marginBottom: spacing.lg },
   backBtn: {
     width: touch.min,
@@ -70,41 +90,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // ── Red hero block (the screen's ONE red block) ──
-  heroTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
-  heroAvatar: {
-    width: HERO_AVATAR,
-    height: HERO_AVATAR,
-    borderRadius: radius.md,
-    // Near-black tile on red — sanctioned chip-inside-block pattern.
-    backgroundColor: colors.onBlock,
+  // ── Stat row: the signature big-number unit, 3-up in a charcoal card ──
+  statCard: { marginTop: spacing.md },
+  statRow: { flexDirection: 'row', alignItems: 'stretch' },
+  statCell: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  statDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+    marginVertical: spacing.xs,
   },
-  heroName: {
-    fontSize: type.size.display,
-    lineHeight: 46,
-    textTransform: 'uppercase',
-  },
-  heroHeadline: { opacity: 0.8, marginTop: spacing.sm },
-  heroMeta: {
+  // ── Availability strip ──
+  availRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
     gap: spacing.sm,
-    marginTop: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    minHeight: touch.min,
+    marginTop: spacing.sm,
   },
+  availDot: { width: 8, height: 8, borderRadius: radius.full },
+  availText: { flex: 1 },
   // ── Body sections ──
   specialties: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   stack: { gap: spacing.sm },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    padding: spacing.lg,
-    minHeight: 64,
-  },
-  rowMain: { flex: 1, gap: 2 },
-  bulletRow: {
+  certRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
@@ -112,12 +124,49 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
+    minHeight: 56,
+  },
+  certMain: { flex: 1, gap: 2 },
+  // Achievements: ONE card with divider-separated lines — not row wallpaper.
+  achieveLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.md,
     minHeight: touch.min,
   },
-  bulletText: { flex: 1 },
+  achieveText: { flex: 1 },
+  winLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    minHeight: touch.min,
+  },
+  winMain: { flex: 1, gap: 2 },
   bio: { marginTop: spacing.xs },
-  // ── CTA zone ──
-  cta: { marginTop: spacing.xl, gap: spacing.md },
+  readMore: {
+    minHeight: touch.min,
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+    paddingRight: spacing.lg,
+  },
+  // ── Pinned CTA bar ──
+  ctaBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.bg,
+    paddingTop: spacing.md,
+    paddingHorizontal: spacing.gutter,
+  },
+  ctaInner: {
+    width: '100%',
+    maxWidth: 640,
+    alignSelf: 'center',
+    gap: spacing.md,
+  },
   yourCoachRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -157,6 +206,7 @@ export default function CoachProfileScreen() {
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
   const my = useMyCoach();
+  const insets = useSafeAreaInsets();
 
   const [coach, setCoach] = useState<CoachDetail | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -167,6 +217,7 @@ export default function CoachProfileScreen() {
   const [sending, setSending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [bioExpanded, setBioExpanded] = useState(false);
 
   const reload = useCallback(() => {
     if (status !== 'signedIn' || token === null || coachId === '') return;
@@ -271,156 +322,284 @@ export default function CoachProfileScreen() {
   const pendingElsewhere = my.request !== null && my.request.coachId !== coachId;
   const accepting = coach !== null && coach.acceptingClients && coach.hasCapacity;
 
+  const wins = coach?.milestones ?? [];
+  const bioText = coach?.bio.trim() ?? '';
+  const bioCollapsible = bioText.length > BIO_COLLAPSE_CHARS;
+
+  const availabilityLine =
+    coach === null
+      ? ''
+      : accepting
+        ? `Accepting new clients · ${coach.activeClients} of ${coach.capacity} spots filled`
+        : coach.acceptingClients
+          ? `Roster full · ${coach.activeClients} of ${coach.capacity} spots filled`
+          : 'Not taking new clients right now';
+
+  const showCtaBar = coach !== null && !notFound;
+
   return (
-    <Screen scroll>
-      <Animated.View entering={enterDown()} style={styles.backRow}>
-        <PressableScale
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-          onPress={goBack}
-          style={styles.backBtn}
-        >
-          <Ionicons name="chevron-back" size={24} color={colors.text} />
-        </PressableScale>
-      </Animated.View>
+    <View style={styles.shell}>
+      <Screen scroll bottomInset={showCtaBar ? CTA_SPACE : 0}>
+        <Animated.View entering={enterDown()} style={styles.backRow}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            onPress={goBack}
+            style={styles.backBtn}
+          >
+            <Ionicons name="chevron-back" size={24} color={colors.text} />
+          </PressableScale>
+        </Animated.View>
 
-      {notFound ? (
-        <EmptyState
-          icon="person-remove"
-          title="Coach not found"
-          body="This profile may have been removed."
-          actionLabel="Browse coaches"
-          onAction={goBack}
-        />
-      ) : coach === null ? (
-        loadError ? (
+        {notFound ? (
           <EmptyState
-            icon="cloud-offline"
-            title="Couldn't load this coach"
-            body="Check your connection and try again."
-            actionLabel="Try again"
-            onAction={() => {
-              setLoadError(false);
-              reload();
-            }}
+            icon="person-remove"
+            title="Coach not found"
+            body="This profile may have been removed."
+            actionLabel="Browse coaches"
+            onAction={goBack}
           />
+        ) : coach === null ? (
+          loadError ? (
+            <EmptyState
+              icon="cloud-offline"
+              title="Couldn't load this coach"
+              body="Check your connection and try again."
+              actionLabel="Try again"
+              onAction={() => {
+                setLoadError(false);
+                reload();
+              }}
+            />
+          ) : (
+            <Animated.View
+              entering={enterFade(0)}
+              style={styles.skeletons}
+              accessibilityLabel="Loading coach profile"
+            >
+              <Skeleton height={300} radius={radius.block} />
+              <Skeleton height={110} radius={radius.block} />
+              <Skeleton height={64} />
+              <Skeleton height={64} />
+            </Animated.View>
+          )
         ) : (
-          <Animated.View entering={enterFade(0)} style={styles.skeletons} accessibilityLabel="Loading coach profile">
-            <Skeleton height={220} radius={radius.block} />
-            <Skeleton height={64} />
-            <Skeleton height={64} />
-            <Skeleton height={64} />
-          </Animated.View>
-        )
-      ) : (
-        <>
-          {/* ── THE red hero block: identity + experience at a glance ── */}
-          <Animated.View entering={enterUp(0)}>
-            <Card variant="red">
-              <View style={styles.heroTop}>
-                {coach.avatarUrl !== null ? (
-                  <Image
-                    source={{ uri: coach.avatarUrl }}
-                    style={styles.heroAvatar}
-                    contentFit="cover"
-                    accessibilityElementsHidden
+          <>
+            {/* ── Hero: photo + scrim, or the ONE red block when no photo ── */}
+            <Animated.View entering={enterUp(0)}>
+              <CoachHero
+                name={coach.displayName}
+                headline={coach.headline}
+                photoUrl={coach.photoUrl ?? coach.avatarUrl}
+                tier={coach.coachTier}
+              />
+            </Animated.View>
+
+            {/* ── Big-number stat row ── */}
+            <Animated.View entering={enterUp(1)} style={styles.statCard}>
+              <Card padding={spacing.lg}>
+                <View style={styles.statRow}>
+                  <StatBlock
+                    label="Years"
+                    value={coach.yearsExperience}
+                    size="stat"
+                    align="center"
+                    style={styles.statCell}
                   />
-                ) : (
-                  <IconChip
-                    icon="person"
-                    size={HERO_AVATAR}
-                    color={colors.onBlock}
-                    iconColor={colors.text}
+                  <View style={styles.statDivider} />
+                  <StatBlock
+                    label="Clients"
+                    value={coach.activeClients}
+                    unit={`/ ${coach.capacity}`}
+                    size="stat"
+                    align="center"
+                    style={styles.statCell}
                   />
-                )}
-                <View style={{ flex: 1 }}>
-                  <AppText
-                    variant="display"
-                    color={colors.onBlock}
-                    style={styles.heroName}
-                    numberOfLines={2}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.7}
-                  >
-                    {coach.displayName}
-                  </AppText>
+                  <View style={styles.statDivider} />
+                  {wins.length > 0 ? (
+                    <StatBlock
+                      label="Client wins"
+                      value={wins.length}
+                      size="stat"
+                      align="center"
+                      accent
+                      style={styles.statCell}
+                    />
+                  ) : (
+                    <StatBlock
+                      label="Replies"
+                      value={coach.replyWindowHours}
+                      unit="h"
+                      size="stat"
+                      align="center"
+                      style={styles.statCell}
+                    />
+                  )}
                 </View>
-              </View>
-              <AppText variant="body" color={colors.onBlock} style={styles.heroHeadline}>
-                {coach.headline}
-              </AppText>
-              <View style={styles.heroMeta}>
-                <Tag label={COACH_TIER_LABEL[coach.coachTier]} variant="onBlock" />
-                <Tag label={`${coach.yearsExperience} yrs`} variant="onBlock" />
-                <Tag
-                  label={`${coach.activeClients} client${coach.activeClients === 1 ? '' : 's'}`}
-                  variant="onBlock"
+              </Card>
+
+              {/* Availability strip — capacity context under the numbers. */}
+              <View style={styles.availRow}>
+                <View
+                  style={[
+                    styles.availDot,
+                    { backgroundColor: accepting ? colors.success : colors.textFaint },
+                  ]}
                 />
-                <Tag label={`Replies in ${coach.replyWindowHours}h`} variant="onBlock" />
-              </View>
-            </Card>
-          </Animated.View>
-
-          {coach.specialties.length > 0 ? (
-            <Animated.View entering={enterUp(1)}>
-              <SectionLabel>Specialties</SectionLabel>
-              <View style={styles.specialties}>
-                {coach.specialties.map((s) => (
-                  <Tag key={s} label={s} variant="dim" />
-                ))}
+                <AppText variant="caption" color={colors.textDim} style={styles.availText}>
+                  {availabilityLine}
+                </AppText>
+                <AppText variant="label">Replies in {coach.replyWindowHours}h</AppText>
               </View>
             </Animated.View>
-          ) : null}
 
-          {coach.certifications.length > 0 ? (
-            <Animated.View entering={enterUp(2)}>
-              <SectionLabel>Certifications</SectionLabel>
-              <View style={styles.stack}>
-                {coach.certifications.map((c, i) => (
-                  <View key={`${c.title}-${i}`} style={styles.row}>
-                    <IconChip icon="school" />
-                    <View style={styles.rowMain}>
-                      <AppText variant="bodyBold" numberOfLines={2}>
-                        {c.title}
-                      </AppText>
-                      <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
-                        {c.issuer}
-                        {c.year !== null ? ` · ${c.year}` : ''}
-                      </AppText>
+            {coach.specialties.length > 0 ? (
+              <Animated.View entering={enterUp(2)}>
+                <SectionLabel>Specialties</SectionLabel>
+                <View style={styles.specialties}>
+                  {coach.specialties.map((s) => (
+                    <Tag key={s} label={s} variant="dim" />
+                  ))}
+                </View>
+              </Animated.View>
+            ) : null}
+
+            {coach.certifications.length > 0 ? (
+              <Animated.View entering={enterUp(3)}>
+                <SectionLabel>Certifications</SectionLabel>
+                <View style={styles.stack}>
+                  {coach.certifications.map((c, i) => (
+                    <View key={`${c.title}-${i}`} style={styles.certRow}>
+                      <IconChip icon="school" size={36} />
+                      <View style={styles.certMain}>
+                        <AppText variant="bodyBold" numberOfLines={2}>
+                          {c.title}
+                        </AppText>
+                        <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+                          {c.issuer}
+                        </AppText>
+                      </View>
+                      {c.year !== null ? <AppText variant="label">{c.year}</AppText> : null}
                     </View>
-                  </View>
-                ))}
-              </View>
-            </Animated.View>
-          ) : null}
+                  ))}
+                </View>
+              </Animated.View>
+            ) : null}
 
-          {coach.achievements.length > 0 ? (
-            <Animated.View entering={enterUp(3)}>
-              <SectionLabel>Achievements</SectionLabel>
-              <View style={styles.stack}>
-                {coach.achievements.map((a, i) => (
-                  <View key={`${a}-${i}`} style={styles.bulletRow}>
-                    <Ionicons name="trophy-outline" size={16} color={colors.textDim} />
-                    <AppText variant="body" style={styles.bulletText}>
-                      {a}
+            {coach.achievements.length > 0 ? (
+              <Animated.View entering={enterUp(4)}>
+                <SectionLabel>Achievements</SectionLabel>
+                <Card padding={spacing.lg}>
+                  {coach.achievements.map((a, i) => (
+                    <View key={`${a}-${i}`}>
+                      {i > 0 ? <Divider /> : null}
+                      <View style={styles.achieveLine}>
+                        <Ionicons name="trophy-outline" size={16} color={colors.textDim} />
+                        <AppText variant="body" style={styles.achieveText}>
+                          {a}
+                        </AppText>
+                      </View>
+                    </View>
+                  ))}
+                </Card>
+              </Animated.View>
+            ) : null}
+
+            {/* ── Social proof: anonymised coach-logged client milestones ── */}
+            {wins.length > 0 ? (
+              <Animated.View entering={enterUp(5)}>
+                <SectionLabel>Recent client wins</SectionLabel>
+                <Card padding={spacing.lg}>
+                  {wins.map((w, i) => (
+                    <View key={`${w.title}-${w.achievedAt}-${i}`}>
+                      {i > 0 ? <Divider /> : null}
+                      <View style={styles.winLine}>
+                        <IconChip icon="ribbon-outline" size={36} />
+                        <View style={styles.winMain}>
+                          <AppText variant="bodyBold" numberOfLines={2}>
+                            {w.title}
+                          </AppText>
+                          <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+                            {formatAchievedAt(w.achievedAt)}
+                          </AppText>
+                        </View>
+                      </View>
+                    </View>
+                  ))}
+                </Card>
+              </Animated.View>
+            ) : null}
+
+            {bioText.length > 0 ? (
+              <Animated.View entering={enterUp(6)}>
+                <SectionLabel>About</SectionLabel>
+                <AppText
+                  variant="body"
+                  color={colors.textDim}
+                  style={styles.bio}
+                  numberOfLines={
+                    bioCollapsible && !bioExpanded ? BIO_COLLAPSED_LINES : undefined
+                  }
+                >
+                  {bioText}
+                </AppText>
+                {bioCollapsible ? (
+                  <PressableScale
+                    accessibilityRole="button"
+                    accessibilityLabel={bioExpanded ? 'Show less of the bio' : 'Read the full bio'}
+                    onPress={() => setBioExpanded((v) => !v)}
+                    style={styles.readMore}
+                  >
+                    <AppText variant="caption" color={colors.accent}>
+                      {bioExpanded ? 'Show less' : 'Read more'}
                     </AppText>
-                  </View>
-                ))}
+                  </PressableScale>
+                ) : null}
+              </Animated.View>
+            ) : null}
+
+            {/* ── Intro sheet: optional message → POST /api/coach-requests ── */}
+            <Sheet
+              visible={sheetOpen}
+              onClose={() => {
+                setSheetOpen(false);
+                setActionError(null);
+              }}
+              title={`Request ${coach.displayName}`}
+            >
+              <View style={styles.sheetBody}>
+                <AppTextInput
+                  value={message}
+                  onChangeText={setMessage}
+                  placeholder="Introduce yourself (optional)"
+                  multiline
+                  maxLength={MESSAGE_MAX}
+                  style={styles.sheetInput}
+                  accessibilityLabel="Introduction message, optional"
+                />
+                <AppText variant="caption" color={colors.textFaint}>
+                  Max {MESSAGE_MAX} characters. Contact details are hidden until your coach
+                  accepts.
+                </AppText>
+                {actionError !== null ? (
+                  <AppText variant="caption" color={colors.error}>
+                    {actionError}
+                  </AppText>
+                ) : null}
+                <Button label="Send request" loading={sending} onPress={sendRequest} />
               </View>
-            </Animated.View>
-          ) : null}
+            </Sheet>
+          </>
+        )}
+      </Screen>
 
-          {coach.bio.trim().length > 0 ? (
-            <Animated.View entering={enterUp(4)}>
-              <SectionLabel>About</SectionLabel>
-              <AppText variant="body" color={colors.textDim} style={styles.bio}>
-                {coach.bio}
-              </AppText>
-            </Animated.View>
-          ) : null}
-
-          {/* ── State-aware CTA ── */}
-          <Animated.View entering={enterUp(5)} style={styles.cta}>
+      {/* ── Sticky state-aware CTA — always on screen, logic unchanged ── */}
+      {showCtaBar ? (
+        <Animated.View
+          entering={enterFade(2)}
+          style={[styles.ctaBar, { paddingBottom: insets.bottom + spacing.md }]}
+        >
+          <View style={styles.ctaInner}>
             {actionError !== null && !sheetOpen ? (
               <AppText variant="caption" color={colors.error} style={styles.errorLine}>
                 {actionError}
@@ -465,41 +644,9 @@ export default function CoachProfileScreen() {
                 }}
               />
             )}
-          </Animated.View>
-
-          {/* ── Intro sheet: optional message → POST /api/coach-requests ── */}
-          <Sheet
-            visible={sheetOpen}
-            onClose={() => {
-              setSheetOpen(false);
-              setActionError(null);
-            }}
-            title={`Request ${coach.displayName}`}
-          >
-            <View style={styles.sheetBody}>
-              <AppTextInput
-                value={message}
-                onChangeText={setMessage}
-                placeholder="Introduce yourself (optional)"
-                multiline
-                maxLength={MESSAGE_MAX}
-                style={styles.sheetInput}
-                accessibilityLabel="Introduction message, optional"
-              />
-              <AppText variant="caption" color={colors.textFaint}>
-                Max {MESSAGE_MAX} characters. Contact details are hidden until your coach
-                accepts.
-              </AppText>
-              {actionError !== null ? (
-                <AppText variant="caption" color={colors.error}>
-                  {actionError}
-                </AppText>
-              ) : null}
-              <Button label="Send request" loading={sending} onPress={sendRequest} />
-            </View>
-          </Sheet>
-        </>
-      )}
-    </Screen>
+          </View>
+        </Animated.View>
+      ) : null}
+    </View>
   );
 }

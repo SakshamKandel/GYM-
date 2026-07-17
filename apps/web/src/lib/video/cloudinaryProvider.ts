@@ -57,6 +57,15 @@ const CLOUDINARY_DELIVERY_BASE = 'https://res.cloudinary.com';
 /** Signed delivery URL time-to-live: ~2 hours. */
 const PLAYBACK_TTL_SECONDS = 2 * 60 * 60;
 
+/**
+ * Formats a signed direct-upload slot is allowed to accept (defect F4). Sent as
+ * a *signed* `allowed_formats` param so a client can't POST an arbitrary file
+ * (script, HTML, oversized raw) to the reserved slot: Cloudinary rejects the
+ * upload if the real file format is not in this list. Covers the container
+ * formats phones and desktops actually produce for form-check clips.
+ */
+const ALLOWED_VIDEO_FORMATS = 'mp4,mov,m4v,webm,mkv,avi,3gp,hevc';
+
 interface CloudinaryConfig {
   cloudName: string;
   apiKey: string;
@@ -201,7 +210,10 @@ export class CloudinaryProvider implements VideoProvider {
 
     // Params that MUST be signed (order-independent; signParams sorts them).
     // NOTE: api_key, file and resource_type are NOT part of the signature.
+    // `allowed_formats` is signed so the browser can't drop it — Cloudinary
+    // rejects the upload when the file's real format isn't in the list (F4).
     const signed: Record<string, string | number> = {
+      allowed_formats: ALLOWED_VIDEO_FORMATS,
       public_id: publicId,
       timestamp,
       type: 'authenticated',
@@ -212,11 +224,14 @@ export class CloudinaryProvider implements VideoProvider {
 
     // Full set of form fields the browser attaches (besides the `file` blob).
     // api_secret is deliberately absent — only the derived signature ships.
+    // Every signed param above (except the derived signature) must be echoed
+    // back verbatim or the signature won't match.
     const upload: Record<string, string> = {
       api_key: cfg.apiKey,
       timestamp: String(timestamp),
       public_id: publicId,
       type: 'authenticated',
+      allowed_formats: ALLOWED_VIDEO_FORMATS,
       signature,
     };
     if (signed.context) upload.context = String(signed.context);
@@ -404,4 +419,39 @@ export class CloudinaryProvider implements VideoProvider {
  */
 function sanitizeContextValue(value: string): string {
   return value.replace(/[|=]/g, ' ').trim().slice(0, 200);
+}
+
+/**
+ * Verify (via the Cloudinary Admin API) that an authenticated video asset with
+ * `uid` has actually been uploaded before the console flips the row to 'ready'
+ * (defect F4). The direct-creator-upload confirm step is otherwise a bare
+ * client-trusted `{status:'ready'}` — a caller could mark a video ready that
+ * was never uploaded (or whose upload failed), leaving paying members with a
+ * broken player.
+ *
+ * Not part of the VideoProvider interface: this is a Cloudinary-only check the
+ * admin video route calls directly for cloudinary-hosted rows. Uses HTTP Basic
+ * auth (api_key:api_secret) over the resource-details endpoint.
+ *
+ * Returns true when the asset exists, false on a definitive 404 (not uploaded).
+ * Throws NotConfiguredError when Cloudinary env is absent, or a generic Error
+ * on an ambiguous/transient failure — the caller decides whether to fail open.
+ */
+export async function verifyCloudinaryAsset(uid: string): Promise<boolean> {
+  const cfg = loadConfig();
+  const auth = Buffer.from(`${cfg.apiKey}:${cfg.apiSecret}`).toString('base64');
+  // GET /resources/{resource_type}/{type}/{public_id} → 200 with details when
+  // the asset exists, 404 when it does not. public_id here is a plain UUID.
+  const url =
+    `${CLOUDINARY_API_BASE}/${cfg.cloudName}/resources/video/authenticated/` +
+    encodeURIComponent(uid);
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `Basic ${auth}` },
+  });
+
+  if (res.ok) return true;
+  if (res.status === 404) return false;
+  throw new Error(`Cloudinary resource check failed (HTTP ${res.status})`);
 }

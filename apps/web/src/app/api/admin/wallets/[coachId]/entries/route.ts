@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { recordWalletEntry } from '@/lib/promoEconomy';
+import { coachWalletBalances, recordWalletEntry } from '@/lib/promoEconomy';
 import { clientIp } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -27,8 +27,14 @@ const bodySchema = z
   .object({
     type: z.enum(['adjustment', 'payout']),
     amountMinor: z.number().int(),
-    currency: z.string().trim().min(1).max(8),
+    // Currency is a fixed enum, not free text (E7): a typo like 'NPRR' would
+    // otherwise mint a phantom balance bucket that fragments the coach's real
+    // balance so a genuine payout can never reconcile.
+    currency: z.enum(['NPR', 'USD']),
     note: z.string().trim().max(500).optional(),
+    // Escape hatch to record a payout that exceeds the tracked balance (e.g.
+    // reconciling a pre-app disbursement); off by default so the floor holds.
+    override: z.boolean().optional(),
   })
   .refine((v) => (v.type === 'payout' ? v.amountMinor < 0 : v.amountMinor !== 0), {
     message: 'payout must be negative; adjustment must be non-zero',
@@ -47,7 +53,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ coachId
 
   const parsed = bodySchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { type, amountMinor, currency, note } = parsed.data;
+  const { type, amountMinor, currency, note, override } = parsed.data;
 
   const db = getDb();
   const [coach] = await db
@@ -57,11 +63,25 @@ export async function POST(req: Request, { params }: { params: Promise<{ coachId
     .limit(1);
   if (!coach || coach.role !== 'coach') return json({ error: 'coach_not_found' }, 404);
 
+  // Payout balance floor (E7): a payout must not drive the coach's balance in
+  // that currency negative — over-paid money is unrecoverable in-app. Callers
+  // can pass override:true to record a reconciling payout beyond the balance.
+  if (type === 'payout' && !override) {
+    const balances = await coachWalletBalances(coachId);
+    const current = balances.find((b) => b.currency === currency)?.amountMinor ?? 0;
+    if (current + amountMinor < 0) {
+      return json(
+        { error: 'insufficient_balance', balanceMinor: current, currency },
+        409,
+      );
+    }
+  }
+
   const entry = await recordWalletEntry({
     coachId,
     type,
     amountMinor,
-    currency: currency.toUpperCase(),
+    currency,
     note: note ?? null,
     createdBy: principal.id,
   });

@@ -2,8 +2,7 @@ import { StyleSheet, View } from 'react-native';
 import type { Rank } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { METAL_RAMP } from '../../../components/ui/badges/achievementMetals';
-import { AppText } from '../../../components/ui';
-import { RankEmblem } from './RankEmblem';
+import { AppText, RankEmblem } from '../../../components/ui';
 
 /**
  * Small, restrained profile-card gamification strip: the metal rank emblem,

@@ -1,9 +1,10 @@
 'use client';
 
 import { formatMoney } from '@gym/shared';
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  Badge,
   Button,
   type Column,
   DataTable,
@@ -25,6 +26,8 @@ export interface WalletRow {
   displayName: string;
   email: string;
   coachTier: CoachTier;
+  /** True when the account no longer holds the coach role but still has a balance (E10). */
+  revoked: boolean;
   balances: WalletBalance[];
 }
 
@@ -35,6 +38,11 @@ export interface LedgerEntry {
   currency: string;
   note: string | null;
   createdAt: string;
+}
+
+interface WalletDetail {
+  balances: WalletBalance[];
+  entries: LedgerEntry[];
 }
 
 const DATE_FMT = new Intl.DateTimeFormat('en-US', {
@@ -52,45 +60,82 @@ const TYPE_LABEL: Record<LedgerEntry['type'], string> = {
 };
 
 /**
- * Per-coach wallet balances + ledger (SCALE-UP-PLAN §1.3 / §4.1). The ledger
- * is loaded ALL-UP server-side (wallets/page.tsx) and grouped by coach — there
- * is no per-coach ledger-read endpoint in the pinned API surface, only the
- * balances-only GET /api/admin/wallets and the entry-creating POST — so the
- * drawer reads from the already-loaded `ledgerByCoach` prop instead of
- * fetching. Only the "record adjustment/payout" action is a real mutation,
- * hitting POST /api/admin/wallets/[coachId]/entries; on success we
- * router.refresh() so both the balances table and the ledger reflect it.
+ * Per-coach wallet balances + ledger (SCALE-UP-PLAN §1.3 / §4.1). The drawer
+ * loads the coach's ledger from GET /api/admin/wallets/[coachId] when it opens
+ * (E9) — the old code sliced a global newest-500 feed, so an older coach whose
+ * rows fell off the tail showed a nonzero balance next to "No entries yet".
+ * Recording an adjustment/payout hits POST /api/admin/wallets/[coachId]/entries;
+ * on success we reload the drawer detail and router.refresh() the roster.
  */
-export function WalletsManager({
-  wallets,
-  ledgerByCoach,
-}: {
-  wallets: WalletRow[];
-  ledgerByCoach: Record<string, LedgerEntry[]>;
-}) {
+export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<WalletDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
   const [type, setType] = useState<'adjustment' | 'payout'>('adjustment');
+  // For adjustments the admin picks a direction (E8): a credit adds to the
+  // balance, a debit (clawback) subtracts. Payouts are always debits.
+  const [direction, setDirection] = useState<'credit' | 'debit'>('credit');
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState<(typeof CURRENCIES)[number]>('NPR');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Monotonic guard so a slow detail fetch for coach A can't overwrite the
+  // drawer after the admin has already opened coach B.
+  const detailSeq = useRef(0);
+
   const selected = wallets.find((w) => w.coachId === selectedId) ?? null;
+
+  const loadDetail = useCallback(async (coachId: string) => {
+    const seq = ++detailSeq.current;
+    setDetail(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    try {
+      const res = await fetch(`/api/admin/wallets/${encodeURIComponent(coachId)}`, {
+        credentials: 'include',
+      });
+      if (seq !== detailSeq.current) return;
+      if (!res.ok) {
+        setDetailError(
+          res.status === 403
+            ? 'You are not allowed to view this wallet.'
+            : 'Could not load this wallet ledger.',
+        );
+        setDetailLoading(false);
+        return;
+      }
+      const data = (await res.json()) as WalletDetail;
+      if (seq !== detailSeq.current) return;
+      setDetail({ balances: data.balances ?? [], entries: data.entries ?? [] });
+      setDetailLoading(false);
+    } catch {
+      if (seq !== detailSeq.current) return;
+      setDetailError('Network error.');
+      setDetailLoading(false);
+    }
+  }, []);
 
   function openRow(row: WalletRow) {
     setSelectedId(row.coachId);
     setType('adjustment');
+    setDirection('credit');
     setAmount('');
     setCurrency('NPR');
     setNote('');
     setError(null);
+    void loadDetail(row.coachId);
   }
 
   function close() {
     if (saving) return;
+    detailSeq.current++;
     setSelectedId(null);
+    setDetail(null);
   }
 
   async function recordEntry() {
@@ -101,7 +146,10 @@ export function WalletsManager({
       return;
     }
     const minor = Math.round(major * 100);
-    const signedMinor = type === 'payout' ? -Math.abs(minor) : Math.abs(minor);
+    // Sign: payouts and adjustment debits are negative; adjustment credits are
+    // positive (E8).
+    const negative = type === 'payout' || direction === 'debit';
+    const signedMinor = negative ? -Math.abs(minor) : Math.abs(minor);
     setSaving(true);
     setError(null);
     try {
@@ -120,10 +168,19 @@ export function WalletsManager({
         },
       );
       if (!res.ok) {
+        let code: string | null = null;
+        try {
+          const data = (await res.json()) as { error?: unknown };
+          code = typeof data.error === 'string' ? data.error : null;
+        } catch {
+          code = null;
+        }
         setError(
-          res.status === 403
-            ? 'You are not allowed to manage wallets.'
-            : 'Could not record that entry. Try again.',
+          code === 'insufficient_balance'
+            ? 'That payout is more than the coach’s current balance.'
+            : res.status === 403
+              ? 'You are not allowed to manage wallets.'
+              : 'Could not record that entry. Try again.',
         );
         setSaving(false);
         return;
@@ -131,6 +188,7 @@ export function WalletsManager({
       setSaving(false);
       setAmount('');
       setNote('');
+      await loadDetail(selected.coachId);
       router.refresh();
     } catch {
       setError('Network error.');
@@ -149,9 +207,13 @@ export function WalletsManager({
               fontFamily: 'var(--font-heading)',
               fontWeight: 600,
               fontSize: 14,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
             }}
           >
             {w.displayName || w.email}
+            {w.revoked ? <Badge tone="neutral">Revoked</Badge> : null}
           </div>
           <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{w.email}</div>
         </div>
@@ -193,6 +255,9 @@ export function WalletsManager({
     },
   ];
 
+  const drawerBalances = detail?.balances ?? selected?.balances ?? [];
+  const drawerEntries = detail?.entries ?? [];
+
   return (
     <>
       {wallets.length === 0 ? (
@@ -214,15 +279,16 @@ export function WalletsManager({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
               {selected.email}
+              {selected.revoked ? ' · coach role revoked (balance still owed)' : ''}
             </div>
 
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              {selected.balances.length === 0 ? (
+              {drawerBalances.length === 0 ? (
                 <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
                   No balance yet.
                 </span>
               ) : (
-                selected.balances.map((b) => (
+                drawerBalances.map((b) => (
                   <div
                     key={b.currency}
                     className="gt-card"
@@ -287,6 +353,37 @@ export function WalletsManager({
                 })}
               </div>
 
+              {type === 'adjustment' ? (
+                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                  {(['credit', 'debit'] as const).map((d) => {
+                    const active = direction === d;
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setDirection(d)}
+                        style={{
+                          flex: 1,
+                          padding: '6px 10px',
+                          borderRadius: 10,
+                          cursor: 'pointer',
+                          fontFamily: 'var(--font-heading)',
+                          fontSize: 12,
+                          fontWeight: 600,
+                          background: active ? 'var(--gt-card)' : 'transparent',
+                          color: 'var(--gt-text)',
+                          border: active
+                            ? '1px solid var(--gt-text-dim)'
+                            : '1px solid var(--gt-border)',
+                        }}
+                      >
+                        {d === 'credit' ? 'Credit (+)' : 'Debit (−)'}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+
               <div style={{ display: 'flex', gap: 10 }}>
                 <TextField
                   label="Amount"
@@ -331,11 +428,13 @@ export function WalletsManager({
                 style={{ resize: 'vertical', fontFamily: 'inherit', marginTop: 10, width: '100%' }}
               />
 
-              {type === 'payout' ? (
-                <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 8 }}>
-                  Recorded as a negative ledger entry (money paid out to the coach).
-                </div>
-              ) : null}
+              <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 8 }}>
+                {type === 'payout'
+                  ? 'Recorded as a negative ledger entry (money paid out to the coach).'
+                  : direction === 'debit'
+                    ? 'Recorded as a negative ledger entry (clawback).'
+                    : 'Recorded as a positive ledger entry (credit).'}
+              </div>
 
               {error ? (
                 <div style={{ color: '#ff8178', fontSize: 13, marginTop: 8 }}>
@@ -368,13 +467,17 @@ export function WalletsManager({
               >
                 Ledger
               </div>
-              {(ledgerByCoach[selected.coachId] ?? []).length === 0 ? (
+              {detailLoading ? (
+                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>Loading…</div>
+              ) : detailError ? (
+                <div style={{ fontSize: 13, color: '#ff8178' }}>{detailError}</div>
+              ) : drawerEntries.length === 0 ? (
                 <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
                   No entries yet.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {(ledgerByCoach[selected.coachId] ?? []).map((entry) => (
+                  {drawerEntries.map((entry) => (
                     <div
                       key={entry.id}
                       style={{

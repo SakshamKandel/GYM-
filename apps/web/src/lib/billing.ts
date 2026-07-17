@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
  * Billing mode switch.
@@ -31,4 +31,53 @@ export function verifyRevenueCatAuth(header: string | null): boolean {
   const b = Buffer.from(secret);
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
+}
+
+interface RevenueCatSignatureOptions {
+  secret?: string;
+  nowMs?: number;
+  toleranceMs?: number;
+}
+
+/**
+ * Verifies RevenueCat's optional HMAC signature over `timestamp.rawBody`.
+ * Authorization remains mandatory; this becomes a second check whenever
+ * REVENUECAT_WEBHOOK_SIGNATURE_SECRET is configured.
+ */
+export function verifyRevenueCatSignature(
+  rawBody: string,
+  header: string | null,
+  options: RevenueCatSignatureOptions = {},
+): boolean {
+  const secret = options.secret ?? process.env.REVENUECAT_WEBHOOK_SIGNATURE_SECRET;
+  if (!secret) return true;
+  if (!header) return false;
+
+  let timestamp: string | null = null;
+  const signatures: string[] = [];
+  for (const part of header.split(',')) {
+    const separator = part.indexOf('=');
+    if (separator < 1) continue;
+    const key = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    if (key === 't' && timestamp === null) timestamp = value;
+    if (key === 'v1') signatures.push(value);
+  }
+  if (!timestamp || signatures.length === 0 || !/^\d+$/.test(timestamp)) return false;
+
+  const timestampMs = Number(timestamp) * 1_000;
+  const nowMs = options.nowMs ?? Date.now();
+  const toleranceMs = options.toleranceMs ?? 5 * 60 * 1_000;
+  if (!Number.isSafeInteger(timestampMs) || Math.abs(nowMs - timestampMs) > toleranceMs) {
+    return false;
+  }
+
+  const expected = createHmac('sha256', secret)
+    .update(`${timestamp}.${rawBody}`)
+    .digest();
+  return signatures.some((signature) => {
+    if (!/^[0-9a-f]{64}$/i.test(signature)) return false;
+    const supplied = Buffer.from(signature, 'hex');
+    return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+  });
 }

@@ -1,6 +1,5 @@
 import * as Notifications from 'expo-notifications';
 import { AppState, Platform } from 'react-native';
-import { refreshBuddyUnread } from '../buddy/hooks';
 import { hydrateCheckIns } from '../checkin/store';
 import { useGamificationBadges } from '../gamification/store';
 import { refreshServerSuggestions } from '../progression/hooks';
@@ -34,14 +33,11 @@ import { useAuth } from '../../state/auth';
  *    useCoachThread's component state and reloads on screen focus, so the
  *    thread is already fresh whenever the member can actually see it. The
  *    system notification itself is the realtime signal here.
- *  - 'buddy_invite' / 'buddy_accept' / 'buddy_nudge' → no module refresh
- *    exists: useBuddyData is hook-local and already reloads on focus plus a
- *    12s poll while the Buddy tab is focused and foregrounded.
- *  - 'support_reply' / 'buddy_message' → refreshBuddyUnread() (SCALE-UP-PLAN
- *    §4.4): re-fetches GET /api/me/unread into the shared buddy store so the
- *    Support row's badge and a buddy's chat-icon badge update immediately —
- *    the open thread itself (support.tsx / buddy/chat/[linkId]) already
- *    reloads on focus/poll, same as coach_message above.
+ *  - 'support_reply' → deliberate no-op since the buddy feature (and its
+ *    shared unread store) was removed: the Settings Support-row badge does
+ *    its own focus fetch (features/support/api getSupportUnread) and the
+ *    open support thread reloads on focus/poll, same as coach_message above.
+ *    The system notification itself is the realtime signal.
  *  - 'application_decided' / 'tier_request_decided' / 'payment_decided' →
  *    useAuth.getState().refresh() (the same GET /api/me the debounced
  *    foreground catch-up uses). All three flip server-side state that only
@@ -106,17 +102,12 @@ function refreshForEvent(type: string): void {
     case 'payment_decided':
       void useAuth.getState().refresh();
       break;
-    case 'support_reply':
-    case 'buddy_message':
-      void refreshBuddyUnread();
-      break;
     case 'coach_plan':
     // falls through — no global store exists yet (see the module doc); the
     // Train/Food sections already reload on focus.
     default:
-      // coach_message / buddy_invite / buddy_accept / buddy_nudge / future
-      // types — no store refresh needed (see the module doc); the
-      // notification banner is the signal.
+      // coach_message / support_reply / future types — no store refresh
+      // needed (see the module doc); the notification banner is the signal.
       break;
   }
 }
@@ -154,9 +145,6 @@ function refreshOnForeground(): void {
   void useAuth.getState().refresh();
   void hydrateCheckIns();
   void refreshServerSuggestions();
-  // Covers missed support/buddy-message pushes (denied permission, doze, web
-  // has no pushes at all) — cheap single grouped query, safe to include here.
-  void refreshBuddyUnread();
 }
 
 /**

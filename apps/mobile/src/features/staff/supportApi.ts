@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BASE_URL } from '../../lib/api/client';
+import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
 
 /**
  * Staff console — support inbox API client (SCALE-UP-PLAN §4.4 / §5.3).
@@ -14,10 +14,17 @@ import { BASE_URL } from '../../lib/api/client';
  *   'unauthorized' → 401 (no/expired session token)
  *   'forbidden'    → 403 (signed in, but lacks 'support.thread.read'/'.reply')
  *   'invalid'      → 400 (validation rejected the request body)
+ *   'rate_limited' → 429 (too many requests — distinct from a bare network
+ *                    failure so the UI can show "slow down" copy)
  *   'network'      → offline, non-JSON, or a malformed/unexpected response
  */
 
-export type SupportErrorCode = 'unauthorized' | 'forbidden' | 'invalid' | 'network';
+export type SupportErrorCode =
+  | 'unauthorized'
+  | 'forbidden'
+  | 'invalid'
+  | 'rate_limited'
+  | 'network';
 
 export class SupportApiError extends Error {
   readonly code: SupportErrorCode;
@@ -92,25 +99,35 @@ interface SupportRequestOptions {
   body?: Record<string, unknown>;
 }
 
+/** Every support-inbox call gives up after this long (defect H2: the inbox
+ * used a bare `fetch` with no bound, so a hung connection could freeze the
+ * screen on "Loading…" forever). */
+const SUPPORT_REQUEST_TIMEOUT_MS = 15_000;
+
 function statusToCode(status: number): SupportErrorCode {
   if (status === 401) return 'unauthorized';
   if (status === 403) return 'forbidden';
   if (status === 400) return 'invalid';
+  if (status === 429) return 'rate_limited';
   return 'network';
 }
 
 async function supportRequest(opts: SupportRequestOptions): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${opts.path}`, {
-      method: opts.method,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${opts.token}`,
-        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+    res = await fetchWithTimeout(
+      `${BASE_URL}${opts.path}`,
+      {
+        method: opts.method,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${opts.token}`,
+          ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+        },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
+      SUPPORT_REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new SupportApiError('network', "Can't reach the server");
   }
@@ -142,7 +159,8 @@ export async function getAdminSupportThreads(token: string): Promise<SupportThre
 
 /**
  * GET /api/admin/support/threads/[accountId] → that account's support thread,
- * oldest → newest. Server-side this also marks inbound rows readByCoach=true.
+ * oldest → newest. Read-only (F2) — marking the thread read is a separate call,
+ * see markAdminSupportThreadRead.
  */
 export async function getAdminSupportThread(
   accountId: string,
@@ -154,6 +172,25 @@ export async function getAdminSupportThread(
     token,
   });
   return parse(supportMessagesSchema, data).messages;
+}
+
+/**
+ * POST /api/admin/support/threads/[accountId]/read (no body) → marks every
+ * inbound message on this thread readByCoach=true, clearing its unread badge
+ * in the inbox list (F2: mark-read was split out of GET into its own POST so
+ * a GET-CSRF can't silently clear the work queue). Callers should invoke this
+ * after successfully loading a thread; best-effort — a failure here shouldn't
+ * block the thread from displaying, so callers may choose to swallow errors.
+ */
+export async function markAdminSupportThreadRead(
+  accountId: string,
+  token: string,
+): Promise<void> {
+  await supportRequest({
+    method: 'POST',
+    path: `/api/admin/support/threads/${encodeURIComponent(accountId)}/read`,
+    token,
+  });
 }
 
 const supportReplyEnvelope = z.object({ message: supportMessageSchema });

@@ -17,13 +17,19 @@ export const runtime = 'nodejs';
  *
  *  - POST {userId, tier, reason?, startsAt?, expiresAt?}
  *      Guards (both, fail closed):
- *        1. requirePermission('coach.user.read') — coach/main_admin/super_admin.
+ *        1. requirePermission('client.tier_grant') — this key is in NO role
+ *           preset (see @gym/shared permissions), so ordinary coaches are
+ *           REJECTED here (fixes critical A1: a coach can no longer grant an
+ *           assigned client a permanent Elite tier). Only super_admin/main_admin
+ *           reach this route today (they bypass the matrix); a future per-account
+ *           override can re-enable it for trusted in-house coaches.
  *        2. requireCoachOwnsUser(principal, userId) — an ACTIVE assignment to
  *           THIS coach (super_admin/main_admin pass without a row). → 403
  *           { error:'forbidden' } if not owned.
- *      Dates are ISO-8601 strings (or null). expiresAt null = permanent; a past
- *      expiresAt lapses the tier immediately (effectiveTier collapses it at the
- *      auth choke point). Omitting a date field leaves that column untouched.
+ *      Dates are ISO-8601 strings (or null). For PAID tiers expiresAt is
+ *      REQUIRED, must be in the future, and at most 90 days out (A1 cap —
+ *      400 { error:'expiry_out_of_range' } otherwise); permanent/unbounded
+ *      grants are admin-only. Starter (a downgrade) is exempt from the cap.
  *
  * The audit row is attributed to the coach (setAccountTier logs
  * 'subscription.override' with the actor = caller), so the change log shows the
@@ -45,8 +51,12 @@ export function OPTIONS() {
 }
 
 export async function POST(req: Request) {
-  // Base gate: the caller must be able to read coach users (coach/main/super).
-  const principal = await requirePermission(req, 'coach.user.read');
+  // Base gate: coach-initiated client tier grants require 'client.tier_grant',
+  // which is deliberately absent from EVERY role preset (incl. 'coach') — only
+  // super_admin/main_admin pass via the matrix bypass. This closes the A1
+  // bypass where any coach could POST here directly and grant an assigned
+  // client a permanent Elite tier with no payment.
+  const principal = await requirePermission(req, 'client.tier_grant');
   if (principal instanceof Response) return principal;
 
   const parsed = postSchema.safeParse(await readJson(req));
@@ -76,7 +86,25 @@ export async function POST(req: Request) {
     return json({ error: 'forbidden' }, 403);
   }
 
-  await setAccountTier(userId, tier, principal, reason, { startsAt, expiresAt });
+  // Coach comps are time-boxed (A1): a PAID tier granted through THIS route must
+  // carry a non-null expiry no more than 90 days out — never permanent, never a
+  // past date. Unrestricted or permanent grants are an admin-only capability
+  // (POST /api/admin/subscriptions). Starter (a downgrade) is exempt.
+  if (tier !== 'starter') {
+    const now = Date.now();
+    const MAX_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
+    if (
+      !(expiresAt instanceof Date) ||
+      expiresAt.getTime() <= now ||
+      expiresAt.getTime() > now + MAX_WINDOW_MS
+    ) {
+      return json({ error: 'expiry_out_of_range' }, 400);
+    }
+  }
+
+  // source 'coach' stamps provenance so the RevenueCat webhook won't clobber
+  // this comp while its window is still in force (B4).
+  await setAccountTier(userId, tier, principal, reason, { startsAt, expiresAt }, 'coach');
 
   return json({ ok: true, accountId: userId, tier }, 200);
 }

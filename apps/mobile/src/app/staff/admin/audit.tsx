@@ -20,7 +20,7 @@ import {
   type AuditEntry,
   toStaffError,
 } from '../../../features/staff/api';
-import { isTopAdmin, replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { replaceStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
 
 /**
@@ -40,18 +40,47 @@ import { useAuth } from '../../../state/auth';
  * `audit_log.action` (server: `eq(auditLog.action, action)`, not a prefix/
  * substring test) — so each chip must send one real, fully-qualified action
  * string a `logAudit(...)` call site actually writes, not a category guess.
- * Sourced from the call sites in apps/web/src (coach.assign, roles.grant,
- * subscription.override, account.suspend, content.video.create) plus the
- * promo-economy work's coach.application.approve.
+ *
+ * Defect F5: the original list only covered the pre-scale-up actions and
+ * silently dropped every payment/promo/pricing/wallet/coach-tier/support/
+ * content-mutation/roles-revoke/account-reactivate action the scale-up wave
+ * added — an admin filtering for "Payments approved" saw an empty feed with
+ * no hint why. Extended to the full existing action-string set (sourced from
+ * `logAudit(...)` call sites across apps/web/src) PLUS contract §4.12's new
+ * strings (`staff.login`, `staff.logout`, `coach.offboard`, `payment.refund`,
+ * `broadcast.send`, `promo.grant.expire`) that WP1/WP2/WP6 land in parallel —
+ * action strings are a FROZEN, stable contract so these chips are safe to
+ * ship ahead of those routes.
  */
 const ACTION_FILTERS: { key: string; label: string }[] = [
   { key: '', label: 'All' },
   { key: 'subscription.override', label: 'Tier changes' },
   { key: 'coach.assign', label: 'Coach assigned' },
-  { key: 'coach.application.approve', label: 'Applications' },
+  { key: 'coach.unassign', label: 'Coach unassigned' },
+  { key: 'coach.offboard', label: 'Coach offboarded' },
+  { key: 'coach.application.approve', label: 'Applications approved' },
+  { key: 'coach.application.reject', label: 'Applications rejected' },
+  { key: 'coach.tier.change', label: 'Coach tier approved' },
+  { key: 'coach.tier.reject', label: 'Coach tier rejected' },
   { key: 'roles.grant', label: 'Roles granted' },
+  { key: 'roles.revoke', label: 'Roles revoked' },
+  { key: 'staff.login', label: 'Staff sign-ins' },
+  { key: 'staff.logout', label: 'Staff sign-outs' },
   { key: 'account.suspend', label: 'Suspensions' },
+  { key: 'account.reactivate', label: 'Reactivations' },
   { key: 'content.video.create', label: 'Videos added' },
+  { key: 'content.video.update', label: 'Videos updated' },
+  { key: 'content.video.delete', label: 'Videos removed' },
+  { key: 'payment.approve', label: 'Payments approved' },
+  { key: 'payment.reject', label: 'Payments rejected' },
+  { key: 'payment.refund', label: 'Payments refunded' },
+  { key: 'promo.create', label: 'Promo created' },
+  { key: 'promo.update', label: 'Promo updated' },
+  { key: 'promo.grant.expire', label: 'Promo grants expired' },
+  { key: 'pricing.update', label: 'Pricing updated' },
+  { key: 'wallet.adjust', label: 'Wallet adjustments' },
+  { key: 'support.reply', label: 'Support replies' },
+  { key: 'broadcast.send', label: 'Broadcasts sent' },
 ];
 
 /** Short relative time ("3m", "2h", "5d") with an absolute fallback. */
@@ -79,8 +108,8 @@ function humanAction(action: string): string {
 
 export default function AuditScreen() {
   const token = useAuth((s) => s.token);
-  const staffRole = useAuth((s) => s.staffRole);
-  const canViewAudit = isTopAdmin(staffRole);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
+  const canViewAudit = staffCan(staffPermissions, 'audit.read');
 
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -112,6 +141,10 @@ export default function AuditScreen() {
   const loadMore = useCallback(async () => {
     if (!token || !cursor || loadingMore) return;
     setLoadingMore(true);
+    // Clear a previous failure on retry (G9): otherwise a transient error
+    // permanently replaces "Load more" with a stale failure line even after
+    // a subsequent call succeeds.
+    setError(null);
     try {
       const page = await getAudit(token, {
         cursor,

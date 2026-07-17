@@ -17,6 +17,7 @@ import {
   SkeletonRow,
   Tag,
 } from '../../components/ui';
+import { EmptyArt } from '../../components/visual';
 import { BackHeader } from '../../features/body/components/BackHeader';
 import { useHistory } from '../../features/history/hooks';
 import {
@@ -283,7 +284,7 @@ function WorkoutRow({
 function EmptyState() {
   return (
     <Animated.View entering={enterFade(0)} style={styles.emptyWrap}>
-      <IconChip icon="barbell" color={colors.surface} iconColor={colors.textFaint} size={52} />
+      <EmptyArt variant="history" />
       <AppText variant="bodyBold" center style={styles.emptyTitle}>
         No sessions yet
       </AppText>

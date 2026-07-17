@@ -1,7 +1,7 @@
 import { accounts, admins, coachProfiles } from '@gym/db';
 import { asc, eq } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
-import type { StaffRole } from '@/lib/auth';
+import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
 import { MembersDirectory } from './_components/MembersDirectory';
@@ -18,17 +18,12 @@ const PAGE_SIZE = 50;
  * member_admin + support_admin). The layout already guards the subtree, but we
  * re-check here so hitting the URL directly still fails safe.
  */
-const CAN_READ: readonly StaffRole[] = [
-  'super_admin',
-  'main_admin',
-  'member_admin',
-  'support_admin',
-];
+const CAN_READ = 'members.read' as const;
 
 /** Which roles may mutate — drives whether the drawer shows action controls. */
-const CAN_SUSPEND: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
-const CAN_TIER: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
-const CAN_ASSIGN: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
+const CAN_SUSPEND = 'members.suspend' as const;
+const CAN_TIER = 'subscription.override' as const;
+const CAN_ASSIGN = 'coach.assign' as const;
 
 /**
  * Loads page 1 of the member directory directly via getDb so the first paint
@@ -48,6 +43,7 @@ async function loadFirstPage(): Promise<{ members: MemberRow[]; cursor: string |
       email: accounts.email,
       displayName: accounts.displayName,
       tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
       status: accounts.status,
       createdAt: accounts.createdAt,
       staffRole: admins.role,
@@ -67,6 +63,7 @@ async function loadFirstPage(): Promise<{ members: MemberRow[]; cursor: string |
     email: r.email,
     displayName: r.displayName,
     tier: r.tier,
+    tierExpiresAt: r.tierExpiresAt ? r.tierExpiresAt.toISOString() : null,
     status: r.status,
     createdAt: r.createdAt.toISOString(),
     staffRole: r.staffRole ?? null,
@@ -106,7 +103,8 @@ async function loadCoaches(): Promise<CoachOption[]> {
 export default async function AdminMembersPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (!CAN_READ.includes(principal.role)) redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  if (!permissions.has(CAN_READ)) redirect('/admin');
 
   const [{ members, cursor }, coaches] = await Promise.all([loadFirstPage(), loadCoaches()]);
 
@@ -117,9 +115,9 @@ export default async function AdminMembersPage() {
         initialCursor={cursor}
         coaches={coaches}
         callerRole={principal.role}
-        canSuspend={CAN_SUSPEND.includes(principal.role)}
-        canTier={CAN_TIER.includes(principal.role)}
-        canAssign={CAN_ASSIGN.includes(principal.role)}
+        canSuspend={permissions.has(CAN_SUSPEND)}
+        canTier={permissions.has(CAN_TIER)}
+        canAssign={permissions.has(CAN_ASSIGN)}
       />
     </div>
   );

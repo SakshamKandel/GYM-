@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Badge,
   Button,
@@ -67,13 +67,24 @@ export function CoachDetail({
   const [endingId, setEndingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Edit-coach form state, seeded from the current summary each time the
-  // selected coach changes (parent remounts this via key={coach.id}).
+  // Edit-coach form state, seeded from the current summary.
   const [isActive, setIsActive] = useState(coach.isActive !== false);
   const [coachTier, setCoachTier] = useState<CoachTier>(coach.coachTier);
   const [capacity, setCapacity] = useState(String(coach.capacity));
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+
+  // Re-seed the edit form whenever the server-provided coach values change (C8).
+  // The parent remounts on coach.id change, but an in-pane mutation (approving a
+  // tier request, saving an edit) calls onChanged() → router.refresh(), which
+  // re-renders THIS same instance with fresh props. Without this the stale local
+  // coachTier would be re-sent on the next Save and silently revert the tier that
+  // was just approved.
+  useEffect(() => {
+    setIsActive(coach.isActive !== false);
+    setCoachTier(coach.coachTier);
+    setCapacity(String(coach.capacity));
+  }, [coach.isActive, coach.coachTier, coach.capacity]);
 
   // Tier-request review state: which request id is mid-decision.
   const [decidingId, setDecidingId] = useState<string | null>(null);
@@ -94,10 +105,20 @@ export function CoachDetail({
 
   async function saveEdit() {
     const capacityNum = Number(capacity);
-    if (!Number.isInteger(capacityNum) || capacityNum < 0) {
-      setEditError('Capacity must be a whole number of 0 or more.');
+    // Match the server's 1..200 bound (C10) so an out-of-range value is caught
+    // here with a clear message instead of a generic 400 from the API.
+    if (!Number.isInteger(capacityNum) || capacityNum < 1 || capacityNum > 200) {
+      setEditError('Capacity must be a whole number from 1 to 200.');
       return;
     }
+    // Send only the fields the admin actually changed (C8) — a whole-object PATCH
+    // would re-send a stale coachTier and clobber a tier that was upgraded
+    // elsewhere between load and save.
+    const patch: { isActive?: boolean; coachTier?: CoachTier; capacity?: number } = {};
+    if (isActive !== (coach.isActive !== false)) patch.isActive = isActive;
+    if (coachTier !== coach.coachTier) patch.coachTier = coachTier;
+    if (capacityNum !== coach.capacity) patch.capacity = capacityNum;
+    if (Object.keys(patch).length === 0) return; // nothing dirty
     setSavingEdit(true);
     setEditError(null);
     try {
@@ -107,11 +128,7 @@ export function CoachDetail({
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({
-            isActive,
-            coachTier,
-            capacity: capacityNum,
-          }),
+          body: JSON.stringify(patch),
         },
       );
       if (!res.ok) {
@@ -298,7 +315,8 @@ export function CoachDetail({
                 </span>
                 <input
                   type="number"
-                  min={0}
+                  min={1}
+                  max={200}
                   step={1}
                   className="gt-input"
                   value={capacity}

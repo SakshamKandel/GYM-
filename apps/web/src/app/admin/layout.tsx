@@ -1,8 +1,9 @@
+import type { Permission } from '@gym/shared';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { ConsoleShell, type NavItem } from '@/components/console';
-import type { StaffRole } from '@/lib/auth';
+import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
 
 export const runtime = 'nodejs';
@@ -10,90 +11,34 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Staff roles allowed into the admin console at all. A `coach` is NOT one of
- * them — coaches use /coach. Anyone outside this set (no cookie, non-staff,
- * plain coach, suspended) is bounced to /admin/login.
+ * The console nav carries the permission that unlocks each item. It is checked
+ * against the same effective permission set (role preset plus account
+ * overrides) enforced by the API routes. Overview has no `perm` because its
+ * own tiles are permission-gated. Hiding a link is a courtesy only; every page
+ * re-checks its permission server-side.
  */
-const ADMIN_ROLES: readonly StaffRole[] = [
-  'super_admin',
-  'main_admin',
-  'member_admin',
-  'content_admin',
-  'support_admin',
+const NAV_ITEMS: { href: string; label: string; perm?: Permission; match?: 'exact' }[] = [
+  { href: '/admin', label: 'Overview', match: 'exact' },
+  { href: '/admin/members', label: 'Members', perm: 'members.read' },
+  { href: '/admin/coaches', label: 'Coaches', perm: 'coach.assign' },
+  { href: '/admin/applications', label: 'Applications', perm: 'coach.application.review' },
+  { href: '/admin/content', label: 'Content', perm: 'content.manage' },
+  { href: '/admin/subscriptions', label: 'Subscriptions', perm: 'subscription.override' },
+  { href: '/admin/payments', label: 'Payments', perm: 'payments.review' },
+  { href: '/admin/support', label: 'Support', perm: 'support.thread.read' },
+  { href: '/admin/promos', label: 'Promos', perm: 'promo.manage' },
+  { href: '/admin/wallets', label: 'Wallets', perm: 'wallet.manage' },
+  { href: '/admin/pricing', label: 'Pricing', perm: 'pricing.manage' },
+  { href: '/admin/broadcast', label: 'Broadcast', perm: 'broadcast.send' },
+  { href: '/admin/staff', label: 'Staff', perm: 'roles.grant' },
+  { href: '/admin/audit', label: 'Audit', perm: 'audit.read' },
 ];
 
-/**
- * Per-section role gates mirroring lib/authz.ts roleHasPermission. A nav item
- * renders only when the signed-in role satisfies its predicate; super_admin
- * AND main_admin pass every gate (main_admin holds the full permission set —
- * its rank limits are enforced per-operation by the API routes, not here).
- * This only HIDES a link — page agents MUST re-check the same permission
- * server-side (requirePermission) as the real access control.
- */
-function isTopAdmin(role: StaffRole): boolean {
-  return role === 'super_admin' || role === 'main_admin';
-}
-function canMembers(role: StaffRole): boolean {
-  return isTopAdmin(role) || role === 'member_admin' || role === 'support_admin';
-}
-function canCoaches(role: StaffRole): boolean {
-  return isTopAdmin(role) || role === 'member_admin';
-}
-function canContent(role: StaffRole): boolean {
-  return isTopAdmin(role) || role === 'content_admin';
-}
-function canSubscriptions(role: StaffRole): boolean {
-  return isTopAdmin(role) || role === 'member_admin';
-}
-/** Mirrors the 'coach.application.review' grant (super/main + member_admin). */
-function canApplications(role: StaffRole): boolean {
-  return isTopAdmin(role) || role === 'member_admin';
-}
-/** Mirrors the 'payments.review' grant (super/main + member_admin). */
-function canPayments(role: StaffRole): boolean {
-  return isTopAdmin(role) || role === 'member_admin';
-}
-/** Mirrors the 'support.thread.read' grant (super/main + support_admin). */
-function canSupport(role: StaffRole): boolean {
-  return isTopAdmin(role) || role === 'support_admin';
-}
-/** Mirrors the 'promo.manage' grant — super/main ONLY. */
-function canPromos(role: StaffRole): boolean {
-  return isTopAdmin(role);
-}
-/** Mirrors the 'wallet.manage' grant — super/main ONLY. */
-function canWallets(role: StaffRole): boolean {
-  return isTopAdmin(role);
-}
-/** Mirrors the 'pricing.manage' grant — super/main ONLY. */
-function canPricing(role: StaffRole): boolean {
-  return isTopAdmin(role);
-}
-function canStaff(role: StaffRole): boolean {
-  return isTopAdmin(role);
-}
-function canAudit(role: StaffRole): boolean {
-  return isTopAdmin(role);
-}
-
-/** Builds the visible nav for a role. Overview is always present. */
-function navFor(role: StaffRole): NavItem[] {
-  const items: NavItem[] = [{ href: '/admin', label: 'Overview', match: 'exact' }];
-  if (canMembers(role)) items.push({ href: '/admin/members', label: 'Members' });
-  if (canCoaches(role)) items.push({ href: '/admin/coaches', label: 'Coaches' });
-  if (canApplications(role))
-    items.push({ href: '/admin/applications', label: 'Applications' });
-  if (canContent(role)) items.push({ href: '/admin/content', label: 'Content' });
-  if (canSubscriptions(role))
-    items.push({ href: '/admin/subscriptions', label: 'Subscriptions' });
-  if (canPayments(role)) items.push({ href: '/admin/payments', label: 'Payments' });
-  if (canSupport(role)) items.push({ href: '/admin/support', label: 'Support' });
-  if (canPromos(role)) items.push({ href: '/admin/promos', label: 'Promos' });
-  if (canWallets(role)) items.push({ href: '/admin/wallets', label: 'Wallets' });
-  if (canPricing(role)) items.push({ href: '/admin/pricing', label: 'Pricing' });
-  if (canStaff(role)) items.push({ href: '/admin/staff', label: 'Staff' });
-  if (canAudit(role)) items.push({ href: '/admin/audit', label: 'Audit' });
-  return items;
+/** Builds the visible nav from the server-resolved effective permission set. */
+function navFor(permissions: ReadonlySet<Permission>): NavItem[] {
+  return NAV_ITEMS.filter((item) => item.perm == null || permissions.has(item.perm)).map(
+    ({ href, label, match }) => ({ href, label, ...(match ? { match } : {}) }),
+  );
 }
 
 /**
@@ -112,17 +57,21 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   const isLoginRoute = pathname.startsWith('/admin/login');
 
   const principal = await staffFromCookie();
-  const isAdmin = principal ? ADMIN_ROLES.includes(principal.role) : false;
-
   // Login route: never guard, never show the shell (its page owns its own UI).
   if (isLoginRoute) return <>{children}</>;
 
-  if (!principal || !isAdmin) redirect('/admin/login');
+  if (!principal) redirect('/admin/login');
+
+  const permissions = await effectivePermissionSet(principal);
+  const isAdmin = NAV_ITEMS.some(
+    (item) => item.perm !== undefined && permissions.has(item.perm),
+  );
+  if (!isAdmin) redirect('/admin/login');
 
   return (
     <ConsoleShell
       brand="Admin Console"
-      nav={navFor(principal.role)}
+      nav={navFor(permissions)}
       pathname={pathname}
       email={principal.email}
       loginHref="/admin/login"

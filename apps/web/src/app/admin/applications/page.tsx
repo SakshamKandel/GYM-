@@ -1,8 +1,8 @@
 import { accounts, coachApplications } from '@gym/db';
-import { desc, eq } from 'drizzle-orm';
+import { desc, eq, ne } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
-import type { StaffRole } from '@/lib/auth';
+import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
 import {
@@ -20,42 +20,57 @@ export const dynamic = 'force-dynamic';
  * we re-check the specific permission here so hitting the URL directly still
  * fails safe.
  */
-const CAN_REVIEW: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
 
-const CAP = 300;
+/** Cap on DECIDED (approved/rejected) history only — pending is loaded in full
+ * so old, still-actionable applications can never fall off the bottom of a
+ * fixed newest-N window (C14). */
+const DECIDED_CAP = 300;
 
 /**
- * Loads every coach application (any status), newest first, joined to the
- * applicant's account for email/name. Portfolios are small text/jsonb blobs —
- * loading the full row here means the detail drawer needs no per-row fetch.
+ * Loads coach applications joined to the applicant's account for email/name.
+ * PENDING applications are loaded unbounded — they're the work queue and must
+ * never be hidden by a cap — while decided (approved/rejected) history is capped
+ * (C14). Portfolios are small text/jsonb blobs, so loading the full row here
+ * means the detail drawer needs no per-row fetch.
  */
 async function loadApplications(): Promise<ApplicationRow[]> {
   const db = getDb();
-  const rows = await db
-    .select({
-      id: coachApplications.id,
-      accountId: coachApplications.accountId,
-      accountEmail: accounts.email,
-      accountDisplayName: accounts.displayName,
-      displayName: coachApplications.displayName,
-      headline: coachApplications.headline,
-      bio: coachApplications.bio,
-      yearsExperience: coachApplications.yearsExperience,
-      specialties: coachApplications.specialties,
-      certifications: coachApplications.certifications,
-      achievements: coachApplications.achievements,
-      avatarUrl: coachApplications.avatarUrl,
-      status: coachApplications.status,
-      reviewNote: coachApplications.reviewNote,
-      createdAt: coachApplications.createdAt,
-      decidedAt: coachApplications.decidedAt,
-    })
-    .from(coachApplications)
-    .innerJoin(accounts, eq(accounts.id, coachApplications.accountId))
-    .orderBy(desc(coachApplications.createdAt))
-    .limit(CAP);
+  const cols = {
+    id: coachApplications.id,
+    accountId: coachApplications.accountId,
+    accountEmail: accounts.email,
+    accountDisplayName: accounts.displayName,
+    displayName: coachApplications.displayName,
+    headline: coachApplications.headline,
+    bio: coachApplications.bio,
+    yearsExperience: coachApplications.yearsExperience,
+    specialties: coachApplications.specialties,
+    certifications: coachApplications.certifications,
+    achievements: coachApplications.achievements,
+    avatarUrl: coachApplications.avatarUrl,
+    status: coachApplications.status,
+    reviewNote: coachApplications.reviewNote,
+    createdAt: coachApplications.createdAt,
+    decidedAt: coachApplications.decidedAt,
+  };
 
-  return rows.map((r) => ({
+  const [pendingRows, decidedRows] = await Promise.all([
+    db
+      .select(cols)
+      .from(coachApplications)
+      .innerJoin(accounts, eq(accounts.id, coachApplications.accountId))
+      .where(eq(coachApplications.status, 'pending'))
+      .orderBy(desc(coachApplications.createdAt)),
+    db
+      .select(cols)
+      .from(coachApplications)
+      .innerJoin(accounts, eq(accounts.id, coachApplications.accountId))
+      .where(ne(coachApplications.status, 'pending'))
+      .orderBy(desc(coachApplications.createdAt))
+      .limit(DECIDED_CAP),
+  ]);
+
+  return [...pendingRows, ...decidedRows].map((r) => ({
     id: r.id,
     accountId: r.accountId,
     accountEmail: r.accountEmail,
@@ -78,7 +93,9 @@ async function loadApplications(): Promise<ApplicationRow[]> {
 export default async function AdminApplicationsPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (!CAN_REVIEW.includes(principal.role)) redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  const canReview = permissions.has('coach.application.review');
+  if (!canReview) redirect('/admin');
 
   const applications = await loadApplications();
   const pending = applications.filter((a) => a.status === 'pending').length;
@@ -106,7 +123,7 @@ export default async function AdminApplicationsPage() {
         <StatTile label="Rejected" value={rejected} />
       </div>
 
-      <ApplicationsManager applications={applications} canReview={CAN_REVIEW.includes(principal.role)} />
+      <ApplicationsManager applications={applications} canReview={canReview} />
     </div>
   );
 }

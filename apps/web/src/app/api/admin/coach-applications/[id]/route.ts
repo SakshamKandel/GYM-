@@ -129,7 +129,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const ip = req.headers.get('x-forwarded-for');
 
   if (action === 'reject') {
-    await db
+    // CAS-guard the reject exactly like approve below: if a concurrent approve
+    // already flipped this row out of 'pending', our UPDATE matches 0 rows and
+    // we 404 the loser — otherwise we'd audit a spurious rejection and push a
+    // contradictory "not approved" notification to a just-approved coach (C5).
+    const rejected = await db
       .update(coachApplications)
       .set({
         status: 'rejected',
@@ -137,7 +141,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         decidedBy: principal.id,
         decidedAt: new Date(),
       })
-      .where(and(eq(coachApplications.id, id), eq(coachApplications.status, 'pending')));
+      .where(and(eq(coachApplications.id, id), eq(coachApplications.status, 'pending')))
+      .returning({ id: coachApplications.id });
+    if (rejected.length === 0) return json({ error: 'not_found' }, 404);
 
     await logAudit(
       principal,
@@ -191,40 +197,85 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     .returning({ id: coachApplications.id });
   if (updated.length === 0) return json({ error: 'not_found' }, 404);
 
-  // 1. Grant the staff role.
-  await db
-    .insert(admins)
-    .values({ accountId: application.accountId, role: 'coach' })
-    .onConflictDoUpdate({ target: admins.accountId, set: { role: 'coach' } });
+  // The CAS flip above committed (neon-http is per-statement, no multi-statement
+  // transaction). The three side effects below are all idempotent, but if any
+  // throws (transient DB blip, promo-code retry exhaustion) the application would
+  // be stranded 'approved' with no role/profile/promo — and a retry would 404 at
+  // the pending-check above, requiring manual DB repair (C6). Compensate: on any
+  // failure, revert the row to 'pending' so a retry cleanly re-runs the whole
+  // flow. The revert is CAS-guarded to our own 'approved' flip.
+  try {
+    // 1. Grant the staff role. The conflict update is guarded by
+    // setWhere(role='coach') so a race that granted this account a DIFFERENT
+    // staff role between the adminRoleOf() pre-check and here can never be
+    // silently demoted to 'coach' (C7) — the update simply no-ops, leaving the
+    // higher role intact. A brand-new account (no admins row) still inserts
+    // role='coach' normally.
+    await db
+      .insert(admins)
+      .values({ accountId: application.accountId, role: 'coach' })
+      .onConflictDoUpdate({
+        target: admins.accountId,
+        set: { role: 'coach' },
+        setWhere: eq(admins.role, 'coach'),
+      });
 
-  // 2. Upsert the public coach profile from the application fields.
-  const profileFields = {
-    displayName: application.displayName,
-    headline: application.headline,
-    bio: application.bio,
-    avatarUrl: application.avatarUrl,
-    coachTier: tier,
-    specialties: application.specialties,
-    certifications: application.certifications,
-    achievements: application.achievements,
-    yearsExperience: application.yearsExperience,
-  };
-  await db
-    .insert(coachProfiles)
-    .values({ accountId: application.accountId, ...profileFields })
-    .onConflictDoUpdate({ target: coachProfiles.accountId, set: profileFields });
+    // 2. Upsert the public coach profile from the application fields — but ONLY
+    // when this account isn't already a live coach (C4). Approving a stale
+    // application for an existing coach must never clobber their current,
+    // possibly-edited profile/tier back to the application snapshot; the role
+    // grant + promo code below are idempotent, so a re-approval is otherwise a
+    // no-op for them.
+    if (existingRole !== 'coach') {
+      const profileFields = {
+        displayName: application.displayName,
+        headline: application.headline,
+        bio: application.bio,
+        avatarUrl: application.avatarUrl,
+        coachTier: tier,
+        specialties: application.specialties,
+        certifications: application.certifications,
+        achievements: application.achievements,
+        yearsExperience: application.yearsExperience,
+        // Reactivate on approve: a previously-offboarded coach who re-applies has
+        // a surviving coach_profiles row with isActive=false (offboardCoach keeps
+        // the row for history/wallet). Without this, onConflictDoUpdate leaves the
+        // stale isActive=false and the re-approved coach stays invisible in
+        // discovery + un-assignable (409 'inactive'), silently breaking re-onboarding.
+        isActive: true,
+      };
+      await db
+        .insert(coachProfiles)
+        .values({ accountId: application.accountId, ...profileFields })
+        .onConflictDoUpdate({ target: coachProfiles.accountId, set: profileFields });
+    }
 
-  // 3. Generate the coach's promo code — idempotent: skip if one already exists
-  // (a retried approve call must never mint a second code for the same coach).
-  // Safe under concurrency now: only the single winner of the CAS flip above
-  // ever reaches this line for a given application.
-  const existingCode = await db
-    .select({ id: promoCodes.id })
-    .from(promoCodes)
-    .where(eq(promoCodes.ownerCoachId, application.accountId))
-    .limit(1);
-  if (existingCode.length === 0) {
-    await createCoachPromoCode(db, application.accountId, application.displayName, principal.id);
+    // 3. Generate the coach's promo code — idempotent: skip if one already exists
+    // (a retried approve call must never mint a second code for the same coach).
+    // Safe under concurrency now: only the single winner of the CAS flip above
+    // ever reaches this line for a given application.
+    const existingCode = await db
+      .select({ id: promoCodes.id })
+      .from(promoCodes)
+      .where(eq(promoCodes.ownerCoachId, application.accountId))
+      .limit(1);
+    if (existingCode.length === 0) {
+      await createCoachPromoCode(db, application.accountId, application.displayName, principal.id);
+    }
+  } catch (err) {
+    // Roll the application back to 'pending' so the admin can retry. Guarded so
+    // we only revert the row WE just approved. Best-effort — if the revert also
+    // fails the row stays 'approved' (no worse than before), so swallow it.
+    try {
+      await db
+        .update(coachApplications)
+        .set({ status: 'pending', decidedBy: null, decidedAt: null, reviewNote: null })
+        .where(and(eq(coachApplications.id, id), eq(coachApplications.status, 'approved')));
+    } catch {
+      // ignore — surfacing the original failure matters more than the revert.
+    }
+    console.error('coach.application.approve: side effects failed, reverted to pending', err);
+    return json({ error: 'approve_failed' }, 500);
   }
 
   await logAudit(

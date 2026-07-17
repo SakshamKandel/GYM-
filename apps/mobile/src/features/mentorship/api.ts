@@ -65,6 +65,9 @@ const coachCardSchema = z.object({
   displayName: z.string(),
   headline: z.string(),
   avatarUrl: z.string().nullable(),
+  /** Public profile photo (contract: string | null once the web API ships it).
+   * `.catch(null)` keeps older server responses parseable. */
+  photoUrl: z.string().nullable().catch(null),
   specialties: z.array(z.string()),
   yearsExperience: z.number(),
   acceptingClients: z.boolean(),
@@ -94,12 +97,31 @@ const certificationSchema = z.object({
 });
 export type CoachCertification = z.infer<typeof certificationSchema>;
 
+/** One anonymised coach-logged client win on the PUBLIC profile — title and
+ * date only, never the client's name/id (PII policy). */
+const publicMilestoneSchema = z.object({
+  title: z.string(),
+  achievedAt: z.string(),
+});
+export type CoachPublicMilestone = z.infer<typeof publicMilestoneSchema>;
+
 const coachDetailSchema = coachCardSchema.extend({
   bio: z.string(),
   certifications: z.array(certificationSchema),
   achievements: z.array(z.string()),
   replyWindowHours: z.number(),
   capacity: z.number(),
+  /** Recent client wins (social proof). `.catch([])` — servers that don't
+   * send the field yet must not break the parse; bad rows are dropped. */
+  milestones: z
+    .array(z.unknown())
+    .transform((arr) =>
+      arr.flatMap((raw): CoachPublicMilestone[] => {
+        const parsed = publicMilestoneSchema.safeParse(raw);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    )
+    .catch([]),
 });
 export type CoachDetail = z.infer<typeof coachDetailSchema>;
 

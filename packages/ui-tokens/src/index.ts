@@ -36,6 +36,13 @@ export const colors = {
   // counterpoint block per screen; the rest stay charcoal (`surface`).
   /** Hero-block fill — alias of `accent`. Black text on top (`onBlock`). */
   blockRed: '#FF3B30',
+  /**
+   * Lighter warm-red highlight for decorative red-on-red motifs on the hero
+   * block (energy glow, arcs). ONLY lighter-than-blockRed tints go here — a
+   * highlight lightens the surface, so black `onBlock` ink stays ≥4.5:1 even
+   * where a motif sits under text (a darker tint would drop it, so never).
+   */
+  blockRedGlow: '#FF7A6E',
   /** Warm paper-cream counterpoint block. Black text on top (`onBlock`). */
   blockCream: '#F4F2ED',
   /** Text/icons on `blockRed` and `blockCream` (near-black, matches `bg`). */

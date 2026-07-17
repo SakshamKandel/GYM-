@@ -41,12 +41,17 @@ export function AssignClient({
   const [searching, setSearching] = useState(false);
   const [assigningId, setAssigningId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // When the server refuses on capacity/inactive (409), remember which member so
+  // the admin can retry with force:true via an "Assign anyway" affordance (C9).
+  const [forceTarget, setForceTarget] = useState<{ userId: string; reason: 'full' | 'inactive' } | null>(null);
   // Guards against out-of-order responses clobbering a newer query.
   const reqSeq = useRef(0);
 
   const trimmed = q.trim();
 
   useEffect(() => {
+    // A new query invalidates any pending "assign anyway" override.
+    setForceTarget(null);
     if (trimmed.length === 0) {
       setResults([]);
       setSearching(false);
@@ -81,17 +86,37 @@ export function AssignClient({
     return () => clearTimeout(t);
   }, [trimmed]);
 
-  async function assign(userId: string) {
+  async function assign(userId: string, force = false) {
     setAssigningId(userId);
     setError(null);
+    if (!force) setForceTarget(null);
     try {
       const res = await fetch('/api/admin/assignments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ coachId, userId }),
+        body: JSON.stringify(force ? { coachId, userId, force: true } : { coachId, userId }),
       });
       if (!res.ok) {
+        let code: string | null = null;
+        try {
+          const data = (await res.json()) as { error?: unknown };
+          code = typeof data.error === 'string' ? data.error : null;
+        } catch {
+          code = null;
+        }
+        // Capacity / inactive refusals are recoverable — surface an override
+        // rather than a dead-end error (C9).
+        if (res.status === 409 && (code === 'full' || code === 'inactive')) {
+          setForceTarget({ userId, reason: code });
+          setError(
+            code === 'full'
+              ? 'This coach is at capacity.'
+              : 'This coach is marked inactive.',
+          );
+          setAssigningId(null);
+          return;
+        }
         let msg = 'Could not assign this member. Try again.';
         if (res.status === 403) msg = 'You are not allowed to assign clients.';
         else if (res.status === 404) msg = 'That member no longer exists.';
@@ -102,6 +127,7 @@ export function AssignClient({
       }
       // Reset the search and let the parent refetch the roster + client list.
       setAssigningId(null);
+      setForceTarget(null);
       setQ('');
       setResults([]);
       reqSeq.current++;
@@ -148,6 +174,19 @@ export function AssignClient({
 
       {error ? (
         <div style={{ color: '#ff8178', fontSize: 13, marginTop: 8 }}>{error}</div>
+      ) : null}
+
+      {forceTarget ? (
+        <div style={{ marginTop: 8 }}>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={assigningId != null}
+            onClick={() => assign(forceTarget.userId, true)}
+          >
+            {assigningId === forceTarget.userId ? 'Assigning…' : 'Assign anyway'}
+          </Button>
+        </div>
       ) : null}
 
       {trimmed.length > 0 ? (

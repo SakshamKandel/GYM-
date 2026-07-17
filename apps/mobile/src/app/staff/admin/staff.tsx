@@ -9,13 +9,13 @@ import {
   AppTextInput,
   Button,
   Chip,
-  ConfirmDialog,
   enterDown,
   enterUp,
   PressableScale,
   Screen,
   ScreenHeader,
   SectionLabel,
+  Sheet,
   Tag,
 } from '../../../components/ui';
 import { assignableRolesFor, canManageRole } from '@gym/shared';
@@ -30,9 +30,34 @@ import {
   type StaffRow,
   toStaffError,
 } from '../../../features/staff/api';
-import { isTopAdmin, replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { replaceStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { ROLE_LABEL } from '../../../features/staff/roles';
 import { useAuth } from '../../../state/auth';
+
+/**
+ * Offboarding-impact preview (P0-3 / plan §3 gap-build #3): a coach revoke
+ * triggers the C2 cascade (end active assignments, decline pending requests,
+ * deactivate the coach profile) — this is what the confirm sheet shows
+ * BEFORE the admin commits. Shape matches the plan's literal contract ("the
+ * same counts, returned by a dry-run query param on DELETE").
+ *
+ * CROSS-PACKAGE NOTE: as of this pass, `revokeRole` in features/staff/api.ts
+ * (owned by WP9a) is still the pre-existing 2-arg (accountId, token) => void
+ * form — the `{ dryRun: true }` 3rd-arg overload returning this shape does
+ * not exist yet. `fetchRevokeImpact` below isolates the one call site that
+ * depends on it; the cast is a placeholder until WP9a lands the overload
+ * (tracked as a blocked cross-package dependency, not a bug in this file).
+ */
+interface RevokeImpact {
+  activeClients: number;
+  pendingCoachRequests: number;
+  walletBalances: { currency: string; amountMinor: number }[];
+}
+
+async function fetchRevokeImpact(accountId: string, token: string): Promise<RevokeImpact> {
+  // @ts-expect-error — revokeRole's dry-run overload is a WP9a deliverable not yet landed.
+  return revokeRole(accountId, token, { dryRun: true });
+}
 
 /**
  * Admin · Staff & roles (super_admin + main_admin).
@@ -95,8 +120,9 @@ function revokeFailLine(code: StaffErrorCode): string {
 export default function StaffAndRolesScreen() {
   const token = useAuth((s) => s.token);
   const staffRole = useAuth((s) => s.staffRole);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
   const myAccountId = useAuth((s) => s.user?.id ?? null);
-  const canManageStaff = isTopAdmin(staffRole);
+  const canManageStaff = staffCan(staffPermissions, 'roles.grant');
 
   /** Roles the CALLER may hand out — highest rank first (canonical order). */
   // useMemo (not a plain expression): the React Compiler refuses to optimise
@@ -149,7 +175,7 @@ export default function StaffAndRolesScreen() {
     setSearchError(null);
     setPicked(null);
     try {
-      setResults(await getMembers(token, query));
+      setResults((await getMembers(token, query)).members);
     } catch (err) {
       setSearchError(toStaffError(err).code);
     } finally {
@@ -175,26 +201,77 @@ export default function StaffAndRolesScreen() {
     }
   }, [token, picked, role, loadStaff]);
 
-  // ── Revoke flow ───────────────────────────────────────────
+  // ── Revoke flow (P0-3: offboarding confirm — dry-run counts + typed confirm) ──
   const [revoking, setRevoking] = useState<StaffRow | null>(null);
   const [revokeBusy, setRevokeBusy] = useState(false);
+  const [typedConfirm, setTypedConfirm] = useState('');
+  // Coach revokes trigger the C2 offboarding cascade (end active assignments,
+  // decline pending requests, deactivate the coach profile). A revoking admin
+  // needs to SEE that blast radius before confirming — fetched via the same
+  // DELETE route in dry-run mode so the preview can never drift from what the
+  // real cascade will do.
+  const [revokeImpact, setRevokeImpact] = useState<RevokeImpact | null>(null);
+  const [revokeImpactLoading, setRevokeImpactLoading] = useState(false);
+  const [revokeImpactError, setRevokeImpactError] = useState<string | null>(null);
+
+  const loadRevokeImpact = useCallback(
+    async (accountId: string) => {
+      if (!token) return;
+      setRevokeImpactLoading(true);
+      setRevokeImpactError(null);
+      try {
+        setRevokeImpact(await fetchRevokeImpact(accountId, token));
+      } catch (err) {
+        setRevokeImpactError(revokeFailLine(toStaffError(err).code));
+      } finally {
+        setRevokeImpactLoading(false);
+      }
+    },
+    [token],
+  );
+
+  function openRevoke(s: StaffRow): void {
+    setRevoking(s);
+    setTypedConfirm('');
+    setRevokeImpact(null);
+    setRevokeImpactError(null);
+    if (s.role === 'coach') void loadRevokeImpact(s.accountId);
+  }
+
+  function closeRevoke(): void {
+    if (revokeBusy) return;
+    setRevoking(null);
+    setTypedConfirm('');
+    setRevokeImpact(null);
+    setRevokeImpactError(null);
+  }
+
+  const revokeConfirmMatches =
+    revoking !== null && typedConfirm.trim().toLowerCase() === revoking.email.toLowerCase();
 
   const doRevoke = useCallback(async () => {
-    if (!token || !revoking) return;
+    if (!token || !revoking || !revokeConfirmMatches) return;
+    const target = revoking;
     setRevokeBusy(true);
     try {
-      await revokeRole(revoking.accountId, token);
-      setBanner(`Revoked staff access for ${revoking.email}.`);
+      await revokeRole(target.accountId, token);
+      setBanner(`Revoked staff access for ${target.email}.`);
       setRevoking(null);
+      setTypedConfirm('');
+      setRevokeImpact(null);
+      setRevokeImpactError(null);
       await loadStaff();
     } catch (err) {
       const code = toStaffError(err).code;
       setBanner(revokeFailLine(code));
       setRevoking(null);
+      setTypedConfirm('');
+      setRevokeImpact(null);
+      setRevokeImpactError(null);
     } finally {
       setRevokeBusy(false);
     }
-  }, [token, revoking, loadStaff]);
+  }, [token, revoking, revokeConfirmMatches, loadStaff]);
 
   function goBack(): void {
     if (router.canGoBack()) router.back();
@@ -402,7 +479,7 @@ export default function StaffAndRolesScreen() {
                 <PressableScale
                   accessibilityRole="button"
                   accessibilityLabel={`Revoke ${s.email}`}
-                  onPress={() => setRevoking(s)}
+                  onPress={() => openRevoke(s)}
                   style={styles.revokeBtn}
                 >
                   <Ionicons name="close" size={18} color={colors.error} />
@@ -413,20 +490,94 @@ export default function StaffAndRolesScreen() {
         );
       })}
 
-      <ConfirmDialog
-        visible={revoking !== null}
-        danger
-        title="Revoke staff access?"
-        message={
-          revoking
-            ? `${revoking.email} will lose all staff access and any live sessions end immediately.`
-            : undefined
-        }
-        confirmLabel={revokeBusy ? 'Revoking…' : 'Revoke'}
-        cancelLabel="Cancel"
-        onConfirm={() => void doRevoke()}
-        onCancel={() => (revokeBusy ? undefined : setRevoking(null))}
-      />
+      {/* ── Offboarding confirm: dry-run counts + typed confirm (P0-3) ── */}
+      <Sheet visible={revoking !== null} onClose={closeRevoke} title="Revoke staff access?">
+        {revoking ? (
+          <View style={styles.revokeSheetBody}>
+            <AppText variant="body" color={colors.textDim}>
+              {revoking.email} will lose all staff access and any live sessions
+              end immediately.
+            </AppText>
+
+            {revoking.role === 'coach' ? (
+              revokeImpactLoading ? (
+                <View style={styles.center}>
+                  <ActivityIndicator color={colors.accent} />
+                </View>
+              ) : revokeImpactError ? (
+                <RetryLine
+                  label={revokeImpactError}
+                  onRetry={() => void loadRevokeImpact(revoking.accountId)}
+                />
+              ) : revokeImpact ? (
+                <View style={styles.impactBox}>
+                  <AppText variant="bodyBold" color={colors.warning}>
+                    This will also:
+                  </AppText>
+                  <AppText variant="caption">
+                    • End {revokeImpact.activeClients} active client
+                    assignment{revokeImpact.activeClients === 1 ? '' : 's'}
+                  </AppText>
+                  <AppText variant="caption">
+                    • Decline {revokeImpact.pendingCoachRequests} pending
+                    client request
+                    {revokeImpact.pendingCoachRequests === 1 ? '' : 's'}
+                  </AppText>
+                  <AppText variant="caption">• Deactivate their coach profile</AppText>
+                  {revokeImpact.walletBalances.length > 0 ? (
+                    revokeImpact.walletBalances.map((b) => (
+                      <AppText
+                        key={b.currency}
+                        variant="caption"
+                        color={colors.error}
+                      >
+                        • Outstanding wallet balance:{' '}
+                        {(b.amountMinor / 100).toFixed(2)} {b.currency} — settle
+                        this first, or the balance becomes untrackable once
+                        revoked.
+                      </AppText>
+                    ))
+                  ) : (
+                    <AppText variant="caption" color={colors.textFaint}>
+                      • No outstanding wallet balance.
+                    </AppText>
+                  )}
+                </View>
+              ) : null
+            ) : null}
+
+            <AppText variant="caption" color={colors.textDim} style={styles.typedHint}>
+              Type {revoking.email} to confirm.
+            </AppText>
+            <AppTextInput
+              value={typedConfirm}
+              onChangeText={setTypedConfirm}
+              placeholder={revoking.email}
+              autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel="Type the account's email to confirm"
+            />
+
+            <View style={styles.revokeButtons}>
+              <Button
+                label="Cancel"
+                variant="secondary"
+                style={styles.decisionBtn}
+                onPress={closeRevoke}
+                disabled={revokeBusy}
+              />
+              <Button
+                label={revokeBusy ? 'Revoking…' : 'Revoke'}
+                variant="danger"
+                style={styles.decisionBtn}
+                onPress={() => void doRevoke()}
+                disabled={revokeBusy || !revokeConfirmMatches}
+                loading={revokeBusy}
+              />
+            </View>
+          </View>
+        ) : null}
+      </Sheet>
     </Screen>
   );
 }
@@ -560,4 +711,14 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingVertical: spacing.md,
   },
+  revokeSheetBody: { gap: spacing.md },
+  impactBox: {
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    gap: 4,
+  },
+  typedHint: { marginTop: spacing.xs },
+  revokeButtons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.xs },
+  decisionBtn: { flex: 1 },
 });

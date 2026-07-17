@@ -1,8 +1,8 @@
 'use client';
 
-import { assignableRolesFor, canManageRole } from '@gym/shared';
+import { assignableRolesFor, canManageRole, GRANTABLE_ROLES } from '@gym/shared';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Badge,
   Button,
@@ -13,6 +13,7 @@ import {
   PageHeader,
   SearchField,
   StatusChip,
+  TextField,
 } from '@/components/console';
 import { staffRoleLabel } from '@/app/admin/_lib/staffRoleLabel';
 import type { StaffRole } from '@/lib/auth';
@@ -107,9 +108,13 @@ export function StaffManager({
 }) {
   const router = useRouter();
 
-  // Roles this operator may hand out / change rows to. super_admin → all 7;
-  // main_admin → sub-roles only. Drives both the per-row select and the modal.
-  const assignable = assignableRolesFor(callerRole);
+  // Roles this operator may hand out / change rows to. super_admin → all
+  // grantable; main_admin → sub-roles only. The deprecated nutrition_admin is
+  // filtered out so it can't be granted into a 403 trap (A6); the server
+  // enforces the same whitelist.
+  const assignable = assignableRolesFor(callerRole).filter((r) =>
+    GRANTABLE_ROLES.includes(r),
+  );
 
   // Row-level busy + error state, keyed by accountId, so one row's action never
   // freezes the others.
@@ -118,6 +123,15 @@ export function StaffManager({
 
   // Grant-role modal state.
   const [grantOpen, setGrantOpen] = useState(false);
+
+  // Coach offboarding confirm (P0-3): opened for any action that STRIPS the
+  // coach role — a revoke (newRole=null) or a change to a non-coach role — so
+  // the operator sees the blast radius and types to confirm. Non-coach rows
+  // never route through here.
+  const [offboard, setOffboard] = useState<{
+    member: StaffMember;
+    newRole: StaffRole | null;
+  } | null>(null);
 
   async function changeRole(accountId: string, role: StaffRole) {
     setBusyId(accountId);
@@ -245,18 +259,35 @@ export function StaffManager({
           );
         }
 
+        // Always include the row's CURRENT role as an option even if it's not
+        // in the grantable set (e.g. a legacy nutrition_admin row) so the select
+        // shows the real value and the operator can still change it away.
+        const options = assignable.includes(row.role)
+          ? assignable
+          : [row.role, ...assignable];
+
         return (
           <select
             value={row.role}
             disabled={busy}
-            onChange={(e) => changeRole(row.accountId, e.target.value as StaffRole)}
+            onChange={(e) => {
+              const next = e.target.value as StaffRole;
+              if (next === row.role) return;
+              // Changing a coach to a non-coach role strips the coach role and
+              // triggers the offboarding cascade server-side — confirm first.
+              if (row.role === 'coach' && next !== 'coach') {
+                setOffboard({ member: row, newRole: next });
+              } else {
+                void changeRole(row.accountId, next);
+              }
+            }}
             style={{
               ...selectStyle,
               opacity: busy ? 0.55 : 1,
               cursor: busy ? 'default' : 'pointer',
             }}
           >
-            {assignable.map((r) => (
+            {options.map((r) => (
               <option key={r} value={r}>
                 {staffRoleLabel(r)}
               </option>
@@ -289,6 +320,17 @@ export function StaffManager({
               <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
                 Managed by super admin
               </span>
+            ) : row.role === 'coach' ? (
+              // Revoking a coach ends assignments/plans — go through the
+              // offboarding confirm (P0-3) rather than a one-tap revoke.
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={busy}
+                onClick={() => setOffboard({ member: row, newRole: null })}
+              >
+                Revoke…
+              </Button>
             ) : (
               <ConfirmButton
                 label="Revoke"
@@ -340,6 +382,241 @@ export function StaffManager({
           router.refresh();
         }}
       />
+
+      <OffboardModal
+        target={offboard}
+        onClose={() => setOffboard(null)}
+        onDone={() => {
+          setOffboard(null);
+          router.refresh();
+        }}
+      />
+    </div>
+  );
+}
+
+/** Outstanding balance per currency, plus the counts of what a revoke ends. */
+interface OffboardCounts {
+  activeClients: number;
+  pendingRequests: number;
+  activeWorkoutPlans: number;
+  activeDietPlans: number;
+  walletBalances: { currency: string; amountMinor: number }[];
+}
+
+/** Formats a minor-unit balance line ("NPR 12,300 · USD 45"). */
+function formatBalances(rows: { currency: string; amountMinor: number }[]): string {
+  return rows
+    .map((r) => `${r.currency} ${Math.round(r.amountMinor / 100).toLocaleString()}`)
+    .join(' · ');
+}
+
+/**
+ * Coach offboarding confirm dialog (P0-3). On open it runs the server's
+ * READ-ONLY dry-run (DELETE ?dryRun=1) to fetch the real blast radius, shows
+ * it, and — when clients are attached or money is outstanding — requires the
+ * operator to type CONFIRM before the destructive action fires. A non-zero
+ * wallet balance is WARNED, not blocked (money history is preserved either way).
+ * Handles both a plain revoke (newRole null → DELETE) and a change to a
+ * non-coach role (newRole set → POST), since both strip the coach role.
+ */
+function OffboardModal({
+  target,
+  onClose,
+  onDone,
+}: {
+  target: { member: StaffMember; newRole: StaffRole | null } | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const open = target != null;
+  const member = target?.member ?? null;
+  const newRole = target?.newRole ?? null;
+
+  const [counts, setCounts] = useState<OffboardCounts | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const accountId = member?.accountId ?? null;
+
+  const loadCounts = useCallback(async (id: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/staff/${encodeURIComponent(id)}?dryRun=1`,
+        { method: 'DELETE', credentials: 'include' },
+      );
+      if (!res.ok) {
+        const code = await errorCodeOf(res);
+        setError(friendlyStaffError(res.status, code));
+        setCounts(null);
+        return;
+      }
+      const data = (await res.json()) as { counts: OffboardCounts | null };
+      setCounts(data.counts);
+    } catch {
+      setError('Network error.');
+      setCounts(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Reset + (re)load the dry-run whenever a new target is opened.
+  useEffect(() => {
+    if (!accountId) return;
+    setCounts(null);
+    setConfirmText('');
+    setError(null);
+    void loadCounts(accountId);
+  }, [accountId, loadCounts]);
+
+  const hasImpact =
+    counts != null &&
+    (counts.activeClients > 0 ||
+      counts.pendingRequests > 0 ||
+      counts.activeWorkoutPlans > 0 ||
+      counts.activeDietPlans > 0 ||
+      counts.walletBalances.length > 0);
+  // Require a typed confirm only when there's real impact; a clean coach (no
+  // clients/plans/money) can be offboarded with a single click.
+  const needsType = hasImpact;
+  const confirmOk = !needsType || confirmText.trim().toUpperCase() === 'CONFIRM';
+
+  async function run() {
+    if (!member || !confirmOk) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res =
+        newRole == null
+          ? await fetch(`/api/admin/staff/${encodeURIComponent(member.accountId)}`, {
+              method: 'DELETE',
+              credentials: 'include',
+            })
+          : await fetch('/api/admin/staff', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ accountId: member.accountId, role: newRole }),
+            });
+      if (!res.ok) {
+        const code = await errorCodeOf(res);
+        setError(friendlyStaffError(res.status, code));
+        setSubmitting(false);
+        return;
+      }
+      setSubmitting(false);
+      onDone();
+    } catch {
+      setError('Network error.');
+      setSubmitting(false);
+    }
+  }
+
+  const title =
+    newRole == null
+      ? 'Revoke coach access'
+      : `Change coach to ${staffRoleLabel(newRole)}`;
+  const actionLabel = newRole == null ? 'Revoke access' : 'Change role';
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title}
+      width={480}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            onClick={run}
+            disabled={submitting || loading || !confirmOk}
+          >
+            {submitting ? 'Working…' : actionLabel}
+          </Button>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <p style={{ fontSize: 14, color: 'var(--gt-text)', margin: 0 }}>
+          {member?.coachName || member?.displayName || member?.email}
+        </p>
+
+        {loading ? (
+          <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+            Checking what this affects…
+          </div>
+        ) : counts ? (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              padding: '12px 14px',
+              borderRadius: 10,
+              border: '1px solid var(--gt-border)',
+              fontSize: 13,
+            }}
+          >
+            <div style={{ color: 'var(--gt-text-dim)' }}>
+              Offboarding this coach will:
+            </div>
+            <CountLine n={counts.activeClients} label="active client assignment" verb="end" />
+            <CountLine
+              n={counts.pendingRequests}
+              label="pending client request"
+              verb="decline"
+            />
+            <CountLine
+              n={counts.activeWorkoutPlans}
+              label="assigned workout plan"
+              verb="archive"
+            />
+            <CountLine n={counts.activeDietPlans} label="assigned diet plan" verb="archive" />
+            {counts.walletBalances.length > 0 ? (
+              <div style={{ color: '#e0b341', marginTop: 4 }}>
+                ⚠ Outstanding wallet balance: {formatBalances(counts.walletBalances)} — settle
+                payouts before revoking (the ledger is preserved either way).
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {needsType ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+              Type <strong style={{ color: 'var(--gt-text)' }}>CONFIRM</strong> to proceed.
+            </span>
+            <TextField
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder="CONFIRM"
+              aria-label="Type CONFIRM to proceed"
+              autoFocus
+            />
+          </div>
+        ) : null}
+
+        {error ? <div style={{ fontSize: 13, color: '#ff8178' }}>{error}</div> : null}
+      </div>
+    </Modal>
+  );
+}
+
+/** One "will end 3 active client assignments" line; renders nothing when n=0. */
+function CountLine({ n, label, verb }: { n: number; label: string; verb: string }) {
+  if (n <= 0) return null;
+  return (
+    <div style={{ color: 'var(--gt-text)' }}>
+      {verb} <strong>{n}</strong> {label}
+      {n === 1 ? '' : 's'}
     </div>
   );
 }

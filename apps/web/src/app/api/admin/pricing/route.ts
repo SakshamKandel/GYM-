@@ -28,11 +28,19 @@ export const runtime = 'nodejs';
 
 const MAX_AMOUNT_MINOR = 10_000_000;
 
-const priceInputSchema = z.object({
-  region: z.enum(['NP', 'INTL']),
-  tier: z.enum(['starter', 'silver', 'gold', 'elite']),
-  amountMinor: z.number().int().min(0).max(MAX_AMOUNT_MINOR),
-});
+const priceInputSchema = z
+  .object({
+    region: z.enum(['NP', 'INTL']),
+    tier: z.enum(['starter', 'silver', 'gold', 'elite']),
+    amountMinor: z.number().int().min(0).max(MAX_AMOUNT_MINOR),
+  })
+  // A paid tier priced at 0 makes it free for the whole region (E2). starter is
+  // the only tier allowed to be free — a blanked cell (client toMinor('') → 0)
+  // must be rejected server-side, not silently upserted as a Rs 0 paid tier.
+  .refine((p) => p.tier === 'starter' || p.amountMinor >= 1, {
+    message: 'paid tiers must be priced above zero',
+    path: ['amountMinor'],
+  });
 
 const putSchema = z.object({
   prices: z.array(priceInputSchema).min(1).max(16),

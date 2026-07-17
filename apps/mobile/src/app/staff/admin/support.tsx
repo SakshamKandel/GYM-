@@ -110,8 +110,8 @@ function Bubble({ message }: { message: SupportMessage }) {
 
 export default function AdminSupportScreen() {
   const token = useAuth((s) => s.token);
-  const staffRole = useAuth((s) => s.staffRole);
-  const allowed = canReviewSupport(staffRole);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
+  const allowed = canReviewSupport(staffPermissions);
 
   const [rows, setRows] = useState<SupportThreadRow[]>([]);
   const [loading, setLoading] = useState(true);

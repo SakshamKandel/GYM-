@@ -1,7 +1,7 @@
 import { planVideos } from '@gym/db';
 import { desc } from 'drizzle-orm';
 import { z } from 'zod';
-import { logAudit, requirePermission } from '@/lib/authz';
+import { logAudit, requireAnyPermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { getVideoProvider, NotConfiguredError } from '@/lib/video';
@@ -24,9 +24,15 @@ export const runtime = 'nodejs';
  *           URLs (Cloudflare Stream) it carries just the endpoint and the browser
  *           POSTs the raw file to it. No api_secret is ever returned.
  *  - GET  → the full library for the console list (title/tier/status/position
- *           /thumbnail), newest first.
+ *           /thumbnail), newest first. Org-wide readable by BOTH content keys.
  *
- * Guarded by requirePermission('content.video.publish'); super_admin passes.
+ * Access (RBAC design §1.2/§4.9): a caller needs EITHER `content.manage`
+ * (org-wide content admin — create/retier/remove any row) OR `content.video.own`
+ * (a coach — CRUD scoped to rows they authored). Create stamps createdBy =
+ * caller so the own-scope enforcement in [id] has an author to match. The GET
+ * list stays org-wide for both keys (the library is a shared catalog); per-row
+ * MUTATION scoping lives in the [id] route. super_admin/main_admin bypass.
+ *
  * When the host keys are absent the provider throws NotConfiguredError and POST
  * returns 503 { error: 'video_not_configured' } — no row is created.
  */
@@ -70,8 +76,9 @@ export function OPTIONS() {
 }
 
 export async function POST(req: Request) {
-  const principal = await requirePermission(req, 'content.video.publish');
-  if (principal instanceof Response) return principal;
+  const access = await requireAnyPermission(req, ['content.manage', 'content.video.own']);
+  if (access instanceof Response) return access;
+  const { principal } = access;
 
   const parsed = createSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
@@ -143,8 +150,8 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
-  const principal = await requirePermission(req, 'content.video.publish');
-  if (principal instanceof Response) return principal;
+  const access = await requireAnyPermission(req, ['content.manage', 'content.video.own']);
+  if (access instanceof Response) return access;
 
   const rows = await getDb()
     .select({

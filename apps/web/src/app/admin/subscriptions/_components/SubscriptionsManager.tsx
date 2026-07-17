@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Button,
@@ -63,26 +63,53 @@ function isLapsed(iso: string | null): boolean {
   return !Number.isNaN(t) && t < Date.now();
 }
 
+/** Shape of one member row from GET /api/admin/members (contract §4.7). */
+interface ApiMember {
+  id: string;
+  email: string;
+  displayName: string;
+  tier: Tier;
+  tierExpiresAt: string | null;
+  status: 'active' | 'suspended';
+}
+
+function toMemberRow(m: ApiMember): MemberRow {
+  return {
+    id: m.id,
+    email: m.email,
+    displayName: m.displayName,
+    tier: m.tier,
+    status: m.status,
+    // The list endpoint doesn't return tierStartedAt (informational only); the
+    // modal defaults its start-date input to blank when absent.
+    tierStartedAt: null,
+    tierExpiresAt: m.tierExpiresAt,
+  };
+}
+
 /**
- * Members table + tier-override control. Filtering is client-side over the
- * server-rendered roster (the page already caps the roster). The table shows
- * each member's current tier AND its expiry (a permanent tier reads "No
- * expiry"; a past expiry reads "Lapsed"). "Change tier" opens a modal to pick a
- * new tier, set an optional start date + end date (expiry), and optionally
- * record a reason, then POSTs to /api/admin/subscriptions with
- * credentials:'include' so the httpOnly gt_staff cookie authenticates it.
+ * Members table + tier-override control. The server-rendered roster (capped)
+ * is the default view; typing in the search box switches to a SERVER-side
+ * keyset search over the WHOLE member base (B8 — members past the roster cap are
+ * now reachable), with a "Load more" affordance. A monotonic request-sequence
+ * guard drops stale responses so a slow query can't clobber a newer one.
  *
- * Date semantics match the endpoint: an empty end date with "No expiry
- * (permanent)" checked sends expiresAt=null (clears any expiry); an end date in
- * the past lapses the tier immediately. The start date is informational
- * (audit/history). Omitted-vs-cleared is made explicit in the UI so a save is
- * always predictable — we always send both date fields based on the controls.
- * On success we router.refresh() so the roster + change log reflect the
- * override without a full reload.
+ * "Change tier" opens a modal to pick a new tier, set an optional start date +
+ * end date (expiry), and optionally record a reason, then POSTs to
+ * /api/admin/subscriptions with credentials:'include'. Submitting with a paid
+ * window but a BLANK end date and "No expiry" UNticked is blocked (B10) so a
+ * missing date can never silently grant a permanent tier.
  */
 export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
   const router = useRouter();
   const [filter, setFilter] = useState('');
+  // null = show the SSR roster; an array = live search results.
+  const [remoteRows, setRemoteRows] = useState<MemberRow[] | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const reqSeq = useRef(0);
+
   const [editing, setEditing] = useState<MemberRow | null>(null);
   const [nextTier, setNextTier] = useState<Tier>('starter');
   const [startsAtLocal, setStartsAtLocal] = useState('');
@@ -92,15 +119,52 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const rows = useMemo(() => {
-    const q = filter.trim().toLowerCase();
-    if (!q) return members;
-    return members.filter(
-      (m) =>
-        m.email.toLowerCase().includes(q) ||
-        m.displayName.toLowerCase().includes(q),
-    );
-  }, [members, filter]);
+  async function runSearch(q: string, appendCursor: string | null) {
+    const seq = ++reqSeq.current;
+    setSearching(true);
+    setSearchError(null);
+    try {
+      const url = new URL('/api/admin/members', window.location.origin);
+      if (q) url.searchParams.set('q', q);
+      if (appendCursor) url.searchParams.set('cursor', appendCursor);
+      const res = await fetch(url.toString(), { credentials: 'include' });
+      if (seq !== reqSeq.current) return; // a newer request superseded this one
+      if (!res.ok) {
+        setSearchError('Could not search members. Try again.');
+        setSearching(false);
+        return;
+      }
+      const data = (await res.json()) as { members?: ApiMember[]; nextCursor?: string | null };
+      if (seq !== reqSeq.current) return;
+      const mapped = (data.members ?? []).map(toMemberRow);
+      setRemoteRows((prev) => (appendCursor && prev ? [...prev, ...mapped] : mapped));
+      setCursor(data.nextCursor ?? null);
+      setSearching(false);
+    } catch {
+      if (seq === reqSeq.current) {
+        setSearchError('Network error while searching.');
+        setSearching(false);
+      }
+    }
+  }
+
+  // Debounced server search on the filter text. Empty query → drop back to the
+  // SSR roster (no request).
+  useEffect(() => {
+    const q = filter.trim();
+    if (!q) {
+      reqSeq.current++; // invalidate any in-flight search
+      setRemoteRows(null);
+      setCursor(null);
+      setSearching(false);
+      setSearchError(null);
+      return;
+    }
+    const t = setTimeout(() => void runSearch(q, null), 250);
+    return () => clearTimeout(t);
+  }, [filter]);
+
+  const rows = useMemo(() => remoteRows ?? members, [remoteRows, members]);
 
   function openEdit(m: MemberRow) {
     setEditing(m);
@@ -121,6 +185,12 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
 
   async function save() {
     if (!editing) return;
+    // B10: a paid window with the expiry field blank AND "No expiry" unticked is
+    // ambiguous — it would coerce to a permanent grant. Force an explicit choice.
+    if (!noExpiry && !expiresAtLocal) {
+      setError('Set an end date, or tick "No expiry (permanent)".');
+      return;
+    }
     setSaving(true);
     setError(null);
     // Build the dated window from the controls. We always send both date fields
@@ -198,8 +268,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
         <span
           style={{
             fontSize: 12,
-            color:
-              m.status === 'suspended' ? '#ff8178' : 'var(--gt-text-dim)',
+            color: m.status === 'suspended' ? '#ff8178' : 'var(--gt-text-dim)',
             textTransform: 'uppercase',
             letterSpacing: '0.04em',
             fontFamily: 'var(--font-numeric)',
@@ -221,9 +290,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
         // Starter never expires; a null expiry on any paid tier = permanent.
         if (m.tier === 'starter' || m.tierExpiresAt === null) {
           return (
-            <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-              No expiry
-            </span>
+            <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>No expiry</span>
           );
         }
         const lapsed = isLapsed(m.tierExpiresAt);
@@ -261,23 +328,39 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
         <SearchField
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          placeholder="Filter by name or email…"
-          aria-label="Filter members"
+          placeholder="Search all members by email…"
+          aria-label="Search members"
         />
       </div>
 
-      {members.length === 0 ? (
+      {members.length === 0 && remoteRows === null ? (
         <EmptyState
           title="No members yet"
           description="Members appear here once accounts exist. You can override any member's subscription tier from this table."
         />
       ) : (
-        <DataTable
-          columns={columns}
-          rows={rows}
-          rowKey={(m) => m.id}
-          empty="No members match your filter."
-        />
+        <>
+          <DataTable
+            columns={columns}
+            rows={rows}
+            rowKey={(m) => m.id}
+            empty={searching ? 'Searching…' : 'No members match your search.'}
+          />
+          {searchError ? (
+            <div style={{ color: '#ff8178', fontSize: 13, marginTop: 10 }}>{searchError}</div>
+          ) : null}
+          {remoteRows !== null && cursor ? (
+            <div style={{ marginTop: 12 }}>
+              <Button
+                variant="ghost"
+                disabled={searching}
+                onClick={() => void runSearch(filter.trim(), cursor)}
+              >
+                {searching ? 'Loading…' : 'Load more'}
+              </Button>
+            </div>
+          ) : null}
+        </>
       )}
 
       <Modal
@@ -308,9 +391,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
               >
                 {editing.displayName || editing.email}
               </div>
-              <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-                {editing.email}
-              </div>
+              <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>{editing.email}</div>
             </div>
 
             <div>

@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "seed:demo-coach": "pnpm dlx tsx src/seed-demo-coach.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.0",

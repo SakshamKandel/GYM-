@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -16,6 +16,7 @@ import {
   Screen,
   ScreenHeader,
   SectionLabel,
+  Sheet,
   Tag,
 } from '../../../components/ui';
 import {
@@ -29,7 +30,7 @@ import {
   type MemberRow,
   type StaffErrorCode,
 } from '../../../features/staff/api';
-import { pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
 
 /**
@@ -59,8 +60,13 @@ const ERR_TEXT: Record<StaffErrorCode, string> = {
   conflict: 'That conflicts with the current state.',
   already_pending: 'There is already a pending request.',
   not_an_upgrade: "That isn't higher than the current tier.",
+  confirm_required: 'This needs an explicit confirmation first.',
+  already_refunded: 'That payment was already refunded.',
+  not_approved: 'That payment is no longer approved.',
+  insufficient_balance: "That would take the coach's balance negative.",
   not_configured: 'This feature is not set up yet.',
   network: "Couldn't reach the server.",
+  rate_limited: 'Too many requests — wait a moment and try again.',
 };
 
 function coachDisplay(c: CoachRow): string {
@@ -122,10 +128,23 @@ function CoachDetail({
   const [ending, setEnding] = useState<{ member: MemberRow; assignmentId: string } | null>(
     null,
   );
+  // Read-only quick-view sheet (defect G3): the row used to push
+  // `/staff/admin/members/[id]`, a route that has never existed → an
+  // Unmatched-route screen. Assign/End are already inline on the row, so this
+  // sheet only needs to surface identity + assignment state, not host
+  // mutations (full member management lives in the Members console).
+  const [viewing, setViewing] = useState<MemberRow | null>(null);
+
+  // Monotonic request id (defect G8/#4): without it, a slower-to-resolve
+  // search for an earlier query can land AFTER a newer query's results are
+  // already rendered, silently reverting the visible list to results for a
+  // query the admin no longer has in the search box.
+  const searchReqSeq = useRef(0);
 
   const runSearch = useCallback(
     async (q: string) => {
       const trimmed = q.trim();
+      const reqId = ++searchReqSeq.current;
       if (!trimmed) {
         setResults([]);
         setSearchError(null);
@@ -134,11 +153,14 @@ function CoachDetail({
       setSearching(true);
       setSearchError(null);
       try {
-        setResults(await getMembers(token, trimmed));
+        const data = await getMembers(token, trimmed);
+        if (reqId !== searchReqSeq.current) return; // superseded by a newer query
+        setResults(data.members);
       } catch (e) {
+        if (reqId !== searchReqSeq.current) return;
         setSearchError(ERR_TEXT[toStaffError(e).code]);
       } finally {
-        setSearching(false);
+        if (reqId === searchReqSeq.current) setSearching(false);
       }
     },
     [token],
@@ -334,8 +356,8 @@ function CoachDetail({
             <View key={m.id} style={styles.memberRow}>
               <PressableScale
                 accessibilityRole="button"
-                accessibilityLabel={`Open ${memberName(m)}`}
-                onPress={() => pushStaff(STAFF_ROUTES.adminMember(m.id))}
+                accessibilityLabel={`View ${memberName(m)}`}
+                onPress={() => setViewing(m)}
                 style={styles.memberText}
               >
                 <AppText variant="bodyBold" numberOfLines={1}>
@@ -412,6 +434,40 @@ function CoachDetail({
         onConfirm={() => void doEnd()}
         onCancel={() => setEnding(null)}
       />
+
+      {/* ── Member quick-view (replaces the dead /staff/admin/members/[id] push) ── */}
+      <Sheet
+        visible={viewing !== null}
+        onClose={() => setViewing(null)}
+        title={viewing ? memberName(viewing) : 'Member'}
+      >
+        {viewing ? (
+          <View style={styles.viewSheetBody}>
+            <AppText variant="caption" numberOfLines={1}>
+              {viewing.email}
+            </AppText>
+            <View style={styles.statusTags}>
+              <Tag label={viewing.tier} variant="outline" />
+              {viewing.status === 'suspended' ? (
+                <Tag label="Suspended" variant="outline" color={colors.error} />
+              ) : null}
+            </View>
+            <AppText variant="caption" color={colors.textDim}>
+              {states[viewing.id]?.loading
+                ? 'Checking coach assignment…'
+                : states[viewing.id]?.assignmentIdForThisCoach
+                  ? `Assigned to ${coachDisplay(coach)}.`
+                  : states[viewing.id]?.otherCoachName
+                    ? `Currently coached by ${states[viewing.id]?.otherCoachName}.`
+                    : 'No coach currently assigned.'}
+            </AppText>
+            <AppText variant="caption" color={colors.textFaint} style={styles.viewSheetHint}>
+              For tier changes, suspension or full profile detail, use the
+              Members console.
+            </AppText>
+          </View>
+        ) : null}
+      </Sheet>
     </Screen>
   );
 }
@@ -422,6 +478,12 @@ function CoachDetail({
 
 export default function AdminCoachesScreen() {
   const token = useAuth((s) => s.token);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
+  // Per-screen permission gate (RBAC §1.4) — mirrors the peer admin screens
+  // (promos/pricing/wallets/…). content_admin/support_admin are admitted into
+  // the admin console but hold no `coach.assign`, so without this they'd render
+  // the roster and immediately 403 on getCoaches. Fail closed to a locked view.
+  const allowed = staffCan(staffPermissions, 'coach.assign');
   const [coaches, setCoaches] = useState<CoachRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -441,8 +503,8 @@ export default function AdminCoachesScreen() {
   }, [token]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (allowed) void load();
+  }, [allowed, load]);
 
   // Keep the open coach's row (client count) fresh after a mutation.
   const refreshAndSync = useCallback(async () => {
@@ -455,6 +517,33 @@ export default function AdminCoachesScreen() {
       // Non-fatal: the detail view already reloaded its own row state.
     }
   }, [token]);
+
+  // Fail-closed access gate — a role in the admin console without `coach.assign`
+  // (content_admin / support_admin) gets the dedicated locked card the peer
+  // screens show, not an ungated roster that 403s on the initial getCoaches.
+  if (!allowed) {
+    return (
+      <Screen scroll>
+        <Animated.View entering={enterDown()} style={styles.headerRow}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            onPress={onBackToConsole}
+            style={styles.backBtn}
+          >
+            <Ionicons name="chevron-back" size={24} color={colors.text} />
+          </PressableScale>
+        </Animated.View>
+        <ScreenHeader eyebrow="Admin console" title="Coaches" style={styles.header} />
+        <Animated.View entering={enterUp(0)} style={styles.locked}>
+          <Ionicons name="lock-closed" size={28} color={colors.textFaint} />
+          <AppText variant="caption" center color={colors.textFaint}>
+            You don&apos;t have access to coach management.
+          </AppText>
+        </Animated.View>
+      </Screen>
+    );
+  }
 
   if (selected && token) {
     return (
@@ -593,4 +682,13 @@ const styles = StyleSheet.create({
   },
   emptyLine: { marginTop: spacing.xl, paddingHorizontal: spacing.xs },
   footNote: { marginTop: spacing.xl, paddingHorizontal: spacing.xs },
+  locked: {
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.xxl,
+    paddingHorizontal: spacing.lg,
+  },
+  statusTags: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  viewSheetBody: { gap: spacing.md },
+  viewSheetHint: { marginTop: spacing.sm },
 });

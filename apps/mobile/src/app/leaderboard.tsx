@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { RefreshControl, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useFocusEffect } from 'expo-router';
@@ -14,11 +14,12 @@ import {
   PressableScale,
   Screen,
   ScreenHeader,
+  SectionLabel,
 } from '../components/ui';
-import { BuddySummarySheet } from '../features/buddy/components/BuddySummarySheet';
-import { MovementMark } from '../features/buddy/components/LeaderboardBits';
-import { PublicLeaderboard } from '../features/buddy/components/PublicLeaderboard';
-import { useBuddyData } from '../features/buddy/hooks';
+import { MovementMark } from '../features/engagement/leaderboard/LeaderboardBits';
+import { PublicLeaderboard } from '../features/engagement/leaderboard/PublicLeaderboard';
+import { ChallengeCard } from '../features/gamification/components/ChallengeCard';
+import { useChallenge } from '../features/gamification/useChallenge';
 import {
   getPublicLeaderboard,
   toGamificationError,
@@ -31,9 +32,9 @@ import { useGamificationDisplay } from '../state/gamification';
 
 /**
  * /leaderboard — the public gym-wide consistency board, pushed from the
- * Buddy tab's "Gym leaderboard" entry card. Same screen skeleton as
- * /badges: Screen scroll, back header, load-on-focus, quiet stale/retry
- * row instead of a blocking error state — plus pull-to-refresh.
+ * Settings "Community" section. Same screen skeleton as /badges: Screen
+ * scroll, back header, load-on-focus, quiet stale/retry row instead of a
+ * blocking error state — plus pull-to-refresh.
  *
  * Structure, top to bottom:
  *  1. Scope chips — the live month vs. last month's FINAL standings (the
@@ -42,30 +43,24 @@ import { useGamificationDisplay } from '../state/gamification';
  *     count, 7-day movement, days left in the month, and an actionable
  *     catch-up line ("2 more sessions catch 4th").
  *  3. The board itself (top 50 + pinned own row when ranked below).
+ *  4. The caller's active coach challenge, when one exists (relocated here
+ *     from the retired Buddy tab — same monthly-consistency theme).
  *
  * Ranking, tie-sharing, privacy filtering, movement deltas, and the
  * caller's absolute position all come from GET /api/leaderboard/public
- * (server-authoritative). Buddy rows reuse the existing tap-through sheet;
- * strangers' rows are not tappable.
+ * (server-authoritative). Rows are display-only — no tap-through.
  */
 
 export default function PublicLeaderboardScreen() {
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
-  // Accepted buddies gate the tap-through; their feed events power the sheet.
-  const { list, events } = useBuddyData();
+  const challengeData = useChallenge();
   const [scope, setScope] = useState<LeaderboardScope>('current');
   const [results, setResults] = useState<Partial<Record<LeaderboardScope, PublicLeaderboardResult>>>(
     {},
   );
   const [stale, setStale] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [summaryBuddy, setSummaryBuddy] = useState<{ id: string; name: string } | null>(null);
-
-  const buddyIds = useMemo(
-    () => new Set((list?.accepted ?? []).map((link) => link.buddy.id)),
-    [list],
-  );
 
   const reload = useCallback(
     (which: LeaderboardScope) => {
@@ -211,8 +206,6 @@ export default function PublicLeaderboardScreen() {
                 me={result.me}
                 month={result.month}
                 final={isFinal}
-                buddyIds={buddyIds}
-                onSelectBuddy={(id, name) => setSummaryBuddy({ id, name })}
               />
 
               {result.totalRanked !== null && result.totalRanked > 0 ? (
@@ -223,18 +216,20 @@ export default function PublicLeaderboardScreen() {
               ) : null}
             </Animated.View>
           )}
+
+          {/* ── Coach challenge — monthly consistency, same theme ── */}
+          {challengeData.challenge !== null ? (
+            <Animated.View entering={enterUp(1)} style={styles.challengeWrap}>
+              <SectionLabel>Coach challenge</SectionLabel>
+              <ChallengeCard
+                challenge={challengeData.challenge}
+                onJoin={challengeData.joinCurrentChallenge}
+                onJoined={challengeData.reload}
+              />
+            </Animated.View>
+          ) : null}
         </>
       )}
-
-      {/* Buddy tap-through — identical to the Buddy tab's leaderboard sheet. */}
-      <BuddySummarySheet
-        visible={summaryBuddy !== null}
-        onClose={() => setSummaryBuddy(null)}
-        displayName={summaryBuddy?.name ?? ''}
-        events={events}
-        buddyId={summaryBuddy?.id ?? ''}
-        todayIso={todayIso()}
-      />
     </Screen>
   );
 }
@@ -433,6 +428,8 @@ const styles = StyleSheet.create({
   standingActionText: { flex: 1 },
 
   totalLine: { marginTop: spacing.md },
+
+  challengeWrap: { marginTop: spacing.lg },
 
   // Skeleton
   skeletonList: { gap: spacing.sm },

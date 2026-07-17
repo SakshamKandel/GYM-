@@ -138,13 +138,23 @@ export function ApplicationsManager({
         } catch {
           code = null;
         }
-        setError(
-          code === 'already_coach'
-            ? 'This account is already a coach.'
-            : res.status === 403
-              ? 'You are not allowed to review applications.'
-              : 'Could not save that decision. Try again.',
-        );
+        // Map the specific, non-retryable outcomes the route actually returns
+        // (C17) — the old `already_coach` branch was dead code, and
+        // target_already_staff / self_review_forbidden used to collapse into a
+        // misleading generic "try again".
+        let msg: string;
+        if (code === 'target_already_staff') {
+          msg = 'This account already holds a staff role, so it can’t be approved as a coach.';
+        } else if (code === 'self_review_forbidden') {
+          msg = 'You can’t review your own application.';
+        } else if (res.status === 404) {
+          msg = 'This application was already decided by someone else. Refresh to see its current status.';
+        } else if (res.status === 403) {
+          msg = 'You are not allowed to review applications.';
+        } else {
+          msg = 'Could not save that decision. Try again.';
+        }
+        setError(msg);
         setBusy(false);
         return;
       }

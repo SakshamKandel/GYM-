@@ -3,7 +3,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import type { Exercise } from '@gym/shared';
+import { type Exercise } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
@@ -27,11 +27,12 @@ import {
   StaffApiError,
   toStaffError,
   updateVideo,
+  type VideoCreateResult,
   type Tier,
   type VideoRow,
   type VideoStatus,
 } from '../../../features/staff/api';
-import { pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { searchExercises } from '../../../lib/exercises';
 import { useAuth } from '../../../state/auth';
 
@@ -135,6 +136,11 @@ function UploadPanel({
   );
   // The host keys are absent server-side — uploads can't work at all.
   const [notConfigured, setNotConfigured] = useState(false);
+  // G11: the {video, upload} reservation from a successful createVideo() —
+  // held across retries so a failed host-upload/confirm step re-tries THAT
+  // same processing row instead of calling createVideo again and orphaning a
+  // duplicate. Cleared on final success or on an explicit Cancel/abandon.
+  const [reservation, setReservation] = useState<VideoCreateResult | null>(null);
 
   // Bundled library lookup — no network. Hidden once an exercise is chosen.
   const suggestions = useMemo(() => {
@@ -150,7 +156,22 @@ function UploadPanel({
     setTier('gold');
     setExerciseQuery('');
     setExercise(null);
+    setReservation(null);
   }, []);
+
+  // G11: abandoning the form while a reservation is outstanding (the row was
+  // already created server-side but never confirmed 'ready') best-effort
+  // removes that orphaned 'processing' row instead of leaving it forever.
+  const abandon = useCallback(() => {
+    const stale = reservation;
+    reset();
+    if (stale && token) {
+      void deleteVideo(stale.video.id, token).catch(() => {
+        // Best-effort only — worst case the row stays 'processing' and an
+        // admin removes it later from the library list below.
+      });
+    }
+  }, [reservation, reset, token]);
 
   const pick = useCallback(async () => {
     setLine(null);
@@ -180,15 +201,21 @@ function UploadPanel({
     setPhase('uploading');
     setLine(null);
     try {
-      // 1. Reserve the upload slot + create the row (status='processing').
-      const { video, upload } = await createVideo(
-        {
-          title: trimmed,
-          tierRequired: tier,
-          ...(exercise ? { exerciseId: exercise.id } : {}),
-        },
-        token,
-      );
+      // 1. Reserve the upload slot + create the row (status='processing') —
+      //    reuse an existing reservation on retry (G11) rather than calling
+      //    createVideo again, which would orphan a second 'processing' row.
+      const created =
+        reservation ??
+        (await createVideo(
+          {
+            title: trimmed,
+            tierRequired: tier,
+            ...(exercise ? { exerciseId: exercise.id } : {}),
+          },
+          token,
+        ));
+      if (!reservation) setReservation(created);
+      const { video, upload } = created;
 
       // 2. Push the bytes straight to the host (never through our API). RN's
       //    FormData takes a { uri, name, type } descriptor for the file part;
@@ -234,7 +261,7 @@ function UploadPanel({
       setPhase('details');
       setLine({ text: uploadErrorLine(staffErr.code), tone: 'error' });
     }
-  }, [token, asset, title, tier, exercise, reset, onUploaded]);
+  }, [token, asset, title, tier, exercise, reservation, reset, onUploaded]);
 
   const uploading = phase === 'uploading';
 
@@ -337,7 +364,7 @@ function UploadPanel({
               variant="ghost"
               disabled={uploading}
               onPress={() => {
-                reset();
+                abandon();
                 setLine(null);
               }}
               style={styles.uploadAction}
@@ -443,6 +470,11 @@ function VideoCard({
 
 export default function AdminContentScreen() {
   const token = useAuth((s) => s.token);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
+  // Org-wide content CRUD needs 'content.manage' (content_admin + super/main).
+  // A plain coach holds only 'content.video.own' and uses the separate
+  // staff/coach/videos.tsx screen — this console is not their route.
+  const allowed = staffCan(staffPermissions, 'content.manage');
 
   const [videos, setVideos] = useState<VideoRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -473,8 +505,8 @@ export default function AdminContentScreen() {
   }, [token]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (allowed) void load();
+  }, [allowed, load]);
 
   const changeTier = useCallback(
     async (video: VideoRow, tier: Tier) => {
@@ -509,6 +541,30 @@ export default function AdminContentScreen() {
     },
     [token, load],
   );
+
+  if (!allowed) {
+    return (
+      <Screen>
+        <Animated.View entering={enterDown()} style={styles.headerRow}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Back to admin console"
+            onPress={() => pushStaff(STAFF_ROUTES.adminHome)}
+            style={styles.backBtn}
+          >
+            <Ionicons name="chevron-back" size={24} color={colors.text} />
+          </PressableScale>
+        </Animated.View>
+        <ScreenHeader eyebrow="Admin console" title="Content" style={styles.header} />
+        <Animated.View entering={enterUp(0)} style={styles.locked}>
+          <Ionicons name="lock-closed" size={28} color={colors.textFaint} />
+          <AppText variant="caption" center color={colors.textFaint}>
+            Only a content admin, main admin or super admin can manage the video library.
+          </AppText>
+        </Animated.View>
+      </Screen>
+    );
+  }
 
   return (
     <Screen scroll keyboardAware>
@@ -652,6 +708,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   header: { marginBottom: spacing.gutter },
+  locked: {
+    marginTop: spacing.xxl,
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.xl,
+  },
   // Borderless notice: the warning icon carries the tone, not a stroke.
   banner: {
     flexDirection: 'row',

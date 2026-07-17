@@ -70,13 +70,27 @@ export async function GET(req: Request) {
     .from(admins)
     .innerJoin(accounts, eq(admins.accountId, accounts.id))
     .innerJoin(coachProfiles, eq(coachProfiles.accountId, accounts.id))
-    .where(and(eq(admins.role, 'coach'), eq(coachProfiles.isActive, true)));
+    // A suspended coach (accounts.status='suspended') can't log in, so they must
+    // not stay publicly listed/requestable — a member's coach_request against
+    // them could never be actioned (C3). Suspension writes only accounts.status,
+    // leaving admins.role='coach' and coachProfiles.isActive untouched, so this
+    // status filter is the guard that removes them from discovery.
+    .where(
+      and(
+        eq(admins.role, 'coach'),
+        eq(coachProfiles.isActive, true),
+        eq(accounts.status, 'active'),
+      ),
+    );
 
   // capacity itself stays private on the list — members only see the boolean.
+  // `photoUrl` mirrors `avatarUrl` — the canonical name going forward; the
+  // legacy key stays so already-shipped mobile parsers keep working.
   const coaches = rows
     .map(({ capacity, ...coach }) => ({
       ...coach,
       displayName: coach.displayName || 'Coach',
+      photoUrl: coach.avatarUrl,
       hasCapacity: coach.activeClients < capacity,
     }))
     .sort((a, b) => {

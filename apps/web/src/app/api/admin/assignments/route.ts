@@ -1,5 +1,5 @@
-import { accounts, admins, coachAssignments } from '@gym/db';
-import { and, eq } from 'drizzle-orm';
+import { accounts, admins, coachAssignments, coachProfiles } from '@gym/db';
+import { and, count, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -22,6 +22,9 @@ export const runtime = 'nodejs';
 const postSchema = z.object({
   coachId: z.string().min(1),
   userId: z.string().min(1),
+  // Admin override for the capacity / inactive guards below (C9). Absent =
+  // enforce the coach's own limits, matching the member coach-accept flow.
+  force: z.boolean().optional(),
 });
 
 export function OPTIONS() {
@@ -34,7 +37,7 @@ export async function POST(req: Request) {
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { coachId, userId } = parsed.data;
+  const { coachId, userId, force } = parsed.data;
 
   const db = getDb();
 
@@ -66,6 +69,38 @@ export async function POST(req: Request) {
     .limit(1);
   if (targetStaff.length > 0) return json({ error: 'invalid' }, 400);
 
+  // Respect the coach's own limits (C9) — the member-facing coach-accept flow
+  // enforces these, so admin assign must too, or a "full"/"closed" coach can be
+  // overloaded from the console. An admin may knowingly override with
+  // { force: true }. Skipped when the coach has no profile row (nothing to
+  // enforce). Reassigning a member already on this coach doesn't consume a new
+  // slot, so that member is excluded from the active-client count.
+  if (!force) {
+    const profile = await db
+      .select({ isActive: coachProfiles.isActive, capacity: coachProfiles.capacity })
+      .from(coachProfiles)
+      .where(eq(coachProfiles.accountId, coachId))
+      .limit(1);
+    const p = profile[0];
+    if (p) {
+      if (p.isActive === false) return json({ error: 'inactive' }, 409);
+      const activeRows = await db
+        .select({ n: count() })
+        .from(coachAssignments)
+        .where(
+          and(
+            eq(coachAssignments.coachId, coachId),
+            eq(coachAssignments.status, 'active'),
+            ne(coachAssignments.userId, userId),
+          ),
+        );
+      const activeClients = Number(activeRows[0]?.n ?? 0);
+      if (activeClients >= p.capacity) {
+        return json({ error: 'full', activeClients, capacity: p.capacity }, 409);
+      }
+    }
+  }
+
   const inserted = await db
     .insert(coachAssignments)
     .values({
@@ -89,6 +124,21 @@ export async function POST(req: Request) {
 
   const assignment = inserted[0];
   if (!assignment) return json({ error: 'invalid' }, 400);
+
+  // Enforce the singular-coach invariant (contract §4.11): a member may hold at
+  // most ONE active assignment. End every OTHER active assignment for this
+  // member so a reassignment doesn't leave the previous coach with lingering
+  // chat/client-data/tier-grant access and make /api/me/coach nondeterministic.
+  await db
+    .update(coachAssignments)
+    .set({ status: 'ended' })
+    .where(
+      and(
+        eq(coachAssignments.userId, userId),
+        ne(coachAssignments.coachId, coachId),
+        eq(coachAssignments.status, 'active'),
+      ),
+    );
 
   await logAudit(principal, 'coach.assign', 'account', userId, { coachId });
 

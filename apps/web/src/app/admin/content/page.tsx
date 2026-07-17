@@ -2,6 +2,7 @@ import { planVideos } from '@gym/db';
 import { desc, ne } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
+import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
 import { isVideoConfigured } from '@/lib/video';
@@ -60,11 +61,8 @@ async function loadVideos(): Promise<VideoListItem[]> {
 export default async function AdminContentPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  const isContentStaff =
-    principal.role === 'super_admin' ||
-    principal.role === 'main_admin' ||
-    principal.role === 'content_admin';
-  if (!isContentStaff) redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  if (!permissions.has('content.manage')) redirect('/admin');
 
   const videos = await loadVideos();
   const configured = isVideoConfigured();

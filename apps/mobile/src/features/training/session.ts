@@ -1,14 +1,13 @@
 import { create } from 'zustand';
 import type { SetLog, WorkoutLog } from '@gym/shared';
 import { checkPr, epley1Rm, updateStreak } from '@gym/shared';
-import { publishWorkoutActivity, type CoachWorkoutItem, type CoachWorkoutRow } from '../../lib/api/client';
+import { type CoachWorkoutItem, type CoachWorkoutRow } from '../../lib/api/client';
 import { nowIso, secondsBetween, todayIso } from '../../lib/dates';
 import { getExercise } from '../../lib/exercises';
 import { logHaptic, prHaptic, successHaptic, warnHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
 import { getRepo } from '../../lib/repo';
 import { getPlanWorkout } from '../../lib/seed/plans';
-import { useAuth } from '../../state/auth';
 import { syncWorkouts } from '../sync/workoutSync';
 import { DEFAULT_ADHOC_SETS, DEFAULT_REST_SEC, nextIncompleteIndex } from './logic';
 import type { CustomTemplate } from './templates';
@@ -494,21 +493,9 @@ export const useSession = create<SessionState>()((set, get) => {
       const streak = updateStreak(await repo.getStreak(), todayIso());
       await repo.setStreak(streak);
 
-      // Buddy Sync: broadcast the finished session (fire-and-forget — the
-      // helper swallows failures; buddies just won't see this one offline).
-      const auth = useAuth.getState();
-      if (auth.status === 'signedIn' && auth.token) {
-        const sets = s.exercises.flatMap((e) => e.loggedSets);
-        void publishWorkoutActivity(auth.token, {
-          name: s.workoutName || 'Workout',
-          date: todayIso(),
-          durationSec,
-          volumeKg: Math.round(sets.reduce((sum, x) => sum + x.weightKg * x.reps, 0)),
-          prCount: sets.filter((x) => x.isPr).length,
-        });
-      }
       // One-way server backup of the finished workout (fire-and-forget — it
       // no-ops signed out and swallows failures; the backlog retries later).
+      // This is also what feeds the public gym leaderboard's session-days.
       void syncWorkouts();
 
       successHaptic();

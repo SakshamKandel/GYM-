@@ -1,28 +1,26 @@
 import { accounts, paymentRequests } from '@gym/db';
-import { desc, eq } from 'drizzle-orm';
+import { resolveRegion } from '@gym/shared';
+import { desc, eq, ne, type SQL, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
-import type { StaffRole } from '@/lib/auth';
 import { getDb } from '@/lib/db';
+import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
 import { getVideoProvider } from '@/lib/video';
 import {
   type PaymentRequestRow,
+  type PaymentStatusCounts,
   PaymentsQueue,
 } from './_components/PaymentsQueue';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/**
- * Roles allowed to review manual payment requests. Mirrors the
- * 'payments.review' grant in authz.ts (super_admin + main_admin +
- * member_admin). The admin layout hides the nav link and guards the subtree,
- * but we re-check here so hitting the URL directly still fails safe.
- */
-const CAN_REVIEW: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
-
-const CAP = 200;
+// Pending is loaded UNBOUNDED (B7 — old pending requests must never starve
+// invisibly behind a flat newest-N cap); decided history is capped. PENDING_CAP
+// is a very high safety ceiling, not an expected working-set size.
+const PENDING_CAP = 2000;
+const DECIDED_CAP = 200;
 
 /**
  * Mints a viewable receipt URL from the stored value. The upload pipeline
@@ -43,16 +41,20 @@ async function resolveReceiptUrl(raw: string): Promise<string | null> {
   }
 }
 
-async function loadPaymentRequests(): Promise<PaymentRequestRow[]> {
+async function selectRequests(where: SQL, cap: number) {
   const db = getDb();
-  const rows = await db
+  return db
     .select({
       id: paymentRequests.id,
       accountId: paymentRequests.accountId,
       accountEmail: accounts.email,
       accountDisplayName: accounts.displayName,
+      accountTier: accounts.tier,
+      accountTierExpiresAt: accounts.tierExpiresAt,
+      accountCountry: accounts.country,
       tier: paymentRequests.tier,
       months: paymentRequests.months,
+      region: paymentRequests.region,
       amountMinor: paymentRequests.amountMinor,
       currency: paymentRequests.currency,
       method: paymentRequests.method,
@@ -65,38 +67,80 @@ async function loadPaymentRequests(): Promise<PaymentRequestRow[]> {
     })
     .from(paymentRequests)
     .innerJoin(accounts, eq(accounts.id, paymentRequests.accountId))
+    .where(where)
     .orderBy(desc(paymentRequests.createdAt))
-    .limit(CAP);
+    .limit(cap);
+}
 
-  return Promise.all(
-    rows.map(async (r) => ({
-      id: r.id,
-      accountId: r.accountId,
-      accountEmail: r.accountEmail,
-      accountDisplayName: r.accountDisplayName,
-      tier: r.tier as PaymentRequestRow['tier'],
-      months: r.months,
-      amountMinor: r.amountMinor,
-      currency: r.currency,
-      method: r.method as PaymentRequestRow['method'],
-      receiptUrl: r.receiptUid ? await resolveReceiptUrl(r.receiptUid) : null,
-      note: r.note,
-      status: r.status as PaymentRequestRow['status'],
-      reviewNote: r.reviewNote,
-      createdAt: r.createdAt.toISOString(),
-      decidedAt: r.decidedAt ? r.decidedAt.toISOString() : null,
-    })),
-  );
+type RawRow = Awaited<ReturnType<typeof selectRequests>>[number];
+
+async function toRow(r: RawRow): Promise<PaymentRequestRow> {
+  return {
+    id: r.id,
+    accountId: r.accountId,
+    accountEmail: r.accountEmail,
+    accountDisplayName: r.accountDisplayName,
+    accountTier: r.accountTier as PaymentRequestRow['accountTier'],
+    accountTierExpiresAt: r.accountTierExpiresAt ? r.accountTierExpiresAt.toISOString() : null,
+    tier: r.tier as PaymentRequestRow['tier'],
+    months: r.months,
+    region: r.region as PaymentRequestRow['region'],
+    // B11: NP pricing with no verified NP country — surface it so the reviewer
+    // scrutinises the receipt currency rather than trusting a cheap self-report.
+    selfReportedRegion: r.region === 'NP' && resolveRegion(r.accountCountry) !== 'NP',
+    amountMinor: r.amountMinor,
+    currency: r.currency,
+    method: r.method as PaymentRequestRow['method'],
+    receiptUrl: r.receiptUid ? await resolveReceiptUrl(r.receiptUid) : null,
+    note: r.note,
+    status: r.status as PaymentRequestRow['status'],
+    reviewNote: r.reviewNote,
+    createdAt: r.createdAt.toISOString(),
+    decidedAt: r.decidedAt ? r.decidedAt.toISOString() : null,
+  };
+}
+
+/**
+ * Loads pending requests unbounded + a capped slice of decided history, plus
+ * accurate per-status counts (B7 — tiles/tabs computed over a grouped COUNT, not
+ * a truncated page, so they never undercount).
+ */
+async function loadPaymentRequests(): Promise<{
+  requests: PaymentRequestRow[];
+  counts: PaymentStatusCounts;
+}> {
+  const db = getDb();
+  const [pendingRaw, decidedRaw, countRows] = await Promise.all([
+    selectRequests(eq(paymentRequests.status, 'pending'), PENDING_CAP),
+    selectRequests(ne(paymentRequests.status, 'pending'), DECIDED_CAP),
+    db
+      .select({ status: paymentRequests.status, n: sql<string>`count(*)::text` })
+      .from(paymentRequests)
+      .groupBy(paymentRequests.status),
+  ]);
+
+  const counts: PaymentStatusCounts = {
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+    refunded: 0,
+  };
+  for (const c of countRows) {
+    if (c.status in counts) counts[c.status as keyof PaymentStatusCounts] = Number(c.n);
+  }
+
+  const requests = await Promise.all([...pendingRaw, ...decidedRaw].map(toRow));
+  return { requests, counts };
 }
 
 export default async function AdminPaymentsPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (!CAN_REVIEW.includes(principal.role)) redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  if (!permissions.has('payments.review')) redirect('/admin');
 
-  const requests = await loadPaymentRequests();
-  const pending = requests.filter((r) => r.status === 'pending').length;
-  const approved = requests.filter((r) => r.status === 'approved').length;
+  const { requests, counts } = await loadPaymentRequests();
+  const total = counts.pending + counts.approved + counts.rejected + counts.refunded;
 
   return (
     <div style={{ maxWidth: 1080 }}>
@@ -113,12 +157,13 @@ export default async function AdminPaymentsPage() {
           marginBottom: 24,
         }}
       >
-        <StatTile label="Total" value={requests.length} />
-        <StatTile label="Pending" value={pending} />
-        <StatTile label="Approved" value={approved} />
+        <StatTile label="Total" value={total} />
+        <StatTile label="Pending" value={counts.pending} />
+        <StatTile label="Approved" value={counts.approved} />
+        <StatTile label="Refunded" value={counts.refunded} />
       </div>
 
-      <PaymentsQueue requests={requests} />
+      <PaymentsQueue requests={requests} counts={counts} />
     </div>
   );
 }

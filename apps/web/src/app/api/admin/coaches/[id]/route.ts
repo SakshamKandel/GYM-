@@ -1,5 +1,5 @@
-import { coachProfiles } from '@gym/db';
-import { eq } from 'drizzle-orm';
+import { admins, coachProfiles } from '@gym/db';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -43,13 +43,24 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   const db = getDb();
-  const updated = await db
-    .update(coachProfiles)
-    .set(update)
-    .where(eq(coachProfiles.accountId, id))
-    .returning({ accountId: coachProfiles.accountId });
 
-  if (updated.length === 0) return json({ error: 'not_found' }, 404);
+  // Confirm the target is actually a coach before touching profiles, so we
+  // never mint a coach_profiles row for a non-coach account.
+  const coach = await db
+    .select({ accountId: admins.accountId })
+    .from(admins)
+    .where(and(eq(admins.accountId, id), eq(admins.role, 'coach')))
+    .limit(1);
+  if (coach.length === 0) return json({ error: 'not_found' }, 404);
+
+  // Upsert (not a bare UPDATE): a legacy coach granted the role via
+  // POST /api/admin/staff has no coach_profiles row yet, so a plain UPDATE would
+  // match 0 rows → the admin's edit would silently vanish while the route
+  // reported success/404 (C12).
+  await db
+    .insert(coachProfiles)
+    .values({ accountId: id, ...update })
+    .onConflictDoUpdate({ target: coachProfiles.accountId, set: update });
 
   const ip = req.headers.get('x-forwarded-for');
   await logAudit(principal, 'coach.update', 'coach_profile', id, update, ip);

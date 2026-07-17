@@ -1,6 +1,6 @@
 import { exercises, planVideos } from '@gym/db';
 import { desc, eq } from 'drizzle-orm';
-import { requirePermission } from '@/lib/authz';
+import { requireAnyPermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 
@@ -15,13 +15,11 @@ export const runtime = 'nodejs';
  *          Removed rows are included so the coach can see history; the console
  *          can filter client-side.
  *
- * Guarded by requirePermission('content.video.publish') — the SAME permission
- * that content_admin and coach hold, so a coach sees the library. ADD / RETIER
- * / REMOVE reuse the existing content routes unchanged (they're already gated
- * on content.video.publish, which coach holds):
- *   - POST   /api/admin/videos        (reserve upload + create row)
- *   - PATCH  /api/admin/videos/[id]   (title/description/tierRequired/position/status)
- *   - DELETE /api/admin/videos/[id]   (soft-delete status='removed')
+ * Read-only library. Per RBAC §4.9 the GET list stays org-wide readable for
+ * BOTH content keys: `content.manage` (content_admin / top admins) and
+ * `content.video.own` (coach). Mutations live on the /api/admin/videos routes,
+ * which scope coach writes to their own rows (createdBy) and 404 on non-owned
+ * ids — no existence oracle. The retired `content.video.publish` key is gone.
  */
 
 export function OPTIONS() {
@@ -29,8 +27,8 @@ export function OPTIONS() {
 }
 
 export async function GET(req: Request) {
-  const principal = await requirePermission(req, 'content.video.publish');
-  if (principal instanceof Response) return principal;
+  const access = await requireAnyPermission(req, ['content.manage', 'content.video.own']);
+  if (access instanceof Response) return access;
 
   const rows = await getDb()
     .select({

@@ -267,7 +267,15 @@ function RequestRow({
  * staff, not package.json), so the code is rendered as native `selectable`
  * text: long-press opens the OS "Copy" callout. No button needed.
  */
-function WalletPromoCard({ token }: { token: string | null }) {
+function WalletPromoCard({
+  token,
+  refreshSignal,
+}: {
+  token: string | null;
+  /** Bumped by the parent on every pull-to-refresh so this card's data stays
+   * in step with the roster instead of only ever loading once at mount. */
+  refreshSignal: number;
+}) {
   const [wallet, setWallet] = useState<CoachWallet | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -286,7 +294,9 @@ function WalletPromoCard({ token }: { token: string | null }) {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    // refreshSignal intentionally re-triggers the load on pull-to-refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load, refreshSignal]);
 
   if (loading) return null;
 
@@ -376,6 +386,9 @@ export default function CoachInboxScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<StaffErrorCode | null>(null);
+  // Bumped on every pull-to-refresh — passed to WalletPromoCard so its wallet
+  // fetch rides along instead of only ever loading once at mount (G15).
+  const [walletRefreshSignal, setWalletRefreshSignal] = useState(0);
 
   const load = useCallback(
     async (mode: 'initial' | 'refresh') => {
@@ -384,8 +397,10 @@ export default function CoachInboxScreen() {
         setLoading(false);
         return;
       }
-      if (mode === 'refresh') setRefreshing(true);
-      else setLoading(true);
+      if (mode === 'refresh') {
+        setRefreshing(true);
+        setWalletRefreshSignal((n) => n + 1);
+      } else setLoading(true);
       try {
         // The pending-request queue is secondary — a failure there must never
         // blank the roster, so it resolves to null and keeps the last value.
@@ -538,7 +553,7 @@ export default function CoachInboxScreen() {
       </Animated.View>
 
       {/* promo-economy: commission wallet + own promo code. */}
-      <WalletPromoCard token={token} />
+      <WalletPromoCard token={token} refreshSignal={walletRefreshSignal} />
 
       {loading ? (
         <View style={styles.centre}>

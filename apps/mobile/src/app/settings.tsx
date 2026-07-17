@@ -400,6 +400,7 @@ export default function SettingsScreen() {
   const authUser = useAuth((s) => s.user);
   const authToken = useAuth((s) => s.token);
   const staffRole = useAuth((s) => s.staffRole);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
   const signOut = useAuth((s) => s.signOut);
   // Server-authoritative tier for the identity shield — never useProfile.tier
   // (local upgrade-only mirror, known to drift above the server's value).
@@ -1095,9 +1096,42 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
+      {/* ── Community — invite friends + the public gym board ── */}
+      <Animated.View entering={enterUp(5)} layout={layoutSpring}>
+        <AppText variant="label" style={styles.sectionLabel}>
+          Community
+        </AppText>
+        <View style={styles.group}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Invite friends — you both earn a subscription discount"
+            onPress={() => pushPath('/invite')}
+            style={styles.row}
+          >
+            <IconChip icon="gift-outline" size={36} />
+            <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
+              Invite friends
+            </AppText>
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+          </PressableScale>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Gym leaderboard — this month's consistency ranking, whole gym"
+            onPress={() => pushPath('/leaderboard')}
+            style={styles.row}
+          >
+            <IconChip icon="podium" size={36} />
+            <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
+              Gym leaderboard
+            </AppText>
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+          </PressableScale>
+        </View>
+      </Animated.View>
+
       {/* ── Staff console ───────────────────────────────────── */}
       {/* Only staff accounts see this; taps route OUTSIDE the onboarding gate. */}
-      {staffRole !== null ? (
+      {staffRole !== null && staffPermissions.length > 0 ? (
         <Animated.View entering={enterUp(4)} layout={layoutSpring}>
           <AppText variant="label" style={styles.sectionLabel}>
             Staff
@@ -1641,7 +1675,7 @@ const styles = StyleSheet.create({
   },
   // Trailing lock affordance for gated Elite rows (Tag + small lock icon).
   lockedValue: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  // Unread-count pill on the Support row (mirrors the buddy chat badge).
+  // Unread-count pill on the Support row (accent-fill badge language).
   unreadPill: {
     minWidth: 20,
     height: 20,

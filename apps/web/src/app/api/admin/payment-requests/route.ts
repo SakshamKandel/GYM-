@@ -1,4 +1,5 @@
 import { accounts, paymentRequests } from '@gym/db';
+import { resolveRegion } from '@gym/shared';
 import { desc, eq } from 'drizzle-orm';
 import { requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -23,7 +24,7 @@ export const runtime = 'nodejs';
  */
 
 const MAX_ROWS = 200;
-const STATUSES = ['pending', 'approved', 'rejected'] as const;
+const STATUSES = ['pending', 'approved', 'rejected', 'refunded'] as const;
 
 export function OPTIONS() {
   return preflight();
@@ -46,8 +47,11 @@ export async function GET(req: Request) {
       email: accounts.email,
       displayName: accounts.displayName,
       tierNow: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
+      country: accounts.country,
       tier: paymentRequests.tier,
       months: paymentRequests.months,
+      region: paymentRequests.region,
       amountMinor: paymentRequests.amountMinor,
       currency: paymentRequests.currency,
       method: paymentRequests.method,
@@ -75,9 +79,20 @@ export async function GET(req: Request) {
       }
       return {
         id: r.id,
-        account: { id: r.accountId, email: r.email, displayName: r.displayName, tier: r.tierNow },
+        account: {
+          id: r.accountId,
+          email: r.email,
+          displayName: r.displayName,
+          tier: r.tierNow,
+          tierExpiresAt: r.tierExpiresAt ? r.tierExpiresAt.toISOString() : null,
+        },
         tier: r.tier,
         months: r.months,
+        region: r.region,
+        // B11: NP pricing with no verified NP country (allowed via an
+        // esewa/khalti rail) — flag it so the reviewer eyeballs the receipt
+        // currency rather than trusting a self-reported cheap region.
+        selfReportedRegion: r.region === 'NP' && resolveRegion(r.country) !== 'NP',
         amountMinor: r.amountMinor,
         currency: r.currency,
         method: r.method,

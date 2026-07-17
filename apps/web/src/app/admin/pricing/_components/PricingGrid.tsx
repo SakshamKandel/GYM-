@@ -1,7 +1,7 @@
 'use client';
 
 import { formatMoney } from '@gym/shared';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, Card } from '@/components/console';
 
@@ -33,6 +33,9 @@ function toMajorInput(amountMinor: number): string {
 
 /** Editable major-unit string → amountMinor (rounds to the nearest paisa/cent). */
 function toMinor(major: string): number | null {
+  // An empty/whitespace cell must NOT coerce to 0 (Number('') === 0), which
+  // would silently price a paid tier as free (E2) — treat it as invalid.
+  if (major.trim() === '') return null;
   const n = Number(major);
   if (!Number.isFinite(n) || n < 0) return null;
   return Math.round(n * 100);
@@ -57,7 +60,7 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
     return m;
   }, [prices]);
 
-  const [edits, setEdits] = useState<Record<string, string>>(() => {
+  const seed = useMemo(() => {
     const init: Record<string, string> = {};
     for (const region of REGIONS) {
       for (const tier of EDITABLE_TIERS) {
@@ -66,9 +69,19 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
       }
     }
     return init;
-  });
+  }, [byKey]);
+
+  const [edits, setEdits] = useState<Record<string, string>>(seed);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Re-seed from props whenever the authoritative prices change (E3): after a
+  // save we router.refresh(), which re-renders with the freshly-saved catalog —
+  // without this the grid kept showing the stale mount-time values and a
+  // subsequent save would PUT them back over another admin's edit.
+  useEffect(() => {
+    setEdits(seed);
+  }, [seed]);
 
   const dirty = useMemo(() => {
     for (const region of REGIONS) {
@@ -86,10 +99,16 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
   }
 
   async function save() {
+    // Only send cells the admin actually changed (E3) — PUTting all 6 every
+    // time silently clobbered a concurrent admin's edit to a cell this one
+    // never touched. Unchanged cells are left untouched server-side.
     const payload: { region: PriceRegion; tier: Tier; amountMinor: number }[] = [];
     for (const region of REGIONS) {
       for (const tier of EDITABLE_TIERS) {
-        const minor = toMinor(edits[key(region.key, tier)]);
+        const k = key(region.key, tier);
+        const original = toMajorInput(byKey.get(k)?.amountMinor ?? 0);
+        if (edits[k] === original) continue;
+        const minor = toMinor(edits[k]);
         if (minor === null) {
           setError(`Invalid amount for ${region.label} · ${tier}.`);
           return;
@@ -97,6 +116,7 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
         payload.push({ region: region.key, tier, amountMinor: minor });
       }
     }
+    if (payload.length === 0) return;
     setSaving(true);
     setError(null);
     try {

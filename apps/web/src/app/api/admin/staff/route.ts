@@ -1,11 +1,25 @@
 import { accounts, admins, coachProfiles } from '@gym/db';
-import { isStaffRole } from '@gym/shared';
 import { asc, eq } from 'drizzle-orm';
+import { z } from 'zod';
 import { adminRoleOf, logAudit, requirePermission, requireOutranks } from '@/lib/authz';
+import { offboardCoach } from '@/lib/coachOffboard';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 
 export const runtime = 'nodejs';
+
+const bodySchema = z.object({
+  accountId: z.string().trim().min(1),
+  // nutrition_admin is intentionally absent: it is a deprecated empty preset.
+  role: z.enum([
+    'super_admin',
+    'main_admin',
+    'member_admin',
+    'content_admin',
+    'support_admin',
+    'coach',
+  ]),
+});
 
 /**
  * Admin console — staff & roles management. Lets a super_admin see every staff
@@ -64,18 +78,9 @@ export async function POST(req: Request) {
   const principal = await requirePermission(req, 'roles.grant');
   if (principal instanceof Response) return principal;
 
-  const body = await readJson(req);
-  if (!body || typeof body !== 'object') {
-    return json({ error: 'invalid_body' }, 400);
-  }
-  const { accountId, role } = body as { accountId?: unknown; role?: unknown };
-
-  if (typeof accountId !== 'string' || accountId.trim().length === 0) {
-    return json({ error: 'accountId_required' }, 400);
-  }
-  if (!isStaffRole(role)) {
-    return json({ error: 'invalid_role' }, 400);
-  }
+  const parsed = bodySchema.safeParse(await readJson(req));
+  if (!parsed.success) return json({ error: 'invalid_body' }, 400);
+  const { accountId, role } = parsed.data;
 
   // Nobody may change their OWN admin row — no self-escalation, no
   // self-demotion. Applies to super_admin too.
@@ -109,6 +114,35 @@ export async function POST(req: Request) {
   const changeBlock = requireOutranks(principal, previousRole);
   if (changeBlock) return changeBlock;
 
+  const ip = req.headers.get('x-forwarded-for');
+
+  // Changing a coach to a NON-coach role loses the coach role just like a
+  // revoke, so it must run the SAME offboarding cascade (C2): otherwise the
+  // account keeps its live coach_profiles + active assignments while no longer
+  // being able to reply, orphaning clients. Runs BEFORE the role flip; every
+  // step is status-scoped so it's a no-op if somehow re-run.
+  let cascade: Awaited<ReturnType<typeof offboardCoach>> | null = null;
+  if (previousRole === 'coach' && role !== 'coach') {
+    cascade = await offboardCoach(db, accountId);
+    await logAudit(
+      principal,
+      'coach.offboard',
+      'account',
+      accountId,
+      {
+        reason: 'role_changed',
+        newRole: role,
+        activeClients: cascade.activeClients,
+        pendingRequests: cascade.pendingRequests,
+        activeWorkoutPlans: cascade.activeWorkoutPlans,
+        activeDietPlans: cascade.activeDietPlans,
+        walletBalances: cascade.walletBalances,
+        endedClientIds: cascade.endedClientIds,
+      },
+      ip,
+    );
+  }
+
   // Upsert the admins row (accountId is the PK → change-in-place on conflict).
   await db
     .insert(admins)
@@ -116,17 +150,20 @@ export async function POST(req: Request) {
     .onConflictDoUpdate({ target: admins.accountId, set: { role } });
 
   // Granting coach → make sure a coach_profiles row exists so the account is
-  // immediately visible in the coach roster and coach console. DO NOTHING on
-  // conflict so an existing profile (bio/avatar/capacity) is left untouched.
+  // immediately visible in the coach roster and coach console. A surviving row
+  // from a prior offboarding carries isActive=false (offboardCoach keeps the row
+  // for history/wallet), so re-granting must REACTIVATE it — otherwise the coach
+  // is back in the admins table but absent from discovery + un-assignable
+  // (409 'inactive'). Only isActive is forced on conflict; the rest of an
+  // existing profile (bio/avatar/capacity/tier) is left untouched.
   if (role === 'coach') {
     await db
       .insert(coachProfiles)
       .values({ accountId })
-      .onConflictDoNothing({ target: coachProfiles.accountId });
+      .onConflictDoUpdate({ target: coachProfiles.accountId, set: { isActive: true } });
   }
 
-  const ip = req.headers.get('x-forwarded-for');
   await logAudit(principal, 'roles.grant', 'account', accountId, { role, previousRole }, ip);
 
-  return json({ ok: true }, 200);
+  return json({ ok: true, cascade }, 200);
 }

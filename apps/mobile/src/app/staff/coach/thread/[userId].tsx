@@ -26,7 +26,9 @@ import { addDays, posterDate, toIsoDate, todayIso } from '../../../../lib/dates'
 import { successHaptic } from '../../../../lib/haptics';
 import { useAuth } from '../../../../state/auth';
 import {
+  getCoachInbox,
   getCoachThread,
+  markCoachThreadRead,
   replyToClient,
   toStaffError,
   type CoachThreadMessage,
@@ -178,9 +180,17 @@ export default function CoachThreadScreen() {
   const userId = params.userId;
   const insets = useSafeAreaInsets();
 
-  const clientName = params.name?.trim() || 'Client';
+  // The URL params are a snapshot from when the row was tapped in the inbox —
+  // if the client's name or tier changed since (e.g. a tier upgrade applied
+  // from this very thread), the header would otherwise stay stale for the
+  // rest of the session (G15). Roster refetch below supplies the live values;
+  // the params remain only as the first-paint fallback before that resolves.
+  const [liveName, setLiveName] = useState<string | null>(null);
+  const [liveTier, setLiveTier] = useState<Tier | null>(null);
+
+  const clientName = liveName ?? (params.name?.trim() || 'Client');
   const clientInitial = clientName.charAt(0).toUpperCase();
-  const tier = isTier(params.tier) ? params.tier : null;
+  const tier = liveTier ?? (isTier(params.tier) ? params.tier : null);
 
   const [messages, setMessages] = useState<CoachThreadMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -206,6 +216,10 @@ export default function CoachThreadScreen() {
       const thread = await getCoachThread(userId, token);
       setMessages(thread);
       setLoadError(null);
+      // Mark read now that the thread is visible (F2: GET is read-only, this
+      // is the separate write) — best-effort, never blocks the thread from
+      // showing and never surfaces its own error.
+      void markCoachThreadRead(userId, token).catch(() => {});
     } catch (err) {
       setLoadError(toStaffError(err).code);
     } finally {
@@ -216,6 +230,28 @@ export default function CoachThreadScreen() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Resolve the client's CURRENT name/tier from the roster — best-effort; a
+  // failure (or the client no longer appearing, e.g. coaching just ended)
+  // simply leaves the params-derived fallback in place.
+  useEffect(() => {
+    if (!token || !userId) return;
+    let cancelled = false;
+    void getCoachInbox(token)
+      .then((rows) => {
+        if (cancelled) return;
+        const row = rows.find((r) => r.id === userId);
+        if (!row) return;
+        setLiveName(row.displayName.trim() || null);
+        setLiveTier(row.tier);
+      })
+      .catch(() => {
+        // Non-fatal — the header keeps the params snapshot.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, userId]);
 
   useEffect(() => {
     if (messages.length > 0) scrollToEnd();

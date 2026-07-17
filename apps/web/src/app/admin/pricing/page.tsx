@@ -2,7 +2,7 @@ import { tierPrices } from '@gym/db';
 import { DEFAULT_TIER_PRICES } from '@gym/shared';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
-import type { StaffRole } from '@/lib/auth';
+import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
 import { type PriceCell, PricingGrid } from './_components/PricingGrid';
@@ -15,7 +15,6 @@ export const dynamic = 'force-dynamic';
  * in authz.ts — super_admin + main_admin ONLY, per SCALE-UP-PLAN §4. The
  * layout hides the nav link for anyone else; re-checked here to fail safe.
  */
-const CAN_MANAGE: readonly StaffRole[] = ['super_admin', 'main_admin'];
 
 /**
  * Merges the live tier_prices table over DEFAULT_TIER_PRICES so every
@@ -51,7 +50,8 @@ async function loadPrices(): Promise<PriceCell[]> {
 export default async function AdminPricingPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (!CAN_MANAGE.includes(principal.role)) redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  if (!permissions.has('pricing.manage')) redirect('/admin');
 
   const prices = await loadPrices();
 

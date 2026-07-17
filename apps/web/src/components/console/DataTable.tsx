@@ -30,12 +30,22 @@ export function DataTable<T>({
   rowKey,
   empty,
   onRowClick,
+  rowAriaLabel,
 }: {
   columns: Column<T>[];
   rows: T[];
   rowKey: (row: T, index: number) => string;
   empty?: ReactNode;
   onRowClick?: (row: T) => void;
+  /**
+   * Per-row accessible name for clickable rows, e.g. `(r) => `Open ${r.email}``.
+   * When omitted the row exposes NO aria-label, so its accessible name is
+   * computed from the cell text (name-from-content) — rows stay distinguishable
+   * to screen-reader users instead of all announcing an identical generic
+   * label. Pass this to give a shorter, purpose-built name when the cell text
+   * is noisy.
+   */
+  rowAriaLabel?: (row: T) => string;
 }) {
   return (
     <div
@@ -105,7 +115,7 @@ export function DataTable<T>({
                 }
                 role={onRowClick ? 'button' : undefined}
                 tabIndex={onRowClick ? 0 : undefined}
-                aria-label={onRowClick ? 'Open row details' : undefined}
+                aria-label={onRowClick ? rowAriaLabel?.(row) : undefined}
                 className="gt-tr"
                 style={{
                   cursor: onRowClick ? 'pointer' : 'default',

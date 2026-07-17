@@ -20,7 +20,7 @@ export interface TierDetail {
   gmTier: GmTier;
   isCurrent: boolean;
   isRecommended: boolean;
-  /** Precomputed trial line (parent owns the buddy-trial coupling), or null. */
+  /** Precomputed trial line (parent owns the trial-status coupling), or null. */
   trialLine: string | null;
   /** Precomputed price (parent owns the catalog fetch), so the sheet stays catalog-free. */
   price: TierPriceDisplay;

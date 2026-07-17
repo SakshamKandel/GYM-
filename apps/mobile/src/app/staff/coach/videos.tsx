@@ -484,7 +484,7 @@ export default function CoachVideosScreen() {
         await updateVideo(video.id, { tierRequired: tier }, token);
         await load();
       } catch (err) {
-        setMutationError(errorLine(toStaffError(err).code));
+        setMutationError(mutationErrorLine(toStaffError(err).code));
       } finally {
         setBusyId(null);
       }
@@ -501,7 +501,7 @@ export default function CoachVideosScreen() {
         await deleteVideo(video.id, token);
         await load();
       } catch (err) {
-        setMutationError(errorLine(toStaffError(err).code));
+        setMutationError(mutationErrorLine(toStaffError(err).code));
       } finally {
         setBusyId(null);
       }
@@ -619,7 +619,7 @@ export default function CoachVideosScreen() {
   );
 }
 
-/** Map a StaffApiError code to a short, human line. */
+/** Map a StaffApiError code to a short, human line (list load). */
 function errorLine(code: string): string {
   switch (code) {
     case 'unauthorized':
@@ -628,6 +628,28 @@ function errorLine(code: string): string {
       return "You don't have permission to manage videos.";
     case 'not_found':
       return 'That video no longer exists.';
+    case 'invalid':
+      return 'That change was rejected. Try again.';
+    default:
+      return "Couldn't reach the server. Check your connection and retry.";
+  }
+}
+
+/**
+ * Map a StaffApiError code from a video MUTATION (retier/remove). A coach
+ * holding only `content.video.own` gets a plain 404 from the server on any
+ * video she doesn't own (no existence oracle — contract §4.9), so 'not_found'
+ * here means "not yours", not "doesn't exist" — the org-wide GET list already
+ * proved it exists.
+ */
+function mutationErrorLine(code: string): string {
+  switch (code) {
+    case 'unauthorized':
+      return 'Your session expired. Sign in again to continue.';
+    case 'forbidden':
+      return "You don't have permission to manage videos.";
+    case 'not_found':
+      return 'You can only edit your own uploads.';
     case 'invalid':
       return 'That change was rejected. Try again.';
     default:

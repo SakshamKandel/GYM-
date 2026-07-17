@@ -89,12 +89,27 @@ export async function PATCH(
 
   const db = getDb();
   const rows = await db
-    .select({ id: coachAssignedWorkouts.id, clientId: coachAssignedWorkouts.clientId })
+    .select({
+      id: coachAssignedWorkouts.id,
+      clientId: coachAssignedWorkouts.clientId,
+      coachId: coachAssignedWorkouts.coachId,
+    })
     .from(coachAssignedWorkouts)
     .where(eq(coachAssignedWorkouts.id, id))
     .limit(1);
   const row = rows[0];
   if (!row) return json({ error: 'not_found' }, 404);
+
+  // Author check (C16): only the coach who created this plan may edit/delete
+  // it — a *currently-assigned* second coach must not touch another coach's
+  // plans. super/main bypass. 404 (not 403) so a foreign id never leaks an
+  // ownership oracle. Kept alongside requireCoachOwnsUser (assignment must
+  // still be live) as defense-in-depth behind the singular-coach invariant.
+  const isTopAdmin =
+    principal.role === 'super_admin' || principal.role === 'main_admin';
+  if (!isTopAdmin && row.coachId !== principal.id) {
+    return json({ error: 'not_found' }, 404);
+  }
 
   if (!(await requireCoachOwnsUser(principal, row.clientId))) {
     return json({ error: 'forbidden' }, 403);
@@ -146,12 +161,27 @@ export async function DELETE(
 
   const db = getDb();
   const rows = await db
-    .select({ id: coachAssignedWorkouts.id, clientId: coachAssignedWorkouts.clientId })
+    .select({
+      id: coachAssignedWorkouts.id,
+      clientId: coachAssignedWorkouts.clientId,
+      coachId: coachAssignedWorkouts.coachId,
+    })
     .from(coachAssignedWorkouts)
     .where(eq(coachAssignedWorkouts.id, id))
     .limit(1);
   const row = rows[0];
   if (!row) return json({ error: 'not_found' }, 404);
+
+  // Author check (C16): only the coach who created this plan may edit/delete
+  // it — a *currently-assigned* second coach must not touch another coach's
+  // plans. super/main bypass. 404 (not 403) so a foreign id never leaks an
+  // ownership oracle. Kept alongside requireCoachOwnsUser (assignment must
+  // still be live) as defense-in-depth behind the singular-coach invariant.
+  const isTopAdmin =
+    principal.role === 'super_admin' || principal.role === 'main_admin';
+  if (!isTopAdmin && row.coachId !== principal.id) {
+    return json({ error: 'not_found' }, 404);
+  }
 
   if (!(await requireCoachOwnsUser(principal, row.clientId))) {
     return json({ error: 'forbidden' }, 403);

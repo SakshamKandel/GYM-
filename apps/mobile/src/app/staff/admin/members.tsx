@@ -17,7 +17,7 @@ import {
   Sheet,
   Tag,
 } from '../../../components/ui';
-import { canManageRole } from '@gym/shared';
+import { canManageRole, effectiveTier } from '@gym/shared';
 import {
   assignClient,
   getCoaches,
@@ -31,7 +31,7 @@ import {
   type MemberStatus,
   type Tier,
 } from '../../../features/staff/api';
-import { pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { roleLabel } from '../../../features/staff/roles';
 import { useAuth } from '../../../state/auth';
 
@@ -61,6 +61,22 @@ const TIER_LABEL: Record<Tier, string> = {
 
 const SEARCH_DEBOUNCE_MS = 300;
 
+/**
+ * Read `tierExpiresAt` off a member row/detail object defensively — the
+ * client schema in features/staff/api.ts gains this field additively (RBAC
+ * design contract §4.7); structural typing means this reads it the moment
+ * that field lands without any further change here, and degrades to "no
+ * expiry" (permanent) beforehand.
+ */
+function readTierExpiresAt(x: { tierExpiresAt?: unknown }): string | null {
+  return typeof x.tierExpiresAt === 'string' ? x.tierExpiresAt : null;
+}
+
+/** A paid tier whose dated window has already passed (defect D3). */
+function isLapsed(tier: Tier, tierExpiresAt: string | null): boolean {
+  return tier !== 'starter' && effectiveTier(tier, tierExpiresAt, new Date()) === 'starter';
+}
+
 // ── One member list row ──────────────────────────────────────────
 
 function MemberRowCard({
@@ -73,6 +89,7 @@ function MemberRowCard({
   onPress: () => void;
 }) {
   const suspended = member.status === 'suspended';
+  const lapsed = isLapsed(member.tier, readTierExpiresAt(member));
   return (
     <Animated.View entering={enterUp(index)}>
       <PressableScale
@@ -91,6 +108,9 @@ function MemberRowCard({
         </View>
         <View style={styles.rowTags}>
           <Tag label={TIER_LABEL[member.tier]} variant="outline" />
+          {lapsed ? (
+            <Tag label="Lapsed" variant="outline" color={colors.warning} />
+          ) : null}
           {suspended ? (
             <Tag label="Suspended" variant="outline" color={colors.error} />
           ) : null}
@@ -104,11 +124,14 @@ function MemberRowCard({
 export default function AdminMembersScreen() {
   const token = useAuth((s) => s.token);
   const staffRole = useAuth((s) => s.staffRole);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
 
   // ── List state ───────────────────────────────────────────────
   const [query, setQuery] = useState('');
   const [members, setMembers] = useState<MemberRow[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // ── Detail sheet state ───────────────────────────────────────
@@ -127,12 +150,22 @@ export default function AdminMembersScreen() {
 
   // Suspend/reactivate confirm + generic mutation error dialog.
   const [statusConfirm, setStatusConfirm] = useState(false);
+  // G13: the suspend/reactivate action writes an audited log row server-side
+  // (updateMember's patch type already carries `reason?: string`) but this
+  // screen never collected one, so every such entry landed with an empty
+  // reason — defeating the auditability the action is meant to provide.
+  const [statusReason, setStatusReason] = useState('');
   const [mutationError, setMutationError] = useState<string | null>(null);
 
   // Monotonic request id so a slow earlier fetch can't overwrite a newer query.
   const listReqSeq = useRef(0);
+  // Same pattern for the detail sheet (defect G4): without it, a slow detail
+  // fetch for member A can resolve AFTER member B's sheet has already opened,
+  // silently swapping detail (and therefore mutation targets) onto the wrong
+  // account while the sheet TITLE (driven by openRow) still reads "B".
+  const detailReqSeq = useRef(0);
 
-  // ── List fetch (debounced by query) ──────────────────────────
+  // ── List fetch (debounced by query) — always page one, replaces the list ──
   const loadList = useCallback(
     async (q: string) => {
       if (!token) return;
@@ -140,9 +173,10 @@ export default function AdminMembersScreen() {
       setLoading(true);
       setError(null);
       try {
-        const rows = await getMembers(token, q);
+        const page = await getMembers(token, q);
         if (reqId !== listReqSeq.current) return;
-        setMembers(rows);
+        setMembers(page.members);
+        setCursor(page.nextCursor);
       } catch (err) {
         if (reqId !== listReqSeq.current) return;
         setError(errorLine(toStaffError(err).code));
@@ -158,18 +192,45 @@ export default function AdminMembersScreen() {
     return () => clearTimeout(handle);
   }, [query, loadList]);
 
+  // Append the next keyset page (H3 fix — the directory used to top out at
+  // the first page silently, with no way to reach members past it).
+  const loadMoreList = useCallback(async () => {
+    if (!token || !cursor || loadingMore) return;
+    const reqId = ++listReqSeq.current;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const page = await getMembers(token, query, cursor);
+      if (reqId !== listReqSeq.current) return;
+      setMembers((prev) => [...prev, ...page.members]);
+      setCursor(page.nextCursor);
+    } catch (err) {
+      if (reqId !== listReqSeq.current) return;
+      setError(errorLine(toStaffError(err).code));
+    } finally {
+      if (reqId === listReqSeq.current) setLoadingMore(false);
+    }
+  }, [token, query, cursor, loadingMore]);
+
   // ── Detail fetch (when a row opens) ──────────────────────────
   const loadDetail = useCallback(
     async (id: string) => {
       if (!token) return;
+      const reqId = ++detailReqSeq.current;
       setDetailLoading(true);
       setDetailError(null);
       try {
-        setDetail(await getMemberDetail(id, token));
+        const data = await getMemberDetail(id, token);
+        // A newer loadDetail (a different row opened, or a refresh) fired
+        // while this one was in flight — drop this stale response instead of
+        // clobbering the currently-open sheet with the wrong account (G4).
+        if (reqId !== detailReqSeq.current) return;
+        setDetail(data);
       } catch (err) {
+        if (reqId !== detailReqSeq.current) return;
         setDetailError(errorLine(toStaffError(err).code));
       } finally {
-        setDetailLoading(false);
+        if (reqId === detailReqSeq.current) setDetailLoading(false);
       }
     },
     [token],
@@ -219,16 +280,18 @@ export default function AdminMembersScreen() {
     if (!token || !detail) return;
     const next: MemberStatus =
       detail.member.status === 'active' ? 'suspended' : 'active';
+    const reason = statusReason.trim();
     setSaving(true);
     try {
-      await updateMember(detail.member.id, { status: next }, token);
+      await updateMember(detail.member.id, { status: next, ...(reason ? { reason } : {}) }, token);
+      setStatusReason('');
       await refresh(detail.member.id);
     } catch (err) {
       setMutationError(errorLine(toStaffError(err).code));
     } finally {
       setSaving(false);
     }
-  }, [token, detail, refresh]);
+  }, [token, detail, refresh, statusReason]);
 
   const openCoachPicker = useCallback(async () => {
     setCoachPickerOpen(true);
@@ -270,6 +333,17 @@ export default function AdminMembersScreen() {
   const statusLocked =
     targetStaffRole !== null &&
     (staffRole === null || !canManageRole(staffRole, targetStaffRole));
+
+  // Per-action permission gating (RBAC §1.4). The screen is reached with
+  // `members.read`, but the three privileged controls each require their own
+  // key — a support_admin (members.read only) must not be shown Change tier
+  // (subscription.override), Assign coach (coach.assign) or Suspend
+  // (members.suspend) as available actions. Server enforces too; this stops the
+  // client from presenting forbidden actions that only 403 on tap.
+  const canChangeTier = staffCan(staffPermissions, 'subscription.override');
+  const canAssignCoach = staffCan(staffPermissions, 'coach.assign');
+  const canSuspend = staffCan(staffPermissions, 'members.suspend');
+  const canAnyAction = canChangeTier || canAssignCoach || canSuspend;
 
   return (
     <Screen scroll keyboardAware>
@@ -313,7 +387,7 @@ export default function AdminMembersScreen() {
         <View style={styles.centre}>
           <ActivityIndicator color={colors.accent} />
         </View>
-      ) : error ? (
+      ) : error && members.length === 0 ? (
         <View style={styles.centre}>
           <AppText variant="caption" center color={colors.textDim}>
             {error}
@@ -338,6 +412,26 @@ export default function AdminMembersScreen() {
           />
         ))
       )}
+
+      {/* A failed "Load more" keeps the already-loaded rows on screen — only
+          the initial-load failure (above) replaces the whole list. */}
+      {error && members.length > 0 ? (
+        <View style={styles.loadMoreErrorRow}>
+          <AppText variant="caption" center color={colors.textDim}>
+            {error}
+          </AppText>
+        </View>
+      ) : null}
+
+      {cursor && members.length > 0 ? (
+        <Button
+          label="Load more"
+          variant="secondary"
+          onPress={() => void loadMoreList()}
+          loading={loadingMore}
+          style={styles.loadMoreBtn}
+        />
+      ) : null}
 
       {/* ── Member detail sheet ── */}
       <Sheet
@@ -368,6 +462,9 @@ export default function AdminMembersScreen() {
 
             <View style={styles.statusTags}>
               <Tag label={TIER_LABEL[detail.member.tier]} variant="outline" />
+              {isLapsed(detail.member.tier, readTierExpiresAt(detail.member)) ? (
+                <Tag label="Lapsed" variant="outline" color={colors.warning} />
+              ) : null}
               <Tag
                 label={suspended ? 'Suspended' : 'Active'}
                 variant="outline"
@@ -388,78 +485,96 @@ export default function AdminMembersScreen() {
               </AppText>
             </View>
 
-            {/* Actions */}
+            {/* Actions — each control is additionally gated on its own
+                permission key (not just `members.read`), so a role that can
+                view members but not mutate them (e.g. support_admin) never
+                sees a forbidden action presented as available. */}
             <View style={styles.actions}>
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityLabel="Change tier"
-                disabled={saving}
-                onPress={() => setTierPickerOpen(true)}
-                style={[styles.action, saving && styles.actionDisabled]}
-              >
-                <Ionicons name="pricetag-outline" size={18} color={colors.text} />
-                <AppText variant="body" color={colors.text}>
-                  Change tier
-                </AppText>
-                <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-              </PressableScale>
-
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityLabel={detail.coach ? 'Reassign coach' : 'Assign coach'}
-                disabled={saving}
-                onPress={() => void openCoachPicker()}
-                style={[styles.action, saving && styles.actionDisabled]}
-              >
-                <Ionicons name="person-add-outline" size={18} color={colors.text} />
-                <AppText variant="body" color={colors.text}>
-                  {detail.coach ? 'Reassign coach' : 'Assign coach'}
-                </AppText>
-                <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-              </PressableScale>
-
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityLabel={suspended ? 'Reactivate member' : 'Suspend member'}
-                accessibilityState={{ disabled: saving || statusLocked }}
-                disabled={saving || statusLocked}
-                onPress={() => setStatusConfirm(true)}
-                style={[styles.action, (saving || statusLocked) && styles.actionDisabled]}
-              >
-                <Ionicons
-                  name={
-                    statusLocked
-                      ? 'lock-closed'
-                      : suspended
-                        ? 'play-circle-outline'
-                        : 'pause-circle-outline'
-                  }
-                  size={18}
-                  color={
-                    statusLocked
-                      ? colors.textDim
-                      : suspended
-                        ? colors.success
-                        : colors.error
-                  }
-                />
-                <AppText
-                  variant="body"
-                  color={
-                    statusLocked
-                      ? colors.textDim
-                      : suspended
-                        ? colors.success
-                        : colors.error
-                  }
+              {canChangeTier ? (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel="Change tier"
+                  disabled={saving}
+                  onPress={() => setTierPickerOpen(true)}
+                  style={[styles.action, saving && styles.actionDisabled]}
                 >
-                  {suspended ? 'Reactivate' : 'Suspend'}
-                </AppText>
-              </PressableScale>
+                  <Ionicons name="pricetag-outline" size={18} color={colors.text} />
+                  <AppText variant="body" color={colors.text}>
+                    Change tier
+                  </AppText>
+                  <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                </PressableScale>
+              ) : null}
 
-              {statusLocked ? (
+              {canAssignCoach ? (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel={detail.coach ? 'Reassign coach' : 'Assign coach'}
+                  disabled={saving}
+                  onPress={() => void openCoachPicker()}
+                  style={[styles.action, saving && styles.actionDisabled]}
+                >
+                  <Ionicons name="person-add-outline" size={18} color={colors.text} />
+                  <AppText variant="body" color={colors.text}>
+                    {detail.coach ? 'Reassign coach' : 'Assign coach'}
+                  </AppText>
+                  <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                </PressableScale>
+              ) : null}
+
+              {canSuspend ? (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel={suspended ? 'Reactivate member' : 'Suspend member'}
+                  accessibilityState={{ disabled: saving || statusLocked }}
+                  disabled={saving || statusLocked}
+                  onPress={() => {
+                    setStatusReason('');
+                    setStatusConfirm(true);
+                  }}
+                  style={[styles.action, (saving || statusLocked) && styles.actionDisabled]}
+                >
+                  <Ionicons
+                    name={
+                      statusLocked
+                        ? 'lock-closed'
+                        : suspended
+                          ? 'play-circle-outline'
+                          : 'pause-circle-outline'
+                    }
+                    size={18}
+                    color={
+                      statusLocked
+                        ? colors.textDim
+                        : suspended
+                          ? colors.success
+                          : colors.error
+                    }
+                  />
+                  <AppText
+                    variant="body"
+                    color={
+                      statusLocked
+                        ? colors.textDim
+                        : suspended
+                          ? colors.success
+                          : colors.error
+                    }
+                  >
+                    {suspended ? 'Reactivate' : 'Suspend'}
+                  </AppText>
+                </PressableScale>
+              ) : null}
+
+              {canSuspend && statusLocked ? (
                 <AppText variant="caption" color={colors.textFaint}>
                   Staff account — managed by a higher admin.
+                </AppText>
+              ) : null}
+
+              {!canAnyAction ? (
+                <AppText variant="caption" color={colors.textFaint}>
+                  You have view-only access to this member.
                 </AppText>
               ) : null}
             </View>
@@ -557,21 +672,45 @@ export default function AdminMembersScreen() {
         )}
       </Sheet>
 
-      {/* ── Suspend / reactivate confirm ── */}
-      <ConfirmDialog
+      {/* ── Suspend / reactivate confirm ──
+          G13: a plain yes/no ConfirmDialog can't collect a reason, so this
+          uses a Sheet instead — the server-audited action (updateMember's
+          `reason?: string`) now actually gets one. */}
+      <Sheet
         visible={statusConfirm}
+        onClose={() => setStatusConfirm(false)}
         title={suspended ? 'Reactivate member?' : 'Suspend member?'}
-        message={
-          suspended
-            ? 'They will regain access to their account immediately.'
-            : 'They will lose access until reactivated.'
-        }
-        confirmLabel={suspended ? 'Reactivate' : 'Suspend'}
-        cancelLabel="Cancel"
-        danger={!suspended}
-        onConfirm={() => void toggleStatus()}
-        onCancel={() => setStatusConfirm(false)}
-      />
+      >
+        <View style={styles.sheetBody}>
+          <AppText variant="body" color={colors.textDim}>
+            {suspended
+              ? 'They will regain access to their account immediately.'
+              : 'They will lose access until reactivated.'}
+          </AppText>
+          <AppTextInput
+            value={statusReason}
+            onChangeText={setStatusReason}
+            placeholder="Reason (optional, audited)"
+            multiline
+            maxLength={300}
+            style={styles.reasonInput}
+          />
+          <View style={styles.decisionButtons}>
+            <Button
+              label="Cancel"
+              variant="secondary"
+              style={styles.decisionBtn}
+              onPress={() => setStatusConfirm(false)}
+            />
+            <Button
+              label={suspended ? 'Reactivate' : 'Suspend'}
+              variant="danger"
+              style={styles.decisionBtn}
+              onPress={() => void toggleStatus()}
+            />
+          </View>
+        </View>
+      </Sheet>
 
       {/* ── Mutation error ── */}
       <ConfirmDialog
@@ -651,6 +790,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.lg,
   },
+  loadMoreErrorRow: { paddingTop: spacing.sm, paddingBottom: spacing.xs },
+  loadMoreBtn: { marginTop: spacing.sm },
   // Charcoal list row (brief §11c): fill contrast, no hairline borders.
   row: {
     flexDirection: 'row',
@@ -671,6 +812,13 @@ const styles = StyleSheet.create({
     gap: spacing.lg,
   },
   sheetBody: { gap: spacing.md },
+  reasonInput: {
+    minHeight: 72,
+    paddingTop: 14,
+    textAlignVertical: 'top',
+  },
+  decisionButtons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.sm },
+  decisionBtn: { flex: 1 },
   statusTags: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   coachLine: {
     flexDirection: 'row',

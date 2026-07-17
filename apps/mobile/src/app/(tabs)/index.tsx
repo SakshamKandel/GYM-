@@ -9,13 +9,13 @@ import {
   AITipCard,
   AnimatedTierRing,
   AppText,
-  Button,
   Card,
   enterDown,
   enterFade,
   enterUp,
   FLOATING_TAB_SPACE,
   IconChip,
+  PhotoHero,
   PressableScale,
   Screen,
   ScreenHeader,
@@ -23,11 +23,24 @@ import {
   Skeleton,
   Tag,
 } from '../../components/ui';
+import { homeHeroImage, homeHeroImageKey, photoForWorkout } from '../../components/visual';
+import { allExercises } from '../../lib/exercises';
+import { isMuscleGroup, type MuscleGroup } from '../../lib/muscleMap';
 import { posterDate } from '../../lib/dates';
 import { useAiTip } from '../../lib/ai/useAiTip';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
+import { ProgressReportCard } from '../../components/home/ProgressReportCard';
+import { WeightHomeCard } from '../../components/home/WeightHomeCard';
 import { ActivitySection } from '../../features/activity/components/ActivitySection';
+import { useWeights } from '../../features/body/hooks';
+import {
+  directionIcon,
+  rateLabel,
+  signedDelta,
+  weightChartData,
+  weightHeadline,
+} from '../../features/body/logic';
 import { CheckInCard } from '../../features/checkin/components/CheckInCard';
 import { FirstWorkoutsQuest } from '../../features/engagement/components/FirstWorkoutsQuest';
 import {
@@ -58,6 +71,8 @@ const NEWIE = require('../../../assets/images/newie.png');
 const SKELETON_HERO_H = 212;
 /** Matches the bento/stat tile minHeight so skeletons don't jump. */
 const TILE_HEIGHT = 148;
+/** CoachEntry card: 48dp avatar/chip + the Card's default inner padding. */
+const COACH_CARD_HEIGHT = 48 + spacing.gutter * 2;
 
 const styles = StyleSheet.create({
   topRow: {
@@ -110,20 +125,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
   },
   coachText: { flex: 1, gap: 2 },
+  coachSkeleton: { marginBottom: spacing.md },
   /**
-   * THE red hero block (brief §11b) — the screen's one energetic center.
-   * Flat blockRed fill, chunky corners, black ink, black pill CTA. Extra air
-   * around it per the brief's hero rhythm (28 = xl + xs).
+   * THE hero block (brief §11b) — the screen's one energetic center, now a
+   * Train-style photographic hero (dark photo + scrim + red chip + red pill
+   * CTA). Extra air around it per the brief's hero rhythm (28 = xl + xs).
    */
-  hero: {
-    backgroundColor: colors.blockRed,
-    borderRadius: radius.block,
-    padding: spacing.gutter,
-    gap: spacing.md,
-    marginBottom: spacing.xl + spacing.xs,
-  },
-  /** Secondary ink on red: black at 0.75 ≈ 5.2:1 on blockRed — reads, quietly. */
-  heroDim: { opacity: 0.75 },
+  heroWrap: { marginBottom: spacing.xl + spacing.xs },
   skelHero: { marginBottom: spacing.xl + spacing.xs },
   tileRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.md },
   tileCell: { flex: 1 },
@@ -140,6 +148,13 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     padding: spacing.lg,
     minHeight: 64,
+  },
+  // Small cover-photo thumbnail (decorative) replacing the flat barbell glyph
+  // on the last-session row — ties Home back to Train's photographic language.
+  lastThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
   },
   lastMain: { flex: 1, gap: 2 },
   // Right-aligned meta must not be pushed off-screen by a long session name.
@@ -169,10 +184,24 @@ function MetaChip({ label }: { label: string }) {
 }
 
 /**
- * Red hero block — the screen's single red block AND its single primary CTA
- * (a black "onBlock" pill, per the one-CTA law). Three states share one
- * geometry: eyebrow/tag → Oswald display name → caption → full-width pill.
- * All ink is black on red; secondary lines drop to 0.75 opacity.
+ * The next-workout's muscle focus (first exercise's group), used to vary the
+ * energetic hero photo. Mirrors Train's muscleFocusForWorkout without pulling
+ * the anatomy viewer into the Home bundle; null falls back to the default photo.
+ */
+function nextWorkoutMuscle(workout: PlanWorkout | null): MuscleGroup | null {
+  const first = workout?.exercises[0];
+  if (!first) return null;
+  const group = allExercises().find((e) => e.id === first.exerciseId)?.muscleGroup;
+  return group && isMuscleGroup(group) ? group : null;
+}
+
+/**
+ * Hero block — the screen's single energetic center, now a Train-style
+ * photographic hero (dark stock photo + scrim + red chip → Oswald title →
+ * dim caption → one red pill CTA). Three states share the PhotoHero geometry:
+ * done (celebratory), no-plan (inviting), and next-workout (energetic, photo
+ * varied by muscle focus). The photo is decorative; chip/title/caption/CTA
+ * carry the meaning.
  */
 function Hero({
   planName,
@@ -180,6 +209,7 @@ function Hero({
   doneToday,
   volume,
   unit,
+  muscle,
 }: {
   planName: string | null;
   nextWorkout: PlanWorkout | null;
@@ -187,94 +217,58 @@ function Hero({
   /** Done-state volume, already converted to the display unit. */
   volume: number;
   unit: string;
+  /** Next-workout muscle focus — drives the energetic photo. */
+  muscle: MuscleGroup | null;
 }) {
   if (doneToday !== null) {
     return (
-      <View
-        accessibilityLabel={`Workout done today: ${doneToday.name}. ${formatCompact(volume)} ${unit} volume`}
-        style={styles.hero}
-      >
-        <Tag label="✓ Done" variant="onBlock" />
-        <AppText
-          variant="display"
-          color={colors.onBlock}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.7}
-        >
-          {doneToday.name}
-        </AppText>
-        <AppText variant="caption" color={colors.onBlock} numberOfLines={1} style={styles.heroDim}>
-          {formatCompact(volume)} {unit} volume · {planName ?? 'Workout'}
-        </AppText>
-        {nextWorkout !== null ? (
-          <Button
-            label="Go again"
-            variant="onBlock"
-            onPress={() => router.push(toHref(`/workout/start?planWorkoutId=${nextWorkout.id}`))}
-          />
-        ) : null}
-      </View>
+      <PhotoHero
+        source={homeHeroImage('done', null)}
+        recyclingKey="home-hero-done"
+        accessibilityLabel="An athlete mid-lift"
+        chip={{ label: '✓ Done' }}
+        title={doneToday.name}
+        caption={`${formatCompact(volume)} ${unit} volume · ${planName ?? 'Workout'}`}
+        cta={
+          nextWorkout !== null
+            ? {
+                label: 'Go again',
+                onPress: () =>
+                  router.push(toHref(`/workout/start?planWorkoutId=${nextWorkout.id}`)),
+              }
+            : undefined
+        }
+      />
     );
   }
 
   if (nextWorkout === null) {
     return (
-      <View
-        accessibilityLabel="No plan yet. Choose a plan to get your next workout here."
-        style={styles.hero}
-      >
-        <AppText variant="label" color={colors.onBlock}>
-          Next workout
-        </AppText>
-        <AppText
-          variant="display"
-          color={colors.onBlock}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.7}
-        >
-          No plan yet
-        </AppText>
-        <AppText variant="caption" color={colors.onBlock} numberOfLines={1} style={styles.heroDim}>
-          Pick a plan to get your next workout here.
-        </AppText>
-        <Button
-          label="Choose a plan"
-          variant="onBlock"
-          onPress={() => router.push('/(tabs)/train')}
-        />
-      </View>
+      <PhotoHero
+        source={homeHeroImage('noPlan', null)}
+        recyclingKey="home-hero-noplan"
+        accessibilityLabel="A calm, empty gym"
+        chip={{ label: 'Next workout' }}
+        title="No plan yet"
+        caption="Pick a plan to get your next workout here."
+        cta={{ label: 'Choose a plan', onPress: () => router.push('/(tabs)/train') }}
+      />
     );
   }
 
   return (
-    <View
-      accessibilityLabel={`Next workout: ${nextWorkout.name}, ${nextWorkout.exercises.length} exercises`}
-      style={styles.hero}
-    >
-      <AppText variant="label" color={colors.onBlock}>
-        Next workout
-      </AppText>
-      <AppText
-        variant="display"
-        color={colors.onBlock}
-        numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.7}
-      >
-        {nextWorkout.name}
-      </AppText>
-      <AppText variant="caption" color={colors.onBlock} numberOfLines={1} style={styles.heroDim}>
-        {planName !== null ? `${planName} · ` : ''}
-        {nextWorkout.exercises.length} exercises
-      </AppText>
-      <Button
-        label="Start workout"
-        variant="onBlock"
-        onPress={() => router.push(toHref(`/workout/start?planWorkoutId=${nextWorkout.id}`))}
-      />
-    </View>
+    <PhotoHero
+      source={homeHeroImage('next', muscle, nextWorkout.name)}
+      recyclingKey={`home-hero-${homeHeroImageKey('next', muscle, nextWorkout.name)}`}
+      accessibilityLabel="Training photo"
+      chip={{ label: 'Up next' }}
+      title={nextWorkout.name}
+      caption={`${planName !== null ? `${planName} · ` : ''}${nextWorkout.exercises.length} exercises`}
+      cta={{
+        label: 'Start workout',
+        onPress: () => router.push(toHref(`/workout/start?planWorkoutId=${nextWorkout.id}`)),
+      }}
+    />
   );
 }
 
@@ -298,18 +292,30 @@ function HomeSkeleton() {
 
 /**
  * Prominent Home entry into 1-on-1 coaching, data-driven via useMyCoach():
- * an ASSIGNED coach always wins (any tier) and taps through to the chat;
- * otherwise Elite keeps the classic Greece thread; everyone else gets the
- * coach directory — discovery, not a paywall.
+ * an ASSIGNED coach always wins (any tier) — enrolled badge + tap through to
+ * the chat; a PENDING request shows "waiting" so the member doesn't see
+ * "Find a coach" again after applying; otherwise Elite keeps the classic
+ * Greece thread; everyone else (signed out included — useMyCoach returns
+ * nulls) gets the coach directory — discovery, not a paywall.
  */
 function CoachEntry({ tier }: { tier: Tier }) {
-  const { coach } = useMyCoach();
+  const { coach, request, loaded } = useMyCoach();
+  const signedIn = useAuth((s) => s.status === 'signedIn');
   const elite = hasEntitlement({ tier }, 'coach_chat');
+
+  // Signed in but getMyCoach hasn't resolved for this session (cold start,
+  // offline) — coach/request are UNKNOWN, not absent. Hold a skeleton so an
+  // enrolled member never sees "Find a coach" (or the wrong Greece thread)
+  // while the fetch is in flight or failing. Signed-out users never fetch
+  // (loaded stays false by design) and fall straight through to discovery.
+  if (signedIn && !loaded) {
+    return <Skeleton height={COACH_CARD_HEIGHT} radius={radius.block} style={styles.coachSkeleton} />;
+  }
 
   if (coach !== null) {
     return (
       <Card
-        accessibilityLabel={`Your coach, ${coach.displayName}. Open chat`}
+        accessibilityLabel={`Your coach, ${coach.displayName}. Enrolled. Open chat`}
         onPress={() => router.push(toHref('/coach-chat'))}
         style={styles.coachCard}
       >
@@ -322,10 +328,32 @@ function CoachEntry({ tier }: { tier: Tier }) {
         />
         <View style={styles.coachText}>
           <AppText variant="bodyBold" numberOfLines={1}>
-            Your coach
+            {coach.displayName}
           </AppText>
           <AppText variant="caption" numberOfLines={1}>
-            {coach.displayName}
+            {coach.headline.trim() !== '' ? coach.headline : 'Your 1-on-1 coach'}
+          </AppText>
+        </View>
+        <Tag label="Enrolled" variant="dim" />
+        <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+      </Card>
+    );
+  }
+
+  if (request !== null) {
+    return (
+      <Card
+        accessibilityLabel={`Coaching request sent to ${request.coachName}. Waiting for a reply. View coach profile`}
+        onPress={() => router.push(toHref(`/coaches/${request.coachId}`))}
+        style={styles.coachCard}
+      >
+        <IconChip icon="hourglass-outline" size={48} />
+        <View style={styles.coachText}>
+          <AppText variant="bodyBold" numberOfLines={1}>
+            Request sent
+          </AppText>
+          <AppText variant="caption" numberOfLines={1}>
+            Waiting on {request.coachName}
           </AppText>
         </View>
         <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
@@ -390,8 +418,42 @@ export default function HomeScreen() {
   const quest = useQuestProgress();
   const questDismissed = useQuest((s) => s.dismissed);
 
+  // Weight trend, straight from the offline store (features/body). Deriving
+  // from an empty list while loading keeps hook order stable; the card shows
+  // a skeleton until `weights` resolves. Headline = SMOOTHED trend (EWMA),
+  // never the latest raw weigh-in.
+  const weights = useWeights();
+  const weightList = weights ?? [];
+  const headline = weightHeadline(weightList, unitPref);
+  const trendPoints = weightChartData(weightList, unitPref).trend;
+  const firstTrend = trendPoints[0];
+  const lastTrend = trendPoints[trendPoints.length - 1];
+  const weightDelta30 =
+    firstTrend !== undefined && lastTrend !== undefined && trendPoints.length >= 2
+      ? lastTrend.value - firstTrend.value
+      : null;
+  const lastWeighIn = weightList[weightList.length - 1];
+
   const unit = unitLabel(unitPref);
+  const latestPr = data?.recentPrs[0] ?? null;
+  const latestPrText =
+    latestPr !== null
+      ? `${latestPr.exerciseName} · ${displayWeight(latestPr.weightKg, unitPref)} ${unit} × ${latestPr.reps}`
+      : null;
   const last = data?.lastSession ?? null;
+  // The hero's exact photo, mirroring the same state/muscle/name logic <Hero>
+  // uses below — so the "last session" thumbnail can avoid repeating it.
+  // Same input, same photo, computed here purely to de-collide two surfaces
+  // that can be on screen together (e.g. "done" hero + last session row).
+  const heroMuscle = nextWorkoutMuscle(data?.nextWorkout ?? null);
+  const heroPhotoKey =
+    data === null
+      ? null
+      : data.doneToday !== null
+        ? homeHeroImageKey('done', null)
+        : data.nextWorkout === null
+          ? homeHeroImageKey('noPlan', null)
+          : homeHeroImageKey('next', heroMuscle, data.nextWorkout.name);
   const showQuest = quest !== null && !quest.expired && !questDismissed;
   const todayDescription = data?.doneToday
     ? 'You showed up today. Keep the momentum going with one clear next step.'
@@ -474,13 +536,14 @@ export default function HomeScreen() {
         <HomeSkeleton />
       ) : (
         <>
-          <Animated.View entering={enterUp(0)}>
+          <Animated.View entering={enterUp(0)} style={styles.heroWrap}>
             <Hero
               planName={data.planName}
               nextWorkout={data.nextWorkout}
               doneToday={data.doneToday}
               volume={displayWeight(data.doneToday?.volumeKg ?? 0, unitPref)}
               unit={unit}
+              muscle={heroMuscle}
             />
           </Animated.View>
 
@@ -538,21 +601,49 @@ export default function HomeScreen() {
             </StatTile>
           </Animated.View>
 
+          <Animated.View entering={enterUp(4)}>
+            <SectionLabel>Progress report</SectionLabel>
+            <ProgressReportCard
+              sessions={data.weekSessions}
+              prCount={data.prCount}
+              weightDeltaText={weightDelta30 !== null ? signedDelta(weightDelta30) : null}
+              unit={unit}
+              latestPrText={latestPrText}
+              onOpen={() => router.push('/(tabs)/progress')}
+            />
+          </Animated.View>
+
+          <Animated.View entering={enterUp(5)}>
+            <SectionLabel>Body</SectionLabel>
+            <WeightHomeCard
+              loading={weights === null}
+              trendValue={headline.trendValue}
+              unit={unit}
+              direction={directionIcon(headline.summary.direction)}
+              rateText={rateLabel(headline.summary, unitPref)}
+              lastLoggedText={
+                lastWeighIn !== undefined ? `Last logged ${posterDate(lastWeighIn.date)}` : null
+              }
+              onOpen={() => router.push('/(tabs)/progress')}
+              onLog={() => router.push(toHref('/body/log-weight'))}
+            />
+          </Animated.View>
+
           {showQuest ? (
             <Animated.View entering={enterFade(0)} style={styles.questWrap}>
               <FirstWorkoutsQuest progress={quest} />
             </Animated.View>
           ) : null}
 
-          <Animated.View entering={enterUp(4)}>
+          <Animated.View entering={enterUp(6)}>
             <SectionLabel>Coach</SectionLabel>
             <CoachEntry tier={serverTier} />
           </Animated.View>
 
-          <CheckInCard stagger={5} />
-          <WeeklyCheckIn stagger={5} />
+          <CheckInCard stagger={7} />
+          <WeeklyCheckIn stagger={7} />
 
-          <Animated.View entering={enterUp(6)} style={styles.tipCard}>
+          <Animated.View entering={enterUp(8)} style={styles.tipCard}>
             <AITipCard
               title="Coach tip"
               tip={tipState.status === 'done' ? tipState.text : null}
@@ -563,7 +654,7 @@ export default function HomeScreen() {
           </Animated.View>
 
           {last !== null ? (
-            <Animated.View entering={enterUp(7)}>
+            <Animated.View entering={enterUp(9)}>
               <SectionLabel>Last session</SectionLabel>
               <View style={styles.rowStack}>
                 <PressableScale
@@ -572,7 +663,14 @@ export default function HomeScreen() {
                   onPress={() => void openLastSession()}
                   style={styles.lastRow}
                 >
-                  <IconChip icon="barbell-outline" />
+                  <Image
+                    source={photoForWorkout(last.name, null, heroPhotoKey)}
+                    style={styles.lastThumb}
+                    contentFit="cover"
+                    transition={150}
+                    recyclingKey={`last-${last.name}`}
+                    accessibilityElementsHidden
+                  />
                   <View style={styles.lastMain}>
                     <AppText variant="bodyBold" numberOfLines={1}>
                       {last.name}

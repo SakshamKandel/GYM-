@@ -22,22 +22,56 @@ export const runtime = 'nodejs';
 /**
  * Admin console — a single member.
  *
- *  - GET → the member's account (email, name, tier, status, joined), the JSON
- *          profile blob (account_profiles.data, if present), and the currently
- *          ASSIGNED coach (active coach_assignments row → coach identity).
- *          Guarded by requirePermission('members.read').
+ *  - GET → the member's account (email, name, tier, tierExpiresAt, status,
+ *          joined), a CURATED subset of the JSON profile blob
+ *          (account_profiles.data, if present — see PROFILE_ALLOWLIST; the
+ *          full blob may carry free-form health/goal answers well beyond what
+ *          the drawer renders, so we never ship it wholesale to every
+ *          members.read holder), and the currently ASSIGNED coach (active
+ *          coach_assignments row → coach identity). Guarded by
+ *          requirePermission('members.read').
  *
  *  - PATCH {tier?, status?, reason?} → applies whichever fields are present.
  *          `tier` routes through setAccountTier (source of truth + jsonb mirror
- *          + audit) and is gated on 'subscription.override'. `status` writes
- *          accounts.status and is gated on 'members.suspend'; flipping to
- *          'suspended' instantly kills every live session for the account
- *          because userForToken/staffForToken filter on status='active'. Each
- *          applied field is audited. Because the two fields carry DIFFERENT
- *          permissions, we check each only when that field is supplied — a
- *          member_admin may do both, but the checks are independent and fail
- *          closed per-field.
+ *          + audit) and is gated on 'subscription.override'; console overrides
+ *          always pass `{ startsAt: new Date(), expiresAt: null }` per contract
+ *          §4.4 — an admin picking a tier in this drawer means "grant this now,
+ *          no expiry", never a silent no-op against a stale past expiry.
+ *          `status` writes accounts.status and is gated on 'members.suspend';
+ *          flipping to 'suspended' instantly kills every live session for the
+ *          account because userForToken/staffForToken filter on
+ *          status='active'. Neither field may target the caller's OWN account
+ *          (self-suspend/self-tier-change would risk an unrecoverable
+ *          lockout for a sole super_admin). Each applied field is audited.
+ *          Because the two fields carry DIFFERENT permissions, we check each
+ *          only when that field is supplied — a member_admin may do both, but
+ *          the checks are independent and fail closed per-field.
  */
+
+/** The only account_profiles.data keys the drawer's ProfileSummary renders.
+ * The stored blob is free-form (mobile onboarding answers) and can include
+ * much more than this — health/goal detail no members.read holder needs to
+ * see — so GET filters to this allowlist server-side rather than trusting the
+ * client to just not render the rest. */
+const PROFILE_ALLOWLIST = [
+  'displayName',
+  'sex',
+  'goalType',
+  'activityLevel',
+  'heightCm',
+  'unitPref',
+] as const;
+
+function pickAllowedProfile(
+  data: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  if (!data) return null;
+  const out: Record<string, unknown> = {};
+  for (const key of PROFILE_ALLOWLIST) {
+    if (data[key] !== undefined) out[key] = data[key];
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
 
 function getIp(req: Request): string | null {
   const fwd = req.headers.get('x-forwarded-for');
@@ -62,6 +96,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       email: accounts.email,
       displayName: accounts.displayName,
       tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
       status: accounts.status,
       createdAt: accounts.createdAt,
     })
@@ -119,11 +154,14 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         email: member.email,
         displayName: member.displayName,
         tier: member.tier,
+        tierExpiresAt: member.tierExpiresAt ? member.tierExpiresAt.toISOString() : null,
         status: member.status,
         createdAt: member.createdAt,
         staffRole,
       },
-      profile: profileRows[0]?.data ?? null,
+      profile: pickAllowedProfile(
+        profileRows[0]?.data as Record<string, unknown> | null | undefined,
+      ),
       coach,
     },
     200,
@@ -170,6 +208,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     if (rankBlock) return rankBlock;
   }
   if (status !== undefined) {
+    // Self-target guard: a staffer (incl. the sole super_admin) suspending
+    // their OWN account kills their own session with no path back in —
+    // mirrors the 'cannot_target_self' guard on admin/staff role changes.
+    if (id === base.id) return json({ error: 'cannot_target_self' }, 400);
     const g = await requirePermission(req, 'members.suspend');
     if (g instanceof Response) return g;
     // Rank guard: suspending (or reactivating) an account that holds an admin
@@ -191,9 +233,21 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (existing.length === 0) return json({ error: 'not_found' }, 404);
 
   // Apply tier via the shared helper (updates accounts.tier, mirrors the jsonb
-  // blob, and writes its own 'subscription.override' audit row).
+  // blob, and writes its own 'subscription.override' audit row). Contract
+  // §4.4: console overrides ALWAYS pass an explicit dated window — starting
+  // now, no expiry — so granting a paid tier to a member whose stored
+  // tierExpiresAt is in the past is never a silent no-op (the stale expiry
+  // would otherwise keep collapsing effectiveTier() back to 'starter' even
+  // though the console reported success).
   if (tier !== undefined) {
-    await setAccountTier(id, tier as Tier, base, reason);
+    await setAccountTier(
+      id,
+      tier as Tier,
+      base,
+      reason,
+      { startsAt: new Date(), expiresAt: null },
+      'console',
+    );
   }
 
   // Apply status directly; audit here (setAccountTier only audits the tier).
@@ -216,6 +270,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       email: accounts.email,
       displayName: accounts.displayName,
       tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
       status: accounts.status,
       createdAt: accounts.createdAt,
     })
@@ -223,5 +278,16 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     .where(eq(accounts.id, id))
     .limit(1);
 
-  return json({ member: after[0] }, 200);
+  const row = after[0];
+  return json(
+    {
+      member: row
+        ? {
+            ...row,
+            tierExpiresAt: row.tierExpiresAt ? row.tierExpiresAt.toISOString() : null,
+          }
+        : null,
+    },
+    200,
+  );
 }

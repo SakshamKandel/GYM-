@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { formatMoney } from '@gym/shared';
@@ -24,11 +24,15 @@ import {
 import {
   decidePaymentRequest,
   getAdminPaymentRequests,
+  getMemberDetail,
+  refundPaymentRequest,
   toStaffError,
   type PaymentRequestRow,
   type PaymentStatus,
   type StaffErrorCode,
+  type Tier,
 } from '../../../features/staff/api';
+import { expiryLabel } from '../../../features/staff/duration';
 import { canReviewPayments, replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
 
@@ -48,6 +52,7 @@ const STATUS_TABS: { key: PaymentStatus; label: string }[] = [
   { key: 'pending', label: 'Pending' },
   { key: 'approved', label: 'Approved' },
   { key: 'rejected', label: 'Rejected' },
+  { key: 'refunded', label: 'Refunded' },
 ];
 
 const METHOD_LABEL: Record<PaymentRequestRow['method'], string> = {
@@ -73,8 +78,16 @@ function errorLine(code: StaffErrorCode): string {
   if (code === 'unauthorized') return 'Your session expired — sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'not_found') return 'That request is no longer available.';
+  // B13-style remap for the refund action's CAS conflicts — a generic "try
+  // again" would be actively misleading for both of these (defect: refund
+  // 409s).
+  if (code === 'already_refunded') return 'This payment was already refunded.';
+  if (code === 'not_approved')
+    return 'This request is no longer approved — refresh the queue and try again.';
   return "Couldn't load the queue.";
 }
+
+const TIER_RANK: Record<Tier, number> = { starter: 0, silver: 1, gold: 2, elite: 3 };
 
 /** Short relative age ("3m", "2h", "5d") with an absolute fallback. */
 function relativeTime(iso: string): string {
@@ -108,8 +121,8 @@ function RetryLine({ message, onRetry }: { message: string; onRetry: () => void 
 
 export default function AdminPaymentsScreen() {
   const token = useAuth((s) => s.token);
-  const staffRole = useAuth((s) => s.staffRole);
-  const allowed = canReviewPayments(staffRole);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
+  const allowed = canReviewPayments(staffPermissions);
 
   const [status, setStatus] = useState<PaymentStatus>('pending');
   const [rows, setRows] = useState<PaymentRequestRow[]>([]);
@@ -118,22 +131,43 @@ export default function AdminPaymentsScreen() {
 
   const [selected, setSelected] = useState<PaymentRequestRow | null>(null);
   const [note, setNote] = useState('');
-  const [confirmAction, setConfirmAction] = useState<'approve' | 'reject' | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'approve' | 'reject' | 'refund' | null>(null);
   const [deciding, setDeciding] = useState(false);
   const [decideError, setDecideError] = useState<string | null>(null);
   const [receiptFailed, setReceiptFailed] = useState(false);
+  // Defect A1/#1: the server 409s an approval that would shorten a permanent
+  // current tier or downgrade a higher active one (confirm_required) until
+  // the caller re-POSTs with confirm:true. Armed only by that exact error, on
+  // this exact selected request, so a stale confirmation can never leak onto
+  // a different row.
+  const [pendingConfirm, setPendingConfirm] = useState(false);
+
+  // P0-2: the member's current effective tier + expiry, fetched fresh whenever
+  // a PENDING request opens, so the admin sees what approval would change
+  // instead of deciding blind (defect B1). `undefined` = still loading/unknown.
+  const [previewTier, setPreviewTier] = useState<Tier | undefined>(undefined);
+  const [previewExpiry, setPreviewExpiry] = useState<string | null | undefined>(undefined);
+  const [previewError, setPreviewError] = useState(false);
+
+  // G8: a slow response for tab A must not clobber a faster tab-switch to B —
+  // only the LATEST in-flight request may commit its result.
+  const listSeq = useRef(0);
 
   const load = useCallback(
     async (st: PaymentStatus) => {
       if (!token) return;
+      const seq = ++listSeq.current;
       setLoading(true);
       setError(null);
       try {
-        setRows(await getAdminPaymentRequests(token, st));
+        const data = await getAdminPaymentRequests(token, st);
+        if (listSeq.current !== seq) return; // superseded by a newer tab switch
+        setRows(data);
       } catch (e) {
+        if (listSeq.current !== seq) return;
         setError(errorLine(toStaffError(e).code));
       } finally {
-        setLoading(false);
+        if (listSeq.current === seq) setLoading(false);
       }
     },
     [token],
@@ -149,18 +183,41 @@ export default function AdminPaymentsScreen() {
     setDecideError(null);
     setConfirmAction(null);
     setReceiptFailed(false);
+    setPreviewTier(undefined);
+    setPreviewExpiry(undefined);
+    setPreviewError(false);
+    setPendingConfirm(false);
+    if (row.status === 'pending' && token) {
+      getMemberDetail(row.account.id, token)
+        .then((detail) => {
+          setPreviewTier(detail.member.tier);
+          setPreviewExpiry(detail.member.tierExpiresAt);
+        })
+        .catch(() => setPreviewError(true));
+    }
   }
 
   function closeDetail(): void {
     setSelected(null);
   }
 
-  async function decide(action: 'approve' | 'reject'): Promise<void> {
+  async function decide(action: 'approve' | 'reject' | 'refund'): Promise<void> {
     if (!token || !selected || deciding) return;
     setDeciding(true);
     setDecideError(null);
     try {
-      await decidePaymentRequest(selected.id, action, note.trim() || undefined, token);
+      if (action === 'refund') {
+        await refundPaymentRequest(selected.id, note.trim(), token);
+      } else {
+        await decidePaymentRequest(
+          selected.id,
+          action,
+          note.trim() || undefined,
+          token,
+          action === 'approve' ? pendingConfirm : undefined,
+        );
+      }
+      setPendingConfirm(false);
       setConfirmAction(null);
       setSelected(null);
       await load(status);
@@ -170,7 +227,20 @@ export default function AdminPaymentsScreen() {
       // reverts to "Approve"/"Reject" with zero feedback and the admin keeps
       // re-firing the same failing request.
       setConfirmAction(null);
-      setDecideError(errorLine(toStaffError(e).code));
+      const code = toStaffError(e).code;
+      if (action === 'approve' && code === 'confirm_required') {
+        // The server flagged this as shortening a permanent tier or
+        // downgrading a higher active one (B1) — arm confirm and let the
+        // admin re-tap Approve to proceed deliberately, instead of a dead
+        // 409 loop (defect #1).
+        setPendingConfirm(true);
+        setDecideError(
+          "This member's current plan is permanent or higher than what's being granted — approving will change it. Tap Approve again to confirm.",
+        );
+      } else {
+        setPendingConfirm(false);
+        setDecideError(errorLine(code));
+      }
     } finally {
       setDeciding(false);
     }
@@ -304,6 +374,41 @@ export default function AdminPaymentsScreen() {
 
             {selected.status === 'pending' ? (
               <>
+                {/* P0-2: current tier + expiry BEFORE approval, so the admin
+                    isn't deciding blind (defect B1 — a renewal can otherwise
+                    silently clobber a live paid window). */}
+                <SectionLabel>Member&apos;s current plan</SectionLabel>
+                {previewError ? (
+                  <AppText variant="caption" color={colors.textFaint}>
+                    Couldn&apos;t load the member&apos;s current plan.
+                  </AppText>
+                ) : previewTier === undefined ? (
+                  <ActivityIndicator color={colors.textDim} style={styles.previewSpinner} />
+                ) : (
+                  <View style={styles.previewBlock}>
+                    <AppText variant="body">
+                      Currently {previewTier}
+                      {previewExpiry !== undefined ? ` · ${expiryLabel(previewExpiry)}` : ''}
+                    </AppText>
+                    {TIER_RANK[previewTier] > TIER_RANK[selected.tier] ? (
+                      <AppText variant="caption" color={colors.warning}>
+                        This member already holds a HIGHER tier — approving may downgrade
+                        them. Confirm this is intended.
+                      </AppText>
+                    ) : previewTier === selected.tier ? (
+                      <AppText variant="caption" color={colors.textDim}>
+                        Same tier as today — this extends the existing window by{' '}
+                        {selected.months} month{selected.months === 1 ? '' : 's'}.
+                      </AppText>
+                    ) : (
+                      <AppText variant="caption" color={colors.textDim}>
+                        Grants {selected.tier} for {selected.months} month
+                        {selected.months === 1 ? '' : 's'}.
+                      </AppText>
+                    )}
+                  </View>
+                )}
+
                 <SectionLabel>Decision</SectionLabel>
                 <AppTextInput
                   value={note}
@@ -342,14 +447,53 @@ export default function AdminPaymentsScreen() {
               <>
                 <SectionLabel>Status</SectionLabel>
                 <Tag
-                  label={selected.status === 'approved' ? 'Approved' : 'Rejected'}
+                  label={
+                    selected.status === 'approved'
+                      ? 'Approved'
+                      : selected.status === 'refunded'
+                        ? 'Refunded'
+                        : 'Rejected'
+                  }
                   variant="outline"
-                  color={selected.status === 'approved' ? colors.success : colors.error}
+                  color={
+                    selected.status === 'approved'
+                      ? colors.success
+                      : selected.status === 'refunded'
+                        ? colors.warning
+                        : colors.error
+                  }
                 />
                 {selected.reviewNote ? (
                   <AppText variant="caption" color={colors.textDim} style={styles.reviewNoteText}>
                     {selected.reviewNote}
                   </AppText>
+                ) : null}
+
+                {/* P0-1: refund an approved request — rolls the tier grant
+                    back and posts a negative wallet adjustment server-side. */}
+                {selected.status === 'approved' ? (
+                  <>
+                    <SectionLabel>Refund</SectionLabel>
+                    <AppTextInput
+                      value={note}
+                      onChangeText={setNote}
+                      placeholder="Refund reason (optional, audited)"
+                      multiline
+                      style={styles.noteInput}
+                    />
+                    {decideError ? (
+                      <AppText variant="caption" color={colors.error} style={styles.decideError}>
+                        {decideError}
+                      </AppText>
+                    ) : null}
+                    <Button
+                      label="Refund this payment"
+                      variant="danger"
+                      style={styles.refundBtn}
+                      onPress={() => setConfirmAction('refund')}
+                      disabled={deciding}
+                    />
+                  </>
                 ) : null}
               </>
             )}
@@ -359,15 +503,31 @@ export default function AdminPaymentsScreen() {
 
       <ConfirmDialog
         visible={confirmAction !== null}
-        title={confirmAction === 'approve' ? 'Approve this payment?' : 'Reject this payment?'}
+        title={
+          confirmAction === 'approve'
+            ? 'Approve this payment?'
+            : confirmAction === 'refund'
+              ? 'Refund this payment?'
+              : 'Reject this payment?'
+        }
         message={
           confirmAction === 'approve'
             ? `Grants ${selected?.account.displayName || selected?.account.email || 'this member'} ${selected?.tier} for ${selected?.months} month${selected?.months === 1 ? '' : 's'}.`
-            : 'The member sees this decision and can submit a new request.'
+            : confirmAction === 'refund'
+              ? `Reverses ${selected?.account.displayName || selected?.account.email || 'this member'}'s tier grant and posts a negative wallet adjustment for any settled commission. This cannot be undone.`
+              : 'The member sees this decision and can submit a new request.'
         }
-        confirmLabel={deciding ? 'Working…' : confirmAction === 'approve' ? 'Approve' : 'Reject'}
+        confirmLabel={
+          deciding
+            ? 'Working…'
+            : confirmAction === 'approve'
+              ? 'Approve'
+              : confirmAction === 'refund'
+                ? 'Refund'
+                : 'Reject'
+        }
         cancelLabel="Cancel"
-        danger={confirmAction === 'reject'}
+        danger={confirmAction === 'reject' || confirmAction === 'refund'}
         onConfirm={() => confirmAction && void decide(confirmAction)}
         onCancel={() => setConfirmAction(null)}
       />
@@ -471,4 +631,12 @@ const styles = StyleSheet.create({
   decisionButtons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.lg },
   decisionBtn: { flex: 1 },
   reviewNoteText: { marginTop: spacing.xs },
+  previewBlock: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  previewSpinner: { marginVertical: spacing.sm, alignSelf: 'flex-start' },
+  refundBtn: { marginTop: spacing.lg },
 });

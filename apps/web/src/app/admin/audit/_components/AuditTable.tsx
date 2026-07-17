@@ -118,12 +118,21 @@ export function AuditTable({
   // we can skip the first effect run (which would refetch page 1 needlessly).
   const primed = useRef(false);
 
+  // Abort the in-flight request whenever a newer one starts (or the component
+  // unmounts) so a slow page-1 fetch for an old filter can never land after —
+  // and clobber — the results (and cursor) of a newer filter (F3).
+  const abortRef = useRef<AbortController | null>(null);
+
   const fetchPage = useCallback(
     async (opts: { action: string; actor: string; cursor: string | null; append: boolean }) => {
       const qs = new URLSearchParams();
       if (opts.action) qs.set('action', opts.action);
       if (opts.actor) qs.set('actor', opts.actor);
       if (opts.cursor) qs.set('cursor', opts.cursor);
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
 
       if (opts.append) setLoadingMore(true);
       else setLoading(true);
@@ -132,6 +141,7 @@ export function AuditTable({
       try {
         const res = await fetch(`/api/admin/audit?${qs.toString()}`, {
           credentials: 'same-origin',
+          signal: controller.signal,
         });
         if (!res.ok) {
           setError(res.status === 403 ? 'Not permitted.' : 'Failed to load audit log.');
@@ -141,14 +151,23 @@ export function AuditTable({
         setEntries((prev) => (opts.append ? [...prev, ...data.entries] : data.entries));
         setCursor(data.nextCursor);
       } catch {
+        // A superseded request was aborted by a newer one — leave state to that
+        // newer run rather than flashing a spurious error.
+        if (controller.signal.aborted) return;
         setError('Network error.');
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
+        // Only the current (non-superseded) request may clear the busy flags.
+        if (abortRef.current === controller) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [],
   );
+
+  // Abort any in-flight request when the component unmounts.
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   // Debounced refetch of page 1 whenever a filter changes. Skips the very first
   // render so the server-seeded page 1 is not immediately clobbered.

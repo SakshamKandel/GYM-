@@ -13,12 +13,14 @@ import {
   Card,
   enterUp,
   IconChip,
+  PhotoHero,
   Screen,
   ScreenHeader,
   SectionLabel,
   Sheet,
   Tag,
 } from '../../components/ui';
+import { photoForWorkout } from '../../components/visual';
 import {
   averageRpe,
   formatClock,
@@ -52,9 +54,12 @@ interface PreviousRun {
 }
 
 const styles = StyleSheet.create({
+  // Thin decorative celebration strip above the numeric hero (photographic
+  // language, purely decorative — the red hero carries the numbers).
+  strip: { marginTop: spacing.xl + spacing.xs },
   // Red hero block — the screen's single energetic center (brief §2/§11b).
   hero: {
-    marginTop: spacing.xl + spacing.xs,
+    marginTop: spacing.md,
     gap: spacing.md,
   },
   heroVolumeRow: {
@@ -212,6 +217,21 @@ export default function WorkoutCompleteScreen() {
         title="Workout complete"
         meta={workout ? <Tag label={posterDate(workout.date)} variant="dim" /> : null}
       />
+
+      {/* Thin decorative celebration strip — the shared photo-hero treatment
+          (dark frame + scrim + red chip), keyed to this workout so a Leg Day
+          finish shows legs and a Pull Day shows a back frame. Purely decorative;
+          the red block below carries the numbers. */}
+      <Animated.View entering={enterUp(0)} style={styles.strip}>
+        <PhotoHero
+          source={photoForWorkout(workout?.name, null)}
+          size="strip"
+          recyclingKey={`complete-${workout?.name ?? 'workout'}`}
+          accessibilityLabel="A finished training session"
+          chip={{ label: '✓ Complete' }}
+          title={workout?.name ?? 'Workout'}
+        />
+      </Animated.View>
 
       {/* Red hero: headline volume, with time / sets / PRs (· effort) below.
           Black ink only on the red block (brand law). */}

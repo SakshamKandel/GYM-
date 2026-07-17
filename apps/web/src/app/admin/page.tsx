@@ -9,9 +9,15 @@ import {
   TierChip,
   type Column,
 } from '@/components/console';
+import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
-import { loadOverview, type RecentActivity, type RecentSignup } from './_overview/data';
-import { relativeTime, TierBreakdown } from './_overview/ui';
+import {
+  loadOverview,
+  type OverviewPerms,
+  type RecentActivity,
+  type RecentSignup,
+} from './_overview/data';
+import { OpsTiles, relativeTime, TierBreakdown } from './_overview/ui';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -136,7 +142,20 @@ export default async function AdminOverviewPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
 
-  const data = await loadOverview();
+  const permissions = await effectivePermissionSet(principal);
+
+  // Every section is gated on the SAME permission the API/routes enforce, so a
+  // content_admin or support_admin never sees member PII or the audit feed (A3).
+  const perms: OverviewPerms = {
+    members: permissions.has('members.read'),
+    audit: permissions.has('audit.read'),
+    applications: permissions.has('coach.application.review'),
+    payments: permissions.has('payments.review'),
+    support: permissions.has('support.thread.read'),
+  };
+
+  const data = await loadOverview(perms);
+  const { membership, recentActivity } = data;
 
   return (
     <div>
@@ -145,86 +164,96 @@ export default async function AdminOverviewPage() {
         subtitle="A live snapshot of the platform — membership, coaching, and content at a glance."
       />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: 12,
-          marginBottom: 24,
-        }}
-      >
-        <StatTile label="Total members" value={data.totalMembers.toLocaleString()} />
-        <StatTile label="Active coaches" value={data.activeCoaches.toLocaleString()} />
-        <StatTile
-          label="Active assignments"
-          value={data.activeAssignments.toLocaleString()}
-          hint="coach ↔ member"
-        />
-        <StatTile
-          label="Plan videos ready"
-          value={data.readyVideos.toLocaleString()}
-          hint="published"
-        />
-      </div>
+      <OpsTiles ops={data.ops} />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-          gap: 16,
-          alignItems: 'start',
-          marginBottom: 24,
-        }}
-      >
-        <TierBreakdown rows={data.tierBreakdown} />
-
-        <Card padded={false}>
-          <CardHeader title="Recent activity" />
-          {data.recentActivity.length === 0 ? (
-            <div
-              style={{
-                padding: '28px 18px',
-                textAlign: 'center',
-                color: 'var(--gt-text-dim)',
-                fontSize: 14,
-              }}
-            >
-              No staff actions logged yet.
-            </div>
-          ) : (
-            <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-              {data.recentActivity.map((item, i) => (
-                <ActivityRow
-                  key={item.id}
-                  item={item}
-                  last={i === data.recentActivity.length - 1}
-                />
-              ))}
-            </ul>
-          )}
-        </Card>
-      </div>
-
-      <section>
-        <h2
+      {membership ? (
+        <div
           style={{
-            fontFamily: 'var(--font-heading)',
-            fontWeight: 600,
-            fontSize: 15,
-            letterSpacing: '0.02em',
-            color: 'var(--gt-text)',
-            marginBottom: 12,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: 12,
+            marginBottom: 24,
           }}
         >
-          Recent signups
-        </h2>
-        <DataTable
-          columns={SIGNUP_COLUMNS}
-          rows={data.recentSignups}
-          rowKey={(r) => r.id}
-          empty="No members have signed up yet."
-        />
-      </section>
+          <StatTile label="Total members" value={membership.totalMembers.toLocaleString()} />
+          <StatTile label="Active coaches" value={membership.activeCoaches.toLocaleString()} />
+          <StatTile
+            label="Active assignments"
+            value={membership.activeAssignments.toLocaleString()}
+            hint="coach ↔ member"
+          />
+          <StatTile
+            label="Plan videos ready"
+            value={membership.readyVideos.toLocaleString()}
+            hint="published"
+          />
+        </div>
+      ) : null}
+
+      {membership || recentActivity ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+            gap: 16,
+            alignItems: 'start',
+            marginBottom: 24,
+          }}
+        >
+          {membership ? <TierBreakdown rows={membership.tierBreakdown} /> : null}
+
+          {recentActivity ? (
+            <Card padded={false}>
+              <CardHeader title="Recent activity" />
+              {recentActivity.length === 0 ? (
+                <div
+                  style={{
+                    padding: '28px 18px',
+                    textAlign: 'center',
+                    color: 'var(--gt-text-dim)',
+                    fontSize: 14,
+                  }}
+                >
+                  No staff actions logged yet.
+                </div>
+              ) : (
+                <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                  {recentActivity.map((item, i) => (
+                    <ActivityRow
+                      key={item.id}
+                      item={item}
+                      last={i === recentActivity.length - 1}
+                    />
+                  ))}
+                </ul>
+              )}
+            </Card>
+          ) : null}
+        </div>
+      ) : null}
+
+      {membership ? (
+        <section>
+          <h2
+            style={{
+              fontFamily: 'var(--font-heading)',
+              fontWeight: 600,
+              fontSize: 15,
+              letterSpacing: '0.02em',
+              color: 'var(--gt-text)',
+              marginBottom: 12,
+            }}
+          >
+            Recent signups
+          </h2>
+          <DataTable
+            columns={SIGNUP_COLUMNS}
+            rows={membership.recentSignups}
+            rowKey={(r) => r.id}
+            empty="No members have signed up yet."
+          />
+        </section>
+      ) : null}
     </div>
   );
 }

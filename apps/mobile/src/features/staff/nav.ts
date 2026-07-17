@@ -1,4 +1,7 @@
 import { router, type Href } from 'expo-router';
+import {
+  type Permission,
+} from '@gym/shared';
 
 /**
  * Staff console route helpers.
@@ -12,6 +15,9 @@ import { router, type Href } from 'expo-router';
  * the same escape hatch used by features/auth/nav.ts and are trivial to delete
  * once the types catch up. All screen agents MUST push to these constants so
  * every route string is defined in exactly one place.
+ *
+ * Console visibility derives from the server-provided effective permission
+ * list, so account-specific grants and denials match API enforcement.
  */
 
 export const STAFF_ROUTES = {
@@ -37,8 +43,6 @@ export const STAFF_ROUTES = {
   adminHome: '/staff/admin',
   /** Member directory. */
   adminMembers: '/staff/admin/members',
-  /** A single member's detail (tier / status / coach). Pass the member id. */
-  adminMember: (id: string): string => `/staff/admin/members/${id}`,
   /** Coach pool + assignment management. */
   adminCoaches: '/staff/admin/coaches',
   /** Plan-video library (screen file: staff/admin/content.tsx). */
@@ -57,6 +61,12 @@ export const STAFF_ROUTES = {
   adminStaff: '/staff/admin/staff',
   /** Audit trail (super_admin + main_admin). */
   adminAudit: '/staff/admin/audit',
+  /** Regional tier-price grid (pricing.manage — super/main). */
+  adminPricing: '/staff/admin/pricing',
+  /** Coach wallet balances + ledger + adjustments (wallet.manage — super/main). */
+  adminWallets: '/staff/admin/wallets',
+  /** Coach seniority tier-request queue (coach.application.review). */
+  adminTierRequests: '/staff/admin/tier-requests',
 } as const;
 
 /** router.push through the typed-routes escape hatch. */
@@ -69,55 +79,95 @@ export function replaceStaff(path: string): void {
   router.replace(path as Href);
 }
 
-// ── Role → visibility helpers (mirror the server role matrix) ──
+// ── Effective-permission visibility helpers ──────────────────
 
 /**
- * The two top-rank roles. main_admin holds the full permission set (its only
- * limits are rank checks on staff mutations), so everywhere super_admin may
- * go, main_admin goes too — including the Staff & roles and Audit screens.
+ * Does the server-provided effective list hold `perm`? Missing state fails
+ * closed while account-specific grants and denials remain authoritative.
  */
-export function isTopAdmin(role: string | null): boolean {
-  return role === 'super_admin' || role === 'main_admin';
-}
-
-/** Roles that may open the coach console (coach, super_admin or main_admin). */
-export function canOpenCoachConsole(role: string | null): boolean {
-  return role === 'coach' || isTopAdmin(role);
+export function staffCan(
+  permissions: readonly Permission[] | null | undefined,
+  perm: Permission,
+): boolean {
+  return permissions?.includes(perm) ?? false;
 }
 
 /**
- * Roles that may open the admin console. Any admin-tier role qualifies;
- * a plain `coach` does NOT. (nutrition_admin is included for completeness —
- * it holds no console permission yet, but the hub still lists it as staff.)
+ * Opens the coach console when at least one coach capability is granted.
  */
-export function canOpenAdminConsole(role: string | null): boolean {
-  return (
-    isTopAdmin(role) ||
-    role === 'member_admin' ||
-    role === 'content_admin' ||
-    role === 'support_admin' ||
-    role === 'nutrition_admin'
-  );
+const COACH_CONSOLE_PERMISSIONS: readonly Permission[] = [
+  'coach.message.user',
+  'coach.user.read',
+  'content.video.own',
+  'coach.wallet.read',
+  'client.tier_grant',
+];
+
+export function canOpenCoachConsole(permissions: readonly Permission[]): boolean {
+  return COACH_CONSOLE_PERMISSIONS.some((permission) => permissions.includes(permission));
 }
 
 /**
- * Coach applications + Nepal payment-request review (SCALE-UP-PLAN §4):
- * member_admin holds both permissions; super_admin/main_admin bypass the
- * permission matrix entirely.
+ * Opens the admin console when at least one admin capability is granted.
  */
-export function canReviewApplications(role: string | null): boolean {
-  return isTopAdmin(role) || role === 'member_admin';
+const ADMIN_CONSOLE_PERMISSIONS: readonly Permission[] = [
+  'members.read',
+  'members.suspend',
+  'coach.assign',
+  'subscription.override',
+  'audit.read',
+  'roles.grant',
+  'support.thread.read',
+  'support.thread.reply',
+  'coach.application.review',
+  'payments.review',
+  'promo.manage',
+  'pricing.manage',
+  'wallet.manage',
+  'content.manage',
+  'broadcast.send',
+  'members.manage_credentials',
+  'payouts.review',
+  'analytics.read',
+  'permissions.override',
+  'moderation.manage',
+  'catalog.manage',
+  'gamification.manage',
+];
+
+export function canOpenAdminConsole(permissions: readonly Permission[]): boolean {
+  return ADMIN_CONSOLE_PERMISSIONS.some((permission) => permissions.includes(permission));
 }
 
-/** Alias — payments.review is granted to the same roles as coach.application.review. */
-export const canReviewPayments = canReviewApplications;
-
-/** Promo code + regional pricing management is super_admin/main_admin only. */
-export function canManagePromos(role: string | null): boolean {
-  return isTopAdmin(role);
+/**
+ * Coach applications + coach tier-request review: the `coach.application.review`
+ * permission (member_admin; super/main bypass).
+ */
+export function canReviewApplications(permissions: readonly Permission[]): boolean {
+  return staffCan(permissions, 'coach.application.review');
 }
 
-/** Support inbox: mirrors the 'support.thread.read' grant (support_admin + super/main). */
-export function canReviewSupport(role: string | null): boolean {
-  return isTopAdmin(role) || role === 'support_admin';
+/** Nepal manual-payment review — the `payments.review` permission. */
+export function canReviewPayments(permissions: readonly Permission[]): boolean {
+  return staffCan(permissions, 'payments.review');
+}
+
+/** Promo code management — the `promo.manage` permission (super/main). */
+export function canManagePromos(permissions: readonly Permission[]): boolean {
+  return staffCan(permissions, 'promo.manage');
+}
+
+/** Regional pricing grid — the `pricing.manage` permission (super/main). */
+export function canManagePricing(permissions: readonly Permission[]): boolean {
+  return staffCan(permissions, 'pricing.manage');
+}
+
+/** Coach wallet balances/adjustments — the `wallet.manage` permission (super/main). */
+export function canManageWallets(permissions: readonly Permission[]): boolean {
+  return staffCan(permissions, 'wallet.manage');
+}
+
+/** Support inbox — the `support.thread.read` permission (support_admin + super/main). */
+export function canReviewSupport(permissions: readonly Permission[]): boolean {
+  return staffCan(permissions, 'support.thread.read');
 }

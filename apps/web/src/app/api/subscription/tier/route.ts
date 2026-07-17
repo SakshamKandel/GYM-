@@ -67,10 +67,14 @@ export async function POST(req: Request) {
   // real windows). Clearing expiresAt matters: a stale past tierExpiresAt
   // (e.g. from a lapsed buddy trial) would otherwise collapse the new tier to
   // 'starter' at the auth choke point despite this successful write.
-  await setAccountTier(user.id, tier, { id: user.id }, 'self_serve_paywall', {
-    startsAt: new Date(),
-    expiresAt: null,
-  });
+  await setAccountTier(
+    user.id,
+    tier,
+    { id: user.id },
+    'self_serve_paywall',
+    { startsAt: new Date(), expiresAt: null },
+    'preview',
+  );
 
   // Promo/referral settlement (SCALE-UP-PLAN §4.1): a PAID-tier self-serve
   // pick consumes the account's active discount grant and closes out any
@@ -82,7 +86,14 @@ export async function POST(req: Request) {
   if (tier !== 'starter') {
     try {
       const { amountMinor, currency } = await resolveCatalogAmount(user.id, tier);
-      await settlePromoOnPurchase(user.id, tier, amountMinor, currency, 'preview');
+      await settlePromoOnPurchase({
+        accountId: user.id,
+        mode: 'preview',
+        sourceType: 'subscription_tier',
+        sourceId: user.id,
+        amountMinor,
+        currency,
+      });
     } catch {
       // Best-effort — see comment above.
     }

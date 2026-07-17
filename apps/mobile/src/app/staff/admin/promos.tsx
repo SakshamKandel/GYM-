@@ -274,8 +274,8 @@ function CreateSheet({
 
 export default function AdminPromosScreen() {
   const token = useAuth((s) => s.token);
-  const staffRole = useAuth((s) => s.staffRole);
-  const allowed = canManagePromos(staffRole);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
+  const allowed = canManagePromos(staffPermissions);
 
   const [codes, setCodes] = useState<PromoCodeRow[]>([]);
   const [coaches, setCoaches] = useState<CoachRow[]>([]);
@@ -283,6 +283,9 @@ export default function AdminPromosScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // G10: a failed deactivate/activate must be visible, not silently reverted
+  // (the operator otherwise has zero signal that the toggle didn't take).
+  const [toggleError, setToggleError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -309,13 +312,16 @@ export default function AdminPromosScreen() {
   async function toggleActive(row: PromoCodeRow): Promise<void> {
     if (!token || busyId) return;
     setBusyId(row.id);
+    setToggleError(null);
     const next = !row.active;
     setCodes((prev) => prev.map((c) => (c.id === row.id ? { ...c, active: next } : c)));
     try {
       await updatePromoCode(row.id, { active: next }, token);
-    } catch {
-      // Revert on failure — the row already reflects the optimistic flip.
+    } catch (e) {
+      // Revert the optimistic flip AND surface why — a silent revert leaves
+      // the operator thinking a live code is off when it's still on (G10).
       setCodes((prev) => prev.map((c) => (c.id === row.id ? { ...c, active: row.active } : c)));
+      setToggleError(errorLine(toStaffError(e).code));
     } finally {
       setBusyId(null);
     }
@@ -349,6 +355,12 @@ export default function AdminPromosScreen() {
         onPress={() => setCreating(true)}
         style={styles.newBtn}
       />
+
+      {toggleError ? (
+        <AppText variant="caption" color={colors.error} style={styles.toggleErrorText}>
+          {toggleError}
+        </AppText>
+      ) : null}
 
       {loading ? (
         <View style={styles.center}>
@@ -450,6 +462,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
   },
   newBtn: { marginBottom: spacing.lg },
+  toggleErrorText: { marginBottom: spacing.md },
   center: { paddingVertical: spacing.xl, alignItems: 'center' },
   retryWrap: { marginTop: spacing.md },
   retry: {

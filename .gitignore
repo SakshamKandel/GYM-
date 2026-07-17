@@ -41,6 +41,7 @@ pnpm-debug.log*
 .turbo/
 .eslintcache
 *.tsbuildinfo
+.findex_db/
 
 # IDE / editors
 .vscode/*

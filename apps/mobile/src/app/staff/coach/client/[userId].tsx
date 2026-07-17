@@ -139,6 +139,12 @@ function formatDay(iso: string): string {
 
 export default function CoachClientScreen() {
   const token = useAuth((s) => s.token);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
+  // A1: coach-initiated tier grants are a critical permission gate — the
+  // server enforces it (client.tier_grant, absent from the coach preset by
+  // default), but the control must never even be tappable here so a coach
+  // never learns the flow exists only to hit a 403 at the end of it.
+  const canGrantTier = staffCan(staffPermissions, 'client.tier_grant');
   const params = useLocalSearchParams<{ userId: string; name?: string; tier?: string }>();
   const userId = params.userId;
   const clientName = params.name?.trim() || 'Client';
@@ -200,7 +206,7 @@ export default function CoachClientScreen() {
   }, []);
 
   const apply = useCallback(async () => {
-    if (!token || !userId || saving) return;
+    if (!token || !userId || saving || !canGrantTier) return;
     setSaving(true);
     setError(null);
     try {
@@ -224,7 +230,7 @@ export default function CoachClientScreen() {
     } finally {
       setSaving(false);
     }
-  }, [token, userId, saving, tier, reason, allowsExpiry, resolvedExpiresAt, clientName]);
+  }, [token, userId, saving, canGrantTier, tier, reason, allowsExpiry, resolvedExpiresAt, clientName]);
 
   // ── Milestones — load on mount, log, delete ──────────────────
 
@@ -337,135 +343,149 @@ export default function CoachClientScreen() {
           </Animated.View>
         ) : null}
 
-        <SectionLabel>Set tier</SectionLabel>
-        <View style={styles.chipGrid}>
-          {TIER_ORDER.map((t) => {
-            const on = tier === t;
-            return (
-              <PressableScale
-                key={t}
-                accessibilityRole="button"
-                accessibilityState={{ selected: on }}
-                accessibilityLabel={TIER_LABEL[t]}
-                onPress={() => setTier(t)}
-                style={[
-                  styles.tierPill,
-                  on && { borderColor: TIER_COLOR[t], backgroundColor: colors.surfaceRaised },
-                ]}
-              >
-                <View style={[styles.tierDot, { backgroundColor: TIER_COLOR[t] }]} />
-                <AppText variant="bodyBold" color={on ? colors.text : colors.textDim} tabular={false}>
-                  {TIER_LABEL[t]}
-                </AppText>
-              </PressableScale>
-            );
-          })}
-        </View>
-
-        <SectionLabel>Duration</SectionLabel>
-        {allowsExpiry ? (
+        {canGrantTier ? (
           <>
+            <SectionLabel>Set tier</SectionLabel>
             <View style={styles.chipGrid}>
-              {DURATION_OPTIONS.map((opt) => {
-                const on = duration === opt.key;
+              {TIER_ORDER.map((t) => {
+                const on = tier === t;
                 return (
                   <PressableScale
-                    key={opt.key}
+                    key={t}
                     accessibilityRole="button"
                     accessibilityState={{ selected: on }}
-                    accessibilityLabel={opt.label}
-                    onPress={() => setDuration(opt.key)}
-                    style={[styles.durationPill, on && styles.durationPillOn]}
+                    accessibilityLabel={TIER_LABEL[t]}
+                    onPress={() => setTier(t)}
+                    style={[
+                      styles.tierPill,
+                      on && { borderColor: TIER_COLOR[t], backgroundColor: colors.surfaceRaised },
+                    ]}
                   >
-                    <AppText
-                      variant="body"
-                      color={on ? colors.text : colors.textDim}
-                      tabular={false}
-                    >
-                      {opt.label}
+                    <View style={[styles.tierDot, { backgroundColor: TIER_COLOR[t] }]} />
+                    <AppText variant="bodyBold" color={on ? colors.text : colors.textDim} tabular={false}>
+                      {TIER_LABEL[t]}
                     </AppText>
                   </PressableScale>
                 );
               })}
             </View>
 
-            {usingCustom ? (
-              <View style={styles.customCard}>
-                <AppText variant="label">Pick an expiry date</AppText>
-                <View style={styles.stepperRow}>
-                  <Stepper
-                    label="Year"
-                    value={year}
-                    onChange={setYear}
-                    step={1}
-                    min={new Date().getFullYear()}
-                    max={new Date().getFullYear() + 5}
-                  />
-                  <Stepper
-                    label="Month"
-                    value={month}
-                    onChange={setMonth}
-                    step={1}
-                    min={1}
-                    max={12}
-                    format={(v) => MONTHS[Math.min(Math.max(v, 1), 12) - 1] ?? String(v)}
-                  />
-                  <Stepper
-                    label="Day"
-                    value={safeDay}
-                    onChange={setDay}
-                    step={1}
-                    min={1}
-                    max={maxDay}
-                  />
+            <SectionLabel>Duration</SectionLabel>
+            {allowsExpiry ? (
+              <>
+                <View style={styles.chipGrid}>
+                  {DURATION_OPTIONS.map((opt) => {
+                    const on = duration === opt.key;
+                    return (
+                      <PressableScale
+                        key={opt.key}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: on }}
+                        accessibilityLabel={opt.label}
+                        onPress={() => setDuration(opt.key)}
+                        style={[styles.durationPill, on && styles.durationPillOn]}
+                      >
+                        <AppText
+                          variant="body"
+                          color={on ? colors.text : colors.textDim}
+                          tabular={false}
+                        >
+                          {opt.label}
+                        </AppText>
+                      </PressableScale>
+                    );
+                  })}
                 </View>
+
+                {usingCustom ? (
+                  <View style={styles.customCard}>
+                    <AppText variant="label">Pick an expiry date</AppText>
+                    <View style={styles.stepperRow}>
+                      <Stepper
+                        label="Year"
+                        value={year}
+                        onChange={setYear}
+                        step={1}
+                        min={new Date().getFullYear()}
+                        max={new Date().getFullYear() + 5}
+                      />
+                      <Stepper
+                        label="Month"
+                        value={month}
+                        onChange={setMonth}
+                        step={1}
+                        min={1}
+                        max={12}
+                        format={(v) => MONTHS[Math.min(Math.max(v, 1), 12) - 1] ?? String(v)}
+                      />
+                      <Stepper
+                        label="Day"
+                        value={safeDay}
+                        onChange={setDay}
+                        step={1}
+                        min={1}
+                        max={maxDay}
+                      />
+                    </View>
+                  </View>
+                ) : null}
+              </>
+            ) : (
+              <View style={styles.permanentNote}>
+                <Ionicons name="infinite-outline" size={18} color={colors.textDim} />
+                <AppText variant="caption" color={colors.textDim} style={styles.permanentText}>
+                  Starter is the free tier — it never expires, so no duration is needed.
+                </AppText>
               </View>
+            )}
+
+            <View style={styles.previewRow}>
+              <Ionicons
+                name={allowsExpiry ? 'calendar-outline' : 'infinite-outline'}
+                size={16}
+                color={colors.accent}
+              />
+              <AppText variant="body" color={colors.text}>
+                {previewLine}
+              </AppText>
+            </View>
+
+            <SectionLabel>Reason (optional, audited)</SectionLabel>
+            <AppTextInput
+              value={reason}
+              onChangeText={setReason}
+              placeholder="e.g. 3-month coaching package"
+              maxLength={500}
+              multiline
+              style={styles.reasonInput}
+              accessibilityLabel="Reason"
+            />
+
+            {error ? (
+              <AppText variant="caption" color={colors.error} style={styles.errorLine}>
+                {error}
+              </AppText>
             ) : null}
+
+            <Button
+              label={saving ? 'Saving…' : 'Apply subscription'}
+              onPress={() => void apply()}
+              loading={saving}
+              disabled={saving}
+              style={styles.applyBtn}
+            />
           </>
         ) : (
-          <View style={styles.permanentNote}>
-            <Ionicons name="infinite-outline" size={18} color={colors.textDim} />
-            <AppText variant="caption" color={colors.textDim} style={styles.permanentText}>
-              Starter is the free tier — it never expires, so no duration is needed.
-            </AppText>
-          </View>
+          <>
+            <SectionLabel>Subscription</SectionLabel>
+            <View style={styles.permanentNote}>
+              <Ionicons name="lock-closed-outline" size={18} color={colors.textDim} />
+              <AppText variant="caption" color={colors.textDim} style={styles.permanentText}>
+                You don&apos;t have permission to change this client&apos;s tier. Ask an admin.
+              </AppText>
+            </View>
+          </>
         )}
-
-        <View style={styles.previewRow}>
-          <Ionicons
-            name={allowsExpiry ? 'calendar-outline' : 'infinite-outline'}
-            size={16}
-            color={colors.accent}
-          />
-          <AppText variant="body" color={colors.text}>
-            {previewLine}
-          </AppText>
-        </View>
-
-        <SectionLabel>Reason (optional, audited)</SectionLabel>
-        <AppTextInput
-          value={reason}
-          onChangeText={setReason}
-          placeholder="e.g. 3-month coaching package"
-          maxLength={500}
-          multiline
-          style={styles.reasonInput}
-          accessibilityLabel="Reason"
-        />
-
-        {error ? (
-          <AppText variant="caption" color={colors.error} style={styles.errorLine}>
-            {error}
-          </AppText>
-        ) : null}
-
-        <Button
-          label={saving ? 'Saving…' : 'Apply subscription'}
-          onPress={() => void apply()}
-          loading={saving}
-          disabled={saving}
-          style={styles.applyBtn}
-        />
 
         {/* ── Milestones — the client's coach-logged wins. ── */}
         <SectionLabel>Milestones</SectionLabel>
@@ -740,3 +760,4 @@ const styles = StyleSheet.create({
   },
   endBtn: { marginTop: spacing.xl, marginBottom: spacing.lg },
 });
+import { staffCan } from '../../../../features/staff/nav';

@@ -3,7 +3,7 @@ import { desc, eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
-import type { StaffRole } from '@/lib/auth';
+import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
 import { SupportInbox } from './_components/SupportInbox';
@@ -18,7 +18,6 @@ export const dynamic = 'force-dynamic';
  * already hides the nav link and guards the subtree, but we re-check here so
  * hitting the URL directly still fails safe.
  */
-const CAN_READ: readonly StaffRole[] = ['super_admin', 'main_admin', 'support_admin'];
 
 /**
  * Loads the same shape as GET /api/admin/support/threads (kept in sync
@@ -77,7 +76,8 @@ async function loadThreads(): Promise<SupportThreadRow[]> {
 export default async function AdminSupportPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (!CAN_READ.includes(principal.role)) redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  if (!permissions.has('support.thread.read')) redirect('/admin');
 
   const threads = await loadThreads();
   const awaiting = threads.filter((t) => t.unread > 0).length;

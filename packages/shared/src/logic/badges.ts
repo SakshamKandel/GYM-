@@ -3,11 +3,16 @@
  * (CLAUDE.md rule 10). Strength-club badges always start 'logged'; only a
  * coach can upgrade one to 'verified' (server-side, not here).
  *
- * Catalog is EXACTLY 44 badges at launch:
- *   strength (17) + consistency (13) + mileage (5) + records (3) + crew (6)
- * Challenge badges (`challenge:<id>`) and the two event-driven crew badges
- * (buddy_quest, coach_pick) are awarded server-side outside this pure
- * threshold evaluator — see computeEarnedBadgeIds's doc for what it covers.
+ * Catalog is EXACTLY 42 badges:
+ *   strength (17) + consistency (13) + mileage (5) + records (3) + crew (4)
+ * Challenge badges (`challenge:<id>`) and the event-driven crew badge
+ * (coach_pick) are awarded server-side outside this pure threshold
+ * evaluator — see computeEarnedBadgeIds's doc for what it covers.
+ *
+ * The buddy badges (buddy_first, buddy_quest) were retired with the buddy
+ * pairing feature (2026-07) — a catalog badge must always be earnable.
+ * Legacy award rows for them may still exist server-side; they simply no
+ * longer render (screens draw the catalog only).
  */
 
 export type BadgeFamily = 'strength' | 'consistency' | 'mileage' | 'records' | 'crew';
@@ -123,18 +128,16 @@ const RECORDS_BADGES: BadgeDef[] = [
   { id: 'pr_100', family: 'records', name: '100 PRs', description: 'Set 100 personal records across your exercises.', icon: 'star', sort: 402, threshold: 100 },
 ];
 
-// ── Coach & crew (6) ────────────────────────────────────────────────────
+// ── Coach & crew (4) ────────────────────────────────────────────────────
 
 const CREW_BADGES: BadgeDef[] = [
   { id: 'checkin_first', family: 'crew', name: 'First check-in', description: 'Send your coach your first weekly check-in.', icon: 'clipboard', sort: 500, threshold: 1 },
   { id: 'checkin_10', family: 'crew', name: '10 check-ins', description: 'Check in with your coach in 10 different weeks.', icon: 'clipboard', sort: 501, threshold: 10 },
   { id: 'checkin_25', family: 'crew', name: '25 check-ins', description: 'Check in with your coach in 25 different weeks.', icon: 'clipboard', sort: 502, threshold: 25 },
-  { id: 'buddy_first', family: 'crew', name: 'First buddy', description: 'Pair up with your first gym buddy.', icon: 'buddies', sort: 503 },
-  { id: 'buddy_quest', family: 'crew', name: 'Buddy quest', description: 'You and a buddy each log 12 session-days in the same calendar month.', icon: 'buddies', sort: 504 },
   { id: 'coach_pick', family: 'crew', name: "Coach's pick", description: 'Awarded personally by your coach for standout effort this month.', icon: 'award', sort: 505 },
 ];
 
-/** The full launch catalog — EXACTLY 44 badges (verified by a unit test). */
+/** The full catalog — EXACTLY 42 badges (verified by a unit test). */
 export const BADGE_CATALOG: readonly BadgeDef[] = [
   ...STRENGTH_BADGES,
   ...CONSISTENCY_BADGES,
@@ -147,7 +150,7 @@ export const BADGE_CATALOG: readonly BadgeDef[] = [
 export const STRENGTH_BADGE_IDS: readonly string[] = STRENGTH_BADGES.map((b) => b.id);
 
 /** Badges awarded by an EVENT elsewhere, not by this file's pure threshold pass. */
-const EVENT_DRIVEN_BADGE_IDS = new Set(['buddy_quest', 'coach_pick']);
+const EVENT_DRIVEN_BADGE_IDS = new Set(['coach_pick']);
 
 // ── Canonical lift matching ─────────────────────────────────────────────
 
@@ -188,6 +191,8 @@ export interface BadgeComputeInput {
   /** Distinct session-day isos from ALL finished workouts (ranked + unranked — day_one/comeback use all). */
   sessionDayIsos: readonly string[];
   checkInCount: number;
+  /** Legacy — the buddy badges are retired and nothing here reads it; kept so
+   * server callers that still compute it for legacy accounts keep compiling. */
   hasBuddy: boolean;
 }
 
@@ -223,8 +228,8 @@ function hasComeback(sessionDayIsos: readonly string[]): boolean {
 /**
  * Pure threshold evaluation of the badge catalog against a snapshot of the
  * user's stats. Returns EVERY badge id currently earned (idempotent — the
- * caller diffs against already-awarded rows). Excludes buddy_quest, coach_pick,
- * and challenge:* — those are awarded by their own event-driven code paths.
+ * caller diffs against already-awarded rows). Excludes coach_pick and
+ * challenge:* — those are awarded by their own event-driven code paths.
  */
 /**
  * Snapshot of the caller's own stats used to show progress bars on LOCKED
@@ -239,10 +244,11 @@ export interface BadgeProgressStats {
   prCount: number;
   streakWeeksBest: number;
   checkInCount: number;
+  /** Legacy — see BadgeComputeInput.hasBuddy. */
   hasBuddy: boolean;
 }
 
-export type BadgeProgressUnit = 'kg' | 'sessions' | 'weeks' | 'prs' | 'check-ins' | 'buddies';
+export type BadgeProgressUnit = 'kg' | 'sessions' | 'weeks' | 'prs' | 'check-ins';
 
 export interface BadgeProgress {
   /** Raw current value — may exceed target once earned; clamp in the UI. */
@@ -253,7 +259,7 @@ export interface BadgeProgress {
 
 /**
  * Progress toward one badge, or null for badges with no meaningful scalar
- * progress (comeback, buddy_quest, coach_pick, challenge:* — event-shaped,
+ * progress (comeback, coach_pick, challenge:* — event-shaped,
  * they happen rather than accumulate). Pure and threshold-consistent with
  * computeEarnedBadgeIds: current >= target exactly when the badge is earned,
  * with one deliberate exception — the `total` club shows the PARTIAL sum of
@@ -297,10 +303,7 @@ export function badgeProgress(badge: BadgeDef, stats: BadgeProgressStats): Badge
           ? null
           : { current: stats.checkInCount, target, unit: 'check-ins' };
       }
-      if (badge.id === 'buddy_first') {
-        return { current: stats.hasBuddy ? 1 : 0, target: 1, unit: 'buddies' };
-      }
-      return null; // buddy_quest / coach_pick / challenge extras — event-driven
+      return null; // coach_pick / challenge extras — event-driven
     }
   }
 }
@@ -368,8 +371,6 @@ export function computeEarnedBadgeIds(input: BadgeComputeInput): string[] {
       case 'crew': {
         if (badge.id === 'checkin_first' || badge.id === 'checkin_10' || badge.id === 'checkin_25') {
           if (input.checkInCount >= (badge.threshold ?? Infinity)) earned.push(badge.id);
-        } else if (badge.id === 'buddy_first') {
-          if (input.hasBuddy) earned.push(badge.id);
         }
         break;
       }

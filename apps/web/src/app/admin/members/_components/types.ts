@@ -9,6 +9,10 @@ export interface MemberRow {
   email: string;
   displayName: string;
   tier: Tier;
+  /** ISO expiry for the current dated tier, or null = no expiry (contract
+   * §4.7, additive). Feed to `effectiveTier` from @gym/shared to know whether
+   * a non-starter `tier` has actually lapsed. */
+  tierExpiresAt: string | null;
   status: MemberStatus;
   createdAt: string;
   /** The account's staff role (admins row), or null for a regular member.
@@ -38,6 +42,7 @@ export interface MemberDetail {
     email: string;
     displayName: string;
     tier: Tier;
+    tierExpiresAt: string | null;
     status: MemberStatus;
     createdAt: string;
     staffRole: StaffRole | null;

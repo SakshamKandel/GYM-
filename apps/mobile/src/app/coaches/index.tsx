@@ -9,11 +9,14 @@ import {
   enterDown,
   enterFade,
   enterUp,
+  PhotoHero,
   PressableScale,
   Screen,
   ScreenHeader,
   SkeletonRow,
+  stockImages,
 } from '../../components/ui';
+import { EmptyArt } from '../../components/visual';
 import { CoachCard } from '../../features/mentorship/components/CoachCard';
 import { useCoachDirectory, useMyCoach } from '../../features/mentorship/hooks';
 import { pushPath } from '../../features/mentorship/nav';
@@ -39,7 +42,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  header: { marginBottom: spacing.gutter },
+  header: { marginBottom: spacing.md },
+  banner: { marginBottom: spacing.gutter },
   // Quiet pending-request banner: charcoal row, tap-through to the coach.
   pendingRow: {
     flexDirection: 'row',
@@ -112,12 +116,29 @@ export default function CoachDirectoryScreen() {
 
       <ScreenHeader eyebrow="Find your coach" title="Coaches" style={styles.header} />
 
+      {/* Mood banner — decorative dark stock photo under the shared photo-hero
+          treatment (scrim + red chip + white ink). The header and cards carry
+          the real information. */}
+      <Animated.View entering={enterUp(0)}>
+        <PhotoHero
+          source={stockImages.overheadPressWoman}
+          size="banner"
+          recyclingKey="coaches-banner"
+          accessibilityLabel="A coach pressing a barbell overhead"
+          chip={{ label: 'Mentorship' }}
+          title="Train with a real coach"
+          caption="Personal plans, weekly check-ins, honest feedback."
+          style={styles.banner}
+        />
+      </Animated.View>
+
       {status !== 'signedIn' ? (
         <Animated.View entering={enterUp(0)}>
           <EmptyState
             icon="people"
             title="Sign in to find a coach"
             body="Coach profiles, requests and 1-on-1 chat live on your account."
+            art={<EmptyArt variant="coach" />}
             actionLabel="Sign in"
             onAction={() => pushPath('/auth/sign-in')}
           />
@@ -172,6 +193,7 @@ export default function CoachDirectoryScreen() {
                 icon="people"
                 title="No coaches yet"
                 body="Coach profiles are on the way — check back soon."
+                art={<EmptyArt variant="coach" />}
               />
             </Animated.View>
           ) : coaches !== null ? (

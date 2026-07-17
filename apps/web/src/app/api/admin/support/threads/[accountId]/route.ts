@@ -1,4 +1,4 @@
-import { coachMessages } from '@gym/db';
+import { accounts, coachMessages } from '@gym/db';
 import { maskPii } from '@gym/shared';
 import { and, asc, eq } from 'drizzle-orm';
 import { after } from 'next/server';
@@ -13,11 +13,17 @@ export const runtime = 'nodejs';
 /**
  * Admin console — one account's 'support' thread (SCALE-UP-PLAN §4.4).
  *
- *  - GET → that account's 'support' messages oldest→newest, then marks the
- *          inbound (sender='user') rows readByCoach=true — clears the inbox's
- *          unread badge on open. Mirrors coach/threads/[userId]'s mark-read
- *          flow, scoped to kind='support' instead of 'coach_chat'.
- *  - POST {body} → staff reply: inserts a 'coach' row with
+ *  - GET → that account's 'support' messages oldest→newest. Read-only — mark-
+ *          read is a SEPARATE `POST .../read` (see the sibling `read/route.ts`)
+ *          because a GET here is reachable via a plain top-level navigation
+ *          (SameSite=Lax still attaches the cookie to a GET) and unread IS the
+ *          inbox's work queue; a mutating GET is a silent GET-CSRF that clears
+ *          it. Mirrors coach/threads/[userId]'s equivalent split.
+ *  - POST {body} → staff reply: 404s if the account doesn't exist (avoids a
+ *          raw FK-violation 500) and refuses to fabricate a ticket — a reply
+ *          requires at least one PRIOR 'support' message on the thread, so
+ *          staff can't push a "reply" notification to a member who never
+ *          opened one. Otherwise inserts a 'coach' row with
  *          senderAccountId=principal, PII-masked (keeps parity with the human
  *          coach_chat reply path even though the author is support staff —
  *          contact details never reach storage from either side), pushes
@@ -56,18 +62,6 @@ export async function GET(
     .where(and(eq(coachMessages.accountId, accountId), eq(coachMessages.kind, 'support')))
     .orderBy(asc(coachMessages.createdAt));
 
-  await db
-    .update(coachMessages)
-    .set({ readByCoach: true })
-    .where(
-      and(
-        eq(coachMessages.accountId, accountId),
-        eq(coachMessages.kind, 'support'),
-        eq(coachMessages.sender, 'user'),
-        eq(coachMessages.readByCoach, false),
-      ),
-    );
-
   return json({ messages: rows }, 200);
 }
 
@@ -82,10 +76,29 @@ export async function POST(
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  // Masked BEFORE storage — the in-app-contact policy binds support staff too.
-  const body = maskPii(parsed.data.body);
 
   const db = getDb();
+
+  // The account must exist (a bare FK violation on insert would otherwise
+  // surface as a raw 500), AND the thread must already have at least one
+  // message — a reply with none would fabricate a "support reply" push to a
+  // member who never opened a ticket.
+  const [account] = await db
+    .select({ id: accounts.id })
+    .from(accounts)
+    .where(eq(accounts.id, accountId))
+    .limit(1);
+  if (!account) return json({ error: 'not_found' }, 404);
+
+  const [existingMessage] = await db
+    .select({ id: coachMessages.id })
+    .from(coachMessages)
+    .where(and(eq(coachMessages.accountId, accountId), eq(coachMessages.kind, 'support')))
+    .limit(1);
+  if (!existingMessage) return json({ error: 'no_thread' }, 404);
+
+  // Masked BEFORE storage — the in-app-contact policy binds support staff too.
+  const body = maskPii(parsed.data.body);
 
   const inserted = await db
     .insert(coachMessages)

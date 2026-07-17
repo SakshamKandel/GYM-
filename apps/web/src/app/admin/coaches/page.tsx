@@ -8,7 +8,7 @@ import {
 import { asc, desc, eq, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
-import type { StaffRole } from '@/lib/auth';
+import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
 import {
@@ -28,7 +28,6 @@ export const dynamic = 'force-dynamic';
  * but we re-check here server-side so hitting the URL directly still fails safe
  * — the layout comment explicitly requires each page to re-check its role set.
  */
-const CAN_ASSIGN: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
 
 /**
  * Loads the coach roster directly via getDb — shape matches GET
@@ -154,7 +153,9 @@ async function loadActiveClients(): Promise<Record<string, ClientAssignment[]>> 
 export default async function AdminCoachesPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (!CAN_ASSIGN.includes(principal.role)) redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  const canAssign = permissions.has('coach.assign');
+  if (!canAssign) redirect('/admin');
 
   const [coaches, clientsByCoach, tierRequestsByCoach] = await Promise.all([
     loadCoaches(),
@@ -199,7 +200,7 @@ export default async function AdminCoachesPage() {
         coaches={coaches}
         clientsByCoach={clientsByCoach}
         tierRequestsByCoach={tierRequestsByCoach}
-        canEdit={CAN_ASSIGN.includes(principal.role)}
+        canEdit={canAssign}
       />
     </div>
   );

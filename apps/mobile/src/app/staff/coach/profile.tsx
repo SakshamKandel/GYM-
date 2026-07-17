@@ -58,6 +58,9 @@ const ACHIEVEMENTS_MAX = 10;
 const CERT_FIELD_MAX = 80;
 const CERTS_MAX = 10;
 const UPGRADE_NOTE_MAX = 300;
+/** Client-side cap on the picked photo (the square crop at quality 0.85
+ * usually lands far below this — the guard just refuses absurd originals). */
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 
 const COACH_TIER_LABEL: Record<CoachTier, string> = {
   silver: 'Silver',
@@ -285,6 +288,11 @@ export default function CoachProfileScreen() {
     if (result.canceled) return;
     const asset = result.assets[0];
     if (!asset) return;
+    // Guard against absurdly large originals before the bytes leave the phone.
+    if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_PHOTO_BYTES) {
+      setAvatarError('That photo is too large — pick one under 10 MB.');
+      return;
+    }
 
     setAvatarUploading(true);
     try {
@@ -306,6 +314,27 @@ export default function CoachProfileScreen() {
           : e.code === 'forbidden'
             ? "You don't have coach access."
             : "Couldn't update your photo. Try again.",
+      );
+    } finally {
+      setAvatarUploading(false);
+    }
+  }
+
+  /** Clear the photo — PATCHes avatarUrl: null and saves immediately, same
+   * as pickAvatar (independent of the "Save changes" button). */
+  async function removeAvatar(): Promise<void> {
+    if (!token || avatarUploading || !avatarUrl) return;
+    setAvatarError(null);
+    setAvatarUploading(true);
+    try {
+      const fresh = await updateCoachProfile({ avatarUrl: null }, token);
+      setAvatarUrl(fresh.avatarUrl);
+    } catch (err) {
+      const e = toApiError(err);
+      setAvatarError(
+        e.code === 'forbidden'
+          ? "You don't have coach access."
+          : "Couldn't remove your photo. Try again.",
       );
     } finally {
       setAvatarUploading(false);
@@ -478,6 +507,18 @@ export default function CoachProfileScreen() {
                 disabled={avatarUploading}
                 loading={avatarUploading}
               />
+              {avatarUrl && !avatarUploading ? (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel="Remove photo"
+                  onPress={() => void removeAvatar()}
+                  style={styles.removePhotoBtn}
+                >
+                  <AppText variant="bodyBold" color={colors.textDim}>
+                    Remove photo
+                  </AppText>
+                </PressableScale>
+              ) : null}
               {avatarError ? (
                 <AppText variant="caption" color={colors.error} style={styles.avatarErrorText}>
                   {avatarError}
@@ -855,6 +896,11 @@ const styles = StyleSheet.create({
   },
   avatarText: { flex: 1, gap: spacing.xs, alignItems: 'flex-start' },
   avatarErrorText: { marginTop: 2 },
+  removePhotoBtn: {
+    minHeight: touch.min,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
   tierRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { STAFF_ROLES, type StaffRole } from '@gym/shared';
-import { BASE_URL } from '../../lib/api/client';
+import { STAFF_ROLES, isPermission, type Permission, type StaffRole } from '@gym/shared';
+import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
 
 /**
  * Staff console API client — coach + admin surfaces of the GM Method backend.
@@ -25,8 +25,22 @@ import { BASE_URL } from '../../lib/api/client';
  *   'cannot_revoke_self' → 400 (self-lockout guard on revoke)
  *   'full'         → 409 {error:'full'} (accepting a mentorship request would
  *                    exceed the coach's roster capacity)
+ *   'confirm_required' → 409 {error:'confirm_required', preview} (payment
+ *                    approval would shorten a permanent tier or downgrade a
+ *                    higher active one — re-POST decidePaymentRequest with
+ *                    confirm:true to proceed)
+ *   'already_refunded' → 409 {error:'already_refunded'} (refund raced/retried
+ *                    against an already-refunded request)
+ *   'not_approved' → 409 {error:'not_approved'} (refund attempted on a request
+ *                    that was never approved, or already rejected)
+ *   'insufficient_balance' → 409 {error:'insufficient_balance', balanceMinor,
+ *                    currency} (a wallet payout would drive the coach's
+ *                    tracked balance negative — resend with override:true to
+ *                    record it anyway)
  *   'conflict'     → 409 (state conflicts etc.)
  *   'not_configured' → 503 (e.g. the video host keys are absent)
+ *   'rate_limited' → 429 (too many requests — distinct from a bare network
+ *                    failure so the UI can show "slow down" copy)
  *   'network'      → offline, non-JSON, or a malformed/unexpected response
  */
 
@@ -41,10 +55,15 @@ export type StaffErrorCode =
   | 'cannot_target_self'
   | 'cannot_revoke_self'
   | 'full'
+  | 'confirm_required'
+  | 'already_refunded'
+  | 'not_approved'
+  | 'insufficient_balance'
   | 'conflict'
   | 'already_pending'
   | 'not_an_upgrade'
   | 'not_configured'
+  | 'rate_limited'
   | 'network';
 
 export class StaffApiError extends Error {
@@ -82,7 +101,7 @@ export type PayTier = 'silver' | 'gold' | 'elite';
 export type ApplicationStatus = 'pending' | 'approved' | 'rejected';
 export type TierRequestStatus = 'pending' | 'approved' | 'rejected';
 export type PaymentMethod = 'esewa' | 'khalti' | 'bank' | 'other';
-export type PaymentStatus = 'pending' | 'approved' | 'rejected';
+export type PaymentStatus = 'pending' | 'approved' | 'rejected' | 'refunded';
 export type DecideAction = 'approve' | 'reject';
 
 const staffRoleSchema = z.enum(STAFF_ROLES);
@@ -95,7 +114,7 @@ const assignmentStatusSchema = z.enum(['active', 'ended']);
 const applicationStatusSchema = z.enum(['pending', 'approved', 'rejected']);
 const tierRequestStatusSchema = z.enum(['pending', 'approved', 'rejected']);
 const paymentMethodSchema = z.enum(['esewa', 'khalti', 'bank', 'other']);
-const paymentStatusSchema = z.enum(['pending', 'approved', 'rejected']);
+const paymentStatusSchema = z.enum(['pending', 'approved', 'rejected', 'refunded']);
 
 // ── Fetch plumbing ────────────────────────────────────────────
 
@@ -104,7 +123,15 @@ interface StaffRequestOptions {
   path: string;
   token: string;
   body?: Record<string, unknown>;
+  /** Override for endpoints that legitimately run longer than the default
+   * (e.g. a server-side host round trip). */
+  timeoutMs?: number;
 }
+
+/** Every admin/coach mutation gives up after this long (defect H1: staffRequest
+ * used to be a bare `fetch` with no bound, so a hung connection could freeze
+ * any console screen forever). */
+const STAFF_REQUEST_TIMEOUT_MS = 15_000;
 
 function statusToCode(status: number): StaffErrorCode {
   if (status === 401) return 'unauthorized';
@@ -112,6 +139,7 @@ function statusToCode(status: number): StaffErrorCode {
   if (status === 404) return 'not_found';
   if (status === 400) return 'invalid';
   if (status === 409) return 'conflict';
+  if (status === 429) return 'rate_limited';
   if (status === 503) return 'not_configured';
   return 'network';
 }
@@ -128,21 +156,29 @@ const BODY_ERROR_CODES: Partial<Record<string, StaffErrorCode>> = {
   full: 'full',
   already_pending: 'already_pending',
   not_an_upgrade: 'not_an_upgrade',
+  confirm_required: 'confirm_required',
+  already_refunded: 'already_refunded',
+  not_approved: 'not_approved',
+  insufficient_balance: 'insufficient_balance',
 };
 
 /** Perform the request; resolve with the parsed JSON (or null) of a 2xx body. */
 async function staffRequest(opts: StaffRequestOptions): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${opts.path}`, {
-      method: opts.method,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${opts.token}`,
-        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+    res = await fetchWithTimeout(
+      `${BASE_URL}${opts.path}`,
+      {
+        method: opts.method,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${opts.token}`,
+          ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+        },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
+      opts.timeoutMs ?? STAFF_REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new StaffApiError('network', "Can't reach the server");
   }
@@ -182,16 +218,31 @@ function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown): T
 // Whoami
 // ════════════════════════════════════════════════════════════════
 
-const meStaffSchema = z.object({ role: staffRoleSchema.nullable() });
+/**
+ * `permissions` is additive (RBAC contract §4.3) — an older server that omits
+ * it, or any unrecognised string it does send, must not blank the whole
+ * response. Unknown array shape → [] via `.catch`; unrecognised entries are
+ * filtered out (never trust a permission string the client doesn't know).
+ */
+const meStaffSchema = z.object({
+  role: staffRoleSchema.nullable(),
+  permissions: z
+    .array(z.unknown())
+    .transform((arr): Permission[] => arr.filter(isPermission)),
+});
+
+export type StaffIdentity = z.infer<typeof meStaffSchema>;
 
 /**
- * GET /api/me/staff → the caller's staff role, or null for a non-staff account.
- * 401 (no token) surfaces as StaffApiError 'unauthorized'; a valid non-staff
- * token resolves to `null` (NOT an error).
+ * GET /api/me/staff → the caller's staff role (or null for a non-staff
+ * account) PLUS the exact permission set the server derived for that role
+ * (contract §4.3 — clients gate on permissions, never role names). 401 (no
+ * token) surfaces as StaffApiError 'unauthorized'; a valid non-staff token
+ * resolves to `{ role: null, permissions: [] }` (NOT an error).
  */
-export async function getMeStaff(token: string): Promise<StaffRole | null> {
+export async function getMeStaff(token: string): Promise<StaffIdentity> {
   const data = await staffRequest({ method: 'GET', path: '/api/me/staff', token });
-  return parse(meStaffSchema, data).role;
+  return parse(meStaffSchema, data);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -238,7 +289,8 @@ const coachThreadSchema = z.object({
 
 /**
  * GET /api/coach/threads/[userId] → that client's coach_chat thread
- * (oldest → newest). Server-side this also marks inbound rows read by coach.
+ * (oldest → newest). Read-only (F2) — marking the thread read is a separate
+ * call, see markCoachThreadRead.
  * 'forbidden' when the caller has no active assignment over the user.
  */
 export async function getCoachThread(
@@ -251,6 +303,23 @@ export async function getCoachThread(
     token,
   });
   return parse(coachThreadSchema, data).messages;
+}
+
+/**
+ * POST /api/coach/threads/[userId]/read (no body) → marks every inbound
+ * message on this thread readByCoach=true, clearing the client's
+ * `unreadForCoach` badge in the coach roster (F2: mark-read was split out of
+ * GET into its own POST so a GET-CSRF can't silently clear the work queue).
+ * Callers should invoke this after successfully loading a thread;
+ * best-effort — a failure here shouldn't block the thread from displaying.
+ */
+export async function markCoachThreadRead(userId: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/coach/threads/${encodeURIComponent(userId)}/read`,
+    token,
+  });
+  parse(okSchema, data);
 }
 
 const coachReplySchema = z.object({ message: coachThreadMessageSchema });
@@ -329,9 +398,10 @@ export interface CoachProfilePatch {
   yearsExperience?: number;
   /** 1..200 — the roster cap enforced when accepting requests. */
   capacity?: number;
-  /** An https URL string (max 500 chars) from POST /api/uploads/image (kind
-   * 'coach_avatar')'s `deliveryUrl`. */
-  avatarUrl?: string;
+  /** A Cloudinary https URL string (max 500 chars) from POST
+   * /api/uploads/image (kind 'coach_avatar')'s `deliveryUrl`, or null to
+   * remove the current photo. */
+  avatarUrl?: string | null;
 }
 
 /** PATCH /api/coach/profile → update the caller's own profile; returns it fresh. */
@@ -940,6 +1010,11 @@ const memberRowSchema = z.object({
   email: z.string(),
   displayName: z.string(),
   tier: tierSchema,
+  // ISO instant or null (permanent / no paid tier). Additive per contract
+  // §4.7 — lets the directory show a 'lapsed' badge instead of displaying a
+  // past-expiry paid tier as if it were still active. `.catch(null)` keeps an
+  // older server that omits the field from nuking the whole row.
+  tierExpiresAt: z.string().nullable().catch(null),
   status: memberStatusSchema,
   // The account's staff role, or null for a plain member. `.catch(null)` keeps
   // older/partial server responses from nuking the whole directory parse.
@@ -947,20 +1022,44 @@ const memberRowSchema = z.object({
 });
 export type MemberRow = z.infer<typeof memberRowSchema>;
 
-const membersSchema = z.object({ members: z.array(memberRowSchema) });
+/** Resilient: drop unparseable rows rather than blanking the whole directory. */
+const membersSchema = z.object({
+  members: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): MemberRow[] => {
+      const parsed = memberRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+  // Additive keyset cursor (contract §4.7) — null on the last page. `.catch`
+  // keeps an older server that omits it from nuking the whole page parse.
+  nextCursor: z.string().nullable().catch(null),
+});
+
+export interface MembersPage {
+  members: MemberRow[];
+  nextCursor: string | null;
+}
 
 /**
- * GET /api/admin/members?q= → the member directory (<=100 rows). `q` is a
- * case-insensitive email substring filter.
+ * GET /api/admin/members?q=&cursor= → a keyset page of the member directory.
+ * `q` is a case-insensitive email substring filter; pass a previous page's
+ * `nextCursor` to continue ("Load more") — null means there is no next page.
  */
-export async function getMembers(token: string, q?: string): Promise<MemberRow[]> {
-  const query = q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : '';
+export async function getMembers(
+  token: string,
+  q?: string,
+  cursor?: string,
+): Promise<MembersPage> {
+  const params = new URLSearchParams();
+  if (q?.trim()) params.set('q', q.trim());
+  if (cursor?.trim()) params.set('cursor', cursor.trim());
+  const query = params.toString() ? `?${params.toString()}` : '';
   const data = await staffRequest({
     method: 'GET',
     path: `/api/admin/members${query}`,
     token,
   });
-  return parse(membersSchema, data).members;
+  return parse(membersSchema, data);
 }
 
 const memberDetailAccountSchema = z.object({
@@ -968,6 +1067,8 @@ const memberDetailAccountSchema = z.object({
   email: z.string(),
   displayName: z.string(),
   tier: tierSchema,
+  // ISO instant or null — see memberRowSchema's tierExpiresAt (contract §4.7).
+  tierExpiresAt: z.string().nullable().catch(null),
   status: memberStatusSchema,
   createdAt: z.string(),
   // Present on GET detail; the PATCH echo may omit it — tolerate as null.
@@ -1037,7 +1138,15 @@ const coachRowSchema = z.object({
 });
 export type CoachRow = z.infer<typeof coachRowSchema>;
 
-const coachesSchema = z.object({ coaches: z.array(coachRowSchema) });
+/** Resilient: drop unparseable rows rather than blanking the whole roster. */
+const coachesSchema = z.object({
+  coaches: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): CoachRow[] => {
+      const parsed = coachRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
 
 /** GET /api/admin/coaches → the assignable coach pool with active-client counts. */
 export async function getCoaches(token: string): Promise<CoachRow[]> {
@@ -1118,7 +1227,15 @@ const videoRowSchema = z.object({
 });
 export type VideoRow = z.infer<typeof videoRowSchema>;
 
-const videosSchema = z.object({ videos: z.array(videoRowSchema) });
+/** Resilient: drop unparseable rows rather than blanking the whole library. */
+const videosSchema = z.object({
+  videos: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): VideoRow[] => {
+      const parsed = videoRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
 
 /** GET /api/admin/videos → the plan-video library (newest first). */
 export async function getVideos(token: string): Promise<VideoRow[]> {
@@ -1550,7 +1667,9 @@ const coachApplicationsSchema = z.object({
 
 /**
  * GET /api/admin/coach-applications?status= → the application queue, newest
- * first. Omitting `status` returns every status (server default).
+ * first. Omitting `status` does NOT return every status — the server
+ * defaults to 'pending' (same trap as the tier-request queue below); pass an
+ * explicit `status` to see decided rows.
  */
 export async function getAdminCoachApplications(
   token: string,
@@ -1620,7 +1739,11 @@ const adminCoachTierRequestsSchema = z.object({
   ),
 });
 
-/** GET /api/admin/coach-tier-requests?status= → the upgrade-request queue. */
+/**
+ * GET /api/admin/coach-tier-requests?status= → the upgrade-request queue.
+ * Omitting `status` defaults to 'pending' server-side (same trap as the coach
+ * applications queue above) — pass an explicit `status` for decided rows.
+ */
 export async function getAdminCoachTierRequests(
   token: string,
   status?: TierRequestStatus,
@@ -1778,6 +1901,11 @@ const paymentRequestRowSchema = z.object({
   status: paymentStatusSchema,
   reviewNote: z.string().nullable(),
   createdAt: z.string(),
+  // B11 fraud signal: true when the request claims NP region without a
+  // verified NP country/rail. Server computes this (route.ts:95) specifically
+  // so a reviewer can spot someone self-reporting the cheaper NPR catalog —
+  // must be declared here or zod silently strips it on parse.
+  selfReportedRegion: z.boolean().catch(false),
 });
 export type PaymentRequestRow = z.infer<typeof paymentRequestRowSchema>;
 
@@ -1806,21 +1934,50 @@ export async function getAdminPaymentRequests(
 }
 
 /**
- * POST /api/admin/payment-requests/[id] {action, note?} → approve grants the
- * dated tier window + settles any promo commission; reject records reviewNote.
- * 'not_found' for an unknown/already-decided id.
+ * POST /api/admin/payment-requests/[id] {action, note?, confirm?} → approve
+ * grants the dated tier window + settles any promo commission; reject records
+ * reviewNote. 'not_found' for an unknown/already-decided id.
+ *
+ * `confirm` must be passed true to complete an approval that would shorten a
+ * permanent current tier or downgrade a higher active one (B1/P0-2) — the
+ * server otherwise returns 409 'confirm_required' and applies nothing. Omit
+ * (or pass false) on the first attempt; retry with confirm:true only after
+ * that specific error (never pass it speculatively).
  */
 export async function decidePaymentRequest(
   id: string,
   action: DecideAction,
   note: string | undefined,
   token: string,
+  confirm?: boolean,
 ): Promise<void> {
   const data = await staffRequest({
     method: 'POST',
     path: `/api/admin/payment-requests/${encodeURIComponent(id)}`,
     token,
-    body: { action, ...(note !== undefined ? { note } : {}) },
+    body: { action, ...(note !== undefined ? { note } : {}), ...(confirm ? { confirm: true } : {}) },
+  });
+  parse(okSchema, data);
+}
+
+/**
+ * POST /api/admin/payment-requests/[id]/refund {reason} → reverse a
+ * previously-approved request (gap build P0-1): CAS approved→refunded, tier
+ * rollback, negative wallet adjustment, promo redemption reversal, all
+ * audited with `reason`. 'not_found' for an unknown/non-approved id (map this
+ * to "already decided / not refundable" — mirrors the B13 404 remap, never
+ * "try again").
+ */
+export async function refundPaymentRequest(
+  id: string,
+  reason: string,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/payment-requests/${encodeURIComponent(id)}/refund`,
+    token,
+    body: { reason },
   });
   parse(okSchema, data);
 }
@@ -1829,8 +1986,16 @@ export async function decidePaymentRequest(
 // Admin console — coach wallets
 // ════════════════════════════════════════════════════════════════
 
+// Extends tierRequestCoachSchema with the offboarding-cascade flag (E10/C2):
+// GET /api/admin/wallets includes coaches who no longer hold the coach role
+// but still carry an outstanding ledger balance, flagged `revoked` so the UI
+// can tell them apart from an active coach with the same balance shape.
+const walletCoachSchema = tierRequestCoachSchema.extend({
+  revoked: z.boolean().catch(false),
+});
+
 const adminWalletRowSchema = z.object({
-  coach: tierRequestCoachSchema,
+  coach: walletCoachSchema,
   balances: z.array(walletBalanceSchema).catch([]),
 });
 export type AdminWalletRow = z.infer<typeof adminWalletRowSchema>;
@@ -1857,13 +2022,19 @@ export interface WalletEntryInput {
   amountMinor: number;
   currency: string;
   note?: string;
+  /** Escape hatch (E7): record a payout that exceeds the tracked balance (e.g.
+   * reconciling a pre-app disbursement). Only meaningful for payouts; send it
+   * only after a prior attempt returned 'insufficient_balance', never
+   * speculatively. */
+  override?: boolean;
 }
 
 /**
  * POST /api/admin/wallets/[coachId]/entries → append a manual ledger entry
  * (a positive correction, or a negative payout record — payouts are recorded
  * here, not disbursed; see SCALE-UP-PLAN §9). 'invalid' when a payout amount
- * isn't negative.
+ * isn't negative. 'insufficient_balance' when a payout would drive the
+ * coach's balance in that currency negative and `override` wasn't set.
  */
 export async function addWalletEntry(
   coachId: string,
@@ -1879,10 +2050,43 @@ export async function addWalletEntry(
       amountMinor: input.amountMinor,
       currency: input.currency,
       ...(input.note !== undefined ? { note: input.note } : {}),
+      ...(input.override ? { override: true } : {}),
     },
   });
   // The route returns 201 {entry:{...}}, never {ok:true}.
   parse(z.object({ entry: walletEntrySchema }), data);
+}
+
+const adminWalletDetailSchema = z.object({
+  coach: tierRequestCoachSchema,
+  balances: z.array(walletBalanceSchema).catch([]),
+  // Resilient: drop unparseable rows rather than blanking the whole ledger.
+  entries: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): WalletEntry[] => {
+      const parsed = walletEntrySchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+export type AdminWalletDetail = z.infer<typeof adminWalletDetailSchema>;
+
+/**
+ * GET /api/admin/wallets/[coachId] → one coach's per-currency balances plus
+ * their newest ≤100 ledger entries (contract §4.8) — the per-coach detail the
+ * global roster in getAdminWallets can't provide (E9: the old drawer read off
+ * a global newest-500 feed and silently showed 'No entries yet' for an older
+ * coach). Requires `wallet.manage`.
+ */
+export async function getAdminWalletDetail(
+  coachId: string,
+  token: string,
+): Promise<AdminWalletDetail> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/wallets/${encodeURIComponent(coachId)}`,
+    token,
+  });
+  return parse(adminWalletDetailSchema, data);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -1901,7 +2105,15 @@ const priceRowSchema = z.object({
 });
 export type PriceRow = z.infer<typeof priceRowSchema>;
 
-const pricesSchema = z.object({ prices: z.array(priceRowSchema) });
+/** Resilient: drop unparseable rows rather than blanking the whole grid. */
+const pricesSchema = z.object({
+  prices: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): PriceRow[] => {
+      const parsed = priceRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
 
 /** GET /api/admin/pricing → every (region, tier) price row. */
 export async function getAdminPricing(token: string): Promise<PriceRow[]> {
@@ -1957,4 +2169,45 @@ export async function updateAdminCoach(
     body: { ...patch },
   });
   parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — broadcast / announcements (gap build P0-4)
+// ════════════════════════════════════════════════════════════════
+
+export interface BroadcastInput {
+  /** 1..120 chars. */
+  title: string;
+  /** 1..500 chars. */
+  body: string;
+  /** Restrict the fan-out to accounts at this billing tier. */
+  tier?: Tier;
+  /** Restrict the fan-out to accounts with this ISO-3166 alpha-2 country. */
+  country?: string;
+}
+
+// Server response is `{ ok: true, recipients, devices, delivered, failed }`
+// (apps/web/src/app/api/admin/broadcast/route.ts) — the field is `recipients`,
+// not `recipientCount`. Keep this in sync with that route's response shape.
+const broadcastResultSchema = z.object({ ok: z.literal(true), recipients: z.number() });
+
+/**
+ * POST /api/admin/broadcast {title, body, tier?, country?} → fan out a push
+ * announcement over registered device tokens (super_admin + main_admin only,
+ * gated `broadcast.send`). Returns the recipient count for the confirmation
+ * UI; the server audits the send with that same count.
+ */
+export async function sendBroadcast(input: BroadcastInput, token: string): Promise<number> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/broadcast',
+    token,
+    body: {
+      title: input.title,
+      body: input.body,
+      ...(input.tier !== undefined ? { tier: input.tier } : {}),
+      ...(input.country !== undefined ? { country: input.country } : {}),
+    },
+  });
+  return parse(broadcastResultSchema, data).recipients;
 }

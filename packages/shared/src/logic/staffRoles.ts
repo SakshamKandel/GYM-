@@ -17,7 +17,16 @@
  * enforced at the route level, not here.
  */
 
-/** Every staff role, highest rank first. Mirrors the admins.role DB enum. */
+/**
+ * Every staff role, highest rank first. Mirrors the admins.role DB enum.
+ *
+ * DEPRECATED: `nutrition_admin` is retained ONLY so legacy DB rows keep parsing.
+ * It carries an EMPTY permission preset (see permissions.ts ROLE_PRESETS) and is
+ * excluded from `GRANTABLE_ROLES` (permissions.ts), so it can no longer be
+ * granted and neither console offers it as an entry point (fixes A6: the web
+ * login-loop / mobile 403-trap it used to cause). Do NOT add it back to any
+ * grant dropdown or preset.
+ */
 export const STAFF_ROLES = [
   'super_admin',
   'main_admin',

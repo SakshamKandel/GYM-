@@ -36,7 +36,11 @@ export type ApiErrorCode =
   /** POST /api/promo/redeem: past its window or redemption cap. */
   | 'expired'
   /** POST /api/uploads/image: the image host (Cloudinary) isn't configured server-side. */
-  | 'image_not_configured';
+  | 'image_not_configured'
+  /** POST /api/payments/requests: another request is still awaiting review. */
+  | 'already_pending'
+  /** POST /api/payments/requests: the uploaded receipt already funded a request. */
+  | 'receipt_already_used';
 
 export class ApiError extends Error {
   readonly code: ApiErrorCode;
@@ -94,7 +98,9 @@ function serverErrorCode(raw: string): ApiErrorCode | null {
     raw === 'invalid_code' ||
     raw === 'already_used' ||
     raw === 'expired' ||
-    raw === 'image_not_configured'
+    raw === 'image_not_configured' ||
+    raw === 'already_pending' ||
+    raw === 'receipt_already_used'
     ? raw
     : null;
 }
@@ -106,9 +112,13 @@ function serverErrorCode(raw: string): ApiErrorCode | null {
  */
 const REQUEST_TIMEOUT_MS = 10_000;
 
-/** fetch with a timeout; the abort surfaces as a rejection the callers
- * already map to their typed 'network' errors. */
-async function fetchWithTimeout(
+/**
+ * fetch with a timeout; the abort surfaces as a rejection the callers already
+ * map to their typed 'network' errors. Exported so sibling clients
+ * (features/staff/api.ts, features/staff/supportApi.ts) share the same
+ * hang-proofing instead of issuing bare `fetch` calls (defect H1/H2/H4).
+ */
+export async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number = REQUEST_TIMEOUT_MS,
@@ -281,129 +291,64 @@ export async function logoutAll(token: string): Promise<void> {
 }
 
 // ════════════════════════════════════════════════════════════════
-// Buddy Sync (see BUDDY API CONTRACT) — appended section.
+// Referrals ("Invite friends") & tier trials — appended section.
 // Same philosophy as auth: zod at the boundary, typed error codes,
 // and network failures must never block the UI (screens keep the
-// last known state and retry quietly).
+// last known state and retry quietly). Both endpoints still live
+// under /api/buddy/* server-side for wire-compat with deployed
+// clients; the buddy feature itself is gone.
 // ════════════════════════════════════════════════════════════════
 
-export type BuddyErrorCode =
-  | 'not_found'
+export type RewardsErrorCode =
   | 'invalid'
+  /** Referrals: you already invited this email yourself. */
   | 'already_linked'
-  | 'buddy_limit'
-  | 'nudge_limit'
-  | 'tier_mismatch'
+  /** Referrals: the invited email already belongs to an existing account. */
+  | 'already_enrolled'
+  /** Trial: this tier's one-time trial is already spent. */
   | 'trial_used'
+  /** Trial: the requested tier isn't above the account's current tier. */
   | 'not_an_upgrade'
   | 'forbidden'
   | 'unauthorized'
   | 'network';
 
-export class BuddyApiError extends Error {
-  readonly code: BuddyErrorCode;
+export class RewardsApiError extends Error {
+  readonly code: RewardsErrorCode;
 
-  constructor(code: BuddyErrorCode, message?: string) {
+  constructor(code: RewardsErrorCode, message?: string) {
     super(message ?? code);
-    this.name = 'BuddyApiError';
+    this.name = 'RewardsApiError';
     this.code = code;
   }
 }
 
-/** Narrow an unknown thrown value to BuddyApiError (anything else = network). */
-export function toBuddyError(err: unknown): BuddyApiError {
-  return err instanceof BuddyApiError ? err : new BuddyApiError('network');
+/** Narrow an unknown thrown value to RewardsApiError (anything else = network). */
+export function toRewardsError(err: unknown): RewardsApiError {
+  return err instanceof RewardsApiError ? err : new RewardsApiError('network');
 }
 
-// ── Buddy schemas ─────────────────────────────────────────────
+// ── Rewards fetch plumbing ────────────────────────────────────
 
-const buddyUserSchema = z.object({
-  id: z.string(),
-  displayName: z.string(),
-  email: z.string(),
-  // Membership identity for the TierBadge — not gamification (design law 5
-  // still holds: no xp/rank here). .catch tolerates older server responses.
-  tier: tierSchema.catch('starter'),
-});
-
-export type BuddyUser = z.infer<typeof buddyUserSchema>;
-
-const buddyLinkSchema = z.object({ linkId: z.string(), buddy: buddyUserSchema });
-
-export type BuddyLink = z.infer<typeof buddyLinkSchema>;
-
-const buddyListSchema = z.object({
-  accepted: z.array(buddyLinkSchema),
-  pendingIn: z.array(buddyLinkSchema),
-  pendingOut: z.array(buddyLinkSchema),
-});
-
-export type BuddyList = z.infer<typeof buddyListSchema>;
-
-export type BuddyActivityType = 'workout_completed' | 'pr';
-
-const buddyEventPayloadSchema = z.object({
-  name: z.string().optional(),
-  date: z.string().optional(),
-  durationSec: z.number().optional(),
-  volumeKg: z.number().optional(),
-  prCount: z.number().optional(),
-  /** live_session events carry the workout name here. */
-  sessionName: z.string().optional(),
-});
-
-export type BuddyEventPayload = z.infer<typeof buddyEventPayloadSchema>;
-
-const buddyEventSchema = z.object({
-  id: z.string(),
-  actor: z.object({ id: z.string(), displayName: z.string() }),
-  type: z.enum(['workout_completed', 'pr', 'nudge', 'live_session']),
-  // Lenient: nudge events may ship a null/absent payload.
-  payload: buddyEventPayloadSchema.nullish(),
-  createdAt: z.string(),
-});
-
-export type BuddyEvent = z.infer<typeof buddyEventSchema>;
-
-/**
- * Resilient feed: the server appends new activity types over time (a
- * 'live_session' row once broke EVERY feed fetch and with it the whole
- * Buddy tab). Unknown/malformed events are dropped instead of failing
- * the entire response.
- */
-const buddyFeedSchema = z.object({
-  events: z.array(z.unknown()).transform((arr) =>
-    arr.flatMap((raw): BuddyEvent[] => {
-      const parsed = buddyEventSchema.safeParse(raw);
-      return parsed.success ? [parsed.data] : [];
-    }),
-  ),
-});
-
-// ── Buddy fetch plumbing ──────────────────────────────────────
-
-function buddyServerErrorCode(raw: string): BuddyErrorCode | null {
-  return raw === 'not_found' ||
-    raw === 'invalid' ||
+function rewardsServerErrorCode(raw: string): RewardsErrorCode | null {
+  return raw === 'invalid' ||
     raw === 'already_linked' ||
-    raw === 'buddy_limit' ||
-    raw === 'nudge_limit' ||
-    raw === 'tier_mismatch' ||
+    raw === 'already_enrolled' ||
     raw === 'trial_used' ||
     raw === 'not_an_upgrade'
-    ? (raw as BuddyErrorCode)
+    ? (raw as RewardsErrorCode)
     : null;
 }
 
-interface BuddyRequestOptions {
-  method: 'GET' | 'POST' | 'DELETE';
+interface RewardsRequestOptions {
+  method: 'GET' | 'POST';
   path: string;
   token: string;
   body?: Record<string, unknown>;
 }
 
-/** Buddy request; resolves with parsed JSON (or null for empty 2xx bodies). */
-async function buddyRequest(opts: BuddyRequestOptions): Promise<unknown> {
+/** Rewards request; resolves with parsed JSON (or null for empty 2xx bodies). */
+async function rewardsRequest(opts: RewardsRequestOptions): Promise<unknown> {
   let res: Response;
   try {
     res = await fetchWithTimeout(`${BASE_URL}${opts.path}`, {
@@ -416,11 +361,11 @@ async function buddyRequest(opts: BuddyRequestOptions): Promise<unknown> {
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new BuddyApiError('network', "Can't reach the server");
+    throw new RewardsApiError('network', "Can't reach the server");
   }
 
   if (res.ok) {
-    // Several buddy endpoints 200/201 without a documented body.
+    // Some endpoints 200/201 without a documented body.
     try {
       return (await res.json()) as unknown;
     } catch {
@@ -428,164 +373,22 @@ async function buddyRequest(opts: BuddyRequestOptions): Promise<unknown> {
     }
   }
 
-  let code: BuddyErrorCode =
+  let code: RewardsErrorCode =
     res.status === 401 ? 'unauthorized' : res.status === 403 ? 'forbidden' : 'network';
   try {
     const parsed = errorBodySchema.safeParse(await res.json());
-    if (parsed.success) code = buddyServerErrorCode(parsed.data.error) ?? code;
+    if (parsed.success) code = rewardsServerErrorCode(parsed.data.error) ?? code;
   } catch {
     // Body wasn't JSON — keep the status-derived code.
   }
-  throw new BuddyApiError(code);
+  throw new RewardsApiError(code);
 }
 
-/** Like parseAs, but throws the buddy-typed error (and tolerates transforms). */
-function parseBuddy<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown): T {
+/** Like parseAs, but throws the rewards-typed error (and tolerates transforms). */
+function parseRewards<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown): T {
   const parsed = schema.safeParse(data);
-  if (!parsed.success) throw new BuddyApiError('network', 'Unexpected server response');
+  if (!parsed.success) throw new RewardsApiError('network', 'Unexpected server response');
   return parsed.data;
-}
-
-// ── Buddy endpoints ───────────────────────────────────────────
-
-/**
- * Invite a friend by email. The 201 body ({link}) isn't consumed by the
- * app, so it's deliberately not validated — only errors matter here.
- */
-export async function inviteBuddy(token: string, email: string): Promise<void> {
-  await buddyRequest({ method: 'POST', path: '/api/buddy/invite', token, body: { email } });
-}
-
-export async function getBuddies(token: string): Promise<BuddyList> {
-  const data = await buddyRequest({ method: 'GET', path: '/api/buddy', token });
-  return parseBuddy(buddyListSchema, data);
-}
-
-export async function respondToBuddy(
-  token: string,
-  linkId: string,
-  accept: boolean,
-): Promise<void> {
-  await buddyRequest({ method: 'POST', path: '/api/buddy/respond', token, body: { linkId, accept } });
-}
-
-/** Unlink an accepted buddy or cancel a pending outgoing invite. */
-export async function removeBuddy(token: string, linkId: string): Promise<void> {
-  await buddyRequest({ method: 'DELETE', path: `/api/buddy/${linkId}`, token });
-}
-
-export async function getBuddyFeed(token: string): Promise<BuddyEvent[]> {
-  const data = await buddyRequest({ method: 'GET', path: '/api/buddy/feed', token });
-  return parseBuddy(buddyFeedSchema, data).events;
-}
-
-/** Throws BuddyApiError 'nudge_limit' when today's nudge is already spent. */
-export async function nudgeBuddy(token: string, linkId: string): Promise<void> {
-  await buddyRequest({ method: 'POST', path: '/api/buddy/nudge', token, body: { linkId } });
-}
-
-export async function publishBuddyActivity(
-  token: string,
-  type: BuddyActivityType,
-  payload: BuddyEventPayload,
-): Promise<void> {
-  await buddyRequest({ method: 'POST', path: '/api/buddy/activity', token, body: { type, payload } });
-}
-
-/**
- * Fire-and-forget publish for the training finish flow. Swallows every
- * failure — buddy sync must NEVER block or break finishing a workout
- * (the local log already succeeded; buddies just won't see this one).
- */
-export async function publishWorkoutActivity(
-  token: string,
-  payload: {
-    name: string;
-    date: string;
-    durationSec: number;
-    volumeKg: number;
-    prCount: number;
-  },
-): Promise<void> {
-  try {
-    await publishBuddyActivity(token, 'workout_completed', payload);
-  } catch {
-    // Intentionally silent.
-  }
-}
-
-// ════════════════════════════════════════════════════════════════
-// Buddy Live Sessions, Referrals & Trials
-// ════════════════════════════════════════════════════════════════
-
-export type BuddyTier = 'starter' | 'silver' | 'gold' | 'elite';
-
-const buddySessionParticipantSchema = z.object({
-  accountId: z.string(),
-  displayName: z.string(),
-  joinedAt: z.string(),
-});
-
-export type BuddySessionParticipant = z.infer<typeof buddySessionParticipantSchema>;
-
-const buddySessionSchema = z.object({
-  id: z.string(),
-  host: z.object({ id: z.string(), displayName: z.string(), tier: z.string() }),
-  workoutName: z.string(),
-  status: z.string(),
-  startedAt: z.string(),
-  // Older deploys may omit this field entirely — default to [] so a stale
-  // server response still parses instead of failing the whole list.
-  participants: z.array(buddySessionParticipantSchema).default([]),
-});
-
-export type BuddySession = z.infer<typeof buddySessionSchema>;
-
-const buddySessionListSchema = z.object({ sessions: z.array(buddySessionSchema) });
-
-/**
- * POST /api/buddy/sessions responds `{ session }`. Older deploys omit
- * `host`/`status`, so only the always-present fields are required — the
- * screen reloads the full list right after anyway.
- */
-const startedSessionSchema = z.object({
-  session: z.object({
-    id: z.string(),
-    workoutName: z.string(),
-    startedAt: z.string(),
-  }),
-});
-
-export type StartedBuddySession = z.infer<typeof startedSessionSchema>['session'];
-
-/** Get active live sessions: accepted buddies' plus your own. */
-export async function getBuddySessions(token: string): Promise<BuddySession[]> {
-  const data = await buddyRequest({ method: 'GET', path: '/api/buddy/sessions', token });
-  return parseBuddy(buddySessionListSchema, data).sessions;
-}
-
-/** Start a live workout session. */
-export async function startBuddySession(
-  token: string,
-  workoutName: string,
-): Promise<StartedBuddySession> {
-  const data = await buddyRequest({
-    method: 'POST',
-    path: '/api/buddy/sessions',
-    token,
-    body: { workoutName },
-  });
-  return parseBuddy(startedSessionSchema, data).session;
-}
-
-/** End a live session (host only). */
-export async function endBuddySession(token: string, sessionId: string): Promise<void> {
-  await buddyRequest({ method: 'DELETE', path: `/api/buddy/sessions/${sessionId}`, token });
-}
-
-/** Join a buddy's live session (requires same tier). */
-export async function joinBuddySession(token: string, sessionId: string): Promise<void> {
-  await buddyRequest({ method: 'POST', path: `/api/buddy/sessions/${sessionId}/join`, token });
 }
 
 // ── Referrals ─────────────────────────────────────────────────
@@ -606,13 +409,18 @@ const referralListSchema = z.object({ referrals: z.array(referralSchema) });
 
 /** Get this user's referrals. */
 export async function getReferrals(token: string): Promise<Referral[]> {
-  const data = await buddyRequest({ method: 'GET', path: '/api/buddy/referrals', token });
-  return parseBuddy(referralListSchema, data).referrals;
+  const data = await rewardsRequest({ method: 'GET', path: '/api/buddy/referrals', token });
+  return parseRewards(referralListSchema, data).referrals;
 }
 
-/** Create a referral invite for a friend's email. */
+/**
+ * Create a referral invite for a friend's email. Throws RewardsApiError
+ * 'already_enrolled' when the email already belongs to an existing account
+ * (invites are only for people new to the app) and 'already_linked' when the
+ * caller already invited that email.
+ */
 export async function createReferral(token: string, inviteeEmail: string): Promise<void> {
-  await buddyRequest({
+  await rewardsRequest({
     method: 'POST',
     path: '/api/buddy/referrals',
     token,
@@ -645,13 +453,13 @@ export interface TrialStatus {
 
 /** Get trial status for this account. */
 export async function getTrialStatus(token: string): Promise<TrialStatus> {
-  const data = await buddyRequest({ method: 'GET', path: '/api/buddy/trial', token });
-  return parseBuddy(trialListSchema, data);
+  const data = await rewardsRequest({ method: 'GET', path: '/api/buddy/trial', token });
+  return parseRewards(trialListSchema, data);
 }
 
 /** Start a 2-day trial for a tier (one-time per tier). */
 export async function startTrial(token: string, tier: TrialTier): Promise<void> {
-  await buddyRequest({ method: 'POST', path: '/api/buddy/trial', token, body: { tier } });
+  await rewardsRequest({ method: 'POST', path: '/api/buddy/trial', token, body: { tier } });
 }
 
 // ── Cloud profile backup ──────────────────────────────────────
@@ -679,8 +487,8 @@ export async function putProfileData(
 // ── Push token registration ───────────────────────────────────
 
 /**
- * Register this device's Expo push token so the server can deliver buddy
- * pushes (channelId 'default'). Fire-and-forget from the caller's side:
+ * Register this device's Expo push token so the server can deliver pushes
+ * (coach, support, badge — channelId 'default'). Fire-and-forget from the caller's side:
  * the 200 `{ok:true}` body isn't consumed, so only auth failures propagate
  * (the caller in notifications.ts swallows them). Throws ApiError on a
  * non-2xx / network failure, matching the rest of this client.
@@ -1315,7 +1123,13 @@ export interface PickedFile {
  * features/staff/api.ts's createVideo flow uses: every `fields` entry first,
  * then the file under `file`. Throws ApiError('network') on any transport or
  * host failure so the caller can retry without re-reserving.
+ *
+ * Uses a long (90s) timeout rather than the default 10s — a stalled Cloudinary
+ * upload must eventually surface as a retryable failure instead of wedging the
+ * avatar/receipt/photo flow forever (defect H4).
  */
+const UPLOAD_TIMEOUT_MS = 90_000;
+
 export async function uploadImageAsset(
   reservation: ImageUploadReservation,
   file: PickedFile,
@@ -1328,7 +1142,11 @@ export async function uploadImageAsset(
 
   let res: Response;
   try {
-    res = await fetch(reservation.uploadUrl, { method: 'POST', body: form });
+    res = await fetchWithTimeout(
+      reservation.uploadUrl,
+      { method: 'POST', body: form },
+      UPLOAD_TIMEOUT_MS,
+    );
   } catch {
     throw new ApiError('network', "Couldn't reach the upload host");
   }

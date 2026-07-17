@@ -1,10 +1,11 @@
 import { coachProfiles, type CoachCertification } from '@gym/db';
-import { isCoachSpecialty } from '@gym/shared';
+import { isCoachSpecialty, maskPii } from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { isOwnImageDeliveryUrl } from '@/lib/uploads';
 
 export const runtime = 'nodejs';
 
@@ -13,7 +14,8 @@ export const runtime = 'nodejs';
  *
  *  - GET   → the caller's coach_profiles row (created lazily if missing so a
  *            freshly-promoted coach always has an editable row).
- *  - PATCH → update the card (displayName / bio / avatarUrl /
+ *  - PATCH → update the card (displayName / bio / avatarUrl — a Cloudinary
+ *            deliveryUrl to set, null/'' to clear /
  *            acceptingClients / replyWindowHours) and the portfolio
  *            (headline / specialties / certifications / achievements /
  *            yearsExperience / capacity) on the caller's OWN row only.
@@ -24,6 +26,14 @@ export const runtime = 'nodejs';
  * Guarded by requirePermission('coach.user.read') — every coach holds it, and
  * super_admin passes via bypass. There is no cross-account targeting here, so
  * no requireCoachOwnsUser check is needed.
+ *
+ * PII hygiene (defect C15): every member-visible free-text field
+ * (displayName / bio / headline / achievements / certification title+issuer) is
+ * run through maskPii on WRITE — mirroring coach workouts/diet plans/milestones.
+ * Coaches publishing WhatsApp/Instagram/phone in their public card would let
+ * clients route around the in-app relationship and kill the commission model, so
+ * the mask is applied server-side at the boundary, not trusted to the client.
+ * Fixed-catalog specialties and numeric fields carry no free text — not masked.
  */
 
 const MIN_REPLY_HOURS = 1;
@@ -31,9 +41,14 @@ const MAX_REPLY_HOURS = 168; // one week
 const MAX_DISPLAY_NAME = 80;
 const MAX_BIO = 2000;
 const MAX_AVATAR_URL = 500;
-/** Must be an https URL (validated shape, not reachability) — from our own
- * /api/uploads/image deliveryUrl response, never a client-typed arbitrary URL. */
-const HTTPS_URL_RE = /^https:\/\//i;
+/** Upload kinds whose /api/uploads/image `deliveryUrl` may appear here:
+ * `coach_avatar` is what the profile editor uploads; `application_avatar` is
+ * accepted too because approval copies it into coach_profiles.avatarUrl, so a
+ * client echoing the current value back must keep validating. Any other URL —
+ * a foreign Cloudinary cloud, or a non-`upload` delivery type such as
+ * `image/fetch/<remote-url>` (which would proxy attacker-controlled content
+ * to every member) — is rejected by isOwnImageDeliveryUrl. */
+const AVATAR_KINDS = ['coach_avatar', 'application_avatar'] as const;
 
 /** Portfolio fields — everything here is member-visible via /api/coaches. */
 const portfolioSchema = z.object({
@@ -112,7 +127,9 @@ export async function GET(req: Request) {
 
   const profile = await loadOrCreateProfile(principal.id);
   if (!profile) return json({ error: 'not_found' }, 404);
-  return json({ profile }, 200);
+  // `photoUrl` mirrors `avatarUrl` — canonical name on all public coach
+  // payloads; the legacy key stays for already-shipped mobile parsers.
+  return json({ profile: { ...profile, photoUrl: profile.avatarUrl } }, 200);
 }
 
 export async function PATCH(req: Request) {
@@ -129,7 +146,7 @@ export async function PATCH(req: Request) {
   const update: {
     displayName?: string;
     bio?: string;
-    avatarUrl?: string;
+    avatarUrl?: string | null;
     acceptingClients?: boolean;
     replyWindowHours?: number;
     headline?: string;
@@ -148,7 +165,9 @@ export async function PATCH(req: Request) {
     if (name.length > MAX_DISPLAY_NAME) {
       return json({ error: 'displayName_too_long' }, 400);
     }
-    update.displayName = name;
+    // Member-visible → mask any smuggled contact detail (C15). Length is
+    // validated against the raw input above; the mask can only shorten runs.
+    update.displayName = maskPii(name);
   }
 
   if ('bio' in body) {
@@ -158,18 +177,25 @@ export async function PATCH(req: Request) {
     if (body.bio.length > MAX_BIO) {
       return json({ error: 'bio_too_long' }, 400);
     }
-    update.bio = body.bio;
+    update.bio = maskPii(body.bio);
   }
 
   if ('avatarUrl' in body) {
-    if (typeof body.avatarUrl !== 'string') {
-      return json({ error: 'avatarUrl_must_be_string' }, 400);
+    // null (or an empty string) clears the photo; otherwise it must be a
+    // Cloudinary delivery URL minted by our own uploads endpoint, on our own
+    // cloud — see AVATAR_KINDS above.
+    if (body.avatarUrl === null || body.avatarUrl === '') {
+      update.avatarUrl = null;
+    } else {
+      if (typeof body.avatarUrl !== 'string') {
+        return json({ error: 'avatarUrl_must_be_string' }, 400);
+      }
+      const url = body.avatarUrl.trim();
+      if (url.length > MAX_AVATAR_URL || !isOwnImageDeliveryUrl(url, AVATAR_KINDS)) {
+        return json({ error: 'avatarUrl_invalid' }, 400);
+      }
+      update.avatarUrl = url;
     }
-    const url = body.avatarUrl.trim();
-    if (url.length > MAX_AVATAR_URL || !HTTPS_URL_RE.test(url)) {
-      return json({ error: 'avatarUrl_invalid' }, 400);
-    }
-    update.avatarUrl = url;
   }
 
   if ('acceptingClients' in body) {
@@ -194,12 +220,19 @@ export async function PATCH(req: Request) {
   // the legacy fields above never collide with it).
   const portfolio = portfolioSchema.safeParse(body);
   if (!portfolio.success) return json({ error: 'invalid' }, 400);
-  if (portfolio.data.headline !== undefined) update.headline = portfolio.data.headline;
+  // Mask every member-visible free-text portfolio field on write (C15).
+  if (portfolio.data.headline !== undefined) update.headline = maskPii(portfolio.data.headline);
   if (portfolio.data.specialties !== undefined) update.specialties = portfolio.data.specialties;
   if (portfolio.data.certifications !== undefined) {
-    update.certifications = portfolio.data.certifications;
+    update.certifications = portfolio.data.certifications.map((c) => ({
+      ...c,
+      title: maskPii(c.title),
+      issuer: maskPii(c.issuer),
+    }));
   }
-  if (portfolio.data.achievements !== undefined) update.achievements = portfolio.data.achievements;
+  if (portfolio.data.achievements !== undefined) {
+    update.achievements = portfolio.data.achievements.map(maskPii);
+  }
   if (portfolio.data.yearsExperience !== undefined) {
     update.yearsExperience = portfolio.data.yearsExperience;
   }
@@ -221,6 +254,7 @@ export async function PATCH(req: Request) {
     .returning(PROFILE_COLUMNS);
 
   if (updated.length === 0) return json({ error: 'not_found' }, 404);
+  const fresh = updated[0];
 
   const ip = req.headers.get('x-forwarded-for');
   await logAudit(
@@ -232,5 +266,5 @@ export async function PATCH(req: Request) {
     ip,
   );
 
-  return json({ profile: updated[0] }, 200);
+  return json({ profile: { ...fresh, photoUrl: fresh.avatarUrl } }, 200);
 }

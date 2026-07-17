@@ -1,7 +1,8 @@
 import { accounts, revenuecatEvents } from '@gym/db';
-import { eq } from 'drizzle-orm';
+import { compareTiers, effectiveTier } from '@gym/shared';
+import { and, eq, inArray, isNull, lt, or } from 'drizzle-orm';
 import { z } from 'zod';
-import { verifyRevenueCatAuth } from '@/lib/billing';
+import { verifyRevenueCatAuth, verifyRevenueCatSignature } from '@/lib/billing';
 import { getDb } from '@/lib/db';
 import { json } from '@/lib/http';
 import { resolveCatalogAmount, settlePromoOnPurchase } from '@/lib/promoEconomy';
@@ -10,44 +11,30 @@ import { setAccountTier, type Tier } from '@/lib/tier';
 export const runtime = 'nodejs';
 
 /**
- * POST /api/subscription/revenuecat — RevenueCat server-to-server webhook.
- *
- * This is the ONLY path that grants PAID tiers once BILLING_MODE=live: the
- * client never asserts its own entitlement, RevenueCat does. Configure the
- * webhook in the RevenueCat dashboard with an Authorization header equal to
- * REVENUECAT_WEBHOOK_AUTH, and set each app's appUserID to the account id at
- * login (Purchases.logIn(account.id)) so app_user_id resolves here.
- *
- * Tier mapping: RevenueCat entitlement identifiers are expected to be named
- * exactly 'silver' | 'gold' | 'elite'. The highest active entitlement wins.
- * Events that end access (EXPIRATION) or report no entitlements collapse the
- * account to 'starter' via the entitlement-free branch.
- *
- * Every write goes through setAccountTier → audited as 'subscription.override'
- * with reason 'revenuecat_webhook', profile mirror + Greece elite assignment
- * stay in sync, and expiry lands in accounts.tierExpiresAt where effectiveTier
- * enforces it at the auth choke point with no cron.
- *
- * Responses: RevenueCat retries non-2xx. Unknown users return 200 (retrying
- * won't create the account); malformed bodies return 400; bad auth 401.
+ * RevenueCat server-to-server entitlement handler. Authorization is always
+ * required; HMAC verification is additionally enforced when its secret is
+ * configured. Event ids dedupe every entitlement event, while event timestamps
+ * prevent delayed delivery from replacing newer subscription state.
  */
 
 const PAID_TIERS = ['elite', 'gold', 'silver'] as const satisfies readonly Tier[];
 
 const eventSchema = z.object({
   event: z.object({
-    id: z.string().min(1).nullish(),
-    type: z.string(),
+    id: z.string().min(1),
+    type: z.string().min(1),
+    event_timestamp_ms: z.number().int().nonnegative(),
     app_user_id: z.string().min(1),
-    entitlement_ids: z.array(z.string()).nullish(),
-    purchased_at_ms: z.number().nullish(),
-    expiration_at_ms: z.number().nullish(),
+    original_app_user_id: z.string().min(1).nullish(),
+    aliases: z.array(z.string().min(1)).nullish(),
+    entitlement_ids: z.array(z.string()).nullable().optional(),
+    purchased_at_ms: z.number().int().nonnegative().nullish(),
+    expiration_at_ms: z.number().int().nonnegative().nullish(),
+    currency: z.string().length(3).transform((value) => value.toUpperCase()).nullish(),
+    price_in_purchased_currency: z.number().finite().nonnegative().nullish(),
   }),
 });
 
-/** Event types that change what the user is entitled to. Everything else
- * (TEST, TRANSFER handled via app_user_id, BILLING_ISSUE grace…) is a no-op
- * acknowledged with 200 so RevenueCat stops retrying. */
 const ENTITLEMENT_EVENTS = new Set([
   'INITIAL_PURCHASE',
   'RENEWAL',
@@ -58,14 +45,29 @@ const ENTITLEMENT_EVENTS = new Set([
   'SUBSCRIPTION_EXTENDED',
 ]);
 
+// A free initial trial carries no money. Its first positive RENEWAL is the
+// purchase that consumes a pending promo/referral grant.
+const SETTLEMENT_EVENTS = new Set(['INITIAL_PURCHASE', 'RENEWAL']);
+const PROTECTED_SOURCES = new Set(['manual_payment', 'console', 'coach']);
+
 export async function POST(req: Request) {
   if (!verifyRevenueCatAuth(req.headers.get('authorization'))) {
     return json({ error: 'unauthorized' }, 401);
   }
 
+  let rawBody: string;
+  try {
+    rawBody = await req.text();
+  } catch {
+    return json({ error: 'invalid' }, 400);
+  }
+  if (!verifyRevenueCatSignature(rawBody, req.headers.get('x-revenuecat-webhook-signature'))) {
+    return json({ error: 'invalid_signature' }, 401);
+  }
+
   let body: unknown;
   try {
-    body = await req.json();
+    body = JSON.parse(rawBody) as unknown;
   } catch {
     return json({ error: 'invalid' }, 400);
   }
@@ -73,73 +75,171 @@ export async function POST(req: Request) {
   if (!parsed.success) return json({ error: 'invalid' }, 400);
   const event = parsed.data.event;
 
-  if (!ENTITLEMENT_EVENTS.has(event.type)) return json({ ok: true, skipped: event.type }, 200);
+  if (!ENTITLEMENT_EVENTS.has(event.type)) {
+    return json({ ok: true, skipped: event.type }, 200);
+  }
 
   const db = getDb();
+  const [knownEvent] = await db
+    .select({
+      processedAt: revenuecatEvents.processedAt,
+      tierAppliedAt: revenuecatEvents.tierAppliedAt,
+    })
+    .from(revenuecatEvents)
+    .where(eq(revenuecatEvents.eventId, event.id))
+    .limit(1);
+  if (knownEvent?.processedAt) return json({ ok: true, skipped: 'duplicate' }, 200);
+
+  // RevenueCat recommends checking all subscriber aliases because transfers
+  // and identity merges can change the last-seen app_user_id.
+  const identifiers = Array.from(
+    new Set(
+      [event.app_user_id, event.original_app_user_id, ...(event.aliases ?? [])].filter(
+        (value): value is string => typeof value === 'string' && value.length > 0,
+      ),
+    ),
+  );
   const [account] = await db
-    .select({ id: accounts.id })
+    .select({
+      id: accounts.id,
+      tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
+      tierSource: accounts.tierSource,
+      tierSourceId: accounts.tierSourceId,
+      revenuecatEventAt: accounts.revenuecatEventAt,
+    })
     .from(accounts)
-    .where(eq(accounts.id, event.app_user_id));
-  // Unknown app_user_id: acknowledge — a retry can never succeed. (Covers
-  // anonymous RevenueCat ids from before Purchases.logIn wiring.)
-  if (!account) return json({ ok: true, skipped: 'unknown_user' }, 200);
+    .where(inArray(accounts.id, identifiers))
+    .limit(1);
 
-  // Highest active entitlement wins; none → starter (expiry/cancel collapse).
+  const eventAt = new Date(event.event_timestamp_ms);
+  await db
+    .insert(revenuecatEvents)
+    .values({
+      eventId: event.id,
+      accountId: account?.id ?? null,
+      type: event.type,
+      eventAt,
+      processedAt: account ? null : new Date(),
+      tierAppliedAt: account ? null : new Date(),
+    })
+    .onConflictDoNothing({ target: revenuecatEvents.eventId });
+
+  const [eventState] = await db
+    .select({
+      processedAt: revenuecatEvents.processedAt,
+      tierAppliedAt: revenuecatEvents.tierAppliedAt,
+    })
+    .from(revenuecatEvents)
+    .where(eq(revenuecatEvents.eventId, event.id))
+    .limit(1);
+  if (eventState?.processedAt) {
+    return json({ ok: true, skipped: account ? 'duplicate' : 'unknown_user' }, 200);
+  }
+  if (!account || !eventState) return json({ ok: true, skipped: 'unknown_user' }, 200);
+
   const entitlements = new Set(event.entitlement_ids ?? []);
-  const tier: Tier =
-    event.type === 'EXPIRATION'
-      ? 'starter'
-      : (PAID_TIERS.find((t) => entitlements.has(t)) ?? 'starter');
-
+  const tier: Tier = PAID_TIERS.find((candidate) => entitlements.has(candidate)) ?? 'starter';
   const startsAt = event.purchased_at_ms != null ? new Date(event.purchased_at_ms) : undefined;
   const expiresAt =
     tier === 'starter'
-      ? null // starter never expires
+      ? null
       : event.expiration_at_ms != null
         ? new Date(event.expiration_at_ms)
         : null;
 
-  await setAccountTier(account.id, tier, { id: account.id }, 'revenuecat_webhook', {
-    startsAt,
-    expiresAt,
-  });
+  let tierApplied = eventState.tierAppliedAt !== null;
+  let tierSkipReason: 'protected_grant' | 'stale_event' | null = null;
+  if (!tierApplied) {
+    const now = new Date();
+    const currentEffective = effectiveTier(
+      account.tier as Tier,
+      account.tierExpiresAt ?? null,
+      now,
+    );
+    const comparison = compareTiers(tier, currentEffective);
+    const currentExpiryMs =
+      account.tierExpiresAt == null ? Number.POSITIVE_INFINITY : account.tierExpiresAt.getTime();
+    const incomingExpiryMs = expiresAt == null ? Number.POSITIVE_INFINITY : expiresAt.getTime();
+    const protectedGrant =
+      account.tierSource != null &&
+      PROTECTED_SOURCES.has(account.tierSource) &&
+      currentExpiryMs > now.getTime() &&
+      (comparison < 0 || (comparison === 0 && incomingExpiryMs < currentExpiryMs));
 
-  // Promo/referral settlement (SCALE-UP-PLAN §4.1): a live PAID-tier
-  // entitlement grant consumes the account's active discount grant + credits
-  // the code-owning coach's wallet. RevenueCat's webhook payload does NOT
-  // include the actual price paid (price fields are stripped), so the
-  // catalog price for the account's region is the best available proxy for
-  // commission math — an intentional approximation until real store pricing
-  // is wired through. Best-effort — never fail the webhook ack (RevenueCat
-  // retries non-2xx, and the entitlement grant above already succeeded).
-  //
-  // Only INITIAL_PURCHASE represents an actual new sale. RENEWAL,
-  // UNCANCELLATION, PRODUCT_CHANGE, SUBSCRIPTION_EXTENDED and — critically —
-  // CANCELLATION (fired the moment a user turns off auto-renew, long before
-  // the entitlement actually lapses) must never settle: they'd consume
-  // whatever discount grant happens to be active at that later moment even
-  // though it was never used toward THIS purchase. RevenueCat also delivers
-  // at-least-once, so a redelivered INITIAL_PURCHASE is deduped via
-  // revenuecatEvents before settlement ever runs a second time for it.
-  if (tier !== 'starter' && event.type === 'INITIAL_PURCHASE') {
+    if (protectedGrant) {
+      tierSkipReason = 'protected_grant';
+      await db
+        .update(accounts)
+        .set({ revenuecatEventAt: eventAt })
+        .where(
+          and(
+            eq(accounts.id, account.id),
+            or(isNull(accounts.revenuecatEventAt), lt(accounts.revenuecatEventAt, eventAt)),
+          ),
+        );
+    } else {
+      tierApplied = await setAccountTier(
+        account.id,
+        tier,
+        { id: account.id },
+        'revenuecat_webhook',
+        { startsAt, expiresAt },
+        'revenuecat',
+        event.id,
+        eventAt,
+      );
+      if (!tierApplied) tierSkipReason = 'stale_event';
+    }
+
+    await db
+      .update(revenuecatEvents)
+      .set({ tierAppliedAt: new Date() })
+      .where(eq(revenuecatEvents.eventId, event.id));
+  }
+
+  if (tier !== 'starter' && SETTLEMENT_EVENTS.has(event.type)) {
     try {
-      let alreadyProcessed = false;
-      if (event.id) {
-        const inserted = await db
-          .insert(revenuecatEvents)
-          .values({ eventId: event.id })
-          .onConflictDoNothing({ target: revenuecatEvents.eventId })
-          .returning({ eventId: revenuecatEvents.eventId });
-        alreadyProcessed = inserted.length === 0;
+      let amountMinor: number;
+      let currency: string;
+      let amountIsFinal = false;
+      if (
+        event.price_in_purchased_currency != null &&
+        event.currency != null
+      ) {
+        amountMinor = Math.round(event.price_in_purchased_currency * 100);
+        currency = event.currency;
+        amountIsFinal = true;
+      } else {
+        const catalog = await resolveCatalogAmount(account.id, tier);
+        amountMinor = catalog.amountMinor;
+        currency = catalog.currency;
       }
-      if (!alreadyProcessed) {
-        const { amountMinor, currency } = await resolveCatalogAmount(account.id, tier);
-        await settlePromoOnPurchase(account.id, tier, amountMinor, currency, 'live');
+
+      // Zero means a free trial or complimentary transaction. Keep the grant
+      // active for the first positive renewal instead of paying commission on
+      // catalog money that never moved.
+      if (amountMinor > 0) {
+        await settlePromoOnPurchase({
+          accountId: account.id,
+          mode: 'live',
+          sourceType: 'revenuecat',
+          sourceId: event.id,
+          amountMinor,
+          currency,
+          amountIsFinal,
+        });
       }
-    } catch {
-      // Best-effort — see comment above.
+    } catch (error) {
+      console.error('[revenuecat] settlement failed:', error);
+      return json({ error: 'settle_failed' }, 500);
     }
   }
 
-  return json({ ok: true, tier }, 200);
+  await db
+    .update(revenuecatEvents)
+    .set({ processedAt: new Date() })
+    .where(eq(revenuecatEvents.eventId, event.id));
+
+  return json({ ok: true, tier, tierApplied, tierSkipReason }, 200);
 }

@@ -111,3 +111,37 @@ export const VISUAL_ONLY_SLUGS = new Set([
 export function isMuscleGroup(value: string): value is MuscleGroup {
   return MUSCLE_GROUPS.some((group) => group === value);
 }
+
+/**
+ * Coarse push/pull/legs bucket for a muscle group. Drives the photographic hero
+ * selection shared by the Train and Home tabs (components/visual/*HeroImage.ts)
+ * so both pick the same photo for the same focus. Muscles with no clean bucket
+ * (abs, neck) return null → the caller's default photo.
+ */
+export type TrainingBucket = 'pull' | 'legs' | 'press';
+
+const PULL_MUSCLES: readonly MuscleGroup[] = [
+  'lats',
+  'middle back',
+  'lower back',
+  'biceps',
+  'traps',
+  'forearms',
+];
+const LEGS_MUSCLES: readonly MuscleGroup[] = [
+  'quadriceps',
+  'hamstrings',
+  'glutes',
+  'calves',
+  'adductors',
+  'abductors',
+];
+const PRESS_MUSCLES: readonly MuscleGroup[] = ['chest', 'shoulders', 'triceps'];
+
+export function trainingBucket(muscle: MuscleGroup | null | undefined): TrainingBucket | null {
+  if (!muscle) return null;
+  if (PULL_MUSCLES.includes(muscle)) return 'pull';
+  if (LEGS_MUSCLES.includes(muscle)) return 'legs';
+  if (PRESS_MUSCLES.includes(muscle)) return 'press';
+  return null;
+}

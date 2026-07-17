@@ -81,6 +81,7 @@ function ConsoleCard({
 
 export default function StaffHubScreen() {
   const staffRole = useAuth((s) => s.staffRole);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
   const authUser = useAuth((s) => s.user);
   const profileName = useProfile((s) => s.displayName);
   const signOut = useStaffSignOut();
@@ -88,8 +89,8 @@ export default function StaffHubScreen() {
   const firstName =
     (authUser?.displayName?.trim() || profileName.trim() || 'there').split(' ')[0] ?? 'there';
 
-  const showCoach = canOpenCoachConsole(staffRole);
-  const showAdmin = canOpenAdminConsole(staffRole);
+  const showCoach = canOpenCoachConsole(staffPermissions);
+  const showAdmin = canOpenAdminConsole(staffPermissions);
 
   return (
     <Screen scroll>

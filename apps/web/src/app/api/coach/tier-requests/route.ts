@@ -58,6 +58,10 @@ export async function POST(req: Request) {
     return json({ error: 'not_an_upgrade' }, 400);
   }
 
+  // Fast-path advisory check; the partial unique index
+  // `coach_tier_requests_one_pending` (coach_id WHERE status='pending') is the
+  // real guard against a concurrent double-POST (C11) — onConflictDoNothing
+  // below turns a lost race into 0 rows, mapped to the same already_pending.
   const pending = await db
     .select({ id: coachTierRequests.id })
     .from(coachTierRequests)
@@ -70,10 +74,11 @@ export async function POST(req: Request) {
   const inserted = await db
     .insert(coachTierRequests)
     .values({ coachId: principal.id, requestedTier, note: note ?? '' })
+    .onConflictDoNothing()
     .returning({ id: coachTierRequests.id });
 
   const request = inserted[0];
-  if (!request) return json({ error: 'invalid' }, 400);
+  if (!request) return json({ error: 'already_pending' }, 409);
 
   return json({ id: request.id }, 201);
 }

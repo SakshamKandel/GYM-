@@ -109,10 +109,14 @@ export async function POST(req: Request) {
   // the trial_usage row — effectiveTier() collapses it back to 'starter' at
   // the auth choke point the moment the trial lapses (no cron needed). The old
   // code wrote accounts.tier directly with NO expiry: a permanent free upgrade.
-  await setAccountTier(me.id, tier, { id: me.id }, 'buddy_trial', {
-    startsAt: now,
-    expiresAt,
-  });
+  await setAccountTier(
+    me.id,
+    tier,
+    { id: me.id },
+    'buddy_trial',
+    { startsAt: now, expiresAt },
+    'preview',
+  );
 
   return json({ ok: true, tier, expiresAt }, 201);
 }

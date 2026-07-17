@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import type { Targets, Tier } from '@gym/shared';
+import { type Permission, type Targets, type Tier } from '@gym/shared';
 import { mmkvStorage } from '../lib/mmkvStorage';
 import {
   ApiError,
@@ -16,8 +16,7 @@ import {
   type AuthUser,
 } from '../lib/api/client';
 import { signOutGoogle } from '../features/auth/components/NativeGoogleSignIn';
-import { useBuddyStore } from '../features/buddy/store';
-import { getMeStaff, type StaffRole } from '../features/staff/api';
+import { getMeStaff, type StaffIdentity, type StaffRole } from '../features/staff/api';
 import { DEFAULT_PROFILE_FIELDS, DEFAULT_TARGETS, useProfile } from './profile';
 
 /**
@@ -41,6 +40,14 @@ export interface AuthState {
    * immediately, before the refresh probe completes.
    */
   staffRole: StaffRole | null;
+  /**
+   * The signed-in staff account's granted permission keys (empty for a plain
+   * member and when signed out). Copied exactly from the server's effective
+   * role-plus-override result; an empty list can be an intentional denial.
+   * Persisted so console gating (features/staff/nav) resolves on first render,
+   * before the refresh probe re-confirms the role.
+   */
+  staffPermissions: Permission[];
 
   /** Throws ApiError ('bad_credentials' | 'invalid' | 'network'). */
   signIn: (email: string, password: string) => Promise<void>;
@@ -71,16 +78,26 @@ function adoptServerUser(user: AuthUser): void {
 }
 
 /**
- * Probe the account's staff role. Best-effort: a non-staff account resolves to
- * null, and any failure (offline, server hiccup) resolves to null too — the
- * staff console simply stays hidden rather than surfacing an error.
+ * Probe the account's staff identity — role AND the exact permission set the
+ * server derived for it (contract §4.3). Best-effort: a non-staff account
+ * resolves to `{ role: null, permissions: [] }`, and any failure (offline,
+ * server hiccup) resolves to the same — the staff console simply stays hidden
+ * rather than surfacing an error.
  */
-async function fetchStaffRole(token: string): Promise<StaffRole | null> {
+async function fetchStaffIdentity(token: string): Promise<StaffIdentity> {
   try {
     return await getMeStaff(token);
   } catch {
-    return null;
+    return { role: null, permissions: [] };
   }
+}
+
+/**
+ * The server-derived list is authoritative. Never restore a role preset here:
+ * doing so would silently undo explicit per-account denials.
+ */
+function resolvePermissions(identity: StaffIdentity): Permission[] {
+  return [...identity.permissions];
 }
 
 /** Delay before the one-shot background staff-role retry after sign-in. */
@@ -99,10 +116,13 @@ function retryStaffRoleOnce(token: string): void {
       // Signed out / switched accounts since, or the role already resolved
       // (e.g. an early refresh()) — nothing to retry.
       if (state.token !== token || state.staffRole !== null) return;
-      const role = await fetchStaffRole(token);
-      if (role === null) return;
+      const identity = await fetchStaffIdentity(token);
+      if (identity.role === null) return;
       if (useAuth.getState().token !== token) return;
-      useAuth.setState({ staffRole: role });
+      useAuth.setState({
+        staffRole: identity.role,
+        staffPermissions: resolvePermissions(identity),
+      });
     })();
   }, STAFF_ROLE_RETRY_MS);
 }
@@ -132,11 +152,39 @@ async function establishSession(
   set: (partial: Partial<AuthState>) => void,
   get: () => AuthState,
 ): Promise<void> {
-  set({ status: 'signedIn', token: session.token, user: session.user });
+  // Account switch OVER a live session (defect G1): signing in while another
+  // account is still resident used to skip clearAccountState — so coach notes,
+  // server-reviewed targets and the previous staffRole bled into the new
+  // account, and the old server token was never revoked. Detect the token
+  // change up front and wipe the previous account's out-of-store state +
+  // revoke its token before adopting the new session. Nulling staffRole here
+  // also prevents transiently pairing the OLD role with the NEW token until the
+  // probe below resolves. (A fresh sign-in from signedOut has no prior token,
+  // so this is a no-op then.)
+  const previousToken = get().token;
+  if (previousToken && previousToken !== session.token) {
+    clearAccountState();
+    // Best-effort, fire-and-forget revoke of the old token — the new session is
+    // independent, so sign-in must never block (or fail) on this.
+    void (async () => {
+      try {
+        await apiLogout(previousToken);
+      } catch {
+        // Offline / server hiccup — the old server session expires on its own.
+      }
+    })();
+  }
+  set({
+    status: 'signedIn',
+    token: session.token,
+    user: session.user,
+    staffRole: null,
+    staffPermissions: [],
+  });
   adoptServerUser(session.user);
-  const [, staffRole] = await Promise.all([
+  const [, identity] = await Promise.all([
     restoreOrBackupProfile(session.token, session.user.id),
-    fetchStaffRole(session.token),
+    fetchStaffIdentity(session.token),
   ]);
   // Re-adopt after the restore: a fresh-account reset (or a stale blob) may
   // have wiped the tier/name adopted above; this is upgrade-only, so it's a
@@ -145,8 +193,8 @@ async function establishSession(
   // The session changed while the calls were in flight (sign-out or account
   // switch) — a late result must not touch the new session's state.
   if (get().token !== session.token) return;
-  set({ staffRole });
-  if (staffRole === null) retryStaffRoleOnce(session.token);
+  set({ staffRole: identity.role, staffPermissions: resolvePermissions(identity) });
+  if (identity.role === null) retryStaffRoleOnce(session.token);
 }
 
 /**
@@ -238,11 +286,9 @@ async function restoreOrBackupProfile(token: string, accountId: string): Promise
 /**
  * Wipe account-derived state OUTSIDE the auth store. Runs on both explicit
  * sign-out and the silent 401 sign-out so the next account never sees the
- * previous one's data — the buddy cache holds other users' emails and must
- * never survive an account switch; the profile keeps only device-local setup.
+ * previous one's data — the profile keeps only device-local setup.
  */
 function clearAccountState(): void {
-  useBuddyStore.getState().clear();
   useProfile.getState().resetAccountFields();
   // Coach-reviewed targets + coach notes are account data — never let them
   // survive into the next sign-in on this device.
@@ -260,6 +306,7 @@ export const useAuth = create<AuthState>()(
       token: null,
       user: null,
       staffRole: null,
+      staffPermissions: [],
 
       signIn: async (email, password) => {
         const session = await login({ email: email.trim().toLowerCase(), password });
@@ -289,7 +336,13 @@ export const useAuth = create<AuthState>()(
         // old order — await the network, then clear — could hang the UI on
         // "Signing out…" and lose the clear entirely if the app was killed.)
         clearAccountState();
-        set({ status: 'signedOut', token: null, user: null, staffRole: null });
+        set({
+          status: 'signedOut',
+          token: null,
+          user: null,
+          staffRole: null,
+          staffPermissions: [],
+        });
         if (token) {
           // Fired before the Google await below so a hung native call can
           // never starve the server-side logout.
@@ -329,17 +382,18 @@ export const useAuth = create<AuthState>()(
           if (!profileRestoreSettled.has(user.id)) {
             void restoreOrBackupProfile(token, user.id);
           }
-          // Re-probe staff role so a mid-session grant/revoke is reflected.
-          // Probe directly (not via fetchStaffRole, which collapses failures to
-          // null): a transient error must leave the persisted staffRole
+          // Re-probe staff identity so a mid-session grant/revoke (role AND the
+          // server's permission set) is reflected. Probe directly (not via
+          // fetchStaffIdentity, which collapses failures to a null identity): a
+          // transient error must leave the persisted staffRole/permissions
           // untouched (offline-first) rather than hide the staff console. Only a
           // resolved probe — confirmed staff OR confirmed non-staff — overwrites.
           try {
-            const role = await getMeStaff(token);
+            const identity = await getMeStaff(token);
             if (get().token !== token) return;
-            set({ staffRole: role });
+            set({ staffRole: identity.role, staffPermissions: resolvePermissions(identity) });
           } catch {
-            // Transient probe failure — keep the persisted staffRole.
+            // Transient probe failure — keep the persisted staffRole/permissions.
           }
         } catch (err) {
           // A stale failure must not touch the CURRENT session either — a
@@ -356,7 +410,13 @@ export const useAuth = create<AuthState>()(
               // Session expired or revoked server-side — quietly sign out and
               // clear account-derived state so no stale identity lingers.
               clearAccountState();
-              set({ status: 'signedOut', token: null, user: null, staffRole: null });
+              set({
+                status: 'signedOut',
+                token: null,
+                user: null,
+                staffRole: null,
+                staffPermissions: [],
+              });
             }
           }
           // Network errors keep the signed-in state — the app is offline-first.

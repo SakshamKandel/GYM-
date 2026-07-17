@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -15,20 +15,13 @@ import {
   SectionLabel,
 } from '../../../components/ui';
 import { useAuth } from '../../../state/auth';
+import { type Permission } from '@gym/shared';
 import {
   type AdminOverview,
   getAdminOverview,
   toStaffError,
 } from '../../../features/staff/api';
-import {
-  canManagePromos,
-  canReviewApplications,
-  canReviewPayments,
-  canReviewSupport,
-  isTopAdmin,
-  pushStaff,
-  STAFF_ROUTES,
-} from '../../../features/staff/nav';
+import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import {
   StaffHeaderAction,
   StaffSignOutDialog,
@@ -52,76 +45,109 @@ interface NavRow {
   title: string;
   blurb: string;
   route: string;
-  /** When present, the row is hidden unless this returns true for the caller's role. */
-  visible?: (role: string | null) => boolean;
+  /**
+   * The permission key that unlocks this row (RBAC design §1.4 / §4.10). The
+   * row is hidden unless the server-provided effective list contains `perm`,
+   * including account-specific grants and denials.
+   * Every row MUST carry one: an ungated card walks a role without the
+   * matching permission straight into a dead-end 403 (defect G14).
+   */
+  perm: Permission;
 }
 
+// Three of these routes (pricing/wallets/tier-requests) are NEW parity
+// screens built by the WP8b package.
 const NAV_ROWS: NavRow[] = [
   {
     icon: 'people',
     title: 'Members',
     blurb: 'Search, change tier, suspend, assign a coach.',
     route: STAFF_ROUTES.adminMembers,
+    perm: 'members.read',
   },
   {
     icon: 'barbell',
     title: 'Coaches',
     blurb: 'The coach pool and their active client load.',
     route: STAFF_ROUTES.adminCoaches,
+    perm: 'coach.assign',
   },
   {
     icon: 'videocam',
     title: 'Content',
     blurb: 'The plan-video library.',
     route: STAFF_ROUTES.adminVideos,
+    perm: 'content.manage',
   },
   {
     icon: 'card',
     title: 'Subscriptions',
     blurb: 'Tier overrides + recent changes.',
     route: STAFF_ROUTES.adminSubscriptions,
+    perm: 'subscription.override',
   },
   {
     icon: 'person-add',
     title: 'Applications',
     blurb: 'Review self-serve coach applications.',
     route: STAFF_ROUTES.adminApplications,
-    visible: canReviewApplications,
+    perm: 'coach.application.review',
+  },
+  {
+    icon: 'trending-up',
+    title: 'Tier requests',
+    blurb: 'Coach seniority upgrade requests awaiting review.',
+    route: STAFF_ROUTES.adminTierRequests,
+    perm: 'coach.application.review',
   },
   {
     icon: 'wallet',
     title: 'Payments',
     blurb: 'Nepal manual payment receipts awaiting review.',
     route: STAFF_ROUTES.adminPayments,
-    visible: canReviewPayments,
+    perm: 'payments.review',
   },
   {
     icon: 'pricetag',
     title: 'Promo codes',
     blurb: 'House codes, coach codes, redemption stats.',
     route: STAFF_ROUTES.adminPromos,
-    visible: canManagePromos,
+    perm: 'promo.manage',
+  },
+  {
+    icon: 'cash',
+    title: 'Pricing',
+    blurb: 'Regional tier prices (NP NPR / INTL USD).',
+    route: STAFF_ROUTES.adminPricing,
+    perm: 'pricing.manage',
+  },
+  {
+    icon: 'briefcase',
+    title: 'Coach wallets',
+    blurb: 'Commission balances, adjustments and payouts.',
+    route: STAFF_ROUTES.adminWallets,
+    perm: 'wallet.manage',
   },
   {
     icon: 'chatbubble-ellipses',
     title: 'Support',
     blurb: 'Reply to support tickets from any member.',
     route: STAFF_ROUTES.adminSupport,
-    visible: canReviewSupport,
+    perm: 'support.thread.read',
   },
   {
     icon: 'shield-checkmark',
     title: 'Roles',
     blurb: 'Grant or revoke staff access.',
     route: STAFF_ROUTES.adminStaff,
-    visible: isTopAdmin,
+    perm: 'roles.grant',
   },
   {
     icon: 'receipt',
     title: 'Audit',
     blurb: 'Every privileged action, newest first.',
     route: STAFF_ROUTES.adminAudit,
-    visible: isTopAdmin,
+    perm: 'audit.read',
   },
 ];
 
@@ -141,9 +167,9 @@ function HeroStat({ label, value }: { label: string; value: number }) {
 
 export default function AdminHomeScreen() {
   const token = useAuth((s) => s.token);
-  const staffRole = useAuth((s) => s.staffRole);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
   const signOut = useStaffSignOut();
-  const navRows = NAV_ROWS.filter((row) => !row.visible || row.visible(staffRole));
+  const navRows = NAV_ROWS.filter((row) => staffCan(staffPermissions, row.perm));
 
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -165,9 +191,14 @@ export default function AdminHomeScreen() {
     }
   }, [token]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // Refresh on every focus, not just on mount: the hero stats
+  // (members/coaches/assignments/videos) go stale after the admin drills into
+  // Members/Payments/Content, performs a mutation, and navigates back here.
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   function goBack(): void {
     if (router.canGoBack()) router.back();

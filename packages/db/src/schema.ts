@@ -3,6 +3,7 @@
  * Device SQLite mirrors the log tables; sync queue reconciles (last-write-wins,
  * server timestamp authoritative).
  */
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   date,
@@ -11,6 +12,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -280,6 +282,23 @@ export const accounts = pgTable('accounts', {
   //    the auth choke point — so an expired Elite loses access with NO cron.
   tierStartedAt: timestamp('tier_started_at', { withTimezone: true }),
   tierExpiresAt: timestamp('tier_expires_at', { withTimezone: true }),
+  // Provenance of the CURRENT tier grant — lets the RevenueCat webhook avoid
+  // clobbering an admin/manual Nepal grant (B4): the webhook only downgrades
+  // tiers it granted ('revenuecat'), skipping 'manual_payment'/'console' while
+  // the window is still future. 'preview' = signed-out/local preview grant,
+  // 'coach' = coach-initiated client comp. Nullable — legacy rows predate it.
+  tierSource: text('tier_source', {
+    enum: ['console', 'manual_payment', 'revenuecat', 'preview', 'coach'],
+  }),
+  // Natural id of the grant currently represented by tierSource. Manual
+  // payments store payment_requests.id; RevenueCat stores event.id. Refunds
+  // and webhook retries use it to prove they still own the live tier before
+  // changing it.
+  tierSourceId: text('tier_source_id'),
+  // Latest RevenueCat event generation time observed for this account. Kept
+  // independently of tierSource so a protected manual/console grant can ignore
+  // delayed store events after its window ends.
+  revenuecatEventAt: timestamp('revenuecat_event_at', { withTimezone: true }),
   // 'suspended' kills every session for this account at the auth choke point
   // (userForToken filters on status='active'). Defaulted so existing rows and
   // the mobile GET/POST are unaffected.
@@ -1094,6 +1113,12 @@ export const coachApplications = pgTable(
   (t) => [
     index('coach_applications_account_created').on(t.accountId, t.createdAt),
     index('coach_applications_status').on(t.status, t.createdAt),
+    // At most ONE pending application per account (C4): closes the check-then-
+    // insert race so a stale duplicate can't later clobber a live coach profile.
+    // Route uses onConflictDoNothing→409 'already_open'.
+    uniqueIndex('coach_applications_one_pending')
+      .on(t.accountId)
+      .where(sql`${t.status} = 'pending'`),
   ],
 );
 
@@ -1120,7 +1145,14 @@ export const coachTierRequests = pgTable(
     decidedAt: timestamp('decided_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('coach_tier_requests_coach_status').on(t.coachId, t.status, t.createdAt)],
+  (t) => [
+    index('coach_tier_requests_coach_status').on(t.coachId, t.status, t.createdAt),
+    // At most ONE pending tier request per coach (C11): closes the duplicate-
+    // pending race on the coach POST. Route uses onConflictDoNothing→409.
+    uniqueIndex('coach_tier_requests_one_pending')
+      .on(t.coachId)
+      .where(sql`${t.status} = 'pending'`),
+  ],
 );
 
 /**
@@ -1175,6 +1207,9 @@ export const promoRedemptions = pgTable(
     purchaseAmountMinor: integer('purchase_amount_minor'),
     currency: text('currency'),
     commissionMinor: integer('commission_minor'),
+    // Stamped atomically with promo_codes.redemption_count. A retry can repair
+    // a missing discount grant without incrementing the cap a second time.
+    countedAt: timestamp('counted_at', { withTimezone: true }),
     appliedAt: timestamp('applied_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1207,7 +1242,15 @@ export const discountGrants = pgTable(
     consumedAt: timestamp('consumed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('discount_grants_account_status').on(t.accountId, t.status)],
+  (t) => [
+    index('discount_grants_account_status').on(t.accountId, t.status),
+    // At most ONE active grant per account (E6): with zero active grants, two
+    // concurrent redemptions would otherwise both insert 'active' (nothing to
+    // lock). The redeem path conflict-re-runs against this constraint.
+    uniqueIndex('discount_grants_one_active')
+      .on(t.accountId)
+      .where(sql`${t.status} = 'active'`),
+  ],
 );
 
 /**
@@ -1256,6 +1299,11 @@ export const walletLedger = pgTable(
  */
 export const revenuecatEvents = pgTable('revenuecat_events', {
   eventId: text('event_id').primaryKey(),
+  accountId: text('account_id').references(() => accounts.id, { onDelete: 'set null' }),
+  type: text('type').notNull().default('legacy'),
+  eventAt: timestamp('event_at', { withTimezone: true }).notNull().defaultNow(),
+  tierAppliedAt: timestamp('tier_applied_at', { withTimezone: true }),
+  processedAt: timestamp('processed_at', { withTimezone: true }),
   receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -1308,7 +1356,40 @@ export const paymentRequests = pgTable(
     receiptUrl: text('receipt_url').notNull(),
     note: text('note'),
     promoCodeId: text('promo_code_id').references(() => promoCodes.id, { onDelete: 'set null' }),
-    status: text('status', { enum: ['pending', 'approved', 'rejected'] })
+    // --- Settlement snapshot (B3): pricing/discount context frozen at SUBMIT so
+    // approval settles deterministically regardless of later grant/catalog drift.
+    // discountGrantId is the specific grant reserved for THIS request (released
+    // on reject, settled on approve); discountPct/baseAmountMinor record the
+    // catalog price and applied discount so the approver never re-resolves LIVE
+    // state. All nullable — a request with no promo leaves them null.
+    discountGrantId: text('discount_grant_id').references(() => discountGrants.id, {
+      onDelete: 'set null',
+    }),
+    discountPct: integer('discount_pct'),
+    baseAmountMinor: integer('base_amount_minor'),
+    // --- Idempotent approval (B2): stamped once each side effect lands so the
+    // decide endpoint can re-run a partially-settled 'approved' row without
+    // double-granting or double-crediting. tierGrantedAt = tier window applied;
+    // settledAt = wallet/promo settlement done.
+    tierGrantedAt: timestamp('tier_granted_at', { withTimezone: true }),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+    // --- Pre-approval tier window snapshot (B1/B2 + P0-1). Captured at the
+    // instant the request flips pending→approved, from the member's LIVE tier
+    // BEFORE the grant mutates it. The approve handler re-derives the grant
+    // window from THIS frozen prior (never the live account a partial-failure
+    // retry already mutated), so a re-run reproduces the identical window
+    // instead of EXTENDing on top of the tier it already granted; the refund
+    // route restores this exact window instead of collapsing a separately-paid
+    // tier to starter. Both nullable — legacy rows and no-op grants leave null.
+    priorTier: text('prior_tier', { enum: ['starter', 'silver', 'gold', 'elite'] }),
+    priorExpiresAt: timestamp('prior_expires_at', { withTimezone: true }),
+    priorTierSource: text('prior_tier_source', {
+      enum: ['console', 'manual_payment', 'revenuecat', 'preview', 'coach'],
+    }),
+    priorTierSourceId: text('prior_tier_source_id'),
+    // 'refunded' (P0-1): approved→refunded rolls the tier back + posts a negative
+    // wallet adjustment + reverses the promo redemption (see refund route).
+    status: text('status', { enum: ['pending', 'approved', 'rejected', 'refunded'] })
       .notNull()
       .default('pending'),
     reviewNote: text('review_note'),
@@ -1316,7 +1397,16 @@ export const paymentRequests = pgTable(
     decidedAt: timestamp('decided_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('payment_requests_status_created').on(t.status, t.createdAt)],
+  (t) => [
+    index('payment_requests_status_created').on(t.status, t.createdAt),
+    uniqueIndex('payment_requests_receipt').on(t.receiptUrl),
+    uniqueIndex('payment_requests_one_pending_account')
+      .on(t.accountId)
+      .where(sql`${t.status} = 'pending'`),
+    uniqueIndex('payment_requests_one_pending_grant')
+      .on(t.discountGrantId)
+      .where(sql`${t.status} = 'pending' and ${t.discountGrantId} is not null`),
+  ],
 );
 
 /**
@@ -1462,4 +1552,139 @@ export const progressPhotos = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('progress_photos_account_taken').on(t.accountId, t.takenOn)],
+);
+
+/**
+ * Support-thread lifecycle (P1-11). Support threads themselves are IMPLICIT —
+ * they are the group of `coach_messages` rows with kind='support' for an
+ * account (there is no threads table). This side-car row carries the mutable
+ * lifecycle state per account so admins can resolve and assign a thread without
+ * touching the append-only message history. A row is created lazily on the
+ * first assign/resolve; absence means an implicitly-'open' thread. `unread`
+ * stays the work signal, but a 'resolved' thread leaves the active queue.
+ */
+export const supportThreadStates = pgTable(
+  'support_thread_states',
+  {
+    // PK = the account whose support thread this is (one thread per account).
+    accountId: text('account_id')
+      .primaryKey()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    status: text('status', { enum: ['open', 'resolved'] })
+      .notNull()
+      .default('open'),
+    // The staff account this thread is currently assigned to (null = unassigned).
+    // set null (not cascade) so removing a staff member leaves the thread intact
+    // and merely unassigned.
+    assignedTo: text('assigned_to').references(() => accounts.id, { onDelete: 'set null' }),
+    resolvedBy: text('resolved_by').references(() => accounts.id, { onDelete: 'set null' }),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Inbox filters: open vs resolved, most-recently-touched first.
+    index('support_thread_states_status_updated').on(t.status, t.updatedAt),
+    // "Threads assigned to me" view.
+    index('support_thread_states_assigned').on(t.assignedTo),
+  ],
+);
+
+/**
+ * Coach-initiated payout requests (P1-12). A coach requests a withdrawal of
+ * their wallet balance (in a single currency, over a minimum threshold checked
+ * in the route); an admin approves → mark 'paid' after recording the actual
+ * disbursement, which posts a negative `wallet_ledger` payout entry with the
+ * same `disbursementRef`. The request itself is a workflow record (cascades
+ * with the coach); the money movement lives in the append-only wallet_ledger.
+ * One PENDING request per coach is enforced by the partial unique index.
+ */
+export const coachPayoutRequests = pgTable(
+  'coach_payout_requests',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    currency: text('currency').notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    status: text('status', { enum: ['pending', 'approved', 'rejected', 'paid'] })
+      .notNull()
+      .default('pending'),
+    note: text('note'),
+    // Bank/eSewa/Khalti transaction reference recorded when the payout is
+    // actually disbursed — links the request to its wallet_ledger payout row.
+    disbursementRef: text('disbursement_ref'),
+    decidedBy: text('decided_by').references(() => accounts.id, { onDelete: 'set null' }),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('coach_payout_requests_coach_status').on(t.coachId, t.status),
+    // Admin queue: pending-first, oldest-first.
+    index('coach_payout_requests_status_requested').on(t.status, t.requestedAt),
+    // At most ONE pending payout request per coach.
+    uniqueIndex('coach_payout_requests_one_pending')
+      .on(t.coachId)
+      .where(sql`${t.status} = 'pending'`),
+  ],
+);
+
+/**
+ * Per-account permission overrides (P2-20). Layered on top of the role preset
+ * inside `requirePermission` (apps/web/src/lib/authz.ts): allow=true GRANTS an
+ * extra permission to the account, allow=false STRIPS a preset permission.
+ * super_admin is a safety floor — overrides never apply to it. Composite PK
+ * (accountId, perm) so each perm has at most one override per account (upserted).
+ * `perm` is free text (a Permission key from @gym/shared) rather than an enum so
+ * new permission keys never require a schema migration.
+ */
+export const adminPermissionOverrides = pgTable(
+  'admin_permission_overrides',
+  {
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    perm: text('perm').notNull(), // a Permission key (@gym/shared)
+    allow: boolean('allow').notNull(), // true = grant extra, false = strip preset
+    grantedBy: text('granted_by').references(() => accounts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.perm] }),
+    // requirePermission fetches all overrides for one account per request.
+    index('admin_permission_overrides_account').on(t.accountId),
+  ],
+);
+
+/**
+ * Admin-initiated password reset tokens (P1-7). No admin password capability
+ * existed before; this lets a `members.manage_credentials` holder mint a
+ * single-use, time-boxed reset token. Only the SHA-256 hash of the token is
+ * stored (the plaintext is handed to the member out of band); `usedAt` marks
+ * consumption so a token is redeemable once. `createdBy` is the staff actor
+ * (null for any future self-serve path).
+ */
+export const passwordResetTokens = pgTable(
+  'password_reset_tokens',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(), // SHA-256 of the reset token
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdBy: text('created_by').references(() => accounts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Redemption looks the token up by its hash (constant-time equality upstream).
+    uniqueIndex('password_reset_tokens_hash').on(t.tokenHash),
+    // "Outstanding tokens for this account" + cascade support.
+    index('password_reset_tokens_account').on(t.accountId),
+  ],
 );

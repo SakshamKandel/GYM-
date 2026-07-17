@@ -7,7 +7,7 @@ import { useAuth } from '../../state/auth';
 
 /**
  * Badges store — the caller's own awarded badges, cached locally so the
- * Badges screen and the profile "N of 44 earned" header render instantly
+ * Badges screen and the profile "N of 42 earned" header render instantly
  * (offline-first) and refresh from the server on hydrate.
  *
  * `newlyEarnedIds` is a transient (non-persisted) diff computed on every

@@ -7,13 +7,13 @@ import { useRef, useState, type ComponentProps } from 'react';
 import {
   AppText,
   Button,
-  Card,
   ConfirmDialog,
   EmptyState,
   enterDown,
   enterUp,
   FLOATING_TAB_SPACE,
   IconChip,
+  PhotoHero,
   PressableScale,
   Screen,
   ScreenHeader,
@@ -22,6 +22,7 @@ import {
   Skeleton,
   Tag,
 } from '../../components/ui';
+import { EmptyArt, trainHeroImage } from '../../components/visual';
 import { CoachWorkoutsSection } from '../../features/training/components/CoachWorkoutsSection';
 import { WorkoutPreviewSheet } from '../../features/training/components/WorkoutPreviewSheet';
 import { MuscleFocusSection, muscleFocusForWorkout } from '../../features/training/components/MuscleFocusSection';
@@ -46,17 +47,13 @@ const GOAL_ICONS: Record<GoalType, ComponentProps<typeof Ionicons>['name']> = {
   fat_loss: 'flame',
 };
 
-/** Loading-skeleton height standing in for the red hero block. */
-const HERO_HEIGHT = 180;
+/** Photo-hero height — tall enough for tag + title + meta + CTA over the
+ * bottom scrim, with breathing photo above. The skeleton matches it. */
+const HERO_PHOTO_HEIGHT = 252;
 
 const styles = StyleSheet.create({
   /** Extra air around the hero block (brief §3: up to 28 around the hero). */
   hero: { marginTop: spacing.xl },
-  heroContent: { gap: spacing.sm },
-  heroTitle: { textTransform: 'uppercase' },
-  /** Secondary line on the red block: onBlock ink, dimmed — never white-on-red. */
-  heroMeta: { opacity: 0.8 },
-  heroButton: { marginTop: spacing.sm },
   /** Outlined meta pill for the header chips row (brief §6 — chips MAY have borders). */
   metaChip: {
     minHeight: 34,
@@ -266,72 +263,50 @@ export default function TrainScreen() {
         </AppText>
       </Animated.View>
 
-      {/* Hero: THE one red block on this screen — resume if a session is live,
-          otherwise the next plan workout. Black ink + black pill CTA on red. */}
+      {/* Hero: a full-bleed training photo (bundled stock set, picked by the
+          workout's muscle focus) with the screen's ONE primary red CTA over
+          the sanctioned bottom scrim. Dark-tone photos only — white text
+          stays ≥4.5:1 inside the scrim. Resume if a session is live,
+          otherwise the next plan workout. */}
       <Animated.View entering={enterUp(0)}>
-        {activeWorkout || nextWorkout ? (
-          <Card variant="red" style={styles.hero}>
-            <View style={styles.heroContent}>
-              {activeWorkout ? (
-                <>
-                  <Tag label="In progress" variant="onBlock" />
-                  <AppText
-                    variant="display"
-                    color={colors.onBlock}
-                    style={styles.heroTitle}
-                    numberOfLines={1}
-                  >
-                    {activeWorkout.name.toUpperCase()}
-                  </AppText>
-                  <AppText variant="caption" color={colors.onBlock} style={styles.heroMeta}>
-                    Pick up where you left off
-                  </AppText>
-                  <Button
-                    label="Resume workout"
-                    variant="onBlock"
-                    onPress={() => pushPath('/workout')}
-                    style={styles.heroButton}
-                  />
-                </>
-              ) : nextWorkout ? (
-                <>
-                  <Tag label="Up next" variant="onBlock" />
-                  <AppText
-                    variant="display"
-                    color={colors.onBlock}
-                    style={styles.heroTitle}
-                    numberOfLines={1}
-                  >
-                    {nextWorkout.name}
-                  </AppText>
-                  <AppText
-                    variant="caption"
-                    color={colors.onBlock}
-                    tabular
-                    numberOfLines={1}
-                    style={styles.heroMeta}
-                  >
-                    {`${plan?.name ?? 'Your plan'} · ${nextWorkout.exercises.length} exercises · ~${estimateWorkoutMinutes(nextWorkout)} min`}
-                  </AppText>
-                  <Button
-                    label="Start workout"
-                    variant="onBlock"
-                    onPress={() => pushPath(`/workout/start?planWorkoutId=${nextWorkout.id}`)}
-                    style={styles.heroButton}
-                  />
-                </>
-              ) : null}
-            </View>
-          </Card>
+        {activeWorkout ? (
+          <PhotoHero
+            source={trainHeroImage(initialMuscleFocus, true)}
+            height={HERO_PHOTO_HEIGHT}
+            recyclingKey="train-hero-active"
+            accessibilityLabel="Training photo"
+            chip={{ label: 'In progress' }}
+            title={activeWorkout.name}
+            caption="Pick up where you left off"
+            cta={{ label: 'Resume workout', onPress: () => pushPath('/workout') }}
+            style={styles.hero}
+          />
+        ) : nextWorkout ? (
+          <PhotoHero
+            source={trainHeroImage(initialMuscleFocus, false)}
+            height={HERO_PHOTO_HEIGHT}
+            recyclingKey={`train-hero-${initialMuscleFocus}`}
+            accessibilityLabel="Training photo"
+            chip={{ label: 'Up next' }}
+            title={nextWorkout.name}
+            caption={`${plan?.name ?? 'Your plan'} · ${nextWorkout.exercises.length} exercises · ~${estimateWorkoutMinutes(nextWorkout)} min`}
+            captionTabular
+            cta={{
+              label: 'Start workout',
+              onPress: () => pushPath(`/workout/start?planWorkoutId=${nextWorkout.id}`),
+            }}
+            style={styles.hero}
+          />
         ) : loaded ? (
           <EmptyState
             icon="barbell-outline"
             title="No plan selected"
             body="Pick a plan below to get started."
+            art={<EmptyArt variant="train" />}
             style={styles.hero}
           />
         ) : (
-          <Skeleton height={HERO_HEIGHT} radius={radius.block} style={styles.hero} />
+          <Skeleton height={HERO_PHOTO_HEIGHT} radius={radius.block} style={styles.hero} />
         )}
       </Animated.View>
 

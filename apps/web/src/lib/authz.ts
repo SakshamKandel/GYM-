@@ -1,5 +1,10 @@
-import { admins, auditLog, coachAssignments } from '@gym/db';
-import { canManageRole } from '@gym/shared';
+import { adminPermissionOverrides, admins, auditLog, coachAssignments } from '@gym/db';
+import {
+  ALL_PERMISSIONS,
+  canManageRole,
+  effectivePermissionsForRole,
+  type Permission,
+} from '@gym/shared';
 import { and, eq } from 'drizzle-orm';
 import { bearerToken, staffForToken, type StaffRole } from './auth';
 import { getDb } from './db';
@@ -9,9 +14,14 @@ import { staffTokenFromCookie } from './staffSession';
 /**
  * Guard layer mirroring the existing inline `if (!user) return json(...)`
  * pattern in the API routes: each guard returns EITHER a Principal to continue
- * with, OR a Response to early-return. Roles are HARDCODED here (minimal CTO
- * cut) — no data-driven permission engine. Fail closed everywhere.
+ * with, OR a Response to early-return. The role-to-permission matrix and
+ * override merge live in @gym/shared, and every guard delegates to that single
+ * implementation. Fail closed everywhere.
  */
+
+// Re-exported so existing route call sites can keep importing the Permission
+// type from '@/lib/authz' unchanged; the canonical union lives in @gym/shared.
+export type { Permission };
 
 export interface Principal {
   id: string;
@@ -29,65 +39,6 @@ export interface AuditActor {
   id: string;
 }
 
-/** Every permission the console understands. Extend the switch below to grant. */
-export type Permission =
-  | 'coach.message.user' // author a 'coach' reply into a user's thread
-  | 'coach.user.read' // read an assigned user's coach threads / profile
-  | 'content.video.publish' // publish/attach a plan video
-  | 'members.read' // read the member directory
-  | 'coach.assign' // assign a coach to a user
-  | 'members.suspend' // suspend/reactivate a member account
-  | 'subscription.override' // override a member's subscription tier
-  | 'audit.read' // read the audit log
-  | 'roles.grant' // grant/revoke staff roles
-  | 'support.thread.read' // list/read support threads (org-wide, no ownership scoping)
-  | 'support.thread.reply' // reply into a support thread
-  | 'coach.application.review' // approve/reject coach enrollment applications + tier requests
-  | 'payments.review' // approve/reject manual payment requests
-  | 'promo.manage' // create/toggle promo codes
-  | 'pricing.manage' // edit regional tier prices
-  | 'wallet.manage' // view all wallets, record adjustments/payouts
-  | 'coach.wallet.read'; // a coach reading their OWN wallet (route self-scopes)
-
-/**
- * Hardcoded role → permission matrix. super_admin AND main_admin bypass all —
- * main_admin holds the full permission set; its restriction is RANK, not
- * permissions (it may never target a peer/higher staff account — see
- * requireOutranks + canManageRole from @gym/shared). Anything not listed is
- * denied (fail closed).
- */
-function roleHasPermission(role: StaffRole, perm: Permission): boolean {
-  if (role === 'super_admin' || role === 'main_admin') return true;
-  switch (role) {
-    case 'coach':
-      return (
-        perm === 'coach.message.user' ||
-        perm === 'coach.user.read' ||
-        perm === 'content.video.publish' ||
-        perm === 'coach.wallet.read'
-      );
-    case 'content_admin':
-      return perm === 'content.video.publish';
-    case 'member_admin':
-      return (
-        perm === 'members.read' ||
-        perm === 'coach.assign' ||
-        perm === 'members.suspend' ||
-        perm === 'subscription.override' ||
-        perm === 'coach.application.review' ||
-        perm === 'payments.review'
-      );
-    case 'support_admin':
-      return (
-        perm === 'members.read' ||
-        perm === 'support.thread.read' ||
-        perm === 'support.thread.reply'
-      );
-    default:
-      return false;
-  }
-}
-
 /**
  * Resolves the caller to a staff Principal, or a 401/403 Response. Accepts
  * EITHER the mobile/API `Authorization: Bearer` token OR the browser console's
@@ -102,17 +53,143 @@ export async function requireStaff(req: Request): Promise<Principal | Response> 
   return { id: staff.user.id, email: staff.user.email, role: staff.role };
 }
 
-/** Like requireStaff, then enforces a specific permission (fail closed). */
+/**
+ * All per-account permission overrides as a `perm → allow` map (one query).
+ * allow=true grants an EXTRA permission; allow=false STRIPS a preset one. A
+ * missing entry means "defer to the role preset". Exported so the future staff
+ * override-management routes read the same shape they write.
+ *
+ * Throws on DB error so callers fail closed. Falling back to the role preset
+ * could restore a permission that an unread explicit deny removed.
+ */
+export async function getAccountOverrides(
+  accountId: string,
+): Promise<Map<Permission, boolean>> {
+  const rows = await getDb()
+    .select({ perm: adminPermissionOverrides.perm, allow: adminPermissionOverrides.allow })
+    .from(adminPermissionOverrides)
+    .where(eq(adminPermissionOverrides.accountId, accountId));
+  const map = new Map<Permission, boolean>();
+  for (const row of rows) map.set(row.perm as Permission, row.allow);
+  return map;
+}
+
+/**
+ * Effective permission = role preset merged with per-account overrides.
+ *  - super_admin is a SAFETY FLOOR: it holds everything and can NEVER be
+ *    stripped (overrides do not apply to it) — so a misconfigured/hostile
+ *    override can't lock the top admin out of the console.
+ *  - allow=true grants a permission the preset lacks; allow=false strips one it
+ *    has (main_admin included — only super_admin is protected).
+ *  - No override for `perm` → the preset decides.
+ * Pure — takes the already-fetched override map so enforcement stays one query.
+ */
+/**
+ * The complete effective permission set for one staff principal. Role presets
+ * and per-account overrides are merged once, so callers that need to check
+ * several capabilities (overview/nav/content OR-guards) cannot accidentally
+ * bypass an explicit deny by falling back to role presets.
+ *
+ * Override lookup errors intentionally propagate. Returning preset permissions
+ * when a deny row cannot be read would widen access during a database failure;
+ * server routes catch this and return 503, while server components fail without
+ * rendering protected data.
+ */
+export async function effectivePermissionSet(
+  principal: Principal,
+): Promise<ReadonlySet<Permission>> {
+  if (principal.role === 'super_admin') return new Set(ALL_PERMISSIONS);
+  const overrides = await getAccountOverrides(principal.id);
+  return new Set(effectivePermissionsForRole(principal.role, overrides));
+}
+
+/**
+ * Upsert a single per-account permission override (grant or strip). For future
+ * `permissions.override`-gated staff routes; kept here so read/write share the
+ * override table access. Best-effort audit is the caller's responsibility.
+ */
+export async function setPermissionOverride(
+  accountId: string,
+  perm: Permission,
+  allow: boolean,
+  grantedBy: string | null,
+): Promise<void> {
+  await getDb()
+    .insert(adminPermissionOverrides)
+    .values({ accountId, perm, allow, grantedBy })
+    .onConflictDoUpdate({
+      target: [adminPermissionOverrides.accountId, adminPermissionOverrides.perm],
+      set: { allow, grantedBy, createdAt: new Date() },
+    });
+}
+
+/** Remove a per-account override, reverting `perm` to the role preset. */
+export async function clearPermissionOverride(
+  accountId: string,
+  perm: Permission,
+): Promise<void> {
+  await getDb()
+    .delete(adminPermissionOverrides)
+    .where(
+      and(
+        eq(adminPermissionOverrides.accountId, accountId),
+        eq(adminPermissionOverrides.perm, perm),
+      ),
+    );
+}
+
+/**
+ * Like requireStaff, then enforces a specific permission (fail closed), merging
+ * any per-account overrides. super_admin short-circuits BEFORE the override
+ * query (zero extra queries, never strippable). For everyone else exactly one
+ * override query runs; a lookup failure returns 503 so an unread explicit deny
+ * can never be widened back to the role preset.
+ */
 export async function requirePermission(
   req: Request,
   perm: Permission,
 ): Promise<Principal | Response> {
   const principal = await requireStaff(req);
   if (principal instanceof Response) return principal;
-  if (!roleHasPermission(principal.role, perm)) {
+  if (principal.role === 'super_admin') return principal; // safety floor, no query
+  let permissions: ReadonlySet<Permission>;
+  try {
+    permissions = await effectivePermissionSet(principal);
+  } catch (err) {
+    console.error('permission override lookup failed:', err);
+    return json({ error: 'authorization_unavailable' }, 503);
+  }
+  if (!permissions.has(perm)) {
     return json({ error: 'forbidden' }, 403);
   }
   return principal;
+}
+
+/**
+ * Like `requirePermission`, but accepts an OR-list and performs one override
+ * lookup. Used by content routes where an org-wide manager OR the row owner may
+ * proceed. The returned permission set also lets the caller choose row scope
+ * without re-checking the role preset.
+ */
+export async function requireAnyPermission(
+  req: Request,
+  required: readonly Permission[],
+): Promise<{ principal: Principal; permissions: ReadonlySet<Permission> } | Response> {
+  const principal = await requireStaff(req);
+  if (principal instanceof Response) return principal;
+
+  let permissions: ReadonlySet<Permission>;
+  try {
+    permissions = await effectivePermissionSet(principal);
+  } catch (err) {
+    console.error('permission override lookup failed:', err);
+    return json({ error: 'authorization_unavailable' }, 503);
+  }
+
+  if (!required.some((perm) => permissions.has(perm))) {
+    return json({ error: 'forbidden' }, 403);
+  }
+  return { principal, permissions };
 }
 
 /**
@@ -171,7 +248,13 @@ export function requireOutranks(
   return null;
 }
 
-/** Appends an audit row. Best-effort context; never throws to the caller path. */
+/**
+ * Appends an audit row. Best-effort context; NEVER throws to the caller path
+ * (A5). The prior version awaited an unguarded insert, so a transient audit
+ * failure would 500 an ALREADY-COMMITTED mutation — and the client retry would
+ * then 404 on CAS routes. We swallow the failure (console.error only) so the
+ * primary operation's success is never undone by an audit write.
+ */
 export async function logAudit(
   actor: AuditActor | null,
   action: string,
@@ -180,12 +263,16 @@ export async function logAudit(
   meta: Record<string, unknown> = {},
   ip: string | null = null,
 ): Promise<void> {
-  await getDb().insert(auditLog).values({
-    actorId: actor?.id ?? null,
-    action,
-    targetType,
-    targetId,
-    meta,
-    ip,
-  });
+  try {
+    await getDb().insert(auditLog).values({
+      actorId: actor?.id ?? null,
+      action,
+      targetType,
+      targetId,
+      meta,
+      ip,
+    });
+  } catch (err) {
+    console.error(`logAudit failed for action "${action}":`, err);
+  }
 }

@@ -17,7 +17,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, type Href } from 'expo-router';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { tapHaptic } from '../../lib/haptics';
-import { hasAnyBuddyUnread, useBuddyStore } from '../../features/buddy/store';
 import { useSession } from '../../features/training/session';
 
 /**
@@ -26,9 +25,7 @@ import { useSession } from '../../features/training/session';
  * slides between tabs on a spring, squashing along its travel axis while it
  * moves and settling with a soft overshoot (fluid-drop feel). Icon ink
  * crossfades in sync with the disc's arrival. Long-press keeps the per-tab
- * quick action. A small red dot marks a live workout session on Train, and
- * an unread friend DM on Buddy (fed by the buddy store's 12s poll / push
- * refresh — see features/buddy/hooks.ts).
+ * quick action. A small red dot marks a live workout session on Train.
  * No glow, no border — the pill separates from the canvas by fill contrast
  * alone (brief §9). Honors the system reduce-motion setting.
  */
@@ -41,7 +38,6 @@ export const TAB_ICONS: Record<
   train: { active: 'barbell', idle: 'barbell-outline' },
   food: { active: 'restaurant', idle: 'restaurant-outline' },
   progress: { active: 'trending-up', idle: 'trending-up-outline' },
-  buddy: { active: 'people', idle: 'people-outline' },
 };
 
 const QUICK_ACTIONS: Record<string, string> = {
@@ -49,7 +45,6 @@ const QUICK_ACTIONS: Record<string, string> = {
   train: '/workout/start',
   food: '/food/search',
   progress: '/body/log-weight',
-  buddy: '/buddy',
 };
 
 const BAR_H = 60;
@@ -252,8 +247,6 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
   const reduceMotion = useReducedMotion();
   // Live-workout marker on the Train tab — visible from any other tab.
   const sessionActive = useSession((s) => s.status === 'active');
-  // Unread friend-DM marker on the Buddy tab — visible from any other tab.
-  const buddyUnread = useBuddyStore((s) => hasAnyBuddyUnread(s.unread));
 
   return (
     <View
@@ -280,11 +273,8 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
               focused={focused}
               icons={icons}
               label={label}
-              showLiveDot={
-                (route.name === 'train' && sessionActive) ||
-                (route.name === 'buddy' && buddyUnread)
-              }
-              dotHint={route.name === 'buddy' ? 'unread messages' : 'workout in progress'}
+              showLiveDot={route.name === 'train' && sessionActive}
+              dotHint="workout in progress"
               reduceMotion={reduceMotion}
               onPress={() => {
                 const event = navigation.emit({

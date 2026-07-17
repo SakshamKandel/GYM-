@@ -7,7 +7,7 @@ import { useProfile } from '../../state/profile';
 
 /**
  * Bottom tabs. Gate: new users land on the character welcome first
- * (login is OPTIONAL — it unlocks sync, buddies and paid tiers, and is
+ * (login is OPTIONAL — it unlocks sync and paid tiers, and is
  * always one tap away from Welcome and Settings).
  */
 export default function TabsLayout() {
@@ -29,7 +29,6 @@ export default function TabsLayout() {
       <Tabs.Screen name="train" options={{ title: 'Train' }} />
       <Tabs.Screen name="food" options={{ title: 'Food' }} />
       <Tabs.Screen name="progress" options={{ title: 'Progress' }} />
-      <Tabs.Screen name="buddy" options={{ title: 'Buddy' }} />
     </Tabs>
   );
 }

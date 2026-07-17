@@ -18,10 +18,12 @@ import {
   Button,
   Chip,
   HeroCard,
+  PhotoHero,
   PressableScale,
   Screen,
   ScreenHeader,
   SectionLabel,
+  stockImages,
   Tag,
   enterFade,
   enterUp,
@@ -31,9 +33,7 @@ import { syncProfileNow } from '../../lib/profileSync';
 import { useEffectiveTier } from '../../lib/tier';
 import { applyServerUser, useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
-import { activateTrial } from '../buddy/actions';
-import { trialErrorLine, TRIAL_TIERS } from '../buddy/logic';
-import { useBuddyStore } from '../buddy/store';
+import { activateTrial, trialErrorLine, TRIAL_TIERS } from './trial';
 import {
   getPaymentRequests,
   getSubscriptionCatalog,
@@ -103,7 +103,6 @@ export function SubscribeScreen() {
       const result = await getTrialStatus(token);
       setTrials(result.trials);
       setTrialDays(result.trialDays);
-      useBuddyStore.getState().setTrials(result.trials, result.trialDays);
     } catch {
       // Silent — trial UI just won't show status.
     }
@@ -218,7 +217,7 @@ export function SubscribeScreen() {
 
   /** Open the tap-to-reveal detail sheet with this tier's resolved perks,
    * live price and current trial status (computed here so the sheet stays
-   * catalog/buddy-free). */
+   * catalog/trial-free). */
   function openDetail(t: GmTier): void {
     const canTrial = TRIAL_TIERS.includes(t.tier as TrialTier);
     const isActive = activeTrial?.tier === t.tier;
@@ -257,7 +256,22 @@ export function SubscribeScreen() {
         }
       />
 
-      <Animated.View entering={enterUp(0)} style={styles.pitchWrap}>
+      {/* Mood banner — decorative dark stock photo under the shared photo-hero
+          treatment (scrim + red chip + white ink). Sits above the charcoal
+          pitch block; the pitch and tiers carry the real information. */}
+      <Animated.View entering={enterUp(0)} style={styles.banner}>
+        <PhotoHero
+          source={stockImages.deadliftDark}
+          size="banner"
+          recyclingKey="subscribe-banner"
+          accessibilityLabel="A lifter gripping a loaded barbell mid-deadlift"
+          chip={{ label: 'GM Method' }}
+          title="Built to make you stronger"
+          caption="Adaptive training that changes with your body."
+        />
+      </Animated.View>
+
+      <Animated.View entering={enterUp(1)} style={styles.pitchWrap}>
         <HeroCard mascot variant="charcoal">
           <AppText variant="title">Train the way Greece Maharjan grows</AppText>
           <AppText variant="caption">
@@ -517,6 +531,10 @@ function paymentErrorLine(code: string): string {
       return "You don't have permission to do that.";
     case 'image_not_configured':
       return 'Receipt uploads are temporarily unavailable.';
+    case 'already_pending':
+      return 'Your current payment is still awaiting review.';
+    case 'receipt_already_used':
+      return 'That receipt has already been submitted.';
     default:
       return "Couldn't reach the server — check your connection and try again.";
   }
@@ -956,7 +974,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  pitchWrap: { marginTop: spacing.xl },
+  banner: { marginTop: spacing.xl },
+  pitchWrap: { marginTop: spacing.lg },
   pricingNote: { marginTop: spacing.md },
   previewNote: { marginTop: spacing.sm, color: colors.success },
   planErrorNote: { marginTop: spacing.sm, color: colors.error },

@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
 /**
- * Social gamification API client — buddy leaderboard, buddy co-op quest, and
- * the caller's active coach challenge. Same philosophy as lib/api/badges.ts
- * and lib/api/gamification.ts: zod at the boundary, typed error codes,
- * network failures never block the UI (screens keep whatever they last
- * rendered and show a quiet stale/retry affordance, matching useBuddyData).
+ * Social gamification API client — the public gym consistency leaderboard
+ * and the caller's active coach challenge. Same philosophy as
+ * lib/api/badges.ts and lib/api/gamification.ts: zod at the boundary, typed
+ * error codes, network failures never block the UI (screens keep whatever
+ * they last rendered and show a quiet stale/retry affordance).
  *
  * Design law 5 (XP/rank personal-only): none of these schemas carry xp/level
  * fields — the server never sends them here, and these types don't leave
@@ -85,77 +85,6 @@ function parseAs<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown):
   return parsed.data;
 }
 
-// ── Leaderboard ─────────────────────────────────────────────────
-
-const leaderboardRowSchema = z.object({
-  accountId: z.string(),
-  displayName: z.string(),
-  sessionDays: z.number(),
-  isMe: z.boolean(),
-  tier: tierSchema,
-  // Competition position (ties share) — newer servers only; the component
-  // falls back to computing it client-side from sessionDays.
-  position: z.number().nullable().catch(null),
-});
-
-export type LeaderboardRow = z.infer<typeof leaderboardRowSchema>;
-
-const leaderboardResultSchema = z.object({
-  month: z.string(),
-  rows: z.array(z.unknown()).transform((arr) =>
-    arr.flatMap((raw): LeaderboardRow[] => {
-      const parsed = leaderboardRowSchema.safeParse(raw);
-      return parsed.success ? [parsed.data] : [];
-    }),
-  ),
-});
-
-export interface LeaderboardResult {
-  month: string;
-  rows: LeaderboardRow[];
-}
-
-/** GET /api/buddy/leaderboard — this month's session-day ranking (caller + accepted buddies). */
-export async function getBuddyLeaderboard(token: string): Promise<LeaderboardResult> {
-  const data = await request({ method: 'GET', path: '/api/buddy/leaderboard', token });
-  return parseAs(leaderboardResultSchema, data);
-}
-
-// ── Co-op quest ─────────────────────────────────────────────────
-
-const questPairSchema = z.object({
-  buddyAccountId: z.string(),
-  displayName: z.string(),
-  mine: z.number(),
-  theirs: z.number(),
-  complete: z.boolean(),
-});
-
-export type QuestPair = z.infer<typeof questPairSchema>;
-
-const questResultSchema = z.object({
-  month: z.string(),
-  target: z.number(),
-  pairs: z.array(z.unknown()).transform((arr) =>
-    arr.flatMap((raw): QuestPair[] => {
-      const parsed = questPairSchema.safeParse(raw);
-      return parsed.success ? [parsed.data] : [];
-    }),
-  ),
-});
-
-export interface QuestResult {
-  month: string;
-  target: number;
-  pairs: QuestPair[];
-}
-
-/** GET /api/buddy/quest — "both log N session-days this month" progress per buddy pair. */
-export async function getBuddyQuest(token: string): Promise<QuestResult> {
-  const data = await request({ method: 'GET', path: '/api/buddy/quest', token });
-  return parseAs(questResultSchema, data);
-}
-
 // ── Coach challenge ─────────────────────────────────────────────
 
 const challengeSchema = z.object({
@@ -186,7 +115,7 @@ export type ChallengeJoinErrorCode = 'unauthorized' | 'wrong_month' | 'forbidden
 /**
  * POST /api/challenges/{id}/join — opt into the coach's active monthly
  * challenge. Returns null on success, or a typed error code the caller maps
- * to a friendly line (mirrors the buddy client's toBuddyError pattern).
+ * to a friendly line (mirrors the rewards client's toRewardsError pattern).
  *
  * The route's error body carries its own specific codes (wrong_month /
  * forbidden / not_found) that don't fit GamificationApiError's narrower

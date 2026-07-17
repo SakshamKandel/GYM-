@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { expireGrantsForCode } from '@/lib/promoEconomy';
 import { clientIp } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -14,7 +15,10 @@ export const runtime = 'nodejs';
  *  - PATCH {active?, maxRedemptions?, expiresAt?} → toggle active, raise/lower
  *    (or clear, via explicit null) the redemption cap, or the expiry window.
  *    `code`, `ownerCoachId`, `discountPct`, `commissionPct` are immutable here
- *    — recreate the code to change those. Audited.
+ *    — recreate the code to change those. Audited with old→new values (E11) so
+ *    an activate can be told apart from a deactivate. Deactivating a code also
+ *    expires its outstanding discount grants (E5) and records a separate
+ *    `promo.grant.expire` audit row.
  *
  * Guarded by requirePermission('promo.manage'); super_admin/main_admin pass.
  */
@@ -51,6 +55,21 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (fields.expiresAt !== undefined) update.expiresAt = fields.expiresAt;
 
   const db = getDb();
+
+  // Snapshot the pre-change values so the audit records old→new, not just field
+  // names (E11) — activate vs deactivate is otherwise indistinguishable — and
+  // so we can tell whether `active` actually transitioned true→false.
+  const [before] = await db
+    .select({
+      active: promoCodes.active,
+      maxRedemptions: promoCodes.maxRedemptions,
+      expiresAt: promoCodes.expiresAt,
+    })
+    .from(promoCodes)
+    .where(eq(promoCodes.id, id))
+    .limit(1);
+  if (!before) return json({ error: 'not_found' }, 404);
+
   const updated = await db
     .update(promoCodes)
     .set(update)
@@ -81,14 +100,45 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     ownerDisplayName = owner?.displayName ?? null;
   }
 
+  // Value-level audit meta (E11): record each changed field's old→new value.
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  if (update.active !== undefined && update.active !== before.active) {
+    changes.active = { from: before.active, to: update.active };
+  }
+  if (update.maxRedemptions !== undefined && update.maxRedemptions !== before.maxRedemptions) {
+    changes.maxRedemptions = { from: before.maxRedemptions, to: update.maxRedemptions };
+  }
+  if (update.expiresAt !== undefined) {
+    const fromIso = before.expiresAt ? before.expiresAt.toISOString() : null;
+    const toIso = update.expiresAt ? update.expiresAt.toISOString() : null;
+    if (fromIso !== toIso) changes.expiresAt = { from: fromIso, to: toIso };
+  }
+
   await logAudit(
     principal,
     'promo.update',
     'promo_code',
     row.id,
-    { fields: Object.keys(update) },
+    { code: row.code, changes },
     clientIp(req),
   );
+
+  // Deactivating a live code expires its outstanding grants (E5) so they stop
+  // discounting purchases / paying commission; logged as its own action so the
+  // downstream effect is visible in the audit trail.
+  if (update.active === false && before.active === true) {
+    const expired = await expireGrantsForCode(row.id);
+    if (expired > 0) {
+      await logAudit(
+        principal,
+        'promo.grant.expire',
+        'promo_code',
+        row.id,
+        { code: row.code, grantsExpired: expired },
+        clientIp(req),
+      );
+    }
+  }
 
   return json(
     {

@@ -26,8 +26,8 @@ function emptyInput(overrides: Partial<BadgeComputeInput> = {}): BadgeComputeInp
 }
 
 describe('BADGE_CATALOG', () => {
-  it('has exactly 44 badges at launch', () => {
-    assert.equal(BADGE_CATALOG.length, 44);
+  it('has exactly 42 badges', () => {
+    assert.equal(BADGE_CATALOG.length, 42);
   });
 
   it('every badge id is unique', () => {
@@ -42,7 +42,7 @@ describe('BADGE_CATALOG', () => {
     assert.equal(counts.consistency, 13);
     assert.equal(counts.mileage, 5);
     assert.equal(counts.records, 3);
-    assert.equal(counts.crew, 6);
+    assert.equal(counts.crew, 4);
   });
 
   it('STRENGTH_BADGE_IDS matches the strength family exactly', () => {
@@ -115,22 +115,13 @@ describe('badgeProgress', () => {
     });
   });
 
-  it('buddy_first is a 0-or-1 progress', () => {
-    assert.deepEqual(badgeProgress(byId.get('buddy_first')!, emptyStats()), {
-      current: 0,
-      target: 1,
-      unit: 'buddies',
-    });
-    assert.deepEqual(badgeProgress(byId.get('buddy_first')!, emptyStats({ hasBuddy: true })), {
-      current: 1,
-      target: 1,
-      unit: 'buddies',
-    });
+  it('the retired buddy badges are gone from the catalog', () => {
+    assert.equal(byId.get('buddy_first'), undefined);
+    assert.equal(byId.get('buddy_quest'), undefined);
   });
 
   it('event-shaped badges have no scalar progress', () => {
     assert.equal(badgeProgress(byId.get('comeback')!, emptyStats()), null);
-    assert.equal(badgeProgress(byId.get('buddy_quest')!, emptyStats()), null);
     assert.equal(badgeProgress(byId.get('coach_pick')!, emptyStats()), null);
   });
 
@@ -302,12 +293,7 @@ describe('computeEarnedBadgeIds — mileage, records, crew', () => {
     assert.ok(!earned.includes('checkin_25'));
   });
 
-  it('buddy_first fires only when hasBuddy is true', () => {
-    assert.ok(!computeEarnedBadgeIds(emptyInput({ hasBuddy: false })).includes('buddy_first'));
-    assert.ok(computeEarnedBadgeIds(emptyInput({ hasBuddy: true })).includes('buddy_first'));
-  });
-
-  it('never awards event-driven crew badges from the pure pass', () => {
+  it('never awards retired or event-driven crew badges from the pure pass', () => {
     const maxedOut = computeEarnedBadgeIds(
       emptyInput({
         hasBuddy: true,
@@ -320,11 +306,12 @@ describe('computeEarnedBadgeIds — mileage, records, crew', () => {
         sessionDayIsos: ['2026-01-01', '2026-07-01'],
       }),
     );
+    assert.ok(!maxedOut.includes('buddy_first'));
     assert.ok(!maxedOut.includes('buddy_quest'));
     assert.ok(!maxedOut.includes('coach_pick'));
   });
 
-  it('a fully maxed input earns every non-event-driven badge (42 of 44)', () => {
+  it('a fully maxed input earns every non-event-driven badge (41 of 42)', () => {
     const maxedOut = computeEarnedBadgeIds(
       emptyInput({
         hasBuddy: true,
@@ -337,7 +324,7 @@ describe('computeEarnedBadgeIds — mileage, records, crew', () => {
         sessionDayIsos: ['2026-01-01', '2026-07-01'],
       }),
     );
-    assert.equal(maxedOut.length, 42); // 44 minus buddy_quest and coach_pick
+    assert.equal(maxedOut.length, 41); // 42 minus coach_pick
   });
 });
 

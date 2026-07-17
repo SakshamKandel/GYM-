@@ -7,6 +7,7 @@ import { adminRoleOf } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { isOwnImageDeliveryUrl } from '@/lib/uploads';
 
 export const runtime = 'nodejs';
 
@@ -32,12 +33,20 @@ const MAX_DISPLAY_NAME = 80;
 const MAX_HEADLINE = 120;
 const MAX_BIO = 2000;
 
-const httpsUrl = z
+/** Only what our own /api/uploads/image `deliveryUrl` returns for
+ * kind='application_avatar' on OUR configured cloud
+ * (`https://res.cloudinary.com/<cloudName>/image/upload/application_avatar/<uuid>`)
+ * — never a client-typed arbitrary URL, a foreign Cloudinary account, or a
+ * non-`upload` delivery type (e.g. `image/fetch/<remote-url>`, which would
+ * proxy attacker-controlled content to every viewer). */
+const cloudinaryUrl = z
   .string()
   .trim()
   .max(500)
-  .url()
-  .refine((v) => v.startsWith('https://'), 'avatarUrl must be an https URL');
+  .refine(
+    (v) => isOwnImageDeliveryUrl(v, ['application_avatar']),
+    'avatarUrl must be a delivery URL minted by /api/uploads/image',
+  );
 
 const postSchema = z.object({
   displayName: z.string().trim().min(1).max(MAX_DISPLAY_NAME),
@@ -55,7 +64,7 @@ const postSchema = z.object({
     )
     .max(10),
   achievements: z.array(z.string().trim().min(1).max(120)).max(10),
-  avatarUrl: httpsUrl.optional(),
+  avatarUrl: cloudinaryUrl.optional(),
 });
 
 export function OPTIONS() {
@@ -95,6 +104,11 @@ export async function POST(req: Request) {
 
   const db = getDb();
 
+  // Fast-path reject when an application is already open. This is only advisory:
+  // two concurrent POSTs both pass this check, so the partial unique index
+  // `coach_applications_one_pending` (account_id WHERE status='pending') is the
+  // real guard — onConflictDoNothing below turns a lost race into 0 rows, which
+  // we map to the same already_open (C4).
   const pending = await db
     .select({ id: coachApplications.id })
     .from(coachApplications)
@@ -106,19 +120,32 @@ export async function POST(req: Request) {
     .insert(coachApplications)
     .values({
       accountId: user.id,
-      displayName: data.displayName,
+      // Mask EVERY member-visible free-text field (C13): on approval the approve
+      // route copies displayName + certifications verbatim into coach_profiles,
+      // and a freshly-approved coach need never touch coach/profile (where the
+      // mask would otherwise apply) before being served via /api/coaches — so
+      // unmasked contact details smuggled here would reach members and defeat
+      // the in-app 30%-commission model. Mirror coach/profile/route.ts.
+      displayName: maskPii(data.displayName),
       headline: maskPii(data.headline),
       bio: maskPii(data.bio),
       yearsExperience: data.yearsExperience,
       specialties: data.specialties,
-      certifications: data.certifications,
+      certifications: data.certifications.map((cert) => ({
+        title: maskPii(cert.title),
+        issuer: maskPii(cert.issuer),
+        year: cert.year,
+      })),
       achievements: data.achievements.map((line) => maskPii(line)),
       avatarUrl: data.avatarUrl ?? null,
     })
+    .onConflictDoNothing()
     .returning({ id: coachApplications.id, status: coachApplications.status });
 
+  // 0 rows means the partial unique index rejected a concurrent duplicate — a
+  // pending application already exists for this account (C4).
   const application = inserted[0];
-  if (!application) return json({ error: 'invalid' }, 400);
+  if (!application) return json({ error: 'already_open' }, 409);
 
   return json({ id: application.id, status: application.status }, 201);
 }

@@ -46,7 +46,7 @@ import {
   tierAllowsExpiry,
   type DurationChoice,
 } from '../../../features/staff/duration';
-import { pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
 
 /**
@@ -96,7 +96,12 @@ const ERR_TEXT: Record<StaffErrorCode, string> = {
   conflict: 'That conflicts with the current state.',
   already_pending: 'There is already a pending request.',
   not_an_upgrade: "That isn't higher than the current tier.",
+  confirm_required: 'This needs an explicit confirmation first.',
+  already_refunded: 'That payment was already refunded.',
+  not_approved: 'That payment is no longer approved.',
+  insufficient_balance: "That would take the coach's balance negative.",
   not_configured: 'This feature is not set up yet.',
+  rate_limited: "Too many attempts — wait a moment and try again.",
   network: "Couldn't reach the server.",
 };
 
@@ -128,37 +133,6 @@ function metaTier(meta: unknown): Tier | null {
     }
   }
   return null;
-}
-
-/**
- * The expiry window an override recorded, from its audit meta. The server logs
- * `{ tier, reason, startsAt?, expiresAt? }` as ISO strings or null. Three-way
- * result:
- *   - `undefined` → the meta didn't carry an expiresAt (older override / not set)
- *   - `null`      → set permanent (no expiry)
- *   - string      → the ISO expiry instant
- */
-function metaExpiresAt(meta: unknown): string | null | undefined {
-  if (meta && typeof meta === 'object' && 'expiresAt' in meta) {
-    const v = (meta as Record<string, unknown>).expiresAt;
-    if (v === null) return null;
-    if (typeof v === 'string') return v;
-  }
-  return undefined;
-}
-
-/**
- * Best-effort current expiry for a member: the expiresAt from the most-recent
- * `subscription.override` audit entry that targeted them AND carried the field.
- * Entries arrive newest-first, so the first match wins. `undefined` = unknown.
- */
-function latestExpiryFor(memberId: string, entries: AuditEntry[]): string | null | undefined {
-  for (const e of entries) {
-    if (e.targetId !== memberId) continue;
-    const exp = metaExpiresAt(e.meta);
-    if (exp !== undefined) return exp;
-  }
-  return undefined;
 }
 
 const MONTHS = [
@@ -451,9 +425,25 @@ function OverrideSheet({
 
 export default function AdminSubscriptionsScreen() {
   const token = useAuth((s) => s.token);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
+  // G14: fail closed at the screen level. A role that reaches the admin console
+  // (e.g. support_admin via members.read) but lacks subscription.override must
+  // never see the roster or the override editor — otherwise it walks the flow
+  // to a dead 403 on Save. Mirrors every sibling admin screen's locked view.
+  const allowed = staffCan(staffPermissions, 'subscription.override');
+  // G5: 'Recent overrides' reads the audit log, which needs audit.read
+  // (super_admin/main_admin only) — but this screen also serves member_admin
+  // (subscription.override). Gating the call itself avoids the permanent
+  // 403-retry loop member_admin used to hit.
+  const canSeeAudit = staffCan(staffPermissions, 'audit.read');
 
   const [query, setQuery] = useState('');
   const [members, setMembers] = useState<MemberRow[]>([]);
+  // H3: the directory is keyset-paginated now — track the current query's
+  // next cursor so "Load more" can continue it (a search past the first page
+  // used to be simply unreachable).
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -469,7 +459,9 @@ export default function AdminSubscriptionsScreen() {
       setLoading(true);
       setError(null);
       try {
-        setMembers(await getMembers(token, q.trim() || undefined));
+        const page = await getMembers(token, q.trim() || undefined);
+        setMembers(page.members);
+        setNextCursor(page.nextCursor);
       } catch (e) {
         setError(ERR_TEXT[toStaffError(e).code]);
       } finally {
@@ -479,8 +471,22 @@ export default function AdminSubscriptionsScreen() {
     [token],
   );
 
+  const loadMoreMembers = useCallback(async () => {
+    if (!token || !nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await getMembers(token, query.trim() || undefined, nextCursor);
+      setMembers((prev) => [...prev, ...page.members]);
+      setNextCursor(page.nextCursor);
+    } catch {
+      // Quiet failure — the list stays as-is; the operator can tap again.
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [token, query, nextCursor, loadingMore]);
+
   const loadChanges = useCallback(async () => {
-    if (!token) return;
+    if (!token || !canSeeAudit) return;
     setChangesLoading(true);
     setChangesError(null);
     try {
@@ -491,7 +497,7 @@ export default function AdminSubscriptionsScreen() {
     } finally {
       setChangesLoading(false);
     }
-  }, [token]);
+  }, [token, canSeeAudit]);
 
   // Debounced member search.
   useEffect(() => {
@@ -500,8 +506,9 @@ export default function AdminSubscriptionsScreen() {
   }, [query, loadMembers]);
 
   useEffect(() => {
-    void loadChanges();
-  }, [loadChanges]);
+    if (canSeeAudit) void loadChanges();
+    else setChangesLoading(false);
+  }, [loadChanges, canSeeAudit]);
 
   function onSaved(tier: Tier): void {
     if (editing) {
@@ -516,6 +523,29 @@ export default function AdminSubscriptionsScreen() {
   function goBack(): void {
     if (router.canGoBack()) router.back();
     else pushStaff(STAFF_ROUTES.adminHome);
+  }
+
+  if (!allowed) {
+    return (
+      <Screen>
+        <Animated.View entering={enterDown()} style={styles.headerRow}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            onPress={goBack}
+            style={styles.backBtn}
+          >
+            <Ionicons name="chevron-back" size={24} color={colors.text} />
+          </PressableScale>
+        </Animated.View>
+        <Animated.View entering={enterUp(0)} style={styles.locked}>
+          <Ionicons name="lock-closed" size={28} color={colors.textFaint} />
+          <AppText variant="caption" center color={colors.textFaint}>
+            You do not have access to subscription overrides.
+          </AppText>
+        </Animated.View>
+      </Screen>
+    );
   }
 
   return (
@@ -583,11 +613,24 @@ export default function AdminSubscriptionsScreen() {
               </PressableScale>
             </Animated.View>
           ))}
+          {nextCursor ? (
+            <Button
+              label={loadingMore ? 'Loading…' : 'Load more'}
+              variant="secondary"
+              loading={loadingMore}
+              disabled={loadingMore}
+              onPress={() => void loadMoreMembers()}
+            />
+          ) : null}
         </View>
       )}
 
       <SectionLabel>Recent overrides</SectionLabel>
-      {changesLoading ? (
+      {!canSeeAudit ? (
+        <AppText variant="caption" color={colors.textFaint} style={styles.emptyLine}>
+          Only a super admin or main admin can view override history here.
+        </AppText>
+      ) : changesLoading ? (
         <View style={styles.loadingBlock}>
           <ActivityIndicator color={colors.textDim} />
         </View>
@@ -626,7 +669,7 @@ export default function AdminSubscriptionsScreen() {
       {editing && token ? (
         <OverrideSheet
           member={editing}
-          currentExpiry={latestExpiryFor(editing.id, changes)}
+          currentExpiry={editing.tierExpiresAt}
           token={token}
           onClose={() => setEditing(null)}
           onSaved={onSaved}
@@ -652,6 +695,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   header: { marginBottom: spacing.gutter },
+  locked: {
+    marginTop: spacing.xxl,
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.xl,
+  },
   list: { gap: spacing.md, marginTop: spacing.lg },
   // Charcoal member row (brief §11c): fill contrast, no hairline borders.
   memberRow: {

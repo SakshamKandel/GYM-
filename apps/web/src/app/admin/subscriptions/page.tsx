@@ -1,10 +1,10 @@
 import { accounts, auditLog } from '@gym/db';
 import { alias } from 'drizzle-orm/pg-core';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { Card, CardHeader, StatTile } from '@/components/console';
-import type { StaffRole } from '@/lib/auth';
 import { getDb } from '@/lib/db';
+import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
 import {
   type MemberRow,
@@ -15,17 +15,37 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/**
- * Roles allowed to override subscription tiers. Mirrors canSubscriptions() in
- * admin/layout.tsx and the 'subscription.override' grant in authz.ts
- * (super_admin + main_admin + member_admin). The layout hides the nav link and guards the
- * subtree, but we re-check here so hitting the URL directly still fails safe —
- * every page re-checks its own role set.
- */
-const CAN_OVERRIDE: readonly StaffRole[] = ['super_admin', 'main_admin', 'member_admin'];
-
 const MEMBER_CAP = 200;
 const LOG_CAP = 30;
+
+/**
+ * Per-tier member counts computed over the WHOLE table on the EFFECTIVE tier
+ * (B8/D2): a paid tier whose expiry has lapsed counts as 'starter', so the tiles
+ * never drift upward, and the count spans every account rather than the capped
+ * roster slice the table renders.
+ */
+async function loadTierCounts(): Promise<{ byTier: Record<Tier, number>; total: number }> {
+  const db = getDb();
+  const res = await db.execute<{ tier: string; n: string }>(sql`
+    select
+      case
+        when tier <> 'starter' and tier_expires_at is not null and tier_expires_at <= now()
+          then 'starter'
+        else tier
+      end as tier,
+      count(*)::text as n
+    from accounts
+    group by 1
+  `);
+  const byTier: Record<Tier, number> = { starter: 0, silver: 0, gold: 0, elite: 0 };
+  let total = 0;
+  for (const r of res.rows) {
+    const n = Number(r.n);
+    total += n;
+    if (r.tier in byTier) byTier[r.tier as Tier] = n;
+  }
+  return { byTier, total };
+}
 
 /**
  * Loads the member roster (tier + account status) for the override table. Capped
@@ -133,20 +153,16 @@ const DATE_FMT = new Intl.DateTimeFormat('en-US', {
 export default async function AdminSubscriptionsPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
-  if (!CAN_OVERRIDE.includes(principal.role)) redirect('/admin');
+  const permissions = await effectivePermissionSet(principal);
+  if (!permissions.has('subscription.override')) redirect('/admin');
 
-  const [members, changes] = await Promise.all([
+  const [members, changes, tierCounts] = await Promise.all([
     loadMembers(),
     loadTierChanges(),
+    loadTierCounts(),
   ]);
 
-  const byTier: Record<Tier, number> = {
-    starter: 0,
-    silver: 0,
-    gold: 0,
-    elite: 0,
-  };
-  for (const m of members) byTier[m.tier]++;
+  const byTier = tierCounts.byTier;
   const paid = byTier.silver + byTier.gold + byTier.elite;
 
   return (
@@ -174,11 +190,11 @@ export default async function AdminSubscriptionsPage() {
           marginBottom: 24,
         }}
       >
-        <StatTile label="Members" value={members.length} />
+        <StatTile label="Members" value={tierCounts.total} />
         <StatTile
           label="Paid tiers"
           value={paid}
-          hint="silver · gold · elite"
+          hint="silver · gold · elite · effective"
         />
         <StatTile label="Gold" value={byTier.gold} />
         <StatTile label="Elite" value={byTier.elite} />

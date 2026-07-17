@@ -35,7 +35,12 @@ const postSchema = z.object({
   discountPct: z.number().int().min(5).max(90),
   commissionPct: z.number().int().min(0).max(50).optional(),
   maxRedemptions: z.number().int().positive().optional(),
-  expiresAt: z.coerce.date().optional(),
+  // Reject an already-past expiry (E11): a born-dead code is never redeemable
+  // and only clutters the table. A small skew allowance covers clock drift.
+  expiresAt: z.coerce
+    .date()
+    .refine((d) => d.getTime() > Date.now() - 60_000, { message: 'expiry must be in the future' })
+    .optional(),
 });
 
 const CODE_COLUMNS = {
@@ -104,10 +109,15 @@ export async function POST(req: Request) {
     ownerDisplayName = owner.displayName;
   }
 
+  // A house code (no owner) has no coach to pay, so its commission is forced to
+  // 0 regardless of what the client sent (E11) — otherwise settlement would
+  // compute a commission with nowhere to credit it.
+  const effectiveCommissionPct = ownerCoachId ? (commissionPct ?? 0) : 0;
+
   const values = {
     ownerCoachId: ownerCoachId ?? null,
     discountPct,
-    commissionPct: commissionPct ?? 0,
+    commissionPct: effectiveCommissionPct,
     maxRedemptions: maxRedemptions ?? null,
     expiresAt: expiresAt ?? null,
     createdBy: principal.id,

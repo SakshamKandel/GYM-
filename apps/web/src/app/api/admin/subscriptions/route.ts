@@ -73,11 +73,17 @@ export async function POST(req: Request) {
 
   // setAccountTier gates nothing itself — we've already enforced the permission
   // above. It updates accounts.tier (+ optional dates), mirrors account_profiles,
-  // syncs the Greece auto-assignment, and audits.
-  await setAccountTier(accountId, tier, principal, reason, {
-    startsAt,
-    expiresAt,
-  });
+  // syncs the Greece auto-assignment, and audits. source 'console' stamps
+  // provenance (§4.4) so the RevenueCat webhook won't clobber this override
+  // while its window is still in force (B4).
+  await setAccountTier(
+    accountId,
+    tier,
+    principal,
+    reason,
+    { startsAt, expiresAt },
+    'console',
+  );
 
   return json({ ok: true, accountId, tier }, 200);
 }

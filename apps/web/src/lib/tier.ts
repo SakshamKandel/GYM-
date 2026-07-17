@@ -1,11 +1,20 @@
 import { accounts } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import { type AuditActor, logAudit } from './authz';
 import { syncEliteCoachAssignment } from './coachAutoAssign';
 import { getDb } from './db';
 
 export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
+
+/**
+ * Provenance of a tier grant, stamped onto accounts.tier_source (§4.4). Lets
+ * the RevenueCat webhook avoid clobbering an admin/manual/coach grant that is
+ * still in force (B4). 'console' = admin override, 'manual_payment' = approved
+ * Nepal request, 'revenuecat' = verified store entitlement, 'preview' =
+ * signed-out/self-serve preview pick, 'coach' = coach-initiated client comp.
+ */
+export type TierSource = 'console' | 'manual_payment' | 'revenuecat' | 'preview' | 'coach';
 
 /** Optional dated-subscription window for a tier change. */
 export interface TierDates {
@@ -13,6 +22,11 @@ export interface TierDates {
   startsAt?: Date | null;
   /** When it lapses. `null` = no expiry (permanent). `undefined` leaves as-is. */
   expiresAt?: Date | null;
+}
+
+export interface TierSourceExpectation {
+  source: TierSource | null;
+  sourceId: string | null;
 }
 
 /**
@@ -44,21 +58,67 @@ export async function setAccountTier(
   actor: AuditActor,
   reason?: string,
   dates?: TierDates,
-): Promise<void> {
+  source?: TierSource | null,
+  sourceId?: string | null,
+  sourceEventAt?: Date,
+  expectedCurrentSource?: TierSourceExpectation,
+): Promise<boolean> {
   const db = getDb();
 
   // Build the column set: tier always; date columns only when the caller opted
-  // in (undefined = leave alone, null = clear, Date = set).
+  // in (undefined = leave alone, null = clear, Date = set). `source` stamps
+  // provenance (§4.4) so the RevenueCat webhook can protect manual/console/coach
+  // grants (B4); omitted = leave the column untouched.
   const set: {
     tier: Tier;
     tierStartedAt?: Date | null;
     tierExpiresAt?: Date | null;
+    tierSource?: TierSource | null;
+    tierSourceId?: string | null;
+    revenuecatEventAt?: Date;
   } = { tier };
   if (dates?.startsAt !== undefined) set.tierStartedAt = dates.startsAt;
   if (dates?.expiresAt !== undefined) set.tierExpiresAt = dates.expiresAt;
+  if (source !== undefined) {
+    set.tierSource = source;
+    set.tierSourceId = sourceId ?? null;
+  }
+  if (sourceEventAt !== undefined) set.revenuecatEventAt = sourceEventAt;
 
-  // Source of truth.
-  await db.update(accounts).set(set).where(eq(accounts.id, accountId));
+  // Source of truth. Store events are accepted only when newer than the last
+  // observed event. The same event id/timestamp may retry after a partial
+  // failure; it is allowed to converge on the same values.
+  let where: SQL | undefined = eq(accounts.id, accountId);
+  if (sourceEventAt) {
+    where = and(
+        eq(accounts.id, accountId),
+        or(
+          isNull(accounts.revenuecatEventAt),
+          lt(accounts.revenuecatEventAt, sourceEventAt),
+          and(
+            eq(accounts.revenuecatEventAt, sourceEventAt),
+            eq(accounts.tierSourceId, sourceId ?? ''),
+          ),
+        ),
+      );
+  }
+  if (expectedCurrentSource) {
+    const sourceCondition =
+      expectedCurrentSource.source === null
+        ? isNull(accounts.tierSource)
+        : eq(accounts.tierSource, expectedCurrentSource.source);
+    const sourceIdCondition =
+      expectedCurrentSource.sourceId === null
+        ? isNull(accounts.tierSourceId)
+        : eq(accounts.tierSourceId, expectedCurrentSource.sourceId);
+    where = and(where, sourceCondition, sourceIdCondition);
+  }
+  const updated = await db
+    .update(accounts)
+    .set(set)
+    .where(where)
+    .returning({ id: accounts.id });
+  if (!updated[0]) return false;
 
   // Mirror onto the jsonb profile blob WITHOUT clobbering sibling keys. The
   // WHERE guard means a missing profile row is left untouched (skipped).
@@ -90,9 +150,12 @@ export async function setAccountTier(
   await logAudit(actor, 'subscription.override', 'account', accountId, {
     tier,
     reason,
+    source,
+    sourceId,
     startsAt: dates?.startsAt !== undefined ? isoOrNull(dates.startsAt) : undefined,
     expiresAt: dates?.expiresAt !== undefined ? isoOrNull(dates.expiresAt) : undefined,
   });
+  return true;
 }
 
 function isoOrNull(d: Date | null | undefined): string | null {

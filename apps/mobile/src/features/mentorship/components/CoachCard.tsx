@@ -1,27 +1,21 @@
 import { StyleSheet, View } from 'react-native';
-import { Image } from 'expo-image';
 import { colors, radius, spacing } from '@gym/ui-tokens';
-import { AppText, IconChip, PressableScale, Tag } from '../../../components/ui';
-import type { CoachCardData, CoachTier } from '../api';
+import { AppText, PressableScale, Tag } from '../../../components/ui';
+import type { CoachCardData } from '../api';
 import { pushPath } from '../nav';
-
-/** Seniority badge — accent for elite, cream for gold, charcoal (dim) for
- * silver. Tokens only; not a billing tier (see coach_profiles.coachTier). */
-function CoachTierBadge({ tier }: { tier: CoachTier }) {
-  if (tier === 'elite') return <Tag label="Elite" variant="filled" color={colors.accent} />;
-  if (tier === 'gold') return <Tag label="Gold" variant="filled" color={colors.blockCream} />;
-  return <Tag label="Silver" variant="dim" />;
-}
+import { CoachAvatar } from './CoachAvatar';
+import { CoachTierBadge } from './CoachTierBadge';
 
 /**
  * One coach in the discovery hub — a charcoal row card (block language:
- * borderless, separation by fill contrast): 52dp avatar block, name +
- * one-line headline, up to three specialty pills (+N overflow), and an
- * availability tag on the right rail. The whole row taps through to the
- * coach's profile.
+ * borderless, separation by fill contrast): 56dp photo-or-initials avatar,
+ * name + seniority badge, one-line headline, up to three specialty pills
+ * (+N overflow), and a right rail with availability + a live client count
+ * (the capacity signal the list payload exposes). The whole row taps
+ * through to the coach's profile.
  */
 
-const AVATAR = 52;
+const AVATAR = 56;
 const MAX_SPECIALTIES = 3;
 
 const styles = StyleSheet.create({
@@ -32,14 +26,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     padding: spacing.lg,
-    minHeight: 64,
-  },
-  avatar: {
-    width: AVATAR,
-    height: AVATAR,
-    // Nested-tile radius — matches IconChip's rounded square (brief §3).
-    borderRadius: radius.md,
-    backgroundColor: colors.surfaceRaised,
+    minHeight: 88,
   },
   main: { flex: 1, gap: 2 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
@@ -50,7 +37,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     marginTop: spacing.xs,
   },
-  rail: { flexShrink: 0, alignItems: 'flex-end' },
+  rail: { flexShrink: 0, alignItems: 'flex-end', gap: spacing.xs },
 });
 
 export function CoachCard({ coach }: { coach: CoachCardData }) {
@@ -61,22 +48,18 @@ export function CoachCard({ coach }: { coach: CoachCardData }) {
   return (
     <PressableScale
       accessibilityRole="button"
-      accessibilityLabel={`${coach.displayName}. ${coach.headline}. ${
+      accessibilityLabel={`${coach.displayName}, ${coach.coachTier} coach. ${coach.headline}. ${
+        coach.activeClients} active client${coach.activeClients === 1 ? '' : 's'}. ${
         accepting ? 'Accepting clients' : 'Not taking clients'
       }. View profile`}
       onPress={() => pushPath(`/coaches/${coach.id}`)}
       style={styles.row}
     >
-      {coach.avatarUrl !== null ? (
-        <Image
-          source={{ uri: coach.avatarUrl }}
-          style={styles.avatar}
-          contentFit="cover"
-          accessibilityElementsHidden
-        />
-      ) : (
-        <IconChip icon="person" size={AVATAR} />
-      )}
+      <CoachAvatar
+        name={coach.displayName}
+        url={coach.photoUrl ?? coach.avatarUrl}
+        size={AVATAR}
+      />
 
       <View style={styles.main}>
         <View style={styles.nameRow}>
@@ -104,6 +87,9 @@ export function CoachCard({ coach }: { coach: CoachCardData }) {
         ) : (
           <Tag label="Full" variant="dim" />
         )}
+        <AppText variant="label" numberOfLines={1}>
+          {coach.activeClients} client{coach.activeClients === 1 ? '' : 's'}
+        </AppText>
       </View>
     </PressableScale>
   );

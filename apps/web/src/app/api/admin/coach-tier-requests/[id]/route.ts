@@ -29,6 +29,14 @@ const postSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
+/** Tier seniority ordering (mirrors /api/coaches). Guards approval against a
+ * stale request that would silently DOWNGRADE or no-op the coach's tier (C11). */
+const COACH_TIER_RANK: Record<'silver' | 'gold' | 'elite', number> = {
+  silver: 1,
+  gold: 2,
+  elite: 3,
+};
+
 export function OPTIONS() {
   return preflight();
 }
@@ -88,8 +96,46 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return json({ ok: true }, 200);
   }
 
-  // action === 'approve' — flip the request first (the WHERE guard is the
-  // actual commit point / race guard), then write the tier.
+  // action === 'approve'. Guard against a stale request that no longer
+  // represents an upgrade (C11): if the coach was manually promoted after
+  // filing this request, approving it would silently DOWNGRADE them (e.g.
+  // elite→gold) and push a wrong "upgraded" notification. Read the current tier
+  // first; when the requested tier doesn't outrank it, auto-close the request as
+  // rejected rather than applying it.
+  const profileRows = await db
+    .select({ coachTier: coachProfiles.coachTier })
+    .from(coachProfiles)
+    .where(eq(coachProfiles.accountId, request.coachId))
+    .limit(1);
+  const currentTier = profileRows[0]?.coachTier ?? null;
+  if (currentTier && COACH_TIER_RANK[request.requestedTier] <= COACH_TIER_RANK[currentTier]) {
+    const closed = await db
+      .update(coachTierRequests)
+      .set({ status: 'rejected', decidedBy: principal.id, decidedAt: new Date() })
+      .where(and(eq(coachTierRequests.id, id), eq(coachTierRequests.status, 'pending')))
+      .returning({ id: coachTierRequests.id });
+    if (closed.length === 0) return json({ error: 'not_found' }, 404);
+
+    await logAudit(
+      principal,
+      'coach.tier.reject',
+      'coach_tier_request',
+      id,
+      {
+        coachId: request.coachId,
+        requestedTier: request.requestedTier,
+        currentTier,
+        reason: 'not_an_upgrade',
+        note,
+      },
+      ip,
+    );
+
+    return json({ error: 'not_an_upgrade', currentTier }, 409);
+  }
+
+  // Flip the request first (the WHERE guard is the actual commit point / race
+  // guard), then write the tier.
   const updated = await db
     .update(coachTierRequests)
     .set({ status: 'approved', decidedBy: principal.id, decidedAt: new Date() })
@@ -97,10 +143,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     .returning({ id: coachTierRequests.id });
   if (updated.length === 0) return json({ error: 'not_found' }, 404);
 
+  // Upsert (not a bare UPDATE): a coach granted the role via POST
+  // /api/admin/staff has no coach_profiles row yet, so a plain UPDATE would match
+  // 0 rows and the approval would "succeed" while the tier never changed (C12).
   await db
-    .update(coachProfiles)
-    .set({ coachTier: request.requestedTier })
-    .where(eq(coachProfiles.accountId, request.coachId));
+    .insert(coachProfiles)
+    .values({ accountId: request.coachId, coachTier: request.requestedTier })
+    .onConflictDoUpdate({
+      target: coachProfiles.accountId,
+      set: { coachTier: request.requestedTier },
+    });
 
   await logAudit(
     principal,

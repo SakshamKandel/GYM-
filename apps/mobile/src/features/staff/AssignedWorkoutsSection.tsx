@@ -305,13 +305,25 @@ export function AssignedWorkoutsSection({
       if (!neighbor) return;
       setBusyId(w.id);
       try {
-        await Promise.all([
-          updateClientWorkout(w.id, { position: neighbor.position }, token),
-          updateClientWorkout(neighbor.id, { position: w.position }, token),
-        ]);
+        // Sequential, not Promise.all: a swap is two independent PATCHes (no
+        // atomic reorder endpoint exists), so if the second one fails we must
+        // roll the first back — otherwise a partial swap leaves two rows
+        // sharing (or duplicating) a position.
+        await updateClientWorkout(w.id, { position: neighbor.position }, token);
+        try {
+          await updateClientWorkout(neighbor.id, { position: w.position }, token);
+        } catch (err) {
+          await updateClientWorkout(w.id, { position: w.position }, token).catch(() => {
+            // Best-effort rollback — a reload still shows the true server state.
+          });
+          throw err;
+        }
         await load();
       } catch (err) {
         setMutationError(errorLine(toStaffError(err).code));
+        // Refresh regardless so any partial/rolled-back state is reconciled
+        // with what the server actually has, rather than trusting local state.
+        await load();
       } finally {
         setBusyId(null);
       }
