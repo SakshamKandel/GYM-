@@ -31,6 +31,7 @@ import {
   toStaffError,
 } from '../../../features/staff/api';
 import { replaceStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
+import { ReauthSheet, useReauth } from '../../../features/staff/ReauthGate';
 import { ROLE_LABEL } from '../../../features/staff/roles';
 import { useAuth } from '../../../state/auth';
 
@@ -38,15 +39,11 @@ import { useAuth } from '../../../state/auth';
  * Offboarding-impact preview (P0-3 / plan §3 gap-build #3): a coach revoke
  * triggers the C2 cascade (end active assignments, decline pending requests,
  * deactivate the coach profile) — this is what the confirm sheet shows
- * BEFORE the admin commits. Shape matches the plan's literal contract ("the
- * same counts, returned by a dry-run query param on DELETE").
- *
- * CROSS-PACKAGE NOTE: as of this pass, `revokeRole` in features/staff/api.ts
- * (owned by WP9a) is still the pre-existing 2-arg (accountId, token) => void
- * form — the `{ dryRun: true }` 3rd-arg overload returning this shape does
- * not exist yet. `fetchRevokeImpact` below isolates the one call site that
- * depends on it; the cast is a placeholder until WP9a lands the overload
- * (tracked as a blocked cross-package dependency, not a bug in this file).
+ * BEFORE the admin commits. Fetched via `revokeRole(accountId, token,
+ * { dryRun: true })`, which appends `?dryRun=1` and hits the server's
+ * READ-ONLY preflight branch — it can never trigger the real cascade, no
+ * matter when it's called (including the instant the admin taps the revoke
+ * icon, before the typed-confirm sheet or the real Revoke button).
  */
 interface RevokeImpact {
   activeClients: number;
@@ -55,8 +52,12 @@ interface RevokeImpact {
 }
 
 async function fetchRevokeImpact(accountId: string, token: string): Promise<RevokeImpact> {
-  // @ts-expect-error — revokeRole's dry-run overload is a WP9a deliverable not yet landed.
-  return revokeRole(accountId, token, { dryRun: true });
+  const { counts } = await revokeRole(accountId, token, { dryRun: true });
+  return {
+    activeClients: counts?.activeClients ?? 0,
+    pendingCoachRequests: counts?.pendingRequests ?? 0,
+    walletBalances: counts?.walletBalances ?? [],
+  };
 }
 
 /**
@@ -123,6 +124,10 @@ export default function StaffAndRolesScreen() {
   const staffPermissions = useAuth((s) => s.staffPermissions);
   const myAccountId = useAuth((s) => s.user?.id ?? null);
   const canManageStaff = staffCan(staffPermissions, 'roles.grant');
+  // Step-up (plan §3 #14): granting, revoking, or offboarding a staff account
+  // are the console's most destructive actions — each is gated behind a fresh
+  // password re-entry (5-min in-memory window shared across the console).
+  const reauth = useReauth();
 
   /** Roles the CALLER may hand out — highest rank first (canonical order). */
   // useMemo (not a plain expression): the React Compiler refuses to optimise
@@ -414,7 +419,7 @@ export default function StaffAndRolesScreen() {
           </View>
           <Button
             label={`Grant ${ROLE_LABEL[role]}`}
-            onPress={() => void doGrant()}
+            onPress={() => reauth.guard(() => void doGrant())}
             loading={granting}
           />
         </Animated.View>
@@ -570,7 +575,7 @@ export default function StaffAndRolesScreen() {
                 label={revokeBusy ? 'Revoking…' : 'Revoke'}
                 variant="danger"
                 style={styles.decisionBtn}
-                onPress={() => void doRevoke()}
+                onPress={() => reauth.guard(() => void doRevoke())}
                 disabled={revokeBusy || !revokeConfirmMatches}
                 loading={revokeBusy}
               />
@@ -578,6 +583,9 @@ export default function StaffAndRolesScreen() {
           </View>
         ) : null}
       </Sheet>
+
+      {/* Step-up password prompt for grant / revoke / offboard (plan §3 #14). */}
+      <ReauthSheet controller={reauth} />
     </Screen>
   );
 }

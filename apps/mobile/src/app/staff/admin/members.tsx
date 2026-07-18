@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Share, StyleSheet, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
@@ -20,11 +20,16 @@ import {
 import { canManageRole, effectiveTier } from '@gym/shared';
 import {
   assignClient,
+  forceSignOutMember,
+  exportCsvToFile,
+  gdprAnonymizeMember,
+  generateResetLink,
   getCoaches,
   getMemberDetail,
   getMembers,
   toStaffError,
   updateMember,
+  updateMemberIdentity,
   type CoachRow,
   type MemberDetail,
   type MemberRow,
@@ -32,8 +37,50 @@ import {
   type Tier,
 } from '../../../features/staff/api';
 import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
+import { ReauthSheet, useReauth } from '../../../features/staff/ReauthGate';
 import { roleLabel } from '../../../features/staff/roles';
 import { useAuth } from '../../../state/auth';
+
+/**
+ * P1-7 client contract (M2 owns features/staff/api.ts — coded against the
+ * EXACT export names from its brief; shapes are this screen's best-effort
+ * guess at the idiomatic server contract and may need reconciling at the
+ * integration gate if M2 lands a different shape):
+ *   generateResetLink(memberId, token) => Promise<{ resetUrl: string; expiresAt: string }>
+ *   forceSignOutMember(memberId, token) => Promise<void>
+ *   updateMemberIdentity(memberId, { email?, displayName? }, token) => Promise<MemberAccount>
+ *   gdprAnonymizeMember(memberId, token) => Promise<void> — the "typed confirm"
+ *     is a CLIENT-side gate (type the member's email) before the button
+ *     enables; nothing beyond the id crosses the wire.
+ *   exportCsvToFile(kind, token) => Promise<string> — downloads the CSV
+ *     straight to a local file (native-side streaming; never buffered into
+ *     one JS string) and returns its `file://` URI, shared via the OS share
+ *     sheet (RN's built-in Share — no expo-sharing dependency exists in this
+ *     app; the on-device path is the copy-path fallback when the share sheet
+ *     is unavailable/dismissed).
+ */
+
+/** Best-effort share; on failure (dismissed / unsupported) the caller keeps
+ * the link visible as selectable text so the admin can copy it by hand. */
+async function shareLink(message: string): Promise<void> {
+  try {
+    await Share.share({ message });
+  } catch {
+    // Share sheet dismissed or unavailable — nothing further to do; the
+    // link stays on screen as the copy-link fallback.
+  }
+}
+
+/** Like shareLink, but for a local file URI — passed via `url` so iOS
+ * attaches the actual file instead of sharing it as a text message. */
+async function shareFile(uri: string): Promise<void> {
+  try {
+    await Share.share({ url: uri });
+  } catch {
+    // Share sheet dismissed or unavailable — the file stays on-device; its
+    // path stays on screen as the copy-path fallback.
+  }
+}
 
 /**
  * Admin · Members — the searchable member directory.
@@ -125,6 +172,12 @@ export default function AdminMembersScreen() {
   const token = useAuth((s) => s.token);
   const staffRole = useAuth((s) => s.staffRole);
   const staffPermissions = useAuth((s) => s.staffPermissions);
+  // Step-up (plan §3 #14): reset-link minting, force sign-out, identity edit,
+  // and GDPR anonymize are account-takeover / irreversible-data actions —
+  // same step-up gate as staff.tsx's role grant/revoke and subscriptions.tsx's
+  // tier override, just newly wired here (defect: these P1-7 actions used to
+  // fire on a bare confirm with no fresh password re-entry).
+  const reauth = useReauth();
 
   // ── List state ───────────────────────────────────────────────
   const [query, setQuery] = useState('');
@@ -156,6 +209,41 @@ export default function AdminMembersScreen() {
   // reason — defeating the auditability the action is meant to provide.
   const [statusReason, setStatusReason] = useState('');
   const [mutationError, setMutationError] = useState<string | null>(null);
+
+  // ── P1-7: member lifecycle tools (reset link / force sign-out / edit
+  // identity / GDPR anonymize) — all gated on `members.manage_credentials`. ──
+  const [resetLinkOpen, setResetLinkOpen] = useState(false);
+  const [resetLinkLoading, setResetLinkLoading] = useState(false);
+  const [resetLinkResult, setResetLinkResult] = useState<{
+    resetUrl: string;
+    expiresAt: string;
+  } | null>(null);
+  const [resetLinkError, setResetLinkError] = useState<string | null>(null);
+
+  const [signOutConfirm, setSignOutConfirm] = useState(false);
+  const [signOutBusy, setSignOutBusy] = useState(false);
+  const [signOutNotice, setSignOutNotice] = useState<string | null>(null);
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [editEmail, setEditEmail] = useState('');
+  const [editName, setEditName] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const [gdprOpen, setGdprOpen] = useState(false);
+  const [gdprConfirmText, setGdprConfirmText] = useState('');
+  const [gdprSaving, setGdprSaving] = useState(false);
+  const [gdprError, setGdprError] = useState<string | null>(null);
+  const [gdprDone, setGdprDone] = useState(false);
+
+  // P1-10: CSV export of the member directory, shared via the OS share sheet.
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  // Fallback when the native share sheet is dismissed/unavailable — RN's
+  // Share.share() resolves normally on dismissal (it doesn't throw), so
+  // without this the exported link would be silently lost. Mirrors the
+  // csvLink block in audit.tsx/wallets.tsx/payments.tsx.
+  const [csvLink, setCsvLink] = useState<string | null>(null);
 
   // Monotonic request id so a slow earlier fetch can't overwrite a newer query.
   const listReqSeq = useRef(0);
@@ -324,6 +412,123 @@ export default function AdminMembersScreen() {
     [token, detail, refresh],
   );
 
+  // ── P1-7 handlers ─────────────────────────────────────────────
+  function openResetLink(): void {
+    setResetLinkOpen(true);
+    setResetLinkResult(null);
+    setResetLinkError(null);
+    void (async () => {
+      if (!token || !detail) return;
+      setResetLinkLoading(true);
+      try {
+        const result = await generateResetLink(detail.member.id, token);
+        setResetLinkResult(result);
+      } catch (err) {
+        setResetLinkError(errorLine(toStaffError(err).code));
+      } finally {
+        setResetLinkLoading(false);
+      }
+    })();
+  }
+
+  async function doForceSignOut(): Promise<void> {
+    setSignOutConfirm(false);
+    if (!token || !detail) return;
+    setSignOutBusy(true);
+    setSignOutNotice(null);
+    try {
+      await forceSignOutMember(detail.member.id, token);
+      setSignOutNotice('Signed out on every device.');
+    } catch (err) {
+      setMutationError(errorLine(toStaffError(err).code));
+    } finally {
+      setSignOutBusy(false);
+    }
+  }
+
+  function openEdit(): void {
+    if (!detail) return;
+    setEditEmail(detail.member.email);
+    setEditName(detail.member.displayName);
+    setEditError(null);
+    setEditOpen(true);
+  }
+
+  async function saveEdit(): Promise<void> {
+    if (!token || !detail) return;
+    const email = editEmail.trim();
+    const displayName = editName.trim();
+    if (!email || !displayName) {
+      setEditError('Email and name cannot be empty.');
+      return;
+    }
+    const patch: { email?: string; displayName?: string } = {};
+    if (email !== detail.member.email) patch.email = email;
+    if (displayName !== detail.member.displayName) patch.displayName = displayName;
+    if (Object.keys(patch).length === 0) {
+      setEditOpen(false);
+      return;
+    }
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      await updateMemberIdentity(detail.member.id, patch, token);
+      setEditOpen(false);
+      await refresh(detail.member.id);
+    } catch (err) {
+      setEditError(errorLine(toStaffError(err).code));
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  function openGdpr(): void {
+    setGdprConfirmText('');
+    setGdprError(null);
+    setGdprDone(false);
+    setGdprOpen(true);
+  }
+
+  const gdprConfirmMatches =
+    detail !== null && gdprConfirmText.trim().toLowerCase() === detail.member.email.toLowerCase();
+
+  async function doGdprAnonymize(): Promise<void> {
+    if (!token || !detail || !gdprConfirmMatches) return;
+    setGdprSaving(true);
+    setGdprError(null);
+    try {
+      await gdprAnonymizeMember(detail.member.id, token);
+      setGdprDone(true);
+      // The account no longer resolves to a normal member row after
+      // anonymization — close out and refresh the LIST rather than the
+      // (now-gone) detail sheet.
+      setTimeout(() => {
+        setGdprOpen(false);
+        closeSheet();
+        void loadList(query);
+      }, 900);
+    } catch (err) {
+      setGdprError(errorLine(toStaffError(err).code));
+    } finally {
+      setGdprSaving(false);
+    }
+  }
+
+  async function exportMembersCsv(): Promise<void> {
+    if (!token || csvBusy) return;
+    setCsvBusy(true);
+    setCsvError(null);
+    try {
+      const uri = await exportCsvToFile('members', token);
+      setCsvLink(uri);
+      await shareFile(uri);
+    } catch (err) {
+      setCsvError(errorLine(toStaffError(err).code));
+    } finally {
+      setCsvBusy(false);
+    }
+  }
+
   const suspended = detail?.member.status === 'suspended';
 
   // A staff-holding member may only be suspended/reactivated by a caller who
@@ -343,7 +548,11 @@ export default function AdminMembersScreen() {
   const canChangeTier = staffCan(staffPermissions, 'subscription.override');
   const canAssignCoach = staffCan(staffPermissions, 'coach.assign');
   const canSuspend = staffCan(staffPermissions, 'members.suspend');
-  const canAnyAction = canChangeTier || canAssignCoach || canSuspend;
+  // P1-7: reset link / force sign-out / identity edit / GDPR anonymize.
+  const canManageCredentials = staffCan(staffPermissions, 'members.manage_credentials');
+  const canAnyAction = canChangeTier || canAssignCoach || canSuspend || canManageCredentials;
+  // P1-10: CSV export of the directory — same read gate as the list itself.
+  const canExportCsv = staffCan(staffPermissions, 'members.read');
 
   return (
     <Screen scroll keyboardAware>
@@ -358,7 +567,48 @@ export default function AdminMembersScreen() {
         </PressableScale>
       </Animated.View>
 
-      <ScreenHeader eyebrow="Admin console" title="Members" style={styles.header} />
+      <ScreenHeader
+        eyebrow="Admin console"
+        title="Members"
+        style={styles.header}
+        action={
+          canExportCsv ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Export members as CSV"
+              accessibilityState={{ disabled: csvBusy }}
+              disabled={csvBusy}
+              onPress={() => void exportMembersCsv()}
+              style={styles.headerActionBtn}
+            >
+              {csvBusy ? (
+                <ActivityIndicator size="small" color={colors.text} />
+              ) : (
+                <Ionicons name="download-outline" size={20} color={colors.text} />
+              )}
+            </PressableScale>
+          ) : undefined
+        }
+      />
+
+      {csvError ? (
+        <AppText variant="caption" color={colors.error} style={styles.csvErrorText}>
+          {csvError}
+        </AppText>
+      ) : null}
+
+      {csvLink ? (
+        <View style={styles.csvLinkBlock}>
+          <AppText variant="caption" color={colors.textDim}>
+            Export saved on this device (long-press to copy the file path if the share sheet
+            didn&apos;t open):
+          </AppText>
+          <Text selectable style={styles.selectableLink}>
+            {csvLink}
+          </Text>
+          <Button label="Dismiss" variant="secondary" onPress={() => setCsvLink(null)} />
+        </View>
+      ) : null}
 
       <Animated.View entering={enterUp(0)} style={styles.searchWrap}>
         <Ionicons name="search" size={18} color={colors.textDim} style={styles.searchIcon} />
@@ -572,6 +822,88 @@ export default function AdminMembersScreen() {
                 </AppText>
               ) : null}
 
+              {/* P1-7: member lifecycle tools — all gated members.manage_credentials. */}
+              {canManageCredentials ? (
+                <>
+                  <PressableScale
+                    accessibilityRole="button"
+                    accessibilityLabel="Generate a password reset link"
+                    disabled={saving || statusLocked}
+                    onPress={() => reauth.guard(openResetLink)}
+                    style={[styles.action, (saving || statusLocked) && styles.actionDisabled]}
+                  >
+                    <Ionicons name="key-outline" size={18} color={colors.text} />
+                    <AppText variant="body" color={colors.text}>
+                      Generate reset link
+                    </AppText>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                  </PressableScale>
+
+                  <PressableScale
+                    accessibilityRole="button"
+                    accessibilityLabel="Force sign-out on every device"
+                    disabled={saving || signOutBusy || statusLocked}
+                    onPress={() => {
+                      setSignOutNotice(null);
+                      setSignOutConfirm(true);
+                    }}
+                    style={[
+                      styles.action,
+                      (saving || signOutBusy || statusLocked) && styles.actionDisabled,
+                    ]}
+                  >
+                    <Ionicons name="log-out-outline" size={18} color={colors.text} />
+                    <AppText variant="body" color={colors.text}>
+                      Force sign-out everywhere
+                    </AppText>
+                    {signOutBusy ? (
+                      <ActivityIndicator size="small" color={colors.textDim} />
+                    ) : (
+                      <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                    )}
+                  </PressableScale>
+
+                  <PressableScale
+                    accessibilityRole="button"
+                    accessibilityLabel="Edit email and name"
+                    disabled={saving || statusLocked}
+                    onPress={openEdit}
+                    style={[styles.action, (saving || statusLocked) && styles.actionDisabled]}
+                  >
+                    <Ionicons name="create-outline" size={18} color={colors.text} />
+                    <AppText variant="body" color={colors.text}>
+                      Edit email &amp; name
+                    </AppText>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                  </PressableScale>
+
+                  <PressableScale
+                    accessibilityRole="button"
+                    accessibilityLabel="Anonymize this member (GDPR)"
+                    disabled={saving || statusLocked}
+                    onPress={openGdpr}
+                    style={[styles.action, (saving || statusLocked) && styles.actionDisabled]}
+                  >
+                    <Ionicons name="trash-bin-outline" size={18} color={colors.error} />
+                    <AppText variant="body" color={colors.error}>
+                      Anonymize (GDPR)
+                    </AppText>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                  </PressableScale>
+
+                  {signOutNotice ? (
+                    <AppText variant="caption" color={colors.success}>
+                      {signOutNotice}
+                    </AppText>
+                  ) : null}
+                  {canManageCredentials && statusLocked ? (
+                    <AppText variant="caption" color={colors.textFaint}>
+                      Staff account — credentials tools are locked here too.
+                    </AppText>
+                  ) : null}
+                </>
+              ) : null}
+
               {!canAnyAction ? (
                 <AppText variant="caption" color={colors.textFaint}>
                   You have view-only access to this member.
@@ -722,6 +1054,158 @@ export default function AdminMembersScreen() {
         onConfirm={() => setMutationError(null)}
         onCancel={() => setMutationError(null)}
       />
+
+      {/* ── Force sign-out confirm ── */}
+      <ConfirmDialog
+        visible={signOutConfirm}
+        title="Sign out everywhere?"
+        message="Every device this member is signed into loses access immediately. Their account isn't suspended — they can sign back in right away."
+        confirmLabel="Sign out"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={() => reauth.guard(() => void doForceSignOut())}
+        onCancel={() => setSignOutConfirm(false)}
+      />
+
+      {/* ── Password reset link (P1-7) ── */}
+      <Sheet visible={resetLinkOpen} onClose={() => setResetLinkOpen(false)} title="Reset link">
+        <View style={styles.sheetBody}>
+          {resetLinkLoading ? (
+            <View style={styles.sheetCentre}>
+              <ActivityIndicator color={colors.accent} />
+            </View>
+          ) : resetLinkError ? (
+            <>
+              <AppText variant="caption" color={colors.textDim}>
+                {resetLinkError}
+              </AppText>
+              <Button
+                label="Retry"
+                variant="secondary"
+                onPress={() => reauth.guard(openResetLink)}
+              />
+            </>
+          ) : resetLinkResult ? (
+            <>
+              <AppText variant="caption" color={colors.textDim}>
+                Send this one-time link to the member — no email is sent
+                automatically. It expires{' '}
+                {new Date(resetLinkResult.expiresAt).toLocaleString()}.
+              </AppText>
+              {/* Plain, selectable RN Text (not AppText) so the admin can
+                  long-press to copy as a fallback when the share sheet is
+                  unavailable/dismissed. */}
+              <Text selectable style={styles.selectableLink}>
+                {resetLinkResult.resetUrl}
+              </Text>
+              <Button
+                label="Share link"
+                onPress={() => void shareLink(resetLinkResult.resetUrl)}
+              />
+            </>
+          ) : null}
+        </View>
+      </Sheet>
+
+      {/* ── Edit email / name (P1-7) ── */}
+      <Sheet visible={editOpen} onClose={() => setEditOpen(false)} title="Edit member">
+        <View style={styles.sheetBody}>
+          <AppText variant="label">Email</AppText>
+          <AppTextInput
+            value={editEmail}
+            onChangeText={setEditEmail}
+            placeholder="Email"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            editable={!editSaving}
+          />
+          <AppText variant="label">Display name</AppText>
+          <AppTextInput
+            value={editName}
+            onChangeText={setEditName}
+            placeholder="Display name"
+            maxLength={120}
+            editable={!editSaving}
+          />
+          {editError ? (
+            <AppText variant="caption" color={colors.error}>
+              {editError}
+            </AppText>
+          ) : null}
+          <View style={styles.decisionButtons}>
+            <Button
+              label="Cancel"
+              variant="secondary"
+              style={styles.decisionBtn}
+              disabled={editSaving}
+              onPress={() => setEditOpen(false)}
+            />
+            <Button
+              label="Save"
+              style={styles.decisionBtn}
+              loading={editSaving}
+              disabled={editSaving || !editEmail.trim() || !editName.trim()}
+              onPress={() => reauth.guard(() => void saveEdit())}
+            />
+          </View>
+        </View>
+      </Sheet>
+
+      {/* ── GDPR anonymize (P1-7) — typed confirm: the admin must type the
+          member's exact email before the button enables. ── */}
+      <Sheet visible={gdprOpen} onClose={() => setGdprOpen(false)} title="Anonymize member">
+        <View style={styles.sheetBody}>
+          {gdprDone ? (
+            <AppText variant="body" color={colors.success}>
+              This member's personal data has been anonymized.
+            </AppText>
+          ) : (
+            <>
+              <AppText variant="body" color={colors.textDim}>
+                This permanently scrubs {detail?.member.email ?? 'this member'}&apos;s
+                personal data (GDPR right-to-erasure). It cannot be undone. Type
+                their email address to confirm.
+              </AppText>
+              <AppTextInput
+                value={gdprConfirmText}
+                onChangeText={setGdprConfirmText}
+                placeholder={detail?.member.email ?? 'member@example.com'}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                editable={!gdprSaving}
+              />
+              {gdprError ? (
+                <AppText variant="caption" color={colors.error}>
+                  {gdprError}
+                </AppText>
+              ) : null}
+              <View style={styles.decisionButtons}>
+                <Button
+                  label="Cancel"
+                  variant="secondary"
+                  style={styles.decisionBtn}
+                  disabled={gdprSaving}
+                  onPress={() => setGdprOpen(false)}
+                />
+                <Button
+                  label="Anonymize"
+                  variant="danger"
+                  style={styles.decisionBtn}
+                  loading={gdprSaving}
+                  disabled={gdprSaving || !gdprConfirmMatches}
+                  onPress={() => reauth.guard(() => void doGdprAnonymize())}
+                />
+              </View>
+            </>
+          )}
+        </View>
+      </Sheet>
+
+      {/* Step-up password prompt for reset link / force sign-out / edit / GDPR
+          anonymize (plan §3 #14). */}
+      <ReauthSheet controller={reauth} />
     </Screen>
   );
 }
@@ -762,6 +1246,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   header: { marginBottom: spacing.gutter },
+  headerActionBtn: {
+    width: touch.min,
+    height: touch.min,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  csvErrorText: { marginBottom: spacing.sm },
+  csvLinkBlock: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  selectableLink: {
+    fontFamily: 'monospace',
+    fontSize: 13,
+    color: colors.text,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',

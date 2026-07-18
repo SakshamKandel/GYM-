@@ -18,9 +18,16 @@ import { useState } from 'react';
  * in — never a stuck state.
  *
  * `loginHref` is the console's own login route ('/admin/login' or
- * '/coach/login'), passed by ConsoleShell.
+ * '/coach/login'), passed by ConsoleShell. `compact` renders an icon-only
+ * button for the collapsed sidebar rail (same real sign-out behaviour).
  */
-export function LogoutButton({ loginHref }: { loginHref: string }) {
+export function LogoutButton({
+  loginHref,
+  compact = false,
+}: {
+  loginHref: string;
+  compact?: boolean;
+}) {
   const [busy, setBusy] = useState(false);
 
   async function signOut() {
@@ -37,6 +44,41 @@ export function LogoutButton({ loginHref }: { loginHref: string }) {
     window.location.replace(loginHref);
   }
 
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={() => void signOut()}
+        disabled={busy}
+        aria-label="Log out"
+        title="Log out"
+        className="gt-nav-item"
+        style={{
+          width: 40,
+          height: 40,
+          margin: '0 auto',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--gt-surface)',
+          border: '1px solid var(--gt-border)',
+          cursor: busy ? 'default' : 'pointer',
+          opacity: busy ? 0.6 : 1,
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
+          <path
+            d="M6 2H3v12h3M10 11l3-3-3-3M13 8H6"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+    );
+  }
+
   return (
     <button
       type="button"
@@ -46,7 +88,7 @@ export function LogoutButton({ loginHref }: { loginHref: string }) {
       style={{
         width: '100%',
         textAlign: 'left',
-        background: 'none',
+        background: 'var(--gt-surface)',
         border: '1px solid var(--gt-border)',
         cursor: busy ? 'default' : 'pointer',
         opacity: busy ? 0.6 : 1,

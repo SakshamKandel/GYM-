@@ -9,7 +9,9 @@
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
-    "seed:demo-coach": "pnpm dlx tsx src/seed-demo-coach.ts"
+    "seed:demo-coach": "pnpm dlx tsx src/seed-demo-coach.ts",
+    "seed:wave-gym": "pnpm dlx tsx src/seed-wave-gym.ts",
+    "seed:live-demo": "pnpm dlx tsx src/seed-live-demo.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.0",

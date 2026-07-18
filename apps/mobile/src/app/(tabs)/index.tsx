@@ -1,3 +1,4 @@
+import { memo, useCallback, useMemo } from 'react';
 import { router } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -24,7 +25,7 @@ import {
   Tag,
 } from '../../components/ui';
 import { homeHeroImage, homeHeroImageKey, photoForWorkout } from '../../components/visual';
-import { allExercises } from '../../lib/exercises';
+import { getExercise } from '../../lib/exercises';
 import { isMuscleGroup, type MuscleGroup } from '../../lib/muscleMap';
 import { posterDate } from '../../lib/dates';
 import { useAiTip } from '../../lib/ai/useAiTip';
@@ -52,6 +53,7 @@ import {
 import { StreakChip } from '../../features/engagement/components/StreakChip';
 import { WeeklyCheckIn } from '../../features/engagement/components/WeeklyCheckIn';
 import { openLastSession, pushHistory } from '../../features/history/nav';
+import { pushPath as pushGymsPath } from '../../features/gyms/nav';
 import { useMyCoach } from '../../features/mentorship/hooks';
 import { useHomeData, useQuestProgress, type DoneToday } from '../../features/engagement/hooks';
 import { avatarLetter, formatCompact, greetingForHour, toHref } from '../../features/engagement/logic';
@@ -170,10 +172,14 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     minHeight: touch.min,
   },
+  // Standalone teaser rows (gyms) sit between sections, outside any
+  // gap-managed stack — they carry their own bottom rhythm so they never
+  // fuse into the next card.
+  teaserWrap: { marginBottom: spacing.md },
 });
 
 /** Outlined meta pill for the header row (dates, counts). Not a tap target. */
-function MetaChip({ label }: { label: string }) {
+const MetaChip = memo(function MetaChip({ label }: { label: string }) {
   return (
     <View style={styles.metaChip}>
       <AppText variant="label" color={colors.text}>
@@ -181,7 +187,7 @@ function MetaChip({ label }: { label: string }) {
       </AppText>
     </View>
   );
-}
+});
 
 /**
  * The next-workout's muscle focus (first exercise's group), used to vary the
@@ -191,7 +197,7 @@ function MetaChip({ label }: { label: string }) {
 function nextWorkoutMuscle(workout: PlanWorkout | null): MuscleGroup | null {
   const first = workout?.exercises[0];
   if (!first) return null;
-  const group = allExercises().find((e) => e.id === first.exerciseId)?.muscleGroup;
+  const group = getExercise(first.exerciseId)?.muscleGroup;
   return group && isMuscleGroup(group) ? group : null;
 }
 
@@ -203,7 +209,7 @@ function nextWorkoutMuscle(workout: PlanWorkout | null): MuscleGroup | null {
  * varied by muscle focus). The photo is decorative; chip/title/caption/CTA
  * carry the meaning.
  */
-function Hero({
+const Hero = memo(function Hero({
   planName,
   nextWorkout,
   doneToday,
@@ -270,7 +276,7 @@ function Hero({
       }}
     />
   );
-}
+});
 
 /**
  * Skeleton geometry for everything data-driven: the red hero block, the
@@ -298,7 +304,7 @@ function HomeSkeleton() {
  * Greece thread; everyone else (signed out included — useMyCoach returns
  * nulls) gets the coach directory — discovery, not a paywall.
  */
-function CoachEntry({ tier }: { tier: Tier }) {
+const CoachEntry = memo(function CoachEntry({ tier }: { tier: Tier }) {
   const { coach, request, loaded } = useMyCoach();
   const signedIn = useAuth((s) => s.status === 'signedIn');
   const elite = hasEntitlement({ tier }, 'coach_chat');
@@ -400,7 +406,7 @@ function CoachEntry({ tier }: { tier: Tier }) {
       <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
     </Card>
   );
-}
+});
 
 export default function HomeScreen() {
   const displayName = useProfile((s) => s.displayName);
@@ -424,15 +430,24 @@ export default function HomeScreen() {
   // never the latest raw weigh-in.
   const weights = useWeights();
   const weightList = weights ?? [];
-  const headline = weightHeadline(weightList, unitPref);
-  const trendPoints = weightChartData(weightList, unitPref).trend;
-  const firstTrend = trendPoints[0];
-  const lastTrend = trendPoints[trendPoints.length - 1];
-  const weightDelta30 =
-    firstTrend !== undefined && lastTrend !== undefined && trendPoints.length >= 2
-      ? lastTrend.value - firstTrend.value
-      : null;
-  const lastWeighIn = weightList[weightList.length - 1];
+  // Trend smoothing (EWMA) + chart projection are pure but non-trivial over
+  // ~90 rows; recompute only when the weight list or unit actually changes,
+  // not on every one of Home's ~5 focus-driven re-renders.
+  const { headline, weightDelta30, lastWeighIn } = useMemo(() => {
+    const hl = weightHeadline(weightList, unitPref);
+    const trendPoints = weightChartData(weightList, unitPref).trend;
+    const firstTrend = trendPoints[0];
+    const lastTrend = trendPoints[trendPoints.length - 1];
+    const delta30 =
+      firstTrend !== undefined && lastTrend !== undefined && trendPoints.length >= 2
+        ? lastTrend.value - firstTrend.value
+        : null;
+    return {
+      headline: hl,
+      weightDelta30: delta30,
+      lastWeighIn: weightList[weightList.length - 1],
+    };
+  }, [weights, unitPref]);
 
   const unit = unitLabel(unitPref);
   const latestPr = data?.recentPrs[0] ?? null;
@@ -445,15 +460,24 @@ export default function HomeScreen() {
   // uses below — so the "last session" thumbnail can avoid repeating it.
   // Same input, same photo, computed here purely to de-collide two surfaces
   // that can be on screen together (e.g. "done" hero + last session row).
-  const heroMuscle = nextWorkoutMuscle(data?.nextWorkout ?? null);
-  const heroPhotoKey =
-    data === null
-      ? null
-      : data.doneToday !== null
-        ? homeHeroImageKey('done', null)
-        : data.nextWorkout === null
-          ? homeHeroImageKey('noPlan', null)
-          : homeHeroImageKey('next', heroMuscle, data.nextWorkout.name);
+  // Hero photo selection scans the exercise catalog (getExercise) and builds a
+  // recycling key; both are stable for a given home-data snapshot, so memoize
+  // them rather than recomputing on every focus-driven re-render.
+  const heroMuscle = useMemo(
+    () => nextWorkoutMuscle(data?.nextWorkout ?? null),
+    [data?.nextWorkout],
+  );
+  const heroPhotoKey = useMemo(
+    () =>
+      data === null
+        ? null
+        : data.doneToday !== null
+          ? homeHeroImageKey('done', null)
+          : data.nextWorkout === null
+            ? homeHeroImageKey('noPlan', null)
+            : homeHeroImageKey('next', heroMuscle, data.nextWorkout.name),
+    [data, heroMuscle],
+  );
   const showQuest = quest !== null && !quest.expired && !questDismissed;
   const todayDescription = data?.doneToday
     ? 'You showed up today. Keep the momentum going with one clear next step.'
@@ -461,6 +485,11 @@ export default function HomeScreen() {
       ? `${data.nextWorkout.name} is ready. Everything you need for today is below.`
       : 'Set your plan, then let this screen keep your next move obvious.';
   const sessionsThisWeek = data?.weekSessions ?? 0;
+
+  // Stable nav handlers so the memoized report/weight cards don't re-render
+  // just because Home re-rendered with fresh inline closures.
+  const openProgress = useCallback(() => router.push('/(tabs)/progress'), []);
+  const logWeight = useCallback(() => router.push(toHref('/body/log-weight')), []);
 
   const { state: tipState, refresh } = useAiTip(() => {
     const streak = weeklyStreak?.weeks ?? 0;
@@ -609,7 +638,7 @@ export default function HomeScreen() {
               weightDeltaText={weightDelta30 !== null ? signedDelta(weightDelta30) : null}
               unit={unit}
               latestPrText={latestPrText}
-              onOpen={() => router.push('/(tabs)/progress')}
+              onOpen={openProgress}
             />
           </Animated.View>
 
@@ -624,8 +653,8 @@ export default function HomeScreen() {
               lastLoggedText={
                 lastWeighIn !== undefined ? `Last logged ${posterDate(lastWeighIn.date)}` : null
               }
-              onOpen={() => router.push('/(tabs)/progress')}
-              onLog={() => router.push(toHref('/body/log-weight'))}
+              onOpen={openProgress}
+              onLog={logWeight}
             />
           </Animated.View>
 
@@ -638,6 +667,22 @@ export default function HomeScreen() {
           <Animated.View entering={enterUp(6)}>
             <SectionLabel>Coach</SectionLabel>
             <CoachEntry tier={serverTier} />
+          </Animated.View>
+
+          {/* Nearby gyms teaser (plan §6 P12, optional) — a single compact
+              link row into the /gyms discovery hub; no thematic tie to any
+              other Home section, so it gets its own quiet row rather than a
+              full card. */}
+          <Animated.View entering={enterUp(6)} style={styles.teaserWrap}>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Find a gym near you"
+              onPress={() => pushGymsPath('/gyms')}
+              style={styles.historyRow}
+            >
+              <AppText variant="bodyBold">Nearby gyms</AppText>
+              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+            </PressableScale>
           </Animated.View>
 
           <CheckInCard stagger={7} />

@@ -67,6 +67,12 @@ export const STAFF_ROUTES = {
   adminWallets: '/staff/admin/wallets',
   /** Coach seniority tier-request queue (coach.application.review). */
   adminTierRequests: '/staff/admin/tier-requests',
+  /** Coach payout-request review queue (payouts.review — super/main). */
+  adminPayouts: '/staff/admin/payouts',
+  /** All-partners meal-order oversight (orders.review — super/main). */
+  adminOrders: '/staff/admin/orders',
+  /** Meal-delivery manual-payment review queue (payments.review). */
+  adminMealPayments: '/staff/admin/meal-payments',
 } as const;
 
 /** router.push through the typed-routes escape hatch. */
@@ -133,6 +139,7 @@ const ADMIN_CONSOLE_PERMISSIONS: readonly Permission[] = [
   'moderation.manage',
   'catalog.manage',
   'gamification.manage',
+  'orders.review',
 ];
 
 export function canOpenAdminConsole(permissions: readonly Permission[]): boolean {
@@ -170,4 +177,17 @@ export function canManageWallets(permissions: readonly Permission[]): boolean {
 /** Support inbox — the `support.thread.read` permission (support_admin + super/main). */
 export function canReviewSupport(permissions: readonly Permission[]): boolean {
   return staffCan(permissions, 'support.thread.read');
+}
+
+/** Coach payout-request queue — the `payouts.review` permission (super/main). */
+export function canManagePayouts(permissions: readonly Permission[]): boolean {
+  return staffCan(permissions, 'payouts.review');
+}
+
+/**
+ * All-partners meal-order oversight — the `orders.review` permission
+ * (super_admin/main_admin — no sub-role preset).
+ */
+export function canReviewOrders(permissions: readonly Permission[]): boolean {
+  return staffCan(permissions, 'orders.review');
 }

@@ -14,19 +14,45 @@ type Tier = 'starter' | 'silver' | 'gold' | 'elite';
 type Status = 'active' | 'suspended' | 'ended' | 'live' | 'pending';
 type Tone = 'neutral' | 'positive' | 'warning' | 'critical' | 'info';
 
+// Tones read from the semantic status tokens (fg + weak wash) so a theme flip
+// recolours every badge with zero edits. Borders derive from the fg via
+// color-mix, keeping the outline in-family without a second hardcoded value.
 const TONE_STYLES: Record<Tone, { fg: string; bg: string; border: string }> = {
-  neutral: { fg: 'var(--gt-text-dim)', bg: 'transparent', border: 'var(--gt-border)' },
-  positive: { fg: '#4cc264', bg: 'rgba(63,185,80,0.10)', border: 'rgba(63,185,80,0.30)' },
-  warning: { fg: '#e0a34a', bg: 'rgba(224,163,74,0.10)', border: 'rgba(224,163,74,0.30)' },
-  critical: { fg: '#ff8178', bg: 'rgba(255,107,96,0.10)', border: 'rgba(255,107,96,0.30)' },
-  info: { fg: '#7aa2d6', bg: 'rgba(122,162,214,0.10)', border: 'rgba(122,162,214,0.30)' },
+  neutral: {
+    fg: 'var(--gt-text-dim)',
+    bg: 'transparent',
+    border: 'var(--gt-border-strong)',
+  },
+  positive: {
+    fg: 'var(--gt-success)',
+    bg: 'var(--gt-success-weak)',
+    border: 'color-mix(in srgb, var(--gt-success) 32%, transparent)',
+  },
+  warning: {
+    fg: 'var(--gt-warning)',
+    bg: 'var(--gt-warning-weak)',
+    border: 'color-mix(in srgb, var(--gt-warning) 32%, transparent)',
+  },
+  critical: {
+    fg: 'var(--gt-danger)',
+    bg: 'var(--gt-danger-weak)',
+    border: 'color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+  },
+  info: {
+    fg: 'var(--gt-info)',
+    bg: 'var(--gt-info-weak)',
+    border: 'color-mix(in srgb, var(--gt-info) 32%, transparent)',
+  },
 };
 
+// Membership-tier tints — legible on the light surface (AA fg on white). These
+// are decorative brand tints, not semantic status, so they stay bespoke but are
+// tuned for the light theme rather than the old charcoal one.
 const TIER_STYLES: Record<Tier, { fg: string; bg: string; border: string }> = {
-  starter: { fg: '#9a9da3', bg: 'transparent', border: 'var(--gt-border)' },
-  silver: { fg: '#c7cbd1', bg: 'rgba(199,203,209,0.08)', border: 'rgba(199,203,209,0.22)' },
-  gold: { fg: '#d9b25a', bg: 'rgba(217,178,90,0.10)', border: 'rgba(217,178,90,0.28)' },
-  elite: { fg: '#c9a0e8', bg: 'rgba(201,160,232,0.10)', border: 'rgba(201,160,232,0.28)' },
+  starter: { fg: 'var(--gt-text-dim)', bg: 'transparent', border: 'var(--gt-border-strong)' },
+  silver: { fg: '#5a6270', bg: '#f1f2f4', border: '#dadde2' },
+  gold: { fg: '#8a6212', bg: '#fbf1dd', border: '#ebd9a8' },
+  elite: { fg: '#6b3fa0', bg: '#f1e9fa', border: '#dfccf2' },
 };
 
 const STATUS_TONE: Record<Status, Tone> = {

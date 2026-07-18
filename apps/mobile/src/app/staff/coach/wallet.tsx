@@ -6,6 +6,9 @@ import { formatMoney } from '@gym/shared';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
+  AppTextInput,
+  Button,
+  Chip,
   enterDown,
   enterUp,
   PressableScale,
@@ -16,8 +19,13 @@ import {
 } from '../../../components/ui';
 import {
   getCoachWallet,
+  getMyPayoutStatus,
+  payoutMinimumFor,
+  requestPayout,
   toStaffError,
   type CoachWallet,
+  type MyPayoutRequest,
+  type PayoutStatus,
   type WalletEntry,
 } from '../../../features/staff/api';
 import { replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
@@ -79,11 +87,39 @@ function errorLine(code: string): string {
   return "Couldn't load your wallet.";
 }
 
+function payoutErrorLine(code: string, currency: string): string {
+  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'forbidden') return "You don't have coach access.";
+  if (code === 'already_pending')
+    return 'You already have a pending payout request — wait for it to be decided first.';
+  if (code === 'insufficient_balance') return "That's more than your current balance.";
+  // 'invalid' also covers the server's below-minimum rejection.
+  if (code === 'invalid')
+    return `Amount must be at least ${formatMoney(payoutMinimumFor(currency), currency)}.`;
+  return "Couldn't submit the request.";
+}
+
+function payoutStatusTone(status: PayoutStatus): { label: string; color: string } {
+  if (status === 'approved') return { label: 'Approved', color: colors.success };
+  if (status === 'paid') return { label: 'Paid', color: colors.success };
+  if (status === 'rejected') return { label: 'Rejected', color: colors.error };
+  return { label: 'Pending', color: colors.warning };
+}
+
 export default function CoachWalletScreen() {
   const token = useAuth((s) => s.token);
   const [wallet, setWallet] = useState<CoachWallet | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [payouts, setPayouts] = useState<MyPayoutRequest[]>([]);
+  const [payoutsLoading, setPayoutsLoading] = useState(true);
+  const [payoutsError, setPayoutsError] = useState<string | null>(null);
+
+  const [amount, setAmount] = useState('');
+  const [currency, setCurrency] = useState<string>('NPR');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!token) {
@@ -102,9 +138,59 @@ export default function CoachWalletScreen() {
     }
   }, [token]);
 
+  const loadPayouts = useCallback(async () => {
+    if (!token) {
+      setPayoutsLoading(false);
+      return;
+    }
+    setPayoutsError(null);
+    setPayoutsLoading(true);
+    try {
+      setPayouts(await getMyPayoutStatus(token));
+    } catch (err) {
+      setPayoutsError(payoutErrorLine(toStaffError(err).code, currency));
+    } finally {
+      setPayoutsLoading(false);
+    }
+  }, [token, currency]);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadPayouts();
+  }, [load, loadPayouts]);
+
+  // One-pending-per-coach: the server enforces it, this just derives the UI
+  // state from the same history list (getMyPayoutStatus) rather than
+  // tracking it separately.
+  const pendingPayout = payouts.find((p) => p.status === 'pending') ?? null;
+  const balanceCurrencies = (wallet?.balances ?? []).map((b) => b.currency);
+  const currencyOptions = balanceCurrencies.length > 0 ? balanceCurrencies : ['NPR', 'USD'];
+
+  async function submitPayoutRequest(): Promise<void> {
+    if (!token || submitting || pendingPayout) return;
+    const major = Number(amount.trim());
+    if (!amount.trim() || !Number.isFinite(major) || major <= 0) {
+      setSubmitError('Enter a positive amount.');
+      return;
+    }
+    const amountMinor = Math.round(major * 100);
+    const minimum = payoutMinimumFor(currency);
+    if (amountMinor < minimum) {
+      setSubmitError(`Amount must be at least ${formatMoney(minimum, currency)}.`);
+      return;
+    }
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await requestPayout(amountMinor, currency, token);
+      setAmount('');
+      await loadPayouts();
+    } catch (err) {
+      setSubmitError(payoutErrorLine(toStaffError(err).code, currency));
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   function goBack(): void {
     replaceStaff(STAFF_ROUTES.coachInbox);
@@ -188,6 +274,92 @@ export default function CoachWalletScreen() {
             </Animated.View>
           ) : null}
 
+          <Animated.View entering={enterUp(2)} style={styles.payoutCard}>
+            <SectionLabel>Request a payout</SectionLabel>
+
+            {pendingPayout ? (
+              <View style={styles.pendingBanner}>
+                <Ionicons name="time-outline" size={16} color={colors.warning} />
+                <AppText variant="caption" color={colors.textDim} style={styles.pendingBannerText}>
+                  You have a pending request for{' '}
+                  {formatMoney(pendingPayout.amountMinor, pendingPayout.currency)} — wait for an
+                  admin to decide it before requesting again.
+                </AppText>
+              </View>
+            ) : (
+              <>
+                <View style={styles.chipsRow}>
+                  {currencyOptions.map((c) => (
+                    <Chip key={c} label={c} selected={currency === c} onPress={() => setCurrency(c)} />
+                  ))}
+                </View>
+                <AppTextInput
+                  value={amount}
+                  onChangeText={setAmount}
+                  placeholder={`Amount (min ${formatMoney(payoutMinimumFor(currency), currency)})`}
+                  keyboardType="decimal-pad"
+                  editable={!submitting}
+                  accessibilityLabel="Payout amount"
+                />
+                {submitError ? (
+                  <AppText variant="caption" color={colors.error}>
+                    {submitError}
+                  </AppText>
+                ) : null}
+                <Button
+                  label={submitting ? 'Submitting…' : 'Request payout'}
+                  onPress={() => void submitPayoutRequest()}
+                  loading={submitting}
+                  disabled={submitting}
+                  style={styles.requestBtn}
+                />
+              </>
+            )}
+
+            {payoutsLoading && payouts.length === 0 ? (
+              <ActivityIndicator color={colors.textDim} style={styles.payoutSpinner} />
+            ) : payoutsError && payouts.length === 0 ? (
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="Retry loading your payout history"
+                onPress={() => void loadPayouts()}
+                style={styles.staleRow}
+              >
+                <Ionicons name="cloud-offline-outline" size={14} color={colors.textDim} />
+                <AppText variant="caption">{payoutsError} Tap to retry.</AppText>
+              </PressableScale>
+            ) : payouts.length > 0 ? (
+              <View style={styles.payoutHistory}>
+                <AppText variant="label" color={colors.textFaint}>
+                  History
+                </AppText>
+                {payouts.map((p) => {
+                  const tone = payoutStatusTone(p.status);
+                  return (
+                    <View key={p.id} style={styles.row}>
+                      <View style={styles.rowText}>
+                        <View style={styles.rowHead}>
+                          <Tag label={tone.label} variant="outline" color={tone.color} />
+                          <AppText variant="caption" color={colors.textFaint}>
+                            {relativeTime(p.requestedAt)}
+                          </AppText>
+                        </View>
+                        {p.disbursementRef ? (
+                          <AppText variant="caption" numberOfLines={1}>
+                            Ref: {p.disbursementRef}
+                          </AppText>
+                        ) : null}
+                      </View>
+                      <AppText variant="bodyBold" tabular>
+                        {formatMoney(p.amountMinor, p.currency)}
+                      </AppText>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+          </Animated.View>
+
           <SectionLabel>Recent activity</SectionLabel>
           {error ? (
             <PressableScale
@@ -241,6 +413,26 @@ export default function CoachWalletScreen() {
 }
 
 const styles = StyleSheet.create({
+  payoutCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  pendingBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  pendingBannerText: { flex: 1 },
+  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  requestBtn: { marginTop: spacing.xs },
+  payoutSpinner: { marginVertical: spacing.sm, alignSelf: 'flex-start' },
+  payoutHistory: { gap: spacing.sm, marginTop: spacing.sm },
   backRow: { marginBottom: spacing.lg },
   backBtn: {
     width: touch.min,

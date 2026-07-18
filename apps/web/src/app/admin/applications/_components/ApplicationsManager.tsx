@@ -279,7 +279,7 @@ export function ApplicationsManager({
                 fontSize: 13,
                 fontWeight: 600,
                 background: active ? 'var(--gt-red)' : 'transparent',
-                color: active ? '#fff' : 'var(--gt-text)',
+                color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
                 border: active
                   ? '1px solid var(--gt-red)'
                   : '1px solid var(--gt-border)',
@@ -529,7 +529,7 @@ export function ApplicationsManager({
             ) : null}
 
             {error ? (
-              <div style={{ color: '#ff8178', fontSize: 13 }}>{error}</div>
+              <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div>
             ) : null}
           </div>
         ) : null}

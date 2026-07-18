@@ -23,3 +23,7 @@ export * from './logic/leaderboard';
 export * from './logic/plausibility';
 export * from './logic/mentorship';
 export * from './logic/paymentWindow';
+export * from './logic/meals';
+export * from './logic/orders';
+export * from './logic/gyms';
+export * from './logic/geo';

@@ -13,6 +13,7 @@ import {
   TextField,
   TierChip,
 } from '@/components/console';
+import { PayoutsQueue } from './PayoutsQueue';
 
 export type CoachTier = 'silver' | 'gold' | 'elite';
 
@@ -69,6 +70,9 @@ const TYPE_LABEL: Record<LedgerEntry['type'], string> = {
  */
 export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
   const router = useRouter();
+  // Top-level view: coach balances (with the record-entry drawer) or the
+  // coach-initiated payout request queue (plan §3 P1-12).
+  const [tab, setTab] = useState<'balances' | 'payouts'>('balances');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<WalletDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -260,7 +264,37 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
 
   return (
     <>
-      {wallets.length === 0 ? (
+      <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
+        {(['balances', 'payouts'] as const).map((t) => {
+          const active = tab === t;
+          return (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              style={{
+                padding: '7px 14px',
+                borderRadius: 10,
+                cursor: 'pointer',
+                fontFamily: 'var(--font-heading)',
+                fontSize: 13,
+                fontWeight: 600,
+                background: active ? 'var(--gt-accent-strong)' : 'transparent',
+                color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
+                border: active
+                  ? '1px solid var(--gt-accent-strong)'
+                  : '1px solid var(--gt-border)',
+              }}
+            >
+              {t === 'balances' ? 'Balances' : 'Payout requests'}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === 'payouts' ? (
+        <PayoutsQueue />
+      ) : wallets.length === 0 ? (
         <EmptyState
           title="No coach wallets yet"
           description="Wallets appear once a coach is approved. Commission credits land automatically when a promo-coded purchase settles."
@@ -340,10 +374,10 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
                         fontFamily: 'var(--font-heading)',
                         fontSize: 12,
                         fontWeight: 600,
-                        background: active ? 'var(--gt-red)' : 'transparent',
-                        color: active ? '#fff' : 'var(--gt-text)',
+                        background: active ? 'var(--gt-accent-strong)' : 'transparent',
+                        color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
                         border: active
-                          ? '1px solid var(--gt-red)'
+                          ? '1px solid var(--gt-accent-strong)'
                           : '1px solid var(--gt-border)',
                       }}
                     >
@@ -437,7 +471,7 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
               </div>
 
               {error ? (
-                <div style={{ color: '#ff8178', fontSize: 13, marginTop: 8 }}>
+                <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 8 }}>
                   {error}
                 </div>
               ) : null}
@@ -470,7 +504,7 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
               {detailLoading ? (
                 <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>Loading…</div>
               ) : detailError ? (
-                <div style={{ fontSize: 13, color: '#ff8178' }}>{detailError}</div>
+                <div style={{ fontSize: 13, color: 'var(--gt-danger)' }}>{detailError}</div>
               ) : drawerEntries.length === 0 ? (
                 <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
                   No entries yet.
@@ -513,7 +547,7 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
                         className="gt-numeric"
                         style={{
                           fontSize: 13,
-                          color: entry.amountMinor < 0 ? '#ff8178' : '#4cc264',
+                          color: entry.amountMinor < 0 ? 'var(--gt-danger)' : 'var(--gt-success)',
                           whiteSpace: 'nowrap',
                         }}
                       >

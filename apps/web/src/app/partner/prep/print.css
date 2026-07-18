@@ -1,0 +1,43 @@
+/*
+ * Prep-summary print styling. A PLAIN global stylesheet (not a CSS module):
+ * isolating the kitchen sheet from the surrounding console chrome needs a
+ * body-wide `visibility` clip, and CSS-module "pure" mode forbids selectors
+ * without a local class. Class names are `pp-`-prefixed to avoid global
+ * collisions. On screen these are inert layout helpers; the clip only applies
+ * under @media print, so the sidebar/topbar never reach the page.
+ */
+.pp-print-area {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.pp-print-meta {
+  font-size: 13px;
+  color: var(--gt-text-dim);
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .pp-print-area,
+  .pp-print-area * {
+    visibility: visible !important;
+  }
+  .pp-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 0 12px;
+  }
+  .pp-no-print {
+    display: none !important;
+  }
+  .pp-card {
+    border: 1px solid #cccccc !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+}

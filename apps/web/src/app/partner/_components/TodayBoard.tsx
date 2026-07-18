@@ -1,0 +1,428 @@
+'use client';
+
+import { canActorAdvance, ORDER_STATUSES, type MealWindow, type OrderStatus } from '@gym/shared';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Badge, Button, EmptyState } from '@/components/console';
+import type { PartnerOrderView } from '../_data';
+import {
+  formatMoney,
+  isOrderLate,
+  ORDER_STATUS_LABEL,
+  ORDER_STATUS_TONE,
+  windowShort,
+} from '../_format';
+import { OrderDetailDrawer } from './OrderDetailDrawer';
+import { useCallbackRef } from './useCallbackRef';
+
+/**
+ * The Today board — the partner's live operations surface. Every non-terminal
+ * order for the current KTM day, split into a lunch and a dinner lane, each a
+ * kanban of the fulfillment columns (Pending → Confirmed → Preparing → Out for
+ * delivery). One-tap advance is optimistic and self-heals on a CAS conflict
+ * (409 → refetch). The board polls every 15s, flags brand-new orders with a
+ * badge + document-title flash, and highlights any order whose delivery window
+ * has already started but isn't delivered.
+ */
+
+const POLL_MS = 15_000;
+
+/** Board columns, left→right, matching the natural fulfillment flow. */
+const COLUMNS: { status: OrderStatus; label: string }[] = [
+  { status: 'pending', label: 'Awaiting confirmation' },
+  { status: 'confirmed', label: 'Confirmed' },
+  { status: 'preparing', label: 'Preparing' },
+  { status: 'out_for_delivery', label: 'Out for delivery' },
+];
+
+const ADVANCE_META: Partial<Record<OrderStatus, string>> = {
+  confirmed: 'Confirm',
+  preparing: 'Start preparing',
+  out_for_delivery: 'Out for delivery',
+  delivered: 'Mark delivered',
+};
+
+/** Partner-reachable forward targets for a status (excludes cancel/refuse). */
+function nextAction(from: OrderStatus): OrderStatus | null {
+  const to = ORDER_STATUSES.find(
+    (t) => t !== 'cancelled' && t !== 'refused' && canActorAdvance(from, t, 'partner') && ADVANCE_META[t],
+  );
+  return to ?? null;
+}
+
+export function TodayBoard({
+  orders: initial,
+  today,
+  currency,
+}: {
+  orders: PartnerOrderView[];
+  today: string;
+  currency: string;
+}) {
+  const router = useRouter();
+  const [orders, setOrders] = useState<PartnerOrderView[]>(initial);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [errorById, setErrorById] = useState<Record<string, string>>({});
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [newIds, setNewIds] = useState<Set<string>>(() => new Set());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const knownIds = useRef<Set<string>>(new Set(initial.map((o) => o.orderId)));
+
+  const todaysOrders = useMemo(
+    () => orders.filter((o) => o.deliveryDate === today),
+    [orders, today],
+  );
+
+  // Late-highlight recompute every 30s without re-fetching.
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  // 15s polling — server is the source of truth; detect newly-arrived ids.
+  const poll = useCallbackRef(async () => {
+    try {
+      const res = await fetch('/api/partner/orders?scope=active', { credentials: 'include' });
+      if (!res.ok) return;
+      const body = (await res.json()) as { orders: PartnerOrderView[] };
+      const fetched = body.orders;
+      const fresh = fetched.filter(
+        (o) => o.deliveryDate === today && !knownIds.current.has(o.orderId),
+      );
+      if (fresh.length > 0) {
+        setNewIds((prev) => {
+          const next = new Set(prev);
+          for (const o of fresh) next.add(o.orderId);
+          return next;
+        });
+      }
+      for (const o of fetched) knownIds.current.add(o.orderId);
+      setOrders(fetched);
+    } catch {
+      /* transient — next tick retries */
+    }
+  });
+
+  useEffect(() => {
+    const t = setInterval(() => void poll(), POLL_MS);
+    return () => clearInterval(t);
+  }, [poll]);
+
+  // Title flash while unreviewed new orders exist (cleared on interaction).
+  useEffect(() => {
+    if (newIds.size === 0) return;
+    const base = document.title;
+    let on = false;
+    const t = setInterval(() => {
+      on = !on;
+      document.title = on ? `(${newIds.size}) New order${newIds.size === 1 ? '' : 's'}` : base;
+    }, 1000);
+    return () => {
+      clearInterval(t);
+      document.title = base;
+    };
+  }, [newIds.size]);
+
+  async function advance(orderId: string, toStatus: OrderStatus) {
+    setBusyId(orderId);
+    setErrorById((e) => ({ ...e, [orderId]: '' }));
+    try {
+      const res = await fetch(`/api/partner/orders/${encodeURIComponent(orderId)}/advance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ toStatus }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        const msg =
+          body.error === 'payment_required'
+            ? 'Not paid yet — approve the payment before confirming.'
+            : body.error === 'conflict' || body.error === 'illegal_transition'
+              ? 'This order changed — refreshing.'
+              : 'Could not update. Try again.';
+        setErrorById((e) => ({ ...e, [orderId]: msg }));
+        if (body.error === 'conflict' || body.error === 'illegal_transition') void poll();
+        return;
+      }
+      const body = (await res.json()) as { order: PartnerOrderView };
+      setOrders((list) => list.map((o) => (o.orderId === orderId ? body.order : o)));
+      router.refresh();
+    } catch {
+      setErrorById((e) => ({ ...e, [orderId]: 'Network error. Try again.' }));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function acknowledgeNew() {
+    setNewIds(new Set());
+  }
+
+  const windows: MealWindow[] = ['lunch', 'dinner'];
+  const hasAny = todaysOrders.length > 0;
+
+  return (
+    <div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          marginBottom: 14,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+            Auto-refreshing every 15s · {todaysOrders.length} live today
+          </span>
+          {newIds.size > 0 ? (
+            <button
+              onClick={acknowledgeNew}
+              style={{
+                border: 'none',
+                borderRadius: 999,
+                padding: '4px 12px',
+                background: 'var(--gt-accent-strong)',
+                color: 'var(--gt-accent-ink)',
+                fontFamily: 'var(--font-heading)',
+                fontWeight: 600,
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              {newIds.size} new order{newIds.size === 1 ? '' : 's'} · review
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {!hasAny ? (
+        <EmptyState
+          title="No orders for today yet"
+          description="New one-time and subscription orders for today appear here automatically."
+        />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {windows.map((window) => {
+            const windowOrders = todaysOrders.filter((o) => o.window === window);
+            if (windowOrders.length === 0) return null;
+            return (
+              <WindowLane
+                key={window}
+                window={window}
+                orders={windowOrders}
+                currency={currency}
+                nowMs={nowMs}
+                busyId={busyId}
+                errorById={errorById}
+                newIds={newIds}
+                onAdvance={advance}
+                onOpen={setSelectedId}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {selectedId ? (
+        <OrderDetailDrawer
+          orderId={selectedId}
+          currency={currency}
+          onClose={() => setSelectedId(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function WindowLane({
+  window,
+  orders,
+  currency,
+  nowMs,
+  busyId,
+  errorById,
+  newIds,
+  onAdvance,
+  onOpen,
+}: {
+  window: MealWindow;
+  orders: PartnerOrderView[];
+  currency: string;
+  nowMs: number;
+  busyId: string | null;
+  errorById: Record<string, string>;
+  newIds: Set<string>;
+  onAdvance: (id: string, to: OrderStatus) => void;
+  onOpen: (id: string) => void;
+}) {
+  const lateCount = orders.filter((o) => isOrderLate(o, nowMs)).length;
+  return (
+    <section aria-label={`${windowShort(window)} orders`}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <h3 style={{ margin: 0, fontFamily: 'var(--font-heading)', fontSize: 16 }}>
+          {windowShort(window)}
+        </h3>
+        <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>{orders.length} orders</span>
+        {lateCount > 0 ? <Badge tone="critical">{lateCount} late</Badge> : null}
+      </div>
+
+      <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+        <div style={{ display: 'flex', gap: 12, minWidth: 'min-content' }}>
+          {COLUMNS.map((col) => {
+            const colOrders = orders.filter((o) => o.status === col.status);
+            return (
+              <div
+                key={col.status}
+                style={{
+                  flex: '0 0 264px',
+                  width: 264,
+                  background: 'var(--gt-surface-sunken)',
+                  borderRadius: 12,
+                  padding: 10,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '2px 4px 10px',
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 12,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                      color: 'var(--gt-text-dim)',
+                      fontFamily: 'var(--font-heading)',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {col.label}
+                  </span>
+                  <span className="gt-numeric" style={{ fontSize: 13, color: 'var(--gt-text-faint)' }}>
+                    {colOrders.length}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {colOrders.map((o) => (
+                    <BoardCard
+                      key={o.orderId}
+                      order={o}
+                      currency={currency}
+                      late={isOrderLate(o, nowMs)}
+                      isNew={newIds.has(o.orderId)}
+                      busy={busyId === o.orderId}
+                      error={errorById[o.orderId]}
+                      onAdvance={onAdvance}
+                      onOpen={onOpen}
+                    />
+                  ))}
+                  {colOrders.length === 0 ? (
+                    <div style={{ fontSize: 12, color: 'var(--gt-text-faint)', padding: '6px 4px' }}>
+                      —
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function BoardCard({
+  order,
+  currency,
+  late,
+  isNew,
+  busy,
+  error,
+  onAdvance,
+  onOpen,
+}: {
+  order: PartnerOrderView;
+  currency: string;
+  late: boolean;
+  isNew: boolean;
+  busy: boolean;
+  error?: string;
+  onAdvance: (id: string, to: OrderStatus) => void;
+  onOpen: (id: string) => void;
+}) {
+  const to = nextAction(order.status);
+  const digitalUnpaid =
+    order.paymentMethod !== 'cod' &&
+    order.paymentStatus !== 'paid' &&
+    order.paymentStatus !== 'refunded';
+  const blocked = to === 'confirmed' && digitalUnpaid;
+  const itemCount = order.items.reduce((sum, it) => sum + it.qty, 0);
+
+  return (
+    <div
+      className="gt-card"
+      style={{
+        padding: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        borderLeft: late ? '3px solid var(--gt-danger)' : undefined,
+        boxShadow: isNew ? '0 0 0 2px var(--gt-accent-strong)' : undefined,
+      }}
+    >
+      <button
+        onClick={() => onOpen(order.orderId)}
+        style={{
+          all: 'unset',
+          cursor: 'pointer',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+        }}
+        aria-label={`Open order for ${order.deliveryName}`}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <strong style={{ fontSize: 14 }}>{order.deliveryName}</strong>
+          <span className="gt-numeric" style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+            {formatMoney(order.totalMinor, currency)}
+          </span>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+          {itemCount} item{itemCount === 1 ? '' : 's'} ·{' '}
+          {order.items.map((it) => `${it.qty}× ${it.name}`).join(', ')}
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {late ? <Badge tone="critical">Late</Badge> : null}
+          {isNew ? <Badge tone="info">New</Badge> : null}
+          {digitalUnpaid ? <Badge tone="warning">Unpaid</Badge> : null}
+          {order.status === 'out_for_delivery' ? (
+            <Badge tone={ORDER_STATUS_TONE[order.status]}>{ORDER_STATUS_LABEL[order.status]}</Badge>
+          ) : null}
+        </div>
+      </button>
+
+      {to ? (
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={busy || blocked}
+          title={blocked ? 'Payment must be approved before confirming.' : undefined}
+          onClick={() => onAdvance(order.orderId, to)}
+          style={{ width: '100%', textAlign: 'center' }}
+        >
+          {busy ? 'Working…' : ADVANCE_META[to]}
+        </Button>
+      ) : null}
+
+      {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 12 }}>{error}</div> : null}
+    </div>
+  );
+}

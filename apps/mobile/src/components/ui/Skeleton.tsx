@@ -6,6 +6,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
+import { nativeOnly } from './motion';
 import { colors, radius as radiusTokens, spacing } from '@gym/ui-tokens';
 
 /**
@@ -35,7 +36,7 @@ export function Skeleton({
 }: SkeletonProps) {
   return (
     <Animated.View
-      entering={FadeIn.duration(180)}
+      entering={nativeOnly(FadeIn.duration(180))}
       accessible={false}
       importantForAccessibility="no-hide-descendants"
       style={[styles.block, { width, height, borderRadius: radius }, style]}

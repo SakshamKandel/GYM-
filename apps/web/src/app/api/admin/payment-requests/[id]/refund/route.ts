@@ -222,11 +222,51 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     .returning({ id: paymentRequests.id });
   if (!flipped[0]) return json({ error: 'already_refunded' }, 409);
 
+  // 5. Post-flip clawback re-check: a commission credited by a concurrent
+  //    idempotent approve-completion (its settle re-runs whenever settled_at was
+  //    still null) can land AFTER step 1's one-time read but before this flip, so
+  //    step 1 would have skipped the clawback. Re-read now that we own the
+  //    terminal 'refunded' state and claw it back; the (sourceType:'refund',
+  //    sourceId) unique index makes this idempotent with step 1, so at most one
+  //    clawback row ever exists for the request.
+  let clawbackMinor = commission && commission.amountMinor !== 0 ? -commission.amountMinor : 0;
+  const [commission2] = await db
+    .select({
+      coachId: walletLedger.coachId,
+      amountMinor: walletLedger.amountMinor,
+      currency: walletLedger.currency,
+    })
+    .from(walletLedger)
+    .where(
+      and(
+        eq(walletLedger.type, 'commission'),
+        eq(walletLedger.sourceType, 'payment_request'),
+        eq(walletLedger.sourceId, row.id),
+      ),
+    )
+    .limit(1);
+  if (commission2 && commission2.amountMinor !== 0) {
+    await db
+      .insert(walletLedger)
+      .values({
+        coachId: commission2.coachId,
+        type: 'adjustment',
+        amountMinor: -commission2.amountMinor,
+        currency: commission2.currency,
+        sourceType: 'refund',
+        sourceId: row.id,
+        note: `Refund of payment ${row.id}`,
+        createdBy: principal.id,
+      })
+      .onConflictDoNothing({ target: [walletLedger.sourceType, walletLedger.sourceId] });
+    clawbackMinor = -commission2.amountMinor;
+  }
+
   await logAudit(principal, 'payment.refund', 'payment_request', row.id, {
     accountId: row.accountId,
     tier: row.tier,
     reason,
-    clawbackMinor: commission ? -commission.amountMinor : 0,
+    clawbackMinor,
     promoReversed: !!row.discountGrantId,
     restoredTier: tierRestored ? (row.priorTier ?? 'starter') : null,
   }, ip);

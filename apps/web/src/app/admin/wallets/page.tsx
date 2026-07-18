@@ -5,6 +5,7 @@ import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
+import { DownloadCsv } from '../_components/DownloadCsv';
 import { type WalletRow, WalletsManager } from './_components/WalletsManager';
 
 export const runtime = 'nodejs';
@@ -101,6 +102,7 @@ export default async function AdminWalletsPage() {
       <PageHeader
         title="Coach wallets"
         subtitle="Commission balances from promo-coded purchases. Record manual adjustments or payouts here — payout rails are still manual."
+        action={<DownloadCsv href="/api/admin/exports/wallet-ledger" label="Download ledger CSV" />}
       />
 
       <div

@@ -1,6 +1,51 @@
 import type { ReactNode } from 'react';
 
 /**
+ * Small square thumbnail for a table cell (avatar, meal photo, gym photo).
+ * Rounded, hairline-bordered, object-fit cover; falls back to an initials/glyph
+ * chip when `src` is absent so ragged image data never breaks the row rhythm.
+ * Uses a plain <img> (Cloudinary URLs are already sized) — no next/image needed.
+ */
+export function TableThumb({
+  src,
+  alt = '',
+  size = 36,
+  fallback,
+}: {
+  src?: string | null;
+  alt?: string;
+  size?: number;
+  fallback?: ReactNode;
+}) {
+  const box: React.CSSProperties = {
+    width: size,
+    height: size,
+    borderRadius: 8,
+    flexShrink: 0,
+    border: '1px solid var(--gt-border)',
+    background: 'var(--gt-surface-sunken)',
+    objectFit: 'cover',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: 'var(--gt-text-faint)',
+    fontFamily: 'var(--font-heading)',
+    fontSize: Math.round(size * 0.36),
+    fontWeight: 600,
+    overflow: 'hidden',
+  };
+  if (src) {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={src} alt={alt} style={box} loading="lazy" />;
+  }
+  return (
+    <span aria-hidden style={box}>
+      {fallback ?? (alt ? alt.charAt(0).toUpperCase() : '—')}
+    </span>
+  );
+}
+
+/**
  * Column spec for <DataTable>. `render(row)` returns the cell content for that
  * row; `header` is the column label; `align` sets text alignment (use 'right'
  * for numeric columns); `width` optionally fixes the column width. `key` must

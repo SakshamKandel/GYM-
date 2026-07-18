@@ -1,146 +1,148 @@
-import Link from 'next/link';
-import type { ReactNode } from 'react';
-import { LogoutButton } from './LogoutButton';
+'use client';
+
+import { type ReactNode, useEffect, useState } from 'react';
+import { type NavGroup, SidebarNav } from './SidebarNav';
+import { TopBar } from './TopBar';
+
+/** Re-export nav types so consumers can import them from ConsoleShell/index. */
+export type { NavItem, NavGroup } from './SidebarNav';
+
+const COLLAPSE_KEY = 'gt.sidebar.collapsed';
 
 /**
- * A single left-nav destination. `match` decides the active state:
- *  - 'exact' → active only when pathname === href (use for index routes).
- *  - 'prefix' → active when pathname starts with href (use for sections).
- */
-export interface NavItem {
-  href: string;
-  label: string;
-  match?: 'exact' | 'prefix';
-}
-
-function isActive(item: NavItem, pathname: string): boolean {
-  if (item.match === 'exact') return pathname === item.href;
-  // Default prefix match, but avoid a bare index href (e.g. '/admin') matching
-  // every sub-route — treat a href with no trailing segment as exact-ish.
-  return pathname === item.href || pathname.startsWith(`${item.href}/`);
-}
-
-/**
- * Shared console chrome for the admin + coach shells: fixed-width sidebar with
- * a brand label, role-filtered nav (active item painted the one accent red via
- * the .gt-nav-item token), and a footer showing the signed-in email + a Log out
- * button. Logout POSTs to /api/staff/logout and then redirects the browser to
- * this console's own login page (`loginHref`) — see LogoutButton. Server
- * component apart from that one client button; the caller passes the resolved
- * pathname so active state renders without client JS.
+ * Shared console chrome for the admin / coach / partner shells. Composes the
+ * grouped {@link SidebarNav} and the sticky {@link TopBar} around the routed
+ * page content.
  *
- * `nav` items are pre-filtered by the caller (role gating lives in the layout),
- * so ConsoleShell renders exactly what it's given. `loginHref` is the console's
- * login route ('/admin/login' or '/coach/login').
+ * The whole frame is a client component so the collapse toggle can drive BOTH
+ * the sidebar width and the content offset from one piece of state (no
+ * hydration jump), and persist the choice to localStorage. Server-rendered
+ * `children` are passed straight through as a prop, so pages stay server
+ * components — the client boundary is only the frame, not the routes inside it.
+ *
+ * Responsive: below 960px the sidebar becomes an off-canvas drawer toggled from
+ * the TopBar menu button, with a scrim. `groups` are pre-filtered by the caller
+ * (permission gating lives in the layout); this renders exactly what it's given.
  */
 export function ConsoleShell({
   brand,
-  nav,
+  groups,
   pathname,
   email,
   loginHref,
+  notificationsHref,
+  hasNotifications,
   children,
 }: {
   brand: string;
-  nav: NavItem[];
+  groups: NavGroup[];
   pathname: string;
   email: string;
   loginHref: string;
+  notificationsHref?: string;
+  hasNotifications?: boolean;
   children: ReactNode;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [isNarrow, setIsNarrow] = useState(false);
+
+  // Restore persisted collapse choice after mount (avoids SSR mismatch).
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(COLLAPSE_KEY) === '1') setCollapsed(true);
+    } catch {
+      /* localStorage unavailable — default expanded */
+    }
+  }, []);
+
+  // Track the off-canvas breakpoint.
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 960px)');
+    const apply = () => setIsNarrow(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+
+  // Close the mobile drawer whenever the route changes.
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  function toggleCollapse() {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }
+
+  const sidebar = (
+    <SidebarNav
+      brand={brand}
+      groups={groups}
+      pathname={pathname}
+      email={email}
+      loginHref={loginHref}
+      collapsed={!isNarrow && collapsed}
+      onToggle={toggleCollapse}
+    />
+  );
+
   return (
-    <div style={{ display: 'flex', minHeight: '100vh' }}>
-      <aside
-        style={{
-          width: 224,
-          flexShrink: 0,
-          borderRight: '1px solid var(--gt-border)',
-          padding: '20px 14px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
-          position: 'sticky',
-          top: 0,
-          height: '100vh',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 9,
-            padding: '0 12px 18px',
-          }}
-        >
-          <span
+    <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--gt-bg)' }}>
+      <a href="#gt-main" className="gt-skip-link">
+        Skip to content
+      </a>
+
+      {/* Desktop sidebar (in-flow). Hidden when narrow — drawer takes over. */}
+      {!isNarrow ? sidebar : null}
+
+      {/* Off-canvas drawer for narrow viewports. */}
+      {isNarrow && mobileOpen ? (
+        <>
+          <div
+            onClick={() => setMobileOpen(false)}
             aria-hidden
             style={{
-              width: 8,
-              height: 8,
-              borderRadius: 2,
-              background: 'var(--gt-red)',
-              flexShrink: 0,
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(16,17,18,0.36)',
+              zIndex: 40,
             }}
           />
-          <span
-            style={{
-              fontFamily: 'var(--font-heading)',
-              fontWeight: 600,
-              fontSize: 15,
-              letterSpacing: '-0.01em',
-            }}
-          >
-            {brand}
-          </span>
-        </div>
-
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {nav.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="gt-nav-item"
-              data-active={isActive(item, pathname) ? 'true' : undefined}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-
-        <div style={{ marginTop: 'auto', padding: '0 12px' }}>
-          <div
-            style={{
-              borderTop: '1px solid var(--gt-border)',
-              paddingTop: 14,
-              marginBottom: 10,
-            }}
-          >
-            <div
-              style={{
-                fontSize: 11,
-                letterSpacing: '0.04em',
-                textTransform: 'uppercase',
-                color: 'var(--gt-text-dim)',
-                marginBottom: 4,
-              }}
-            >
-              Signed in
-            </div>
-            <div
-              className="gt-numeric"
-              style={{
-                fontSize: 12,
-                color: 'var(--gt-text)',
-                wordBreak: 'break-all',
-              }}
-            >
-              {email}
-            </div>
+          <div style={{ position: 'fixed', top: 0, left: 0, zIndex: 41, height: '100vh' }}>
+            {sidebar}
           </div>
-          <LogoutButton loginHref={loginHref} />
-        </div>
-      </aside>
-      <main style={{ flex: 1, minWidth: 0, padding: '28px 32px' }}>{children}</main>
+        </>
+      ) : null}
+
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <TopBar
+          email={email}
+          notificationsHref={notificationsHref}
+          hasNotifications={hasNotifications}
+          onToggleSidebar={isNarrow ? () => setMobileOpen((o) => !o) : undefined}
+        />
+        <main
+          id="gt-main"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            width: '100%',
+            maxWidth: 1280,
+            margin: '0 auto',
+            padding: '28px 32px',
+          }}
+        >
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

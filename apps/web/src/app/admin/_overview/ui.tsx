@@ -1,6 +1,55 @@
 import Link from 'next/link';
 import { Card, CardHeader, TierChip } from '@/components/console';
-import type { OpsQueue, Tier } from './data';
+import type { ChartPoint } from '@/components/console/ChartCard';
+import type { HeatRow } from '@/components/console/HeatGrid';
+import type { OpsQueue, SignupDayCount, Tier } from './data';
+
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Slices the last 14 days of `dailySignups28` into ChartCard points. */
+export function buildSignupTrend(daily: SignupDayCount[]): ChartPoint[] {
+  return daily.slice(-14).map((d) => ({
+    label: new Date(`${d.date}T00:00:00Z`).toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      timeZone: 'UTC',
+    }),
+    value: d.count,
+  }));
+}
+
+/**
+ * Buckets `dailySignups28` into real Sun–Sat weekly rows × 7 weekday columns
+ * for HeatGrid (calendar-aligned, not just "every 7 entries" — a day's actual
+ * weekday always lands under its matching column).
+ */
+export function buildSignupHeatmap(daily: SignupDayCount[]): HeatRow[] {
+  const byWeekStart = new Map<string, number[]>();
+  for (const d of daily) {
+    const date = new Date(`${d.date}T00:00:00Z`);
+    const dow = date.getUTCDay(); // 0=Sun..6=Sat
+    const weekStart = new Date(date);
+    weekStart.setUTCDate(weekStart.getUTCDate() - dow);
+    const key = weekStart.toISOString().slice(0, 10);
+    const row = byWeekStart.get(key) ?? new Array(7).fill(0);
+    row[dow] = d.count;
+    byWeekStart.set(key, row);
+  }
+  const weekStarts = Array.from(byWeekStart.keys()).sort();
+  return weekStarts.map((key, i) => ({
+    label:
+      i === weekStarts.length - 1
+        ? 'This wk'
+        : new Date(`${key}T00:00:00Z`).toLocaleDateString(undefined, {
+            month: 'short',
+            day: 'numeric',
+            timeZone: 'UTC',
+          }),
+    values: byWeekStart.get(key) ?? new Array(7).fill(0),
+  }));
+}
+
+export { WEEKDAY_LABELS };
 
 /** Formats a past Date as a compact relative label ("3m ago", "2h ago"). */
 export function relativeTime(date: Date): string {

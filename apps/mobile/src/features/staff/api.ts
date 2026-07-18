@@ -1,5 +1,13 @@
+import * as FileSystem from 'expo-file-system/legacy';
 import { z } from 'zod';
-import { STAFF_ROLES, isPermission, type Permission, type StaffRole } from '@gym/shared';
+import {
+  ORDER_STATUSES,
+  STAFF_ROLES,
+  isPermission,
+  type OrderStatus,
+  type Permission,
+  type StaffRole,
+} from '@gym/shared';
 import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
 
 /**
@@ -1442,17 +1450,69 @@ export async function grantRole(
 }
 
 /**
+ * Offboarding-impact preview (P0-3) — shape mirrors the server's
+ * `OffboardCounts` (apps/web/src/lib/coachOffboard.ts).
+ */
+export interface StaffOffboardCounts {
+  activeClients: number;
+  pendingRequests: number;
+  pendingTierRequests: number;
+  activeWorkoutPlans: number;
+  activeDietPlans: number;
+  walletBalances: { currency: string; amountMinor: number }[];
+}
+
+export interface RevokeDryRunResult {
+  dryRun: true;
+  targetRole: StaffRole;
+  counts: StaffOffboardCounts | null;
+}
+
+const revokeDryRunSchema = z.object({
+  dryRun: z.literal(true),
+  targetRole: staffRoleSchema,
+  counts: z
+    .object({
+      activeClients: z.number(),
+      pendingRequests: z.number(),
+      pendingTierRequests: z.number(),
+      activeWorkoutPlans: z.number(),
+      activeDietPlans: z.number(),
+      walletBalances: z.array(z.object({ currency: z.string(), amountMinor: z.number() })),
+    })
+    .nullable(),
+});
+
+/**
  * DELETE /api/admin/staff/[accountId] → revoke all staff access + kill live
  * sessions (super_admin + main_admin, rank-checked). 'cannot_revoke_self'
  * when trying to revoke your OWN role, 'insufficient_rank' when the caller
  * does not outrank the target, 'not_found' when the account wasn't staff.
+ *
+ * Pass `{ dryRun: true }` for a READ-ONLY preflight (`?dryRun=1`) that
+ * returns the offboarding blast radius WITHOUT mutating anything. The two
+ * overloads keep the destructive and read-only paths from ever being
+ * confused at a call site: only passing the literal `{ dryRun: true }`
+ * option appends the query param the server requires to skip the mutation.
  */
-export async function revokeRole(accountId: string, token: string): Promise<void> {
+export async function revokeRole(accountId: string, token: string): Promise<void>;
+export async function revokeRole(
+  accountId: string,
+  token: string,
+  options: { dryRun: true },
+): Promise<RevokeDryRunResult>;
+export async function revokeRole(
+  accountId: string,
+  token: string,
+  options?: { dryRun?: boolean },
+): Promise<void | RevokeDryRunResult> {
+  const dryRun = options?.dryRun === true;
   const data = await staffRequest({
     method: 'DELETE',
-    path: `/api/admin/staff/${encodeURIComponent(accountId)}`,
+    path: `/api/admin/staff/${encodeURIComponent(accountId)}${dryRun ? '?dryRun=1' : ''}`,
     token,
   });
+  if (dryRun) return parse(revokeDryRunSchema, data);
   parse(okSchema, data);
 }
 
@@ -2210,4 +2270,800 @@ export async function sendBroadcast(input: BroadcastInput, token: string): Promi
     },
   });
   return parse(broadcastResultSchema, data).recipients;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — member lifecycle (P1-7: reset link, sign-out, identity, GDPR)
+// ════════════════════════════════════════════════════════════════
+
+const resetLinkSchema = z.object({ resetUrl: z.string(), expiresAt: z.string() });
+export type ResetLinkResult = z.infer<typeof resetLinkSchema>;
+
+/**
+ * POST /api/admin/members/[id]/credentials (no body) → mints a single-use,
+ * 1-hour password-reset token and returns the full redemption LINK for the
+ * admin to hand the member out of band (no email infra exists — nothing is
+ * sent automatically; the caller's UI is responsible for surfacing/sharing
+ * the link). Requires `members.manage_credentials`. 'insufficient_rank' when
+ * the target is a staff account the caller doesn't outrank.
+ */
+export async function generateResetLink(
+  accountId: string,
+  token: string,
+): Promise<ResetLinkResult> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/members/${encodeURIComponent(accountId)}/credentials`,
+    token,
+  });
+  return parse(resetLinkSchema, data);
+}
+
+/**
+ * DELETE /api/admin/members/[id]/sessions → deletes every live session for
+ * the account (force sign-out everywhere) WITHOUT suspending it. Requires
+ * `members.manage_credentials`.
+ */
+export async function forceSignOutMember(accountId: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/admin/members/${encodeURIComponent(accountId)}/sessions`,
+    token,
+  });
+  parse(okSchema, data);
+}
+
+// The identity-update route lives at .../credentials (shared with the
+// reset-link POST above, PATCH is the identity verb there) and echoes back
+// only {id,email,displayName} — NOT the full member row, so this gets its
+// own minimal schema rather than reusing memberUpdateSchema.
+const identityUpdateSchema = z.object({
+  member: z.object({ id: z.string(), email: z.string(), displayName: z.string() }),
+});
+
+/**
+ * PATCH /api/admin/members/[id]/credentials {email?, displayName?} → corrects
+ * the account's login identity (email lowercased + uniqueness-checked
+ * server-side; each changed field is audited old→new). 'conflict' when the
+ * new email is already taken. Requires `members.manage_credentials`.
+ */
+export async function updateMemberIdentity(
+  id: string,
+  patch: { email?: string; displayName?: string },
+  token: string,
+): Promise<{ id: string; email: string; displayName: string }> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/members/${encodeURIComponent(id)}/credentials`,
+    token,
+    body: { ...patch },
+  });
+  return parse(identityUpdateSchema, data).member;
+}
+
+/**
+ * POST /api/admin/members/[id]/gdpr {confirm} → runs the same anonymization
+ * cascade as the member's own self-serve DELETE /api/me, admin-initiated.
+ * The server requires `confirm` to exactly equal the account's current email
+ * (its own typed-confirm gate against a stray click); this fetches that email
+ * via getMemberDetail internally so the call stays a simple (accountId,
+ * token) pair — the CALLER's UI is still responsible for collecting its own
+ * typed confirmation from the admin before invoking this at all, since the
+ * cascade is irreversible. 'cannot_target_self' when aimed at the caller's
+ * own account (self-erasure only via DELETE /api/me). Requires
+ * `members.manage_credentials`.
+ */
+export async function gdprAnonymizeMember(accountId: string, token: string): Promise<void> {
+  const detail = await getMemberDetail(accountId, token);
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/members/${encodeURIComponent(accountId)}/gdpr`,
+    token,
+    body: { confirm: detail.member.email },
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — coach_requests oversight (P1-8)
+// ════════════════════════════════════════════════════════════════
+
+// Server shape: nested member/coach identity objects + ageDays (computed
+// server-side). Adapted below to the FLAT shape
+// apps/mobile/src/app/staff/admin/coaches.tsx's PendingRequestsOversight (the
+// sole consumer) expects — one row = one pending coach_requests entry.
+const oversightIdentitySchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  displayName: z.string(),
+});
+const coachRequestOversightRawSchema = z.object({
+  id: z.string(),
+  status: z.enum(['pending', 'accepted', 'declined', 'canceled']),
+  message: z.string().catch(''),
+  createdAt: z.string(),
+  member: oversightIdentitySchema,
+  coach: oversightIdentitySchema,
+  ageDays: z.number().catch(0),
+});
+
+export interface CoachRequestOversightRow {
+  id: string;
+  userId: string;
+  displayName: string;
+  email: string;
+  coachId: string;
+  coachDisplayName: string;
+  ageDays: number;
+  createdAt: string;
+}
+
+/** Resilient: drop unparseable rows rather than blanking the whole queue. */
+const coachRequestsOversightSchema = z.object({
+  requests: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): CoachRequestOversightRow[] => {
+      const parsed = coachRequestOversightRawSchema.safeParse(raw);
+      if (!parsed.success) return [];
+      const r = parsed.data;
+      return [
+        {
+          id: r.id,
+          userId: r.member.id,
+          displayName: r.member.displayName.trim() || r.member.email,
+          email: r.member.email,
+          coachId: r.coach.id,
+          coachDisplayName: r.coach.displayName.trim() || r.coach.email,
+          ageDays: r.ageDays,
+          createdAt: r.createdAt,
+        },
+      ];
+    }),
+  ),
+});
+
+/**
+ * GET /api/admin/oversight/coach-requests?status=pending → pending mentorship
+ * requests platform-wide, newest first. Every call server-side sweeps any
+ * pending row older than 14 days to 'canceled' first (no cron exists), so a
+ * row surviving in this list is still genuinely open. Requires
+ * `moderation.manage`.
+ */
+export async function getCoachRequestsOversight(
+  token: string,
+): Promise<CoachRequestOversightRow[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: '/api/admin/oversight/coach-requests?status=pending',
+    token,
+  });
+  return parse(coachRequestsOversightSchema, data).requests;
+}
+
+/**
+ * POST /api/admin/oversight/coach-requests/[id] (no body) → force-cancels a
+ * pending request, freeing the member to request a different coach.
+ * 'not_found' for an unknown/already-decided id. Requires `moderation.manage`.
+ */
+export async function cancelCoachRequest(id: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/oversight/coach-requests/${encodeURIComponent(id)}`,
+    token,
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — moderation queues (P1-9)
+// ════════════════════════════════════════════════════════════════
+
+// Matches apps/mobile/src/app/staff/admin/content.tsx's ModerationTabs (the
+// sole consumer) exactly — plural/hyphenated tab keys, flat row shape. The
+// SERVER exposes milestones and progress-photos as two differently-shaped
+// resources (no unified /api/admin/moderation?kind= endpoint, and no
+// custom-foods route at all yet) — adapted to one flat shape below.
+export type ModerationItemType = 'milestones' | 'custom-foods' | 'progress-photos';
+
+export interface ModerationItem {
+  id: string;
+  accountId: string;
+  accountDisplayName: string;
+  /** Milestone title / food name / photo caption — the item's headline. */
+  title: string;
+  /** Secondary line — milestone note / food brand-macros / photo date. */
+  detail: string;
+  /** Populated only for progress-photos. */
+  imageUrl?: string | null;
+  createdAt: string;
+}
+
+const milestoneModerationRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+  member: oversightIdentitySchema,
+  coach: oversightIdentitySchema,
+});
+/** Resilient: drop unparseable rows rather than blanking the whole queue. */
+const milestonesModerationSchema = z.object({
+  milestones: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): ModerationItem[] => {
+      const parsed = milestoneModerationRowSchema.safeParse(raw);
+      if (!parsed.success) return [];
+      const r = parsed.data;
+      const coachLabel = r.coach.displayName.trim() || r.coach.email;
+      return [
+        {
+          id: r.id,
+          accountId: r.member.id,
+          accountDisplayName: r.member.displayName.trim() || r.member.email,
+          title: r.title,
+          detail: r.note ? `${r.note} · by ${coachLabel}` : `by ${coachLabel}`,
+          imageUrl: null,
+          createdAt: r.createdAt,
+        },
+      ];
+    }),
+  ),
+});
+
+const photoModerationRowSchema = z.object({
+  id: z.string(),
+  takenOn: z.string(),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+  account: oversightIdentitySchema,
+  url: z.string(),
+});
+/** Resilient: drop unparseable rows rather than blanking the whole queue. */
+const photosModerationSchema = z.object({
+  photos: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): ModerationItem[] => {
+      const parsed = photoModerationRowSchema.safeParse(raw);
+      if (!parsed.success) return [];
+      const r = parsed.data;
+      return [
+        {
+          id: r.id,
+          accountId: r.account.id,
+          accountDisplayName: r.account.displayName.trim() || r.account.email,
+          title: r.takenOn,
+          detail: r.note ?? '',
+          imageUrl: r.url,
+          createdAt: r.createdAt,
+        },
+      ];
+    }),
+  ),
+});
+
+/**
+ * GET the moderation queue for one tab, adapted to a flat `ModerationItem[]`:
+ *   'milestones'      → GET /api/admin/moderation/milestones
+ *   'progress-photos' → GET /api/admin/moderation/progress-photos
+ *   'custom-foods'    → no server route exists yet — throws 'not_configured'
+ *                        rather than silently returning an empty list (the
+ *                        backend package deferred this sub-feature).
+ * Requires `moderation.manage`.
+ */
+export async function getModerationQueue(
+  kind: ModerationItemType,
+  token: string,
+): Promise<ModerationItem[]> {
+  if (kind === 'custom-foods') {
+    throw new StaffApiError('not_configured', 'Custom-food moderation is not available yet.');
+  }
+  if (kind === 'milestones') {
+    const data = await staffRequest({
+      method: 'GET',
+      path: '/api/admin/moderation/milestones',
+      token,
+    });
+    return parse(milestonesModerationSchema, data).milestones;
+  }
+  const data = await staffRequest({
+    method: 'GET',
+    path: '/api/admin/moderation/progress-photos',
+    token,
+  });
+  return parse(photosModerationSchema, data).photos;
+}
+
+/**
+ * DELETE /api/admin/moderation/[kind]/[id] → removes one item from the
+ * member-visible surface (audit-logged, hard delete). 'not_found' for an
+ * already-gone id. Requires `moderation.manage`. Throws 'not_configured' for
+ * 'custom-foods' (no server route exists yet).
+ */
+export async function removeModerationItem(
+  kind: ModerationItemType,
+  id: string,
+  token: string,
+): Promise<void> {
+  if (kind === 'custom-foods') {
+    throw new StaffApiError('not_configured', 'Custom-food moderation is not available yet.');
+  }
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/admin/moderation/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`,
+    token,
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — CSV exports (P1-10)
+// ════════════════════════════════════════════════════════════════
+
+export type CsvExportKind = 'members' | 'payment-requests' | 'wallet-ledger' | 'audit';
+
+/** GET /api/admin/exports/[kind] gives up after this long — CSV generation
+ * streams potentially thousands of rows, well past the usual 15s budget. */
+const CSV_EXPORT_TIMEOUT_MS = 45_000;
+
+/**
+ * GET /api/admin/exports/[kind] → the server streams a CSV file directly
+ * (Content-Type text/csv), potentially thousands of rows. This downloads it
+ * straight to local disk with `FileSystem.downloadAsync` — the native layer
+ * streams bytes to the file as they arrive, so the CSV body is NEVER
+ * buffered into a single JS string (the previous `res.text()` approach
+ * defeated the server's streaming design and risked an OOM/UI-freeze on
+ * large exports; the resulting string, handed whole to `Share.share`, could
+ * also blow past Android's ~1MB Binder transaction limit and crash the
+ * app). Returns a local `file://` URI: a short, constant-size string that's
+ * safe to pass to `Share.share({url})` or render directly, unlike the CSV
+ * content itself. Embedding the bearer token in a URL isn't a concern here
+ * — the header goes over the request, never into the resulting file path.
+ * Gated server-side on the permission matching the underlying data
+ * (members→members.read, payment-requests→payments.review,
+ * wallet-ledger→wallet.manage, audit→audit.read).
+ */
+export async function exportCsvToFile(kind: CsvExportKind, token: string): Promise<string> {
+  const fileUri = `${FileSystem.cacheDirectory}gym-export-${kind}-${Date.now()}.csv`;
+
+  let result: FileSystem.FileSystemDownloadResult;
+  try {
+    result = await Promise.race([
+      FileSystem.downloadAsync(`${BASE_URL}/api/admin/exports/${encodeURIComponent(kind)}`, fileUri, {
+        headers: { Authorization: `Bearer ${token}` },
+      }),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('timeout')), CSV_EXPORT_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    await FileSystem.deleteAsync(fileUri, { idempotent: true }).catch(() => {});
+    throw new StaffApiError('network', "Can't reach the server");
+  }
+
+  if (result.status < 200 || result.status >= 300) {
+    let bodyCode: StaffErrorCode | undefined;
+    try {
+      const body = JSON.parse(await FileSystem.readAsStringAsync(result.uri)) as unknown;
+      if (body && typeof body === 'object') {
+        const err = (body as { error?: unknown }).error;
+        if (typeof err === 'string') bodyCode = BODY_ERROR_CODES[err];
+      }
+    } catch {
+      // Non-JSON error body — the status code is all we have.
+    }
+    await FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => {});
+    throw new StaffApiError(bodyCode ?? statusToCode(result.status));
+  }
+
+  return result.uri;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — payout requests (P1-12/13)
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * Minimum withdrawal per currency (minor units) — mirrors the server-side
+ * floor (NPR Rs 1,000 / USD $10); used here only for client-side UX hinting
+ * (disable the submit button, show a hint). The server recomputes and
+ * enforces this authoritatively regardless.
+ */
+export const MIN_PAYOUT_MINOR: Record<'NPR' | 'USD', number> = {
+  NPR: 100_000,
+  USD: 1_000,
+};
+
+/** `MIN_PAYOUT_MINOR[currency]` with a safe fallback for an unrecognised currency. */
+export function payoutMinimumFor(currency: string): number {
+  return MIN_PAYOUT_MINOR[currency as 'NPR' | 'USD'] ?? MIN_PAYOUT_MINOR.NPR;
+}
+
+export type PayoutStatus = 'pending' | 'approved' | 'rejected' | 'paid';
+const payoutStatusSchema = z.enum(['pending', 'approved', 'rejected', 'paid']);
+
+const myPayoutRequestSchema = z.object({
+  id: z.string(),
+  amountMinor: z.number(),
+  currency: z.string(),
+  status: payoutStatusSchema,
+  note: z.string().nullable().catch(null),
+  disbursementRef: z.string().nullable().catch(null),
+  requestedAt: z.string(),
+  decidedAt: z.string().nullable().catch(null),
+});
+export type MyPayoutRequest = z.infer<typeof myPayoutRequestSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole history. */
+const myPayoutStatusSchema = z.object({
+  requests: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): MyPayoutRequest[] => {
+      const parsed = myPayoutRequestSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/**
+ * GET /api/coach/payouts → the caller's OWN payout-request history (newest
+ * 50), newest first. At most one 'pending' row exists at a time (server-
+ * enforced via a partial unique index) — the UI derives "you already have a
+ * pending request" from finding one in this list rather than tracking it
+ * separately. Requires `coach.wallet.read`.
+ */
+export async function getMyPayoutStatus(token: string): Promise<MyPayoutRequest[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/payouts', token });
+  return parse(myPayoutStatusSchema, data).requests;
+}
+
+const requestPayoutEnvelope = z.object({ id: z.string() });
+
+/**
+ * POST /api/coach/payouts {amountMinor, currency} → files a withdrawal
+ * request against the caller's own wallet balance; returns the new request's
+ * id (use getMyPayoutStatus to read the fresh row back). `currency` must be
+ * 'NPR' or 'USD'. 'invalid' when the amount is below the per-currency
+ * minimum (server: `{error:'below_minimum', minimumMinor, currency}`, a 400
+ * this client maps to 'invalid'); 'insufficient_balance' when it exceeds the
+ * caller's current balance in that currency; 'already_pending' (409) when the
+ * caller already has one pending request. Requires `coach.wallet.read`.
+ */
+export async function requestPayout(
+  amountMinor: number,
+  currency: string,
+  token: string,
+): Promise<string> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/coach/payouts',
+    token,
+    body: { amountMinor, currency },
+  });
+  return parse(requestPayoutEnvelope, data).id;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — payout queue (P1-12)
+// ════════════════════════════════════════════════════════════════
+
+const payoutRequestRowSchema = z.object({
+  id: z.string(),
+  coach: tierRequestCoachSchema,
+  amountMinor: z.number(),
+  currency: z.string(),
+  status: payoutStatusSchema,
+  note: z.string().nullable().catch(null),
+  disbursementRef: z.string().nullable().catch(null),
+  // Only populated on PENDING rows (the coach's live ledger balance in the
+  // requested currency, so the admin can see coverage before approving);
+  // null on decided/history rows. `.catch(null)` tolerates an older server.
+  balanceMinor: z.number().nullable().catch(null),
+  requestedAt: z.string(),
+  decidedAt: z.string().nullable().catch(null),
+});
+export type PayoutRequestRow = z.infer<typeof payoutRequestRowSchema>;
+
+function parsePayoutRows(raw: unknown): PayoutRequestRow[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((r): PayoutRequestRow[] => {
+    const parsed = payoutRequestRowSchema.safeParse(r);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+const payoutQueueSchema = z.object({
+  pending: z.array(z.unknown()).transform(parsePayoutRows),
+  history: z.array(z.unknown()).transform(parsePayoutRows),
+});
+export interface PayoutQueue {
+  /** Every currently-pending request, oldest first (so nothing starves). */
+  pending: PayoutRequestRow[];
+  /** The newest 100 decided requests (approved/rejected/paid), newest first. */
+  history: PayoutRequestRow[];
+}
+
+/**
+ * GET /api/admin/payouts → the payout review queue: ALL pending requests plus
+ * a capped tail of decided history (no `status` filter — the server always
+ * returns both buckets in one call; the caller derives per-status tabs by
+ * filtering `history` locally). Requires `payouts.review`.
+ */
+export async function getPayoutRequests(token: string): Promise<PayoutQueue> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/payouts', token });
+  return parse(payoutQueueSchema, data);
+}
+
+/**
+ * POST /api/admin/payouts/[id] {action:'approve', disbursementRef, note?} |
+ * {action:'reject', note?} → decide a pending payout. Approve requires a
+ * non-empty `disbursementRef` (the bank/eSewa/Khalti transaction reference),
+ * re-checks the coach's LIVE ledger balance at decision time, and posts the
+ * negative wallet-ledger entry server-side; reject frees the coach's
+ * one-pending slot. 'not_found' for an unknown id; 'conflict' (409, server
+ * `{error:'already_decided'}`) when another admin already decided it in the
+ * meantime — the caller should refetch the queue rather than retry blindly;
+ * 'insufficient_balance' when the coach's balance no longer covers the
+ * request. Requires `payouts.review`.
+ */
+export async function decidePayoutRequest(
+  id: string,
+  action: DecideAction,
+  options: { disbursementRef?: string; note?: string },
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/payouts/${encodeURIComponent(id)}`,
+    token,
+    body: {
+      action,
+      ...(options.disbursementRef !== undefined
+        ? { disbursementRef: options.disbursementRef }
+        : {}),
+      ...(options.note !== undefined ? { note: options.note } : {}),
+    },
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — meal-delivery orders oversight (plan §3/§6/§7 P11)
+// ════════════════════════════════════════════════════════════════
+
+const orderStatusSchema = z.enum(ORDER_STATUSES as unknown as [OrderStatus, ...OrderStatus[]]);
+const mealWindowSchema = z.enum(['lunch', 'dinner']);
+const mealCurrencySchema = z.enum(['NPR', 'USD']);
+const orderPaymentMethodSchema = z.enum(['esewa', 'khalti', 'cod']);
+const orderPaymentStatusSchema = z.enum(['unpaid', 'receipt_submitted', 'paid', 'refunded']);
+const orderSourceSchema = z.enum(['one_time', 'subscription']);
+
+const adminOrderItemSchema = z.object({
+  name: z.string(),
+  qty: z.number(),
+  priceMinorSnapshot: z.number(),
+});
+export type AdminOrderItem = z.infer<typeof adminOrderItemSchema>;
+
+/**
+ * One order row for the all-partners oversight queue — the partner strict
+ * projection (§2 PartnerOrderView) PLUS the partner's own name/id, since an
+ * admin (unlike a partner) may see across restaurants. Still never carries the
+ * member's raw accountId/email — delivery-necessary fields only, same
+ * discipline as the partner surface.
+ */
+const adminOrderRowSchema = z.object({
+  id: z.string(),
+  partnerId: z.string(),
+  partnerName: z.string(),
+  source: orderSourceSchema,
+  status: orderStatusSchema,
+  placedAt: z.string(),
+  deliveryDate: z.string(),
+  window: mealWindowSchema,
+  deliveryName: z.string(),
+  deliveryPhone: z.string(),
+  deliveryAddressText: z.string(),
+  items: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): AdminOrderItem[] => {
+      const parsed = adminOrderItemSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+  totalMinor: z.number(),
+  currency: mealCurrencySchema,
+  paymentMethod: orderPaymentMethodSchema,
+  paymentStatus: orderPaymentStatusSchema,
+  cancelReason: z.string().nullable().catch(null),
+});
+export type AdminOrderRow = z.infer<typeof adminOrderRowSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole queue. */
+const adminOrdersSchema = z.object({
+  orders: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): AdminOrderRow[] => {
+      const parsed = adminOrderRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+export type AdminOrderScope = 'active' | 'history';
+
+/**
+ * GET /api/admin/orders?scope=active|history&status=&partnerId= → every
+ * order across every partner (all-orders oversight, §3/§7 P11). `scope`
+ * defaults to 'active' (non-terminal, oldest-cutoff first) server-side;
+ * 'history' returns delivered/cancelled/refused, newest first. `status` and
+ * `partnerId` optionally narrow further. Requires `orders.review`
+ * (super_admin/main_admin — no sub-role preset).
+ */
+export async function fetchAdminOrders(
+  token: string,
+  opts: { scope?: AdminOrderScope; status?: OrderStatus; partnerId?: string } = {},
+): Promise<AdminOrderRow[]> {
+  const params = new URLSearchParams();
+  if (opts.scope) params.set('scope', opts.scope);
+  if (opts.status) params.set('status', opts.status);
+  if (opts.partnerId) params.set('partnerId', opts.partnerId);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/orders${query}`,
+    token,
+  });
+  return parse(adminOrdersSchema, data).orders;
+}
+
+const adminOrderEnvelope = z.object({ order: adminOrderRowSchema });
+
+/**
+ * POST /api/admin/orders/[id]/override {toStatus, reason?} → admin force-
+ * advance, mirroring the partner advance route but with admin authority
+ * (§3/§8 `canActorAdvance(from, toStatus, 'admin')`): every transition a
+ * partner may drive, PLUS "cancel any non-terminal order" even one already
+ * out for delivery. A CAS conflict (lost race / illegal transition / the
+ * order already moved on) surfaces as 'conflict' — refetch the queue rather
+ * than retrying blind. Requires `orders.review`.
+ */
+export async function overrideOrderStatus(
+  id: string,
+  toStatus: OrderStatus,
+  reason: string | undefined,
+  token: string,
+): Promise<AdminOrderRow> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/orders/${encodeURIComponent(id)}/override`,
+    token,
+    body: { toStatus, ...(reason !== undefined ? { reason } : {}) },
+  });
+  return parse(adminOrderEnvelope, data).order;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — meal-delivery payment requests (plan §3/§6/§7 P11)
+// ════════════════════════════════════════════════════════════════
+
+export type MealPaymentReviewStatus = 'pending' | 'approved' | 'rejected' | 'refunded';
+const mealPaymentStatusSchema = z.enum(['pending', 'approved', 'rejected', 'refunded']);
+const mealPaymentMethodSchema = z.enum(['esewa', 'khalti']);
+
+const mealPaymentAccountSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  displayName: z.string(),
+});
+
+/** Order-scoped target context (null fields when the row's target is a cycle). */
+const mealPaymentOrderTargetSchema = z.object({
+  kind: z.literal('order'),
+  id: z.string().nullable(),
+  totalMinor: z.number().nullable(),
+  status: orderStatusSchema.nullable(),
+  paymentStatus: orderPaymentStatusSchema.nullable(),
+  deliveryDate: z.string().nullable(),
+  window: mealWindowSchema.nullable(),
+});
+
+/** Cycle-scoped target context (weekly-subscription billing). */
+const mealPaymentCycleTargetSchema = z.object({
+  kind: z.literal('cycle'),
+  id: z.string().nullable(),
+  amountMinor: z.number().nullable(),
+  status: z.enum(['open', 'awaiting_payment', 'paid', 'void']).nullable(),
+  weekStart: z.string().nullable(),
+  weekEnd: z.string().nullable(),
+});
+
+const mealPaymentTargetSchema = z.union([
+  mealPaymentOrderTargetSchema,
+  mealPaymentCycleTargetSchema,
+]);
+export type MealPaymentTarget = z.infer<typeof mealPaymentTargetSchema>;
+
+const mealPaymentRequestRowSchema = z.object({
+  id: z.string(),
+  account: mealPaymentAccountSchema,
+  target: mealPaymentTargetSchema,
+  amountMinor: z.number(),
+  currency: z.string(),
+  method: mealPaymentMethodSchema,
+  // A signed URL minted per-request — never cache/store beyond this screen's
+  // lifetime (mirrors the subscription payment-requests receipt contract).
+  receiptUrl: z.string(),
+  note: z.string().nullable(),
+  status: mealPaymentStatusSchema,
+  reviewNote: z.string().nullable(),
+  createdAt: z.string(),
+  decidedAt: z.string().nullable().catch(null),
+});
+export type MealPaymentRequestRow = z.infer<typeof mealPaymentRequestRowSchema>;
+
+/** Resilient: drop unparseable rows rather than blanking the whole queue. */
+const mealPaymentQueueSchema = z.object({
+  requests: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): MealPaymentRequestRow[] => {
+      const parsed = mealPaymentRequestRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+
+/**
+ * GET /api/admin/meal-payments?status= → the meal manual-payment queue
+ * (eSewa/Khalti receipts for one-time orders AND weekly subscription
+ * cycles), newest first. Reuses `payments.review` (no new permission key per
+ * the plan). `receiptUrl` is re-minted fresh on every read.
+ */
+export async function fetchMealPaymentQueue(
+  token: string,
+  status?: MealPaymentReviewStatus,
+): Promise<MealPaymentRequestRow[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/meal-payments${query}`,
+    token,
+  });
+  return parse(mealPaymentQueueSchema, data).requests;
+}
+
+/**
+ * POST /api/admin/meal-payments/[id] {action:'approve'|'reject', note?} →
+ * decide one pending meal payment request. Approve idempotently stamps the
+ * target `paid` (order.paymentStatus or cycle.status) but does NOT auto-
+ * advance order fulfillment — that's a separate overrideOrderStatus/partner
+ * advance call. 'not_found' for an unknown id; a 409 means another admin
+ * already decided it — refetch rather than retry. Requires `payments.review`.
+ */
+export async function decideMealPayment(
+  id: string,
+  action: DecideAction,
+  note: string | undefined,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/meal-payments/${encodeURIComponent(id)}`,
+    token,
+    body: { action, ...(note !== undefined ? { note } : {}) },
+  });
+  parse(okSchema, data);
+}
+
+/**
+ * POST /api/admin/meal-payments/[id]/refund {reason?} → reverse an already-
+ * APPROVED meal payment. Non-refundable (409) once the order is in
+ * production (preparing/out_for_delivery/delivered/refused) or past its
+ * frozen cutoff, or once the cycle's billed week has begun — mirrors the
+ * subscription payment-requests refund pattern. Requires `payments.review`.
+ */
+export async function refundMealPayment(
+  id: string,
+  reason: string | undefined,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/meal-payments/${encodeURIComponent(id)}/refund`,
+    token,
+    body: { ...(reason !== undefined ? { reason } : {}) },
+  });
+  parse(okSchema, data);
 }

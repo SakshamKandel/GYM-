@@ -297,7 +297,7 @@ export function UploadModal({
         </label>
 
         {error ? (
-          <div style={{ color: '#ff8178', fontSize: 13 }}>{error}</div>
+          <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div>
         ) : null}
       </form>
     </Modal>

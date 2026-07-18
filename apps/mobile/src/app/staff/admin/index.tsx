@@ -108,6 +108,20 @@ const NAV_ROWS: NavRow[] = [
     perm: 'payments.review',
   },
   {
+    icon: 'restaurant',
+    title: 'Orders',
+    blurb: 'All-partners meal-order oversight — force status or cancel.',
+    route: STAFF_ROUTES.adminOrders,
+    perm: 'orders.review',
+  },
+  {
+    icon: 'fast-food',
+    title: 'Meal payments',
+    blurb: 'eSewa/Khalti receipts for meal orders and weekly plans.',
+    route: STAFF_ROUTES.adminMealPayments,
+    perm: 'payments.review',
+  },
+  {
     icon: 'pricetag',
     title: 'Promo codes',
     blurb: 'House codes, coach codes, redemption stats.',
@@ -127,6 +141,13 @@ const NAV_ROWS: NavRow[] = [
     blurb: 'Commission balances, adjustments and payouts.',
     route: STAFF_ROUTES.adminWallets,
     perm: 'wallet.manage',
+  },
+  {
+    icon: 'cash-outline',
+    title: 'Payouts',
+    blurb: 'Coach withdrawal requests awaiting approval.',
+    route: STAFF_ROUTES.adminPayouts,
+    perm: 'payouts.review',
   },
   {
     icon: 'chatbubble-ellipses',

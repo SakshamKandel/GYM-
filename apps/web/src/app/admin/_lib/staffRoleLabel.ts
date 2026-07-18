@@ -14,6 +14,7 @@ export const STAFF_ROLE_LABELS: Record<StaffRole, string> = {
   content_admin: 'Content admin',
   support_admin: 'Support admin',
   coach: 'Coach',
+  partner: 'Meal partner',
 };
 
 export function staffRoleLabel(role: StaffRole): string {

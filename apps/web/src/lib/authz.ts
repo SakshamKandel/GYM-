@@ -1,4 +1,10 @@
-import { adminPermissionOverrides, admins, auditLog, coachAssignments } from '@gym/db';
+import {
+  adminPermissionOverrides,
+  admins,
+  auditLog,
+  coachAssignments,
+  mealPartners,
+} from '@gym/db';
 import {
   ALL_PERMISSIONS,
   canManageRole,
@@ -246,6 +252,70 @@ export function requireOutranks(
     return json({ error: 'insufficient_rank' }, 403);
   }
   return null;
+}
+
+/**
+ * The identity a partner-portal route works with: the resolved staff Principal
+ * PLUS the caller's own `meal_partners.id`. Every partner query MUST be scoped
+ * by this guard-derived `partnerId` — never a value from the request body or
+ * params — so one restaurant can never read or mutate another's rows.
+ */
+export interface PartnerPrincipal {
+  principal: Principal;
+  partnerId: string;
+}
+
+/**
+ * Partner-portal guard. requireStaff, then: role must be exactly 'partner', and
+ * the caller must own an ACTIVE `meal_partners` row (looked up by accountId, the
+ * UNIQUE login identity). Returns `{ principal, partnerId }` or a 403 Response.
+ *
+ * Fail closed: no partner row, or `isActive=false` (admin deactivation), → 403.
+ * Deactivation also deletes the partner's sessions (a second kill-switch in the
+ * admin route), so a live token can't outrace the isActive flip — but this guard
+ * enforces isActive on every request regardless, closing any residual race.
+ */
+export async function requirePartner(
+  req: Request,
+): Promise<PartnerPrincipal | Response> {
+  const principal = await requireStaff(req);
+  if (principal instanceof Response) return principal;
+  if (principal.role !== 'partner') return json({ error: 'forbidden' }, 403);
+  const rows = await getDb()
+    .select({ id: mealPartners.id, isActive: mealPartners.isActive })
+    .from(mealPartners)
+    .where(eq(mealPartners.accountId, principal.id))
+    .limit(1);
+  const row = rows[0];
+  if (!row || !row.isActive) return json({ error: 'forbidden' }, 403);
+  return { principal, partnerId: row.id };
+}
+
+/**
+ * The only permissions a partner account may ever hold. A partner's role preset
+ * is exactly this set; the permission-override rail must never widen a partner
+ * beyond it (threat #6 — the biggest escalation surface).
+ */
+const PARTNER_NATIVE_PERMISSIONS: readonly Permission[] = ['meals.own', 'orders.fulfill'];
+
+/**
+ * Guard for the permission-override route/UI: refuses any override that TARGETS
+ * a partner account with a permission outside its native set. A partner must
+ * never be granted `members.read`, `payments.review`, or any other key — that
+ * would turn the delivery-only role into an admin. Overrides that touch only the
+ * partner's own two native keys (e.g. an admin temporarily stripping
+ * `orders.fulfill`) are allowed; everything else is 403.
+ *
+ * Returns null to continue, or a 403 Response. A null `targetRole` (target is
+ * not a partner) always passes — this rail only constrains partner targets.
+ */
+export function assertNotPartnerOverrideTarget(
+  targetRole: StaffRole | null,
+  perm: Permission,
+): Response | null {
+  if (targetRole !== 'partner') return null;
+  if (PARTNER_NATIVE_PERMISSIONS.includes(perm)) return null;
+  return json({ error: 'partner_override_forbidden' }, 403);
 }
 
 /**

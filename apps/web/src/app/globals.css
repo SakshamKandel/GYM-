@@ -1,22 +1,91 @@
 /**
- * Web-console design tokens (coach console). Charcoal base, cards one step up,
- * signal-red reserved for the primary action + active nav only. No glow, no
- * pulsing dots, no gradient blobs. Loading = flat skeleton bars.
+ * Web-console design tokens (admin + coach + partner consoles).
+ *
+ * v1 = LIGHT SaaS. The whole console is token-driven: every surface reads these
+ * CSS custom properties, so redefining the :root block reskins all ~14 pages
+ * with zero page edits. A future dark mode is a `:root[data-theme="dark"]`
+ * override of the SAME token names — no component touches a raw hex.
+ *
+ * Accent discipline: --gt-accent (signal orange) appears on exactly ONE primary
+ * CTA per view, the active-nav indicator, chart fills, and a single highlight
+ * pill. Deltas / trends use the semantic status tokens (success/danger), never
+ * the accent.
  *
  * Font family CSS variables (--font-poppins / --font-oswald) are injected by
  * next/font in layout.tsx.
  */
 :root {
-  --gt-bg: #131416; /* charcoal page background */
-  --gt-card: #1b1d20; /* cards one step up */
-  --gt-border: #26282b; /* hairline borders */
-  --gt-red: #ff3b30; /* signal red — primary action / active nav ONLY */
-  --gt-text: #f2f3f5;
-  --gt-text-dim: #9a9da3;
-  --gt-radius: 14px;
+  /* Surfaces */
+  --gt-bg: #f5f5f2; /* page background — warm off-white */
+  --gt-surface: #ffffff; /* raised surface (inputs, top bar) */
+  --gt-card: #ffffff; /* cards */
+  --gt-surface-sunken: #fafaf8; /* recessed rows / table hover */
+  --gt-surface-hover: #f2f2ee; /* interactive hover fill */
 
+  /* Borders */
+  --gt-border: #ececE6; /* hairline */
+  --gt-border-strong: #deded7; /* emphasised divider */
+  --gt-border-input: #b9bab4; /* form control outline (AA on white) */
+
+  /* Text */
+  --gt-text: #1b1c1e; /* primary ink */
+  --gt-text-dim: #5f636a; /* secondary (>=5.2:1 on bg) */
+  --gt-text-faint: #8a8e95; /* tertiary / meta */
+
+  /* Accent (signal orange) */
+  --gt-accent: #f0521e; /* fills, active indicator */
+  --gt-accent-strong: #c4421a; /* accent text / focus ring (AA on white) */
+  --gt-accent-weak: #fdede6; /* accent wash (active-nav bg, pill bg) */
+  --gt-accent-ink: #ffffff; /* text on an accent fill */
+  --gt-red: var(--gt-accent-strong); /* legacy alias — pre-redesign pages */
+
+  /* Semantic status (fg + weak wash) */
+  --gt-success: #1e7f45;
+  --gt-success-weak: #e7f4ec;
+  --gt-danger: #c4362b;
+  --gt-danger-weak: #fbeae8;
+  --gt-warning: #8a6212;
+  --gt-warning-weak: #fbf1dd;
+  --gt-info: #2e5fa6;
+  --gt-info-weak: #e9f0fa;
+
+  /* Radius */
+  --gt-radius: 16px;
+  --gt-radius-sm: 10px;
+  --gt-radius-lg: 20px;
+  --gt-radius-pill: 999px;
+
+  /* Shadows (soft, low-spread for a paper-light console) */
+  --gt-shadow-sm: 0 1px 2px rgba(16, 17, 18, 0.05);
+  --gt-shadow-card: 0 1px 2px rgba(16, 17, 18, 0.04), 0 1px 3px rgba(16, 17, 18, 0.06);
+  --gt-shadow-pop: 0 8px 28px rgba(16, 17, 18, 0.14);
+
+  /* Spacing scale (4 → 48) */
+  --gt-space-1: 4px;
+  --gt-space-2: 8px;
+  --gt-space-3: 12px;
+  --gt-space-4: 16px;
+  --gt-space-5: 20px;
+  --gt-space-6: 24px;
+  --gt-space-7: 28px;
+  --gt-space-8: 32px;
+  --gt-space-9: 36px;
+  --gt-space-10: 40px;
+  --gt-space-11: 44px;
+  --gt-space-12: 48px;
+
+  /* Type scale */
+  --gt-fs-display: 34px;
+  --gt-fs-h1: 22px;
+  --gt-fs-h2: 16px;
+  --gt-fs-body: 14px;
+  --gt-fs-meta: 12px;
+  --gt-fs-micro: 11px;
+
+  /* Fonts */
   --font-heading: var(--font-poppins), system-ui, sans-serif;
   --font-numeric: var(--font-oswald), system-ui, sans-serif;
+  --gt-numeric: var(--font-numeric); /* token-name alias (frozen contract) */
 }
 
 * {
@@ -51,14 +120,15 @@ h4 {
   background: var(--gt-card);
   border: 1px solid var(--gt-border);
   border-radius: var(--gt-radius);
+  box-shadow: var(--gt-shadow-card);
 }
 
-/* Primary action — the only red button. */
+/* Primary action — the one accent button. */
 .gt-btn-primary {
-  background: var(--gt-red);
-  color: #fff;
+  background: var(--gt-accent-strong);
+  color: var(--gt-accent-ink);
   border: none;
-  border-radius: 10px;
+  border-radius: var(--gt-radius-sm);
   padding: 10px 16px;
   font-family: var(--font-heading);
   font-weight: 600;
@@ -72,24 +142,28 @@ h4 {
 
 .gt-input {
   width: 100%;
-  background: var(--gt-bg);
-  border: 1px solid var(--gt-border);
-  border-radius: 10px;
+  background: var(--gt-surface);
+  border: 1px solid var(--gt-border-input);
+  border-radius: var(--gt-radius-sm);
   color: var(--gt-text);
   padding: 10px 12px;
   font-size: 15px;
   font-family: var(--font-heading);
 }
+.gt-input::placeholder {
+  color: var(--gt-text-faint);
+}
 .gt-input:focus {
   outline: none;
-  border-color: var(--gt-text-dim);
+  border-color: var(--gt-accent-strong);
+  box-shadow: 0 0 0 3px var(--gt-accent-weak);
 }
 
 /* Pill chips for tier / status. */
 .gt-chip {
   display: inline-block;
   padding: 2px 10px;
-  border-radius: 999px;
+  border-radius: var(--gt-radius-pill);
   border: 1px solid var(--gt-border);
   font-size: 12px;
   font-family: var(--font-numeric);
@@ -98,18 +172,18 @@ h4 {
   color: var(--gt-text-dim);
 }
 
-/* Inbox row hover — border brightens only, no glow. */
+/* Inbox row hover — surface lifts, no glow. */
 .gt-inbox-row {
   transition: border-color 120ms, background 120ms;
 }
 .gt-inbox-row:hover {
-  border-color: var(--gt-text-dim);
-  background: #202226;
+  border-color: var(--gt-border-strong);
+  background: var(--gt-surface-hover);
 }
 
 /* Flat skeleton bar (no shimmer, no pulse). */
 .gt-skeleton {
-  background: var(--gt-border);
+  background: #ececE6;
   border-radius: 6px;
   height: 12px;
 }
@@ -131,22 +205,96 @@ h4 {
   }
 }
 
-/* Data-table row hover — subtle lift, no color shift. */
+/* Data-table row hover — subtle recess, no color shift. */
 .gt-tr:hover {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--gt-surface-sunken);
 }
 
-/* Left nav item; active state is the only other red. */
+/* ── Sidebar nav ──────────────────────────────────────────────────────────
+ * Active item is the one place (besides the primary CTA) the accent appears.
+ * A 3px accent bar sits on the left edge; the pill fills with the accent wash. */
 .gt-nav-item {
-  display: block;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
   padding: 9px 12px;
-  border-radius: 10px;
+  border-radius: var(--gt-radius-sm);
   color: var(--gt-text-dim);
   text-decoration: none;
   font-family: var(--font-heading);
   font-size: 14px;
+  transition: background 120ms, color 120ms;
+}
+.gt-nav-item:hover {
+  background: var(--gt-surface-hover);
+  color: var(--gt-text);
 }
 .gt-nav-item[data-active='true'] {
-  color: var(--gt-red);
-  background: rgba(255, 59, 48, 0.08);
+  color: var(--gt-accent-strong);
+  background: var(--gt-accent-weak);
+  font-weight: 600;
+}
+.gt-nav-item[data-active='true']::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--gt-accent);
+}
+
+.gt-nav-group-label {
+  font-family: var(--font-heading);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gt-text-faint);
+  padding: 0 12px;
+  margin: 4px 0;
+}
+
+/* Focus states — visible keyboard ring on every interactive control. */
+:focus-visible {
+  outline: 2px solid var(--gt-accent-strong);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* Pointer clicks shouldn't paint the ring (only keyboard focus). */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Skip-to-content link (visually hidden until focused). */
+.gt-skip-link {
+  position: absolute;
+  left: 12px;
+  top: -48px;
+  z-index: 100;
+  background: var(--gt-surface);
+  color: var(--gt-text);
+  border: 1px solid var(--gt-border-strong);
+  border-radius: var(--gt-radius-sm);
+  padding: 10px 16px;
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 14px;
+  box-shadow: var(--gt-shadow-pop);
+  transition: top 120ms;
+}
+.gt-skip-link:focus {
+  top: 12px;
+}
+
+/* Honour reduced-motion globally for the shell transitions. */
+@media (prefers-reduced-motion: reduce) {
+  .gt-nav-item,
+  .gt-inbox-row,
+  .gt-skip-link {
+    transition: none;
+  }
 }

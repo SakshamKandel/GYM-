@@ -509,6 +509,25 @@ export interface RecordWalletEntryArgs {
   currency: string;
   note?: string | null;
   createdBy: string;
+  /**
+   * Idempotency key pair for the wallet_ledger (source_type, source_id) unique
+   * index. When both are supplied, a retried/double-submitted manual payout or
+   * adjustment records exactly ONE ledger row (the second call is a no-op that
+   * returns the existing row with `duplicate: true`) — closing the double-deduct
+   * hole where two identical NULL/NULL rows never collided. Omit (both null) to
+   * keep the legacy behaviour for callers that don't supply a key.
+   */
+  sourceType?: string | null;
+  sourceId?: string | null;
+  /**
+   * When true (used for non-override payouts), the non-negative balance floor
+   * for THIS coach+currency is enforced ATOMICALLY inside a single INSERT ...
+   * SELECT statement rather than via a separate read-then-insert. This collapses
+   * the TOCTOU window that let two concurrent payouts both read the same balance,
+   * both pass the floor, and together drive the balance below zero. The caller
+   * gets `{ ok: false, reason: 'floor' }` when the floor would be breached.
+   */
+  enforceFloor?: boolean;
 }
 
 export interface WalletEntry {
@@ -520,24 +539,120 @@ export interface WalletEntry {
   createdAt: Date;
 }
 
+export type RecordWalletEntryResult =
+  | { ok: true; entry: WalletEntry; duplicate?: boolean }
+  | { ok: false; reason: 'floor' };
+
+/** Coerces a raw driver row (snake_case, string-ish scalars) into a WalletEntry. */
+function mapRawWalletEntry(row: {
+  id: unknown;
+  type: unknown;
+  amount_minor: unknown;
+  currency: unknown;
+  note: unknown;
+  created_at: unknown;
+}): WalletEntry {
+  return {
+    id: String(row.id),
+    type: row.type as WalletEntry['type'],
+    amountMinor: Number(row.amount_minor),
+    currency: String(row.currency),
+    note: (row.note as string | null) ?? null,
+    createdAt: row.created_at instanceof Date ? row.created_at : new Date(String(row.created_at)),
+  };
+}
+
+/** Fetches an existing manual entry by its idempotency key (dedup replay path). */
+async function walletEntryBySource(sourceType: string, sourceId: string): Promise<WalletEntry | null> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: walletLedger.id,
+      type: walletLedger.type,
+      amountMinor: walletLedger.amountMinor,
+      currency: walletLedger.currency,
+      note: walletLedger.note,
+      createdAt: walletLedger.createdAt,
+    })
+    .from(walletLedger)
+    .where(and(eq(walletLedger.sourceType, sourceType), eq(walletLedger.sourceId, sourceId)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 /**
  * Inserts one manual wallet_ledger row (admin adjustment or payout). Bounds
  * validation (payout must be negative, adjustment non-zero) is the caller's
- * job (POST /api/admin/wallets/[coachId]/entries, via zod) — this is a plain
- * insert, kept here only so the two wallet routes share one write path.
+ * job (POST /api/admin/wallets/[coachId]/entries, via zod). Two safeguards live
+ * here so both wallet routes share one write path:
+ *  - `enforceFloor` runs the balance check and the insert in a SINGLE statement
+ *    so concurrent payouts can't race past the non-negative floor.
+ *  - `sourceType`/`sourceId` (when supplied) dedup the row via the unique index,
+ *    making a double-submitted payout/adjustment idempotent.
  */
-export async function recordWalletEntry(args: RecordWalletEntryArgs): Promise<WalletEntry> {
+export async function recordWalletEntry(
+  args: RecordWalletEntryArgs,
+): Promise<RecordWalletEntryResult> {
   const db = getDb();
-  const [row] = await db
+  const sourceType = args.sourceType ?? null;
+  const sourceId = args.sourceId ?? null;
+
+  if (args.enforceFloor && args.amountMinor < 0) {
+    // Atomic floor + insert (payout race fix): SUM the current balance and
+    // insert the row in ONE statement, so the read-then-insert window that let
+    // two concurrent payouts both pass `current + amount >= 0` is closed. The
+    // ON CONFLICT keeps it idempotent when an idempotency key is supplied. Table
+    // and column names are written literally (matching grantDiscount's raw CTE).
+    const id = crypto.randomUUID();
+    const res = await db.execute<{
+      id: string;
+      type: string;
+      amount_minor: number | string;
+      currency: string;
+      note: string | null;
+      created_at: Date | string;
+    }>(sql`
+      with bal as (
+        select coalesce(sum(amount_minor), 0) as current
+        from wallet_ledger
+        where coach_id = ${args.coachId} and currency = ${args.currency}
+      )
+      insert into wallet_ledger
+        (id, coach_id, type, amount_minor, currency, source_type, source_id, note, created_by)
+      select ${id}, ${args.coachId}, ${args.type}, ${args.amountMinor}, ${args.currency},
+             ${sourceType}, ${sourceId}, ${args.note ?? null}, ${args.createdBy}
+      from bal
+      where bal.current + ${args.amountMinor} >= 0
+      on conflict (source_type, source_id) do nothing
+      returning id, type, amount_minor, currency, note, created_at
+    `);
+    const row = res.rows[0];
+    if (row) return { ok: true, entry: mapRawWalletEntry(row) };
+    // Zero rows means EITHER the floor blocked the insert OR an idempotency-key
+    // conflict swallowed it. Disambiguate: a pre-existing keyed row → duplicate.
+    if (sourceId != null) {
+      const existing = await walletEntryBySource(sourceType ?? '', sourceId);
+      if (existing) return { ok: true, entry: existing, duplicate: true };
+    }
+    return { ok: false, reason: 'floor' };
+  }
+
+  // Non-floored path (adjustments, override payouts). Idempotent when a key is
+  // supplied; with NULL/NULL source the ON CONFLICT never fires (Postgres treats
+  // NULLs as distinct), preserving the original always-insert behaviour.
+  const inserted = await db
     .insert(walletLedger)
     .values({
       coachId: args.coachId,
       type: args.type,
       amountMinor: args.amountMinor,
       currency: args.currency,
+      sourceType,
+      sourceId,
       note: args.note ?? null,
       createdBy: args.createdBy,
     })
+    .onConflictDoNothing({ target: [walletLedger.sourceType, walletLedger.sourceId] })
     .returning({
       id: walletLedger.id,
       type: walletLedger.type,
@@ -546,6 +661,11 @@ export async function recordWalletEntry(args: RecordWalletEntryArgs): Promise<Wa
       note: walletLedger.note,
       createdAt: walletLedger.createdAt,
     });
-  if (!row) throw new Error('recordWalletEntry: insert returned no row');
-  return row;
+  const row = inserted[0];
+  if (row) return { ok: true, entry: row };
+  if (sourceId != null) {
+    const existing = await walletEntryBySource(sourceType ?? '', sourceId);
+    if (existing) return { ok: true, entry: existing, duplicate: true };
+  }
+  throw new Error('recordWalletEntry: insert returned no row');
 }

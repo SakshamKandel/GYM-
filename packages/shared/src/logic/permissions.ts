@@ -66,6 +66,12 @@ export const ALL_PERMISSIONS = [
   'moderation.manage', // moderate member-visible content (custom foods, progress photos, milestones)
   'catalog.manage', // CRUD the exercises/plans catalog (content surface)
   'gamification.manage', // XP corrections, badge audit/revoke, challenge moderation (super/main)
+  // --- Meal delivery + partner portal + gyms (2026-07-18 marketplace wave).
+  'meals.own', // partner CRUD of its OWN menu (route enforces partnerId=guard scope)
+  'orders.fulfill', // partner advances its OWN orders' fulfillment status
+  'partners.manage', // admin: create/edit/deactivate meal partners (super/main-only preset)
+  'orders.review', // admin: all-orders oversight + force status/cancel (super/main-only preset)
+  'gyms.manage', // admin: CRUD nearby-gym listings + photos (super/main-only preset)
 ] as const;
 
 /** A permission key. Union derived from ALL_PERMISSIONS — never widen by hand. */
@@ -112,6 +118,11 @@ export const ROLE_PRESETS: Record<StaffRole, readonly Permission[]> = {
   content_admin: ['content.manage', 'catalog.manage', 'moderation.manage'],
   coach: ['coach.message.user', 'coach.user.read', 'content.video.own', 'coach.wallet.read'],
   nutrition_admin: [],
+  // Meal-delivery restaurant operator: only its own menu + order fulfillment.
+  // partners.manage / orders.review / gyms.manage are NOT here (super/main
+  // bypass, delegable via per-account override). partner is web-only and never
+  // opens the admin or coach console.
+  partner: ['meals.own', 'orders.fulfill'],
 };
 
 /**

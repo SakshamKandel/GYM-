@@ -205,7 +205,7 @@ export function VideoLibrary({
             {v.title}
           </div>
           {rowError?.id === v.id ? (
-            <div style={{ color: '#ff8178', fontSize: 12, marginTop: 4 }}>
+            <div style={{ color: 'var(--gt-danger)', fontSize: 12, marginTop: 4 }}>
               {rowError.msg}
             </div>
           ) : null}

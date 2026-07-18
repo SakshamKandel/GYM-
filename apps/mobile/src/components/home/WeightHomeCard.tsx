@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing } from '@gym/ui-tokens';
@@ -53,7 +54,7 @@ const styles = StyleSheet.create({
   emptyCopy: { flex: 1, minWidth: 0, gap: spacing.xs },
 });
 
-export function WeightHomeCard({
+export const WeightHomeCard = memo(function WeightHomeCard({
   loading,
   trendValue,
   unit,
@@ -130,4 +131,4 @@ export function WeightHomeCard({
       <Button label="Log weight" variant="secondary" onPress={onLog} />
     </Card>
   );
-}
+});

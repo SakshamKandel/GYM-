@@ -1,0 +1,370 @@
+.page {
+  width: 100%;
+  max-width: 1240px;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--gt-space-3);
+}
+
+.primaryAction,
+.secondaryAction,
+.textAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  border-radius: var(--gt-radius-sm);
+  padding: 10px 16px;
+  font-family: var(--font-heading);
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.primaryAction {
+  border: 1px solid var(--gt-accent-strong);
+  background: var(--gt-accent-strong);
+  color: var(--gt-accent-ink);
+}
+
+.primaryAction:hover {
+  background: var(--gt-accent);
+  border-color: var(--gt-accent);
+}
+
+.secondaryAction {
+  border: 1px solid var(--gt-border-strong);
+  background: var(--gt-surface);
+  color: var(--gt-text);
+}
+
+.secondaryAction:hover {
+  background: var(--gt-surface-hover);
+}
+
+.textAction {
+  min-height: 48px;
+  padding: 8px 2px;
+  color: var(--gt-accent-strong);
+}
+
+.textAction:hover {
+  color: var(--gt-accent);
+}
+
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--gt-space-3);
+  margin-bottom: var(--gt-space-5);
+}
+
+.analyticsGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) minmax(300px, 0.8fr);
+  gap: var(--gt-space-4);
+  align-items: stretch;
+  margin-bottom: var(--gt-space-4);
+}
+
+.detailsGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  gap: var(--gt-space-4);
+  align-items: stretch;
+  margin-bottom: var(--gt-space-7);
+}
+
+.fullHeightCard {
+  height: 100%;
+}
+
+.cardBody {
+  padding: var(--gt-space-4) var(--gt-space-5) var(--gt-space-5);
+}
+
+.pipelineList {
+  display: grid;
+  gap: var(--gt-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pipelineHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gt-space-3);
+  margin-bottom: var(--gt-space-2);
+}
+
+.pipelineLabel {
+  color: var(--gt-text);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.pipelineValue {
+  color: var(--gt-text-dim);
+  font-size: 14px;
+}
+
+.pipelineTrack {
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--gt-radius-pill);
+  background: var(--gt-surface-hover);
+}
+
+.pipelineFill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.fillWarning {
+  background: var(--gt-warning);
+}
+
+.fillInfo {
+  background: var(--gt-info);
+}
+
+.fillAccent {
+  background: var(--gt-accent);
+}
+
+.pipelineFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gt-space-3);
+  margin-top: var(--gt-space-5);
+  padding-top: var(--gt-space-4);
+  border-top: 1px solid var(--gt-border);
+  color: var(--gt-text-dim);
+  font-size: 13px;
+}
+
+.pipelineTotal {
+  color: var(--gt-text);
+  font-family: var(--font-numeric);
+  font-size: 24px;
+  line-height: 1;
+}
+
+.sellerList {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sellerItem {
+  display: grid;
+  grid-template-columns: 30px 72px minmax(0, 1fr) auto;
+  gap: var(--gt-space-3);
+  align-items: center;
+  min-height: 88px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--gt-border);
+}
+
+.sellerItem:last-child {
+  border-bottom: none;
+}
+
+.sellerRank {
+  color: var(--gt-text-faint);
+  font-family: var(--font-numeric);
+  font-size: 18px;
+  text-align: center;
+}
+
+.sellerImage,
+.sellerImageFallback {
+  width: 72px;
+  height: 56px;
+  border: 1px solid var(--gt-border);
+  border-radius: var(--gt-radius-sm);
+  background: var(--gt-surface-sunken);
+}
+
+.sellerImage {
+  display: block;
+  object-fit: cover;
+}
+
+.sellerImageFallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gt-accent-strong);
+  font-family: var(--font-heading);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.sellerCopy {
+  min-width: 0;
+}
+
+.sellerName {
+  overflow: hidden;
+  color: var(--gt-text);
+  font-size: 16px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sellerMeta {
+  margin-top: 4px;
+  color: var(--gt-text-dim);
+  font-size: 13px;
+}
+
+.sellerSales {
+  color: var(--gt-text);
+  font-family: var(--font-numeric);
+  font-size: 17px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.emptyCard {
+  padding: 34px 22px;
+  color: var(--gt-text-dim);
+  font-size: 15px;
+  text-align: center;
+}
+
+.insightGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  background: var(--gt-border);
+}
+
+.insightItem {
+  min-height: 108px;
+  padding: var(--gt-space-4);
+  background: var(--gt-card);
+}
+
+.insightLabel {
+  color: var(--gt-text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.insightValue {
+  margin-top: var(--gt-space-2);
+  color: var(--gt-text);
+  font-family: var(--font-numeric);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.insightHint {
+  margin-top: var(--gt-space-2);
+  color: var(--gt-text-dim);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.queueSection {
+  scroll-margin-top: 88px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--gt-space-4);
+  margin-bottom: var(--gt-space-3);
+}
+
+.sectionTitle {
+  color: var(--gt-text);
+  font-family: var(--font-heading);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sectionDescription {
+  max-width: 68ch;
+  margin: 4px 0 0;
+  color: var(--gt-text-dim);
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+@media (max-width: 1120px) {
+  .kpiGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .analyticsGrid,
+  .detailsGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 680px) {
+  .headerActions {
+    width: 100%;
+  }
+
+  .primaryAction,
+  .secondaryAction {
+    flex: 1;
+  }
+
+  .kpiGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sellerItem {
+    grid-template-columns: 24px 56px minmax(0, 1fr);
+  }
+
+  .sellerImage,
+  .sellerImageFallback {
+    width: 56px;
+    height: 50px;
+  }
+
+  .sellerSales {
+    grid-column: 3;
+    margin-top: -8px;
+    text-align: left;
+  }
+
+  .insightGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sectionHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .primaryAction,
+  .secondaryAction,
+  .textAction {
+    transition: none;
+  }
+}

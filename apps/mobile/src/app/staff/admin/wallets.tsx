@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { ActivityIndicator, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { formatMoney } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -22,6 +22,7 @@ import {
 } from '../../../components/ui';
 import {
   addWalletEntry,
+  exportCsvToFile,
   getAdminWalletDetail,
   getAdminWallets,
   toStaffError,
@@ -32,6 +33,25 @@ import {
 } from '../../../features/staff/api';
 import { replaceStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
+
+/**
+ * P1-10 CSV export contract: exportCsvToFile(kind, token) => Promise<string>
+ * (M2 owns features/staff/api.ts — see the fuller note in members.tsx)
+ * downloads the CSV straight to a local file (native-side streaming; never
+ * buffered into one JS string) and returns its `file://` URI. No
+ * expo-sharing dependency exists in this app, so the file goes through RN's
+ * built-in Share sheet (`url` so iOS attaches it); the on-device path stays
+ * visible as a selectable-text fallback when the share sheet is
+ * unavailable/dismissed.
+ */
+async function shareFile(uri: string): Promise<void> {
+  try {
+    await Share.share({ url: uri });
+  } catch {
+    // Share sheet dismissed/unavailable — the file stays on-device; its
+    // path stays visible as text.
+  }
+}
 
 /**
  * Admin · Wallets — every coach's commission balance + per-coach ledger (gap
@@ -368,6 +388,26 @@ export default function AdminWalletsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [openCoachId, setOpenCoachId] = useState<string | null>(null);
 
+  // P1-10: CSV export of the wallet ledger.
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [csvLink, setCsvLink] = useState<string | null>(null);
+
+  async function exportWalletsCsv(): Promise<void> {
+    if (!token || csvBusy) return;
+    setCsvBusy(true);
+    setCsvError(null);
+    try {
+      const uri = await exportCsvToFile('wallet-ledger', token);
+      setCsvLink(uri);
+      await shareFile(uri);
+    } catch {
+      setCsvError("Couldn't export the wallet ledger.");
+    } finally {
+      setCsvBusy(false);
+    }
+  }
+
   const load = useCallback(async () => {
     if (!token) return;
     setLoading(true);
@@ -406,7 +446,44 @@ export default function AdminWalletsScreen() {
 
   return (
     <Screen scroll>
-      <BackRow onBack={goBack} />
+      <BackRow
+        onBack={goBack}
+        action={
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Export wallet ledger as CSV"
+            accessibilityState={{ disabled: csvBusy }}
+            disabled={csvBusy}
+            onPress={() => void exportWalletsCsv()}
+            style={styles.headerActionBtn}
+          >
+            {csvBusy ? (
+              <ActivityIndicator size="small" color={colors.text} />
+            ) : (
+              <Ionicons name="download-outline" size={20} color={colors.text} />
+            )}
+          </PressableScale>
+        }
+      />
+
+      {csvError ? (
+        <AppText variant="caption" color={colors.error} style={styles.csvErrorText}>
+          {csvError}
+        </AppText>
+      ) : null}
+
+      {csvLink ? (
+        <View style={styles.csvLinkBlock}>
+          <AppText variant="caption" color={colors.textDim}>
+            Export saved on this device (long-press to copy the file path if the share sheet
+            didn&apos;t open):
+          </AppText>
+          <Text selectable style={styles.selectableLink}>
+            {csvLink}
+          </Text>
+          <Button label="Dismiss" variant="secondary" onPress={() => setCsvLink(null)} />
+        </View>
+      ) : null}
 
       {loading ? (
         <View style={styles.center}>
@@ -458,7 +535,7 @@ export default function AdminWalletsScreen() {
 }
 
 /** Shared back row + revamp header. */
-function BackRow({ onBack }: { onBack: () => void }) {
+function BackRow({ onBack, action }: { onBack: () => void; action?: ReactNode }) {
   return (
     <>
       <Animated.View entering={enterDown()} style={styles.headerRow}>
@@ -471,7 +548,7 @@ function BackRow({ onBack }: { onBack: () => void }) {
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
       </Animated.View>
-      <ScreenHeader eyebrow="Admin console" title="Wallets" style={styles.header} />
+      <ScreenHeader eyebrow="Admin console" title="Wallets" style={styles.header} action={action} />
     </>
   );
 }
@@ -492,6 +569,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   header: { marginBottom: spacing.gutter },
+  headerActionBtn: {
+    width: touch.min,
+    height: touch.min,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  csvErrorText: { marginBottom: spacing.sm },
+  csvLinkBlock: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  selectableLink: {
+    fontFamily: 'monospace',
+    fontSize: 13,
+    color: colors.text,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
   locked: {
     marginTop: spacing.xxl,
     alignItems: 'center',

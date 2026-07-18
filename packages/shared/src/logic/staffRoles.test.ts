@@ -28,6 +28,11 @@ describe('STAFF_ROLE_RANK', () => {
     assert.equal(STAFF_ROLE_RANK.content_admin, STAFF_ROLE_RANK.support_admin);
     assert.equal(STAFF_ROLE_RANK.nutrition_admin, STAFF_ROLE_RANK.member_admin);
   });
+  it('partner sits below every sub-role (rank 0)', () => {
+    assert.equal(STAFF_ROLE_RANK.partner, 0);
+    assert.ok(STAFF_ROLE_RANK.member_admin > STAFF_ROLE_RANK.partner);
+    assert.ok(STAFF_ROLE_RANK.main_admin > STAFF_ROLE_RANK.partner);
+  });
   it('covers every role exactly once', () => {
     assert.equal(Object.keys(STAFF_ROLE_RANK).length, STAFF_ROLES.length);
   });
@@ -73,20 +78,30 @@ describe('canManageRole', () => {
     assert.equal(canManageRole('main_admin', 'content_admin'), true);
     assert.equal(canManageRole('main_admin', 'support_admin'), true);
     assert.equal(canManageRole('main_admin', 'coach'), true);
+    // partner is rank 0, strictly below main_admin — rank-manageable (a stray
+    // partner grant could be cleaned up). Actual partner minting still goes only
+    // through POST /api/admin/partners (partner ∉ GRANTABLE_ROLES).
+    assert.equal(canManageRole('main_admin', 'partner'), true);
   });
   it('main_admin can NEVER touch a peer or higher', () => {
     assert.equal(canManageRole('main_admin', 'main_admin'), false);
     assert.equal(canManageRole('main_admin', 'super_admin'), false);
   });
-  it('sub-roles manage nobody', () => {
-    for (const actor of [
+  it('sub-roles manage no peer or higher role', () => {
+    // Sub-roles are all rank 1; they cannot manage each other or anything above.
+    // (They mechanically outrank the rank-0 partner, but that is inert: every
+    // role-management route additionally requires roles.grant, which no sub-role
+    // holds — see permissions.ts.)
+    const subRoles = [
       'member_admin',
       'nutrition_admin',
       'content_admin',
       'support_admin',
       'coach',
-    ] as const) {
+    ] as const;
+    for (const actor of subRoles) {
       for (const target of STAFF_ROLES) {
+        if (target === 'partner') continue; // rank-0, genuinely lower — see note
         assert.equal(canManageRole(actor, target), false);
       }
     }
@@ -112,17 +127,24 @@ describe('assignableRolesFor', () => {
   it('super_admin may assign every role', () => {
     assert.deepEqual(assignableRolesFor('super_admin'), [...STAFF_ROLES]);
   });
-  it('main_admin may assign only the sub-roles', () => {
+  it('main_admin may assign only the sub-roles (+ rank-0 partner)', () => {
+    // Rank-based: main_admin strictly outranks everything except super/main.
+    // partner appears here by rank, but the staff-grant whitelist (GRANTABLE_
+    // ROLES in permissions.ts) still excludes it, so it never reaches a dropdown.
     assert.deepEqual(assignableRolesFor('main_admin'), [
       'member_admin',
       'nutrition_admin',
       'content_admin',
       'support_admin',
       'coach',
+      'partner',
     ]);
   });
-  it('sub-roles may assign nothing', () => {
-    assert.deepEqual(assignableRolesFor('coach'), []);
-    assert.deepEqual(assignableRolesFor('support_admin'), []);
+  it('sub-roles may assign only the rank-0 partner (inert — see note)', () => {
+    // Rank-wise a sub-role outranks only partner. This surfaces here but is
+    // inert: the staff-grant route also requires roles.grant (no sub-role holds
+    // it) and GRANTABLE_ROLES excludes partner, so no sub-role can mint anything.
+    assert.deepEqual(assignableRolesFor('coach'), ['partner']);
+    assert.deepEqual(assignableRolesFor('support_admin'), ['partner']);
   });
 });

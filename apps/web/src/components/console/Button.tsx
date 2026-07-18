@@ -3,14 +3,16 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 /**
- * Console button. Three variants:
- *  - primary: the ONE red action (maps to .gt-btn-primary token).
+ * Console button. Four variants:
+ *  - primary: the ONE accent action per view (maps to --gt-accent).
  *  - ghost: hairline-bordered neutral action.
- *  - danger: destructive; outlined in critical-red text, filled on hover.
- * Only ONE red-filled primary should sit in a given view. For destructive
+ *  - danger: destructive; outlined in danger text, filled on hover.
+ *  - dark: high-emphasis neutral fill (near-black on light) for a secondary
+ *    call-to-action that shouldn't spend the single accent slot.
+ * Only ONE accent-filled primary should sit in a given view. For destructive
  * flows prefer ConfirmButton (2-step). Extends native <button> props.
  */
-type Variant = 'primary' | 'ghost' | 'danger';
+type Variant = 'primary' | 'ghost' | 'danger' | 'dark';
 type Size = 'sm' | 'md';
 
 export function Button({
@@ -41,18 +43,20 @@ export function Button({
 
   const variantStyle =
     variant === 'primary'
-      ? { background: 'var(--gt-red)', color: '#fff', border: 'none' }
-      : variant === 'danger'
-        ? {
-            background: 'transparent',
-            color: '#ff8178',
-            border: '1px solid rgba(255,107,96,0.35)',
-          }
-        : {
-            background: 'transparent',
-            color: 'var(--gt-text)',
-            border: '1px solid var(--gt-border)',
-          };
+      ? { background: 'var(--gt-accent-strong)', color: 'var(--gt-accent-ink)', border: 'none' }
+      : variant === 'dark'
+        ? { background: 'var(--gt-text)', color: 'var(--gt-surface)', border: 'none' }
+        : variant === 'danger'
+          ? {
+              background: 'transparent',
+              color: 'var(--gt-danger)',
+              border: '1px solid color-mix(in srgb, var(--gt-danger) 38%, transparent)',
+            }
+          : {
+              background: 'var(--gt-surface)',
+              color: 'var(--gt-text)',
+              border: '1px solid var(--gt-border-strong)',
+            };
 
   return (
     <button {...rest} style={{ ...base, ...variantStyle, ...style }}>

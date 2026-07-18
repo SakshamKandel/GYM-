@@ -16,6 +16,7 @@ import {
 } from '@/components/console';
 import { staffRoleLabel } from '@/app/admin/_lib/staffRoleLabel';
 import type { StaffRole } from '@/lib/auth';
+import { DownloadCsv } from '../../_components/DownloadCsv';
 import { MemberDrawer } from './MemberDrawer';
 import type { CoachOption, MemberRow, Tier } from './types';
 
@@ -216,6 +217,7 @@ export function MembersDirectory({
       <PageHeader
         title="Members"
         subtitle="Search and filter members, then open a member to change their tier, suspend or reactivate the account, or assign a coach."
+        action={<DownloadCsv href="/api/admin/exports/members" />}
       />
 
       <Toolbar
@@ -255,9 +257,9 @@ export function MembersDirectory({
             marginBottom: 12,
             padding: '10px 14px',
             borderRadius: 10,
-            border: '1px solid rgba(255,107,96,0.30)',
-            background: 'rgba(255,107,96,0.10)',
-            color: '#ff8178',
+            border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+            background: 'var(--gt-danger-weak)',
+            color: 'var(--gt-danger)',
             fontSize: 13,
           }}
         >

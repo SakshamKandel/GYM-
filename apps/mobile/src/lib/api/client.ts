@@ -1081,7 +1081,10 @@ export type ImageUploadKind =
   | 'application_avatar'
   | 'coach_avatar'
   | 'custom_exercise'
-  | 'diet_item';
+  | 'diet_item'
+  /** Meal-delivery eSewa/Khalti receipt (plan §3/§8 P12) — always authenticated
+   * access, never public; validated server-side against its exact uid shape. */
+  | 'meal_receipt';
 
 const imageUploadReservationSchema = z.object({
   uploadUrl: z.string(),

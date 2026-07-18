@@ -36,6 +36,12 @@ export interface RecentActivity {
 }
 
 /** The membership snapshot — only ever computed for a members.read holder (A3). */
+/** One calendar day's signup count (UTC calendar day, 'YYYY-MM-DD'). */
+export interface SignupDayCount {
+  date: string;
+  count: number;
+}
+
 export interface MembershipSnapshot {
   totalMembers: number;
   activeCoaches: number;
@@ -43,6 +49,14 @@ export interface MembershipSnapshot {
   readyVideos: number;
   tierBreakdown: { tier: Tier; count: number }[];
   recentSignups: RecentSignup[];
+  /** Daily signup counts for the last 28 UTC calendar days (oldest first, zero-filled).
+   * Purely a visualization aid — same underlying `accounts` rows already counted
+   * in totalMembers/recentSignups, sliced by day. */
+  dailySignups28: SignupDayCount[];
+  /** Share of total coach capacity (sum of coach_profiles.capacity for active
+   * coaches) currently used by active assignments, 0..1. Derived from the same
+   * activeCoaches/activeAssignments figures already shown above. */
+  coachCapacityPct: number;
 }
 
 /** Pending-work tiles (P0-6). Each field is null when the caller lacks its permission. */
@@ -171,6 +185,9 @@ export async function loadOverview(perms: OverviewPerms): Promise<OverviewData> 
 /** Membership snapshot — only invoked for members.read holders. */
 async function loadMembership(now: Date): Promise<MembershipSnapshot> {
   const db = getDb();
+  const since28 = new Date(now);
+  since28.setUTCDate(since28.getUTCDate() - 27);
+  since28.setUTCHours(0, 0, 0, 0);
 
   const [
     totalMembersRows,
@@ -179,6 +196,8 @@ async function loadMembership(now: Date): Promise<MembershipSnapshot> {
     readyVideosRows,
     tierRows,
     signups,
+    capacityRows,
+    dailyRows,
   ] = await Promise.all([
     db.select({ n: count() }).from(accounts),
     db.select({ n: count() }).from(coachProfiles).where(eq(coachProfiles.isActive, true)),
@@ -202,16 +221,41 @@ async function loadMembership(now: Date): Promise<MembershipSnapshot> {
       .from(accounts)
       .orderBy(desc(accounts.createdAt))
       .limit(8),
+    db
+      .select({ total: sql<string>`coalesce(sum(${coachProfiles.capacity}), 0)::text` })
+      .from(coachProfiles)
+      .where(eq(coachProfiles.isActive, true)),
+    // Daily signup counts for the trend chart + weekday heatmap — same
+    // `accounts` rows already counted in totalMembers, just bucketed by day.
+    db
+      .select({ day: sql<string>`to_char(${accounts.createdAt}, 'YYYY-MM-DD')`, n: count() })
+      .from(accounts)
+      .where(gte(accounts.createdAt, since28))
+      .groupBy(sql`to_char(${accounts.createdAt}, 'YYYY-MM-DD')`),
   ]);
 
   const tierCounts = new Map<Tier, number>();
   for (const r of tierRows) tierCounts.set(r.tier as Tier, Number(r.n));
   const tierBreakdown = TIER_ORDER.map((tier) => ({ tier, count: tierCounts.get(tier) ?? 0 }));
 
+  const dailyByDate = new Map<string, number>();
+  for (const r of dailyRows) dailyByDate.set(r.day, Number(r.n));
+  const dailySignups28: SignupDayCount[] = [];
+  for (let i = 27; i >= 0; i--) {
+    const d = new Date(since28);
+    d.setUTCDate(d.getUTCDate() + (27 - i));
+    const key = d.toISOString().slice(0, 10);
+    dailySignups28.push({ date: key, count: dailyByDate.get(key) ?? 0 });
+  }
+
+  const totalCapacity = Number(capacityRows[0]?.total ?? 0);
+  const activeAssignments = Number(activeAssignmentsRows[0]?.n ?? 0);
+  const coachCapacityPct = totalCapacity > 0 ? activeAssignments / totalCapacity : 0;
+
   return {
     totalMembers: Number(totalMembersRows[0]?.n ?? 0),
     activeCoaches: Number(activeCoachesRows[0]?.n ?? 0),
-    activeAssignments: Number(activeAssignmentsRows[0]?.n ?? 0),
+    activeAssignments,
     readyVideos: Number(readyVideosRows[0]?.n ?? 0),
     tierBreakdown,
     recentSignups: signups.map((s) => ({
@@ -223,6 +267,8 @@ async function loadMembership(now: Date): Promise<MembershipSnapshot> {
       status: s.status as 'active' | 'suspended',
       createdAt: s.createdAt,
     })),
+    dailySignups28,
+    coachCapacityPct,
   };
 }
 

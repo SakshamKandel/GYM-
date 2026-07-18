@@ -284,7 +284,7 @@ export function PromoManager({
             {toggling === r.id ? 'Saving…' : r.active ? 'Deactivate' : 'Activate'}
           </Button>
           {rowError?.id === r.id ? (
-            <div style={{ color: '#ff8178', fontSize: 11, marginTop: 4 }}>
+            <div style={{ color: 'var(--gt-danger)', fontSize: 11, marginTop: 4 }}>
               {rowError.msg}
             </div>
           ) : null}
@@ -350,11 +350,11 @@ export function PromoManager({
                 fontFamily: 'var(--font-heading)',
                 fontSize: 13,
                 fontWeight: 600,
-                background: ownerMode === 'house' ? 'var(--gt-red)' : 'transparent',
-                color: ownerMode === 'house' ? '#fff' : 'var(--gt-text)',
+                background: ownerMode === 'house' ? 'var(--gt-accent)' : 'transparent',
+                color: ownerMode === 'house' ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
                 border:
                   ownerMode === 'house'
-                    ? '1px solid var(--gt-red)'
+                    ? '1px solid var(--gt-accent)'
                     : '1px solid var(--gt-border)',
               }}
             >
@@ -371,11 +371,11 @@ export function PromoManager({
                 fontFamily: 'var(--font-heading)',
                 fontSize: 13,
                 fontWeight: 600,
-                background: ownerMode === 'coach' ? 'var(--gt-red)' : 'transparent',
-                color: ownerMode === 'coach' ? '#fff' : 'var(--gt-text)',
+                background: ownerMode === 'coach' ? 'var(--gt-accent)' : 'transparent',
+                color: ownerMode === 'coach' ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
                 border:
                   ownerMode === 'coach'
-                    ? '1px solid var(--gt-red)'
+                    ? '1px solid var(--gt-accent)'
                     : '1px solid var(--gt-border)',
               }}
             >
@@ -452,12 +452,12 @@ export function PromoManager({
               value={expiresAt}
               onChange={(e) => setExpiresAt(e.target.value)}
               disabled={saving}
-              style={{ flex: 1, colorScheme: 'dark' }}
+              style={{ flex: 1, colorScheme: 'light' }}
             />
           </div>
 
           {error ? (
-            <div style={{ color: '#ff8178', fontSize: 13 }}>{error}</div>
+            <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div>
           ) : null}
         </div>
       </Modal>

@@ -9,6 +9,7 @@ import {
   EmptyState,
   Modal,
   SearchField,
+  StatusChip,
   TierChip,
 } from '@/components/console';
 
@@ -264,19 +265,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
     {
       key: 'status',
       header: 'Account',
-      render: (m) => (
-        <span
-          style={{
-            fontSize: 12,
-            color: m.status === 'suspended' ? '#ff8178' : 'var(--gt-text-dim)',
-            textTransform: 'uppercase',
-            letterSpacing: '0.04em',
-            fontFamily: 'var(--font-numeric)',
-          }}
-        >
-          {m.status}
-        </span>
-      ),
+      render: (m) => <StatusChip status={m.status} />,
     },
     {
       key: 'tier',
@@ -299,7 +288,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
             className="gt-numeric"
             style={{
               fontSize: 13,
-              color: lapsed ? '#ff8178' : 'var(--gt-text)',
+              color: lapsed ? 'var(--gt-danger)' : 'var(--gt-text)',
               whiteSpace: 'nowrap',
             }}
             title={new Date(m.tierExpiresAt).toLocaleString()}
@@ -347,7 +336,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
             empty={searching ? 'Searching…' : 'No members match your search.'}
           />
           {searchError ? (
-            <div style={{ color: '#ff8178', fontSize: 13, marginTop: 10 }}>{searchError}</div>
+            <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 10 }}>{searchError}</div>
           ) : null}
           {remoteRows !== null && cursor ? (
             <div style={{ marginTop: 12 }}>
@@ -412,10 +401,10 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
                         fontSize: 13,
                         letterSpacing: '0.04em',
                         textTransform: 'uppercase',
-                        background: selected ? 'var(--gt-red)' : 'transparent',
-                        color: selected ? '#fff' : 'var(--gt-text)',
+                        background: selected ? 'var(--gt-accent)' : 'transparent',
+                        color: selected ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
                         border: selected
-                          ? '1px solid var(--gt-red)'
+                          ? '1px solid var(--gt-accent)'
                           : '1px solid var(--gt-border)',
                         transition: 'background 120ms, border-color 120ms',
                       }}
@@ -444,7 +433,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
                   value={startsAtLocal}
                   onChange={(e) => setStartsAtLocal(e.target.value)}
                   disabled={saving}
-                  style={{ fontFamily: 'inherit', colorScheme: 'dark' }}
+                  style={{ fontFamily: 'inherit', colorScheme: 'light' }}
                 />
               </label>
 
@@ -468,7 +457,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
                   disabled={saving || noExpiry}
                   style={{
                     fontFamily: 'inherit',
-                    colorScheme: 'dark',
+                    colorScheme: 'light',
                     opacity: noExpiry ? 0.5 : 1,
                   }}
                 />
@@ -493,7 +482,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
                   setNoExpiry(e.target.checked);
                   if (e.target.checked) setExpiresAtLocal('');
                 }}
-                style={{ accentColor: 'var(--gt-red)', cursor: 'inherit' }}
+                style={{ accentColor: 'var(--gt-accent)', cursor: 'inherit' }}
               />
               No expiry (permanent)
             </label>
@@ -533,7 +522,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
             </label>
 
             {error ? (
-              <div style={{ color: 'var(--gt-red)', fontSize: 13 }}>{error}</div>
+              <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div>
             ) : null}
           </div>
         ) : null}

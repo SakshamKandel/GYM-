@@ -1,8 +1,8 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { ActivityIndicator, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { formatMoney } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -23,6 +23,7 @@ import {
 } from '../../../components/ui';
 import {
   decidePaymentRequest,
+  exportCsvToFile,
   getAdminPaymentRequests,
   getMemberDetail,
   refundPaymentRequest,
@@ -34,7 +35,27 @@ import {
 } from '../../../features/staff/api';
 import { expiryLabel } from '../../../features/staff/duration';
 import { canReviewPayments, replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { ReauthSheet, useReauth } from '../../../features/staff/ReauthGate';
 import { useAuth } from '../../../state/auth';
+
+/**
+ * P1-10 CSV export contract: exportCsvToFile(kind, token) => Promise<string>
+ * (M2 owns features/staff/api.ts — see the fuller note in members.tsx)
+ * downloads the CSV straight to a local file (native-side streaming; never
+ * buffered into one JS string) and returns its `file://` URI. No
+ * expo-sharing dependency exists in this app, so the file goes through RN's
+ * built-in Share sheet (`url` so iOS attaches it); the on-device path stays
+ * visible as a selectable-text fallback when the share sheet is
+ * unavailable/dismissed.
+ */
+async function shareFile(uri: string): Promise<void> {
+  try {
+    await Share.share({ url: uri });
+  } catch {
+    // Share sheet dismissed/unavailable — the file stays on-device; its
+    // path stays visible as text.
+  }
+}
 
 /**
  * Admin · Payments — the Nepal manual-payment (eSewa/Khalti/bank) review queue
@@ -123,6 +144,11 @@ export default function AdminPaymentsScreen() {
   const token = useAuth((s) => s.token);
   const staffPermissions = useAuth((s) => s.staffPermissions);
   const allowed = canReviewPayments(staffPermissions);
+  // Step-up (plan §3 #14): a refund reverses a tier grant and posts a wallet
+  // adjustment — money-moving and irreversible, same class of action as
+  // staff.tsx's role revoke, so it gets the same fresh-password gate.
+  // Approve/reject stay ungated (pre-existing, non-money-moving decisions).
+  const reauth = useReauth();
 
   const [status, setStatus] = useState<PaymentStatus>('pending');
   const [rows, setRows] = useState<PaymentRequestRow[]>([]);
@@ -148,6 +174,26 @@ export default function AdminPaymentsScreen() {
   const [previewTier, setPreviewTier] = useState<Tier | undefined>(undefined);
   const [previewExpiry, setPreviewExpiry] = useState<string | null | undefined>(undefined);
   const [previewError, setPreviewError] = useState(false);
+
+  // P1-10: CSV export of the payment-request queue.
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [csvLink, setCsvLink] = useState<string | null>(null);
+
+  async function exportPaymentsCsv(): Promise<void> {
+    if (!token || csvBusy) return;
+    setCsvBusy(true);
+    setCsvError(null);
+    try {
+      const uri = await exportCsvToFile('payment-requests', token);
+      setCsvLink(uri);
+      await shareFile(uri);
+    } catch {
+      setCsvError("Couldn't export the payment queue.");
+    } finally {
+      setCsvBusy(false);
+    }
+  }
 
   // G8: a slow response for tab A must not clobber a faster tab-switch to B —
   // only the LATEST in-flight request may commit its result.
@@ -271,7 +317,44 @@ export default function AdminPaymentsScreen() {
 
   return (
     <Screen scroll>
-      <BackRow onBack={goBack} />
+      <BackRow
+        onBack={goBack}
+        action={
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Export payment requests as CSV"
+            accessibilityState={{ disabled: csvBusy }}
+            disabled={csvBusy}
+            onPress={() => void exportPaymentsCsv()}
+            style={styles.headerActionBtn}
+          >
+            {csvBusy ? (
+              <ActivityIndicator size="small" color={colors.text} />
+            ) : (
+              <Ionicons name="download-outline" size={20} color={colors.text} />
+            )}
+          </PressableScale>
+        }
+      />
+
+      {csvError ? (
+        <AppText variant="caption" color={colors.error} style={styles.csvErrorText}>
+          {csvError}
+        </AppText>
+      ) : null}
+
+      {csvLink ? (
+        <View style={styles.csvLinkBlock}>
+          <AppText variant="caption" color={colors.textDim}>
+            Export saved on this device (long-press to copy the file path if the share sheet
+            didn&apos;t open):
+          </AppText>
+          <Text selectable style={styles.selectableLink}>
+            {csvLink}
+          </Text>
+          <Button label="Dismiss" variant="secondary" onPress={() => setCsvLink(null)} />
+        </View>
+      ) : null}
 
       <Animated.View entering={enterDown()} style={styles.tabsRow}>
         {STATUS_TABS.map((t) => (
@@ -528,15 +611,26 @@ export default function AdminPaymentsScreen() {
         }
         cancelLabel="Cancel"
         danger={confirmAction === 'reject' || confirmAction === 'refund'}
-        onConfirm={() => confirmAction && void decide(confirmAction)}
+        onConfirm={() => {
+          if (!confirmAction) return;
+          const action = confirmAction;
+          if (action === 'refund') {
+            reauth.guard(() => void decide(action));
+          } else {
+            void decide(action);
+          }
+        }}
         onCancel={() => setConfirmAction(null)}
       />
+
+      {/* Step-up password prompt for refund (plan §3 #14). */}
+      <ReauthSheet controller={reauth} />
     </Screen>
   );
 }
 
 /** Shared back row + revamp header. */
-function BackRow({ onBack }: { onBack: () => void }) {
+function BackRow({ onBack, action }: { onBack: () => void; action?: ReactNode }) {
   return (
     <>
       <Animated.View entering={enterDown()} style={styles.headerRow}>
@@ -549,7 +643,7 @@ function BackRow({ onBack }: { onBack: () => void }) {
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
       </Animated.View>
-      <ScreenHeader eyebrow="Admin console" title="Payments" style={styles.header} />
+      <ScreenHeader eyebrow="Admin console" title="Payments" style={styles.header} action={action} />
     </>
   );
 }
@@ -570,6 +664,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   header: { marginBottom: spacing.gutter },
+  headerActionBtn: {
+    width: touch.min,
+    height: touch.min,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  csvErrorText: { marginBottom: spacing.sm },
+  csvLinkBlock: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  selectableLink: {
+    fontFamily: 'monospace',
+    fontSize: 13,
+    color: colors.text,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
   locked: {
     marginTop: spacing.xxl,
     alignItems: 'center',

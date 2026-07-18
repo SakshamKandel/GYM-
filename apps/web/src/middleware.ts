@@ -5,8 +5,9 @@ import type { NextRequest } from 'next/server';
  * Publishes the request pathname as `x-pathname` so server components (notably
  * coach/layout.tsx, which must let /coach/login through its auth guard without
  * a redirect loop) can read it. Request headers are otherwise unavailable to
- * layouts in the App Router. Scoped to /coach/* and /admin/* (both use the same
- * login-escape trick in their layout guard) to stay out of the mobile API.
+ * layouts in the App Router. Scoped to /coach/*, /admin/* and /partner/* (all
+ * three use the same login-escape trick in their layout guard) to stay out of
+ * the mobile API.
  */
 export function middleware(req: NextRequest) {
   const headers = new Headers(req.headers);
@@ -15,5 +16,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/coach/:path*', '/admin/:path*'],
+  matcher: ['/coach/:path*', '/admin/:path*', '/partner/:path*'],
 };

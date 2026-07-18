@@ -561,6 +561,12 @@ export const admins = pgTable('admins', {
       'content_admin',
       'support_admin',
       'coach',
+      // Meal-delivery restaurant operator. Web-only console (`/partner`), one
+      // partner account ↔ one meal_partners row (accountId UNIQUE). Minted ONLY
+      // via POST /api/admin/partners — never a generic staff grant (excluded
+      // from GRANTABLE_ROLES in @gym/shared). Outranks nobody; its capabilities
+      // are permission-gated (meals.own/orders.fulfill), not rank-gated.
+      'partner',
     ],
   }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -923,7 +929,15 @@ export const gamificationProfiles = pgTable('gamification_profiles', {
 /**
  * Bounded XP ledger (DESIGN LAW 1) — sourceKey makes every award idempotent
  * per (account, kind, sourceKey): a date for daily_workout, a weekStart for
- * streak_week, a checkInId for checkin, a setId for pr, a badgeId for badge.
+ * streak_week, a checkInId for checkin, a setId for pr, a badgeId for badge,
+ * a fresh random id for admin_correction (each correction is its own event —
+ * not idempotent against re-application by design, since a staffer may need
+ * to apply several corrections to the same account).
+ *
+ * 'admin_correction' (P2 gamification oversight, admin console) is a plain
+ * text column value — Drizzle's `{enum:[...]}` here is TS-only sugar with no
+ * Postgres CHECK constraint, so adding this value is a zero-migration,
+ * additive change picked up by `pnpm db:push` as a no-op DDL diff.
  */
 export const xpEvents = pgTable(
   'xp_events',
@@ -935,7 +949,7 @@ export const xpEvents = pgTable(
       .notNull()
       .references(() => accounts.id, { onDelete: 'cascade' }),
     kind: text('kind', {
-      enum: ['daily_workout', 'streak_week', 'checkin', 'pr', 'badge'],
+      enum: ['daily_workout', 'streak_week', 'checkin', 'pr', 'badge', 'admin_correction'],
     }).notNull(),
     sourceKey: text('source_key').notNull(),
     amount: integer('amount').notNull(),
@@ -1687,4 +1701,508 @@ export const passwordResetTokens = pgTable(
     // "Outstanding tokens for this account" + cascade support.
     index('password_reset_tokens_account').on(t.accountId),
   ],
+);
+
+// ===========================================================================
+// MEAL DELIVERY + NEARBY GYMS (2026-07-18 marketplace wave — plan §1.2/§4).
+// Additive-only. Money in integer minor units (paisa/cents). Neon-http has NO
+// transactions → all daily-order creation flows through a single CAS
+// (onConflictDoNothing on the partial unique index); status advances are
+// version-guarded UPDATEs. Asia/Kathmandu = fixed UTC+05:45 (pure logic in
+// @gym/shared, no tz dependency). Cutoff/price/macros/delivery snapshots are
+// FROZEN at row creation and never re-resolved.
+// ===========================================================================
+
+/**
+ * A meal-delivery restaurant/partner. Login identity is `accountId` (UNIQUE —
+ * exactly one partner row per account), which also carries the `partner`
+ * admins.role row. Every partner-scoped query is filtered by the partnerId
+ * derived from the auth guard (never the request body). Deactivation flips
+ * `isActive=false` AND deletes the account's sessions (two kill-switches).
+ */
+export const mealPartners = pgTable(
+  'meal_partners',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .unique()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    contact: text('contact').notNull().default(''),
+    phone: text('phone').notNull().default(''),
+    addressText: text('address_text').notNull().default(''),
+    // Delivery zones this partner serves (free-text area names, matched against
+    // a member's saved-address area).
+    serviceAreas: text('service_areas').array().notNull().default(sql`'{}'::text[]`),
+    // Geo service origin + reach (additive 2026-07-18 geo wave). serviceLat/Lng
+    // is the kitchen/dispatch point; serviceRadiusKm is the delivery reach used
+    // by withinRadiusKm to decide whether a member's saved-address point is in
+    // range (a geo complement to the free-text serviceAreas match). All nullable
+    // so existing rows and db:push stay safe; radius null = distance-gating off.
+    serviceLat: doublePrecision('service_lat'),
+    serviceLng: doublePrecision('service_lng'),
+    serviceRadiusKm: doublePrecision('service_radius_km'),
+    acceptsCod: boolean('accepts_cod').notNull().default(true),
+    timezone: text('timezone').notNull().default('Asia/Kathmandu'),
+    currency: text('currency').notNull().default('NPR'),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('meal_partners_account').on(t.accountId),
+    index('meal_partners_active').on(t.isActive),
+  ],
+);
+
+/**
+ * A menu item owned by one partner. `isDeleted` is a soft-delete so historical
+ * order item snapshots keep resolving. Macros are integers; price is minor
+ * units in the row's own `currency`. All partner CRUD is scoped by partnerId.
+ */
+export const meals = pgTable(
+  'meals',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    partnerId: text('partner_id')
+      .notNull()
+      .references(() => mealPartners.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    imageUrl: text('image_url'), // Cloudinary public id / delivery url (nullable)
+    kcal: integer('kcal').notNull(),
+    proteinG: integer('protein_g').notNull(),
+    carbsG: integer('carbs_g').notNull(),
+    fatG: integer('fat_g').notNull(),
+    fiberG: integer('fiber_g'),
+    sugarG: integer('sugar_g'),
+    dietType: text('diet_type', { enum: ['veg', 'non_veg', 'egg'] }).notNull(),
+    // ⊆ {cutting,bulking,balanced} — drives the member goal filter.
+    goalTags: text('goal_tags').array().notNull().default(sql`'{}'::text[]`),
+    priceMinor: integer('price_minor').notNull(),
+    currency: text('currency', { enum: ['NPR', 'USD'] }).notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    isDeleted: boolean('is_deleted').notNull().default(false),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('meals_partner').on(t.partnerId),
+    index('meals_partner_active').on(t.partnerId, t.isActive),
+  ],
+);
+
+/**
+ * When a meal is orderable: (dayOfWeek 0-6, 0=Sun KTM) × window. A meal with no
+ * availability rows is treated as always-available (partner opt-in narrowing).
+ */
+export const mealAvailability = pgTable(
+  'meal_availability',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    mealId: text('meal_id')
+      .notNull()
+      .references(() => meals.id, { onDelete: 'cascade' }),
+    dayOfWeek: integer('day_of_week').notNull(), // 0=Sun … 6=Sat (KTM)
+    window: text('window', { enum: ['lunch', 'dinner'] }).notNull(),
+  },
+  (t) => [uniqueIndex('meal_availability_meal_day_window').on(t.mealId, t.dayOfWeek, t.window)],
+);
+
+/**
+ * A member's saved delivery address. `isDeleted` soft-delete keeps prior orders'
+ * FK (meal_orders.addressId onDelete set null) intact for real deletes.
+ */
+export const savedAddresses = pgTable(
+  'saved_addresses',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    label: text('label').notNull().default(''),
+    line: text('line').notNull(),
+    area: text('area').notNull().default(''),
+    phone: text('phone').notNull(),
+    lat: doublePrecision('lat'),
+    lng: doublePrecision('lng'),
+    isDefault: boolean('is_default').notNull().default(false),
+    isDeleted: boolean('is_deleted').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('saved_addresses_account').on(t.accountId)],
+);
+
+/**
+ * Weekly billing cycle for a subscription (prepaid, Sun-Sat KTM week). At close
+ * (detected on read when now ≥ the week's cutoff) the cycle freezes
+ * `amountMinor = plannedSlots × pricePerDayMinor`, flips open→awaiting_payment
+ * and mints a meal_payment_requests row. Referenced by meal_orders/…_requests,
+ * declared before them so the FK targets resolve.
+ */
+export const mealBillingCycles = pgTable(
+  'meal_billing_cycles',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    subscriptionId: text('subscription_id')
+      .notNull()
+      .references(() => mealSubscriptions.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    weekStart: date('week_start').notNull(), // Sunday (KTM)
+    weekEnd: date('week_end').notNull(), // Saturday (KTM)
+    plannedSlots: integer('planned_slots').notNull().default(0),
+    pricePerDayMinor: integer('price_per_day_minor').notNull(),
+    currency: text('currency').notNull(),
+    amountMinor: integer('amount_minor').notNull().default(0), // frozen at close
+    status: text('status', { enum: ['open', 'awaiting_payment', 'paid', 'void'] })
+      .notNull()
+      .default('open'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('meal_billing_cycles_sub_week').on(t.subscriptionId, t.weekStart),
+    index('meal_billing_cycles_account').on(t.accountId),
+    index('meal_billing_cycles_status').on(t.status),
+  ],
+);
+
+/**
+ * A recurring meal subscription. Materialization (on-read, horizon =
+ * today+tomorrow KTM) spawns meal_orders from ACTIVE subs. `mealId` set for
+ * fixed_meal plans; partner_rotating resolves deterministically per date.
+ * `pricePerDayMinor` is a snapshot (delivery folded in — no per-order fee).
+ */
+export const mealSubscriptions = pgTable(
+  'meal_subscriptions',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    partnerId: text('partner_id')
+      .notNull()
+      .references(() => mealPartners.id, { onDelete: 'cascade' }),
+    daysOfWeek: integer('days_of_week').array().notNull().default(sql`'{}'::integer[]`),
+    window: text('window', { enum: ['lunch', 'dinner'] }).notNull(),
+    planType: text('plan_type', { enum: ['fixed_meal', 'partner_rotating'] }).notNull(),
+    mealId: text('meal_id').references(() => meals.id, { onDelete: 'set null' }),
+    addressId: text('address_id')
+      .notNull()
+      .references(() => savedAddresses.id, { onDelete: 'restrict' }),
+    pricePerDayMinor: integer('price_per_day_minor').notNull(),
+    currency: text('currency', { enum: ['NPR', 'USD'] }).notNull(),
+    paymentMethod: text('payment_method', { enum: ['esewa', 'khalti', 'cod'] }).notNull(),
+    startDate: date('start_date').notNull(),
+    status: text('status', { enum: ['active', 'paused', 'cancelled'] })
+      .notNull()
+      .default('active'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('meal_subscriptions_account').on(t.accountId),
+    index('meal_subscriptions_partner_status').on(t.partnerId, t.status),
+  ],
+);
+
+/**
+ * A member's skip of one delivery date for a subscription. Insert suppresses
+ * materialization before the row exists (guarded now<cutoff); if already
+ * materialized, the skip route additionally CAS-cancels the pending order.
+ */
+export const mealSubSkips = pgTable(
+  'meal_sub_skips',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    subscriptionId: text('subscription_id')
+      .notNull()
+      .references(() => mealSubscriptions.id, { onDelete: 'cascade' }),
+    deliveryDate: date('delivery_date').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('meal_sub_skips_sub_date').on(t.subscriptionId, t.deliveryDate)],
+);
+
+/**
+ * A single meal order (one_time or a materialized subscription slot). The
+ * member's `accountId` is SERVER-ONLY and MUST NOT be serialized into any
+ * partner projection. Delivery snapshot fields + fees + `cutoffAt` are frozen
+ * at creation. `statusVersion` backs the CAS advance. The partial unique index
+ * on (subscriptionId,deliveryDate,window) WHERE source='subscription' is the
+ * materialization idempotency key — racing materializers no-op via
+ * onConflictDoNothing.
+ */
+export const mealOrders = pgTable(
+  'meal_orders',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    partnerId: text('partner_id')
+      .notNull()
+      .references(() => mealPartners.id, { onDelete: 'cascade' }),
+    source: text('source', { enum: ['one_time', 'subscription'] }).notNull(),
+    subscriptionId: text('subscription_id').references(() => mealSubscriptions.id, {
+      onDelete: 'set null',
+    }),
+    cycleId: text('cycle_id').references(() => mealBillingCycles.id, { onDelete: 'set null' }),
+    deliveryDate: date('delivery_date').notNull(),
+    window: text('window', { enum: ['lunch', 'dinner'] }).notNull(),
+    addressId: text('address_id').references(() => savedAddresses.id, { onDelete: 'set null' }),
+    // Delivery snapshot (frozen; free-text notes maskPii'd before store).
+    deliveryName: text('delivery_name').notNull(),
+    deliveryPhone: text('delivery_phone').notNull(),
+    deliveryAddressText: text('delivery_address_text').notNull(),
+    deliveryNotes: text('delivery_notes').notNull().default(''),
+    subtotalMinor: integer('subtotal_minor').notNull(),
+    deliveryFeeMinor: integer('delivery_fee_minor').notNull().default(0),
+    smallOrderFeeMinor: integer('small_order_fee_minor').notNull().default(0),
+    totalMinor: integer('total_minor').notNull(),
+    currency: text('currency', { enum: ['NPR', 'USD'] }).notNull(),
+    paymentMethod: text('payment_method', { enum: ['esewa', 'khalti', 'cod'] }).notNull(),
+    paymentStatus: text('payment_status', {
+      enum: ['unpaid', 'receipt_submitted', 'paid', 'refunded'],
+    })
+      .notNull()
+      .default('unpaid'),
+    status: text('status', {
+      enum: [
+        'pending',
+        'confirmed',
+        'preparing',
+        'out_for_delivery',
+        'delivered',
+        'cancelled',
+        'refused',
+      ],
+    })
+      .notNull()
+      .default('pending'),
+    statusVersion: integer('status_version').notNull().default(0),
+    cutoffAt: timestamp('cutoff_at', { withTimezone: true }).notNull(), // frozen at create
+    placedAt: timestamp('placed_at', { withTimezone: true }).notNull().defaultNow(),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    deliveredAt: timestamp('delivered_at', { withTimezone: true }),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    cancelReason: text('cancel_reason'),
+    decidedBy: text('decided_by').references(() => accounts.id, { onDelete: 'set null' }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Materialization CAS key — one subscription slot per (sub,date,window).
+    uniqueIndex('meal_orders_sub_slot')
+      .on(t.subscriptionId, t.deliveryDate, t.window)
+      .where(sql`${t.source} = 'subscription'`),
+    index('meal_orders_partner_status').on(t.partnerId, t.status),
+    index('meal_orders_account').on(t.accountId),
+    index('meal_orders_partner_date').on(t.partnerId, t.deliveryDate),
+  ],
+);
+
+/** Line items of an order, with name/price/macros snapshotted at creation. */
+export const mealOrderItems = pgTable(
+  'meal_order_items',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    orderId: text('order_id')
+      .notNull()
+      .references(() => mealOrders.id, { onDelete: 'cascade' }),
+    mealId: text('meal_id')
+      .notNull()
+      .references(() => meals.id, { onDelete: 'restrict' }),
+    nameSnapshot: text('name_snapshot').notNull(),
+    priceMinorSnapshot: integer('price_minor_snapshot').notNull(),
+    macrosSnapshot: jsonb('macros_snapshot').$type<MealMacrosSnapshot>().notNull(),
+    qty: integer('qty').notNull(),
+  },
+  (t) => [index('meal_order_items_order').on(t.orderId)],
+);
+
+/** Append-only status-transition audit for an order. */
+export const mealOrderEvents = pgTable(
+  'meal_order_events',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    orderId: text('order_id')
+      .notNull()
+      .references(() => mealOrders.id, { onDelete: 'cascade' }),
+    fromStatus: text('from_status'),
+    toStatus: text('to_status').notNull(),
+    actorId: text('actor_id').references(() => accounts.id, { onDelete: 'set null' }),
+    actorRole: text('actor_role'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('meal_order_events_order').on(t.orderId)],
+);
+
+/**
+ * Manual receipt-based payment request for meals — a sibling of
+ * `paymentRequests`, scoped to an order OR a billing cycle (exactly one set).
+ * eSewa/Khalti only (COD reconciles on delivery). `receiptUrl` UNIQUE dedupes
+ * a resubmitted screenshot. Admin approve → paid; refund is idempotent-stamped.
+ */
+export const mealPaymentRequests = pgTable(
+  'meal_payment_requests',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    orderId: text('order_id').references(() => mealOrders.id, { onDelete: 'cascade' }),
+    cycleId: text('cycle_id').references(() => mealBillingCycles.id, { onDelete: 'cascade' }),
+    amountMinor: integer('amount_minor').notNull(),
+    currency: text('currency').notNull(),
+    method: text('method', { enum: ['esewa', 'khalti'] }).notNull(),
+    receiptUrl: text('receipt_url').notNull().unique(),
+    note: text('note'),
+    status: text('status', { enum: ['pending', 'approved', 'rejected', 'refunded'] })
+      .notNull()
+      .default('pending'),
+    reviewNote: text('review_note'),
+    decidedBy: text('decided_by').references(() => accounts.id, { onDelete: 'set null' }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+    refundedAt: timestamp('refunded_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('meal_payment_requests_account').on(t.accountId),
+    index('meal_payment_requests_status').on(t.status),
+  ],
+);
+
+/**
+ * Singleton config row (id='singleton') holding server-authoritative fee +
+ * cutoff parameters. The client never sets fees/price/cutoff. Defaults mirror
+ * the frozen constants in @gym/shared (cutoffFor uses 21:00 prev-day lunch /
+ * 10:00 same-day dinner).
+ */
+export const mealDeliveryConfig = pgTable('meal_delivery_config', {
+  id: text('id').primaryKey().default('singleton'),
+  smallOrderFeeMinor: integer('small_order_fee_minor').notNull().default(5000), // Rs50
+  smallOrderThresholdMinor: integer('small_order_threshold_minor').notNull().default(50000), // Rs500
+  deliveryFeeMinor: integer('delivery_fee_minor').notNull().default(5000), // Rs50 flat
+  freeDeliveryThresholdMinor: integer('free_delivery_threshold_minor').notNull().default(100000), // Rs1000
+  lunchCutoffPrevDayHour: integer('lunch_cutoff_prev_day_hour').notNull().default(21),
+  dinnerCutoffSameDayHour: integer('dinner_cutoff_same_day_hour').notNull().default(10),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedBy: text('updated_by'),
+});
+
+/** Macros snapshot embedded in a meal_order_items row (frozen at order time). */
+export interface MealMacrosSnapshot {
+  kcal: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  fiberG?: number;
+  sugarG?: number;
+}
+
+/** A social profile link on a gym listing. */
+export interface GymSocialLink {
+  platform: string;
+  url: string;
+}
+
+/** One open→close shift on a gym's weekly hours (HH:MM 24h, KTM local). */
+export interface GymHoursShift {
+  open: string;
+  close: string;
+}
+
+/** Structured weekly hours: per-weekday-key list of shifts (empty = closed). */
+export type GymWeeklyHours = Partial<Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat', GymHoursShift[]>>;
+
+/**
+ * A discoverable nearby gym/studio. Admin-CRUD only. Publish gated behind
+ * `verifiedByAdmin` + status='published'. `externalImageUrl` is operator-
+ * supplied ("not verified by us"); listing photos live in gym_photos and are
+ * admin-uploaded via Cloudinary (NEVER scraped/hotlinked). `rating`/
+ * `reviewCount` are our OWN reviews only (null until that surface ships).
+ */
+export const gyms = pgTable(
+  'gyms',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    slug: text('slug').notNull().unique(),
+    name: text('name').notNull(),
+    category: text('category', {
+      enum: ['gym', 'health_club', 'studio', 'crossfit', 'yoga', 'other'],
+    })
+      .notNull()
+      .default('gym'),
+    addressText: text('address_text').notNull().default(''),
+    city: text('city').notNull().default(''),
+    district: text('district').notNull().default(''),
+    lat: doublePrecision('lat'),
+    lng: doublePrecision('lng'),
+    phone: text('phone').notNull().default(''),
+    website: text('website'),
+    socialLinks: jsonb('social_links').$type<GymSocialLink[]>().notNull().default([]),
+    hours: jsonb('hours').$type<GymWeeklyHours>().notNull().default({}),
+    amenities: text('amenities').array().notNull().default(sql`'{}'::text[]`),
+    externalImageUrl: text('external_image_url'), // operator-supplied, "not verified"
+    priceNote: text('price_note').notNull().default(''),
+    description: text('description').notNull().default(''),
+    rating: doublePrecision('rating'), // OWN reviews only; null until built
+    reviewCount: integer('review_count'),
+    status: text('status', { enum: ['draft', 'published', 'archived'] })
+      .notNull()
+      .default('draft'),
+    verifiedByAdmin: boolean('verified_by_admin').notNull().default(false),
+    createdBy: text('created_by').references(() => accounts.id, { onDelete: 'set null' }),
+    lastEditedBy: text('last_edited_by').references(() => accounts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('gyms_status').on(t.status), index('gyms_city').on(t.city)],
+);
+
+/** Admin-uploaded listing photos for a gym (Cloudinary; reorderable). */
+export const gymPhotos = pgTable(
+  'gym_photos',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    gymId: text('gym_id')
+      .notNull()
+      .references(() => gyms.id, { onDelete: 'cascade' }),
+    uid: text('uid').notNull(), // Cloudinary public id
+    deliveryUrl: text('delivery_url').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('gym_photos_gym').on(t.gymId)],
 );

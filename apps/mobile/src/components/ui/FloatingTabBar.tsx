@@ -1,17 +1,13 @@
 import type { ComponentProps } from 'react';
 import { useEffect } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
-  Easing,
   interpolate,
   useAnimatedStyle,
-  useDerivedValue,
   useReducedMotion,
   useSharedValue,
-  withSequence,
   withSpring,
-  withTiming,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { router, type Href } from 'expo-router';
@@ -20,23 +16,31 @@ import { tapHaptic } from '../../lib/haptics';
 import { useSession } from '../../features/training/session';
 
 /**
- * Floating tab bar (fluid revision): a compact centered dark pill floating
- * above the bottom inset. Icon-only items — ONE physical signal-red disc
- * slides between tabs on a spring, squashing along its travel axis while it
- * moves and settling with a soft overshoot (fluid-drop feel). Icon ink
- * crossfades in sync with the disc's arrival. Long-press keeps the per-tab
- * quick action. A small red dot marks a live workout session on Train.
- * No glow, no border — the pill separates from the canvas by fill contrast
- * alone (brief §9). Honors the system reduce-motion setting.
+ * Floating tab bar — "power cells" (signature revision, OWNER DIRECTIVE
+ * 2026-07-18: NO text labels anywhere in the bar — icons only. Do not re-add
+ * text in any future pass).
+ *
+ * A floating charcoal dock holding six recessed CELLS — shallow wells sunk
+ * into the surface. The active cell CHARGES: signal-red fill rises from the
+ * bottom of the well on a spring (a rep meter filling), the glyph inking
+ * from dim outline to solid black as the level passes it. Tapping another
+ * tab drains the old cell while the new one charges — each cell owns its own
+ * spring, so rapid taps overlap fluidly and never queue. Everything is
+ * contained inside its own slot: nothing protrudes, nothing to misalign.
+ * A red dot on Train marks a live workout. Long-press keeps the per-tab
+ * quick action. No glow, no border — fill contrast only (brief §9).
+ * Honors reduce-motion (cells set instantly) and is web-safe (style-driven
+ * springs, fully visible initial state, no entering animations).
  */
 
-export const TAB_ICONS: Record<
-  string,
-  { active: ComponentProps<typeof Ionicons>['name']; idle: ComponentProps<typeof Ionicons>['name'] }
-> = {
+type IconName = ComponentProps<typeof Ionicons>['name'];
+
+export const TAB_ICONS: Record<string, { active: IconName; idle: IconName }> = {
   index: { active: 'home', idle: 'home-outline' },
   train: { active: 'barbell', idle: 'barbell-outline' },
   food: { active: 'restaurant', idle: 'restaurant-outline' },
+  meals: { active: 'fast-food', idle: 'fast-food-outline' },
+  gyms: { active: 'location', idle: 'location-outline' },
   progress: { active: 'trending-up', idle: 'trending-up-outline' },
 };
 
@@ -44,25 +48,32 @@ const QUICK_ACTIONS: Record<string, string> = {
   index: '/settings',
   train: '/workout/start',
   food: '/food/search',
+  meals: '/meals/orders',
   progress: '/body/log-weight',
 };
 
 const BAR_H = 60;
-/** Active-state disc — meets the 44dp+ target inside the 56dp item. */
-const CIRCLE = 44;
-/** Per-tab touch target width (≥48dp floor). */
-const ITEM_W = 56;
-/** The pill floats this far above the bottom safe-area inset. */
+/** Recessed cell (well) inside each slot. */
+const CELL_W = 44;
+const CELL_H = 46;
+const CELL_R = 14;
+/** Preferred per-tab width; shrinks responsively to the 48dp floor so six
+ * tabs still fit small screens without the dock clipping the edges. */
+const ITEM_W_MAX = 56;
+const ITEM_W_MIN = 48;
+/** Minimum breathing room between the dock and each screen edge. */
+const EDGE_MARGIN = 10;
+/** The dock floats this far above the bottom safe-area inset. */
 const FLOAT_GAP = 16;
 
 /** Space consumed by the bar — screens pad bottom by this. */
 export const FLOATING_TAB_SPACE = 96;
 
-/** Disc travel: settles with a soft overshoot. */
-const TRAVEL_SPRING = { damping: 18, stiffness: 220, mass: 0.8 };
+/** Cell charge/drain — springy fill with a soft settle; drains a touch
+ * faster than it charges so attention lands on the new tab. */
+const CHARGE_SPRING = { damping: 17, stiffness: 190, mass: 0.9 };
+const DRAIN_SPRING = { damping: 22, stiffness: 260, mass: 0.7 };
 const PRESS_SPRING = { damping: 22, stiffness: 420, mass: 0.6 };
-/** Ink crossfade tracks the disc's arrival, slightly quicker than the travel. */
-const INK_TIMING = { duration: 200, easing: Easing.out(Easing.cubic) };
 
 const styles = StyleSheet.create({
   wrap: {
@@ -79,20 +90,26 @@ const styles = StyleSheet.create({
     borderRadius: radius.full,
     paddingHorizontal: spacing.sm,
   },
-  disc: {
-    position: 'absolute',
-    left: spacing.sm + (ITEM_W - CIRCLE) / 2,
-    top: (BAR_H - CIRCLE) / 2,
-    width: CIRCLE,
-    height: CIRCLE,
-    borderRadius: CIRCLE / 2,
-    backgroundColor: colors.accent,
-  },
   item: {
-    width: ITEM_W,
     height: BAR_H,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  cell: {
+    width: CELL_W,
+    height: CELL_H,
+    borderRadius: CELL_R,
+    backgroundColor: colors.surface,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fill: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.accent,
   },
   iconStack: {
     width: 24,
@@ -111,10 +128,10 @@ const styles = StyleSheet.create({
   },
   liveDot: {
     position: 'absolute',
-    top: (BAR_H - CIRCLE) / 2 + 1,
-    right: (ITEM_W - CIRCLE) / 2 + 1,
-    width: 8,
-    height: 8,
+    top: (BAR_H - CELL_H) / 2 + 3,
+    right: 5,
+    width: 7,
+    height: 7,
     borderRadius: 4,
     backgroundColor: colors.accent,
   },
@@ -139,11 +156,11 @@ interface TabBarProps {
 
 interface TabItemProps {
   focused: boolean;
-  icons: { active: ComponentProps<typeof Ionicons>['name']; idle: ComponentProps<typeof Ionicons>['name'] };
+  icons: { active: IconName; idle: IconName };
   label: string;
+  itemW: number;
   showLiveDot: boolean;
-  /** What the dot means, for the accessibility label (e.g. "workout in
-   * progress", "unread messages") — only read when showLiveDot is true. */
+  /** What the dot means, for the accessibility label — read when shown. */
   dotHint: string;
   reduceMotion: boolean;
   onPress: () => void;
@@ -154,32 +171,38 @@ function TabItem({
   focused,
   icons,
   label,
+  itemW,
   showLiveDot,
   dotHint,
   reduceMotion,
   onPress,
   onLongPress,
 }: TabItemProps) {
-  const active = useSharedValue(focused ? 1 : 0);
+  // 0 = drained, 1 = fully charged. Each cell owns its spring, so switching
+  // tabs overlaps a drain and a charge — fluid under rapid taps, never queued.
+  const charge = useSharedValue(focused ? 1 : 0);
   const pressed = useSharedValue(0);
 
   useEffect(() => {
-    active.value = reduceMotion
+    charge.value = reduceMotion
       ? (focused ? 1 : 0)
-      : withTiming(focused ? 1 : 0, INK_TIMING);
-  }, [focused, active, reduceMotion]);
+      : withSpring(focused ? 1 : 0, focused ? CHARGE_SPRING : DRAIN_SPRING);
+  }, [focused, charge, reduceMotion]);
 
-  // Crossfading two stacked icons avoids animating a vector-icon color prop.
-  // The active layer also lands with a tiny pop so the arrival reads physical.
+  const fillStyle = useAnimatedStyle(() => ({
+    height: interpolate(charge.value, [0, 1], [0, CELL_H]),
+  }));
+  // The glyph inks to solid as the level passes it (crossfade weighted to the
+  // upper half of the fill) and gets a tiny lift at full charge.
   const idleIconStyle = useAnimatedStyle(() => ({
-    opacity: 1 - active.value,
+    opacity: interpolate(charge.value, [0, 0.45, 0.8], [1, 1, 0]),
   }));
   const activeIconStyle = useAnimatedStyle(() => ({
-    opacity: active.value,
-    transform: [{ scale: interpolate(active.value, [0, 0.6, 1], [0.8, 1.12, 1]) }],
+    opacity: interpolate(charge.value, [0, 0.45, 0.8], [0, 0, 1]),
+    transform: [{ scale: interpolate(charge.value, [0.8, 1], [0.9, 1]) }],
   }));
   const pressStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: 1 - pressed.value * 0.08 }],
+    transform: [{ scale: 1 - pressed.value * 0.07 }],
   }));
 
   return (
@@ -196,57 +219,39 @@ function TabItem({
       onPressOut={() => {
         pressed.value = withSpring(0, PRESS_SPRING);
       }}
-      style={styles.item}
+      style={[styles.item, { width: itemW }]}
     >
-      <Animated.View style={[styles.iconStack, pressStyle]}>
-        <Animated.View style={[styles.iconLayer, idleIconStyle]}>
-          <Ionicons name={icons.idle} size={22} color={colors.textDim} />
-        </Animated.View>
-        <Animated.View style={[styles.iconLayer, activeIconStyle]}>
-          <Ionicons name={icons.active} size={22} color={colors.onBlock} />
-        </Animated.View>
+      <Animated.View style={[styles.cell, pressStyle]}>
+        <Animated.View style={[styles.fill, fillStyle]} />
+        <View style={styles.iconStack}>
+          <Animated.View style={[styles.iconLayer, idleIconStyle]}>
+            <Ionicons name={icons.idle} size={22} color={colors.textDim} />
+          </Animated.View>
+          <Animated.View style={[styles.iconLayer, activeIconStyle]}>
+            <Ionicons name={icons.active} size={22} color={colors.onBlock} />
+          </Animated.View>
+        </View>
       </Animated.View>
       {showLiveDot && !focused ? <View style={styles.liveDot} pointerEvents="none" /> : null}
     </Pressable>
   );
 }
 
-/**
- * The single red disc that physically slides under the active tab. While it
- * travels it squashes toward its motion axis (scaleX up / scaleY down) and
- * relaxes as the spring settles — driven by the distance between the sprung
- * position and its target, so the deformation is exactly zero at rest.
- */
-function SlidingDisc({ index, reduceMotion }: { index: number; reduceMotion: boolean }) {
-  const target = useSharedValue(index * ITEM_W);
-  const sprung = useDerivedValue(() =>
-    reduceMotion ? target.value : withSpring(target.value, TRAVEL_SPRING),
-  );
-
-  useEffect(() => {
-    target.value = index * ITEM_W;
-  }, [index, target]);
-
-  const discStyle = useAnimatedStyle(() => {
-    // 0 at rest → 1 at one full tab of remaining travel.
-    const strain = Math.min(Math.abs(target.value - sprung.value) / ITEM_W, 1);
-    return {
-      transform: [
-        { translateX: sprung.value },
-        { scaleX: 1 + strain * 0.35 },
-        { scaleY: 1 - strain * 0.22 },
-      ],
-    };
-  });
-
-  return <Animated.View pointerEvents="none" style={[styles.disc, discStyle]} />;
-}
-
 export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) {
   const insets = useSafeAreaInsets();
+  const { width: screenW } = useWindowDimensions();
   const reduceMotion = useReducedMotion();
   // Live-workout marker on the Train tab — visible from any other tab.
   const sessionActive = useSession((s) => s.status === 'active');
+
+  // Responsive item width: prefer 56dp, shrink to the 48dp floor when six
+  // tabs would push the dock past the safe screen edges. Side insets honored.
+  const usable =
+    screenW - insets.left - insets.right - EDGE_MARGIN * 2 - spacing.sm * 2;
+  const itemW = Math.max(
+    ITEM_W_MIN,
+    Math.min(ITEM_W_MAX, Math.floor(usable / Math.max(state.routes.length, 1))),
+  );
 
   return (
     <View
@@ -254,7 +259,6 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
       pointerEvents="box-none"
     >
       <View style={styles.bar}>
-        <SlidingDisc index={state.index} reduceMotion={reduceMotion} />
         {state.routes.map((route, index) => {
           const options = descriptors[route.key]?.options ?? {};
           const focused = state.index === index;
@@ -273,6 +277,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
               focused={focused}
               icons={icons}
               label={label}
+              itemW={itemW}
               showLiveDot={route.name === 'train' && sessionActive}
               dotHint="workout in progress"
               reduceMotion={reduceMotion}

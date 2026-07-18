@@ -2,7 +2,10 @@ import { redirect } from 'next/navigation';
 import {
   Card,
   CardHeader,
+  ChartCard,
   DataTable,
+  GaugeArc,
+  HeatGrid,
   PageHeader,
   StatTile,
   StatusChip,
@@ -17,7 +20,14 @@ import {
   type RecentActivity,
   type RecentSignup,
 } from './_overview/data';
-import { OpsTiles, relativeTime, TierBreakdown } from './_overview/ui';
+import {
+  buildSignupHeatmap,
+  buildSignupTrend,
+  OpsTiles,
+  relativeTime,
+  TierBreakdown,
+  WEEKDAY_LABELS,
+} from './_overview/ui';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -170,23 +180,104 @@ export default async function AdminOverviewPage() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gridTemplateColumns: 'repeat(3, minmax(180px, 1fr))',
             gap: 12,
             marginBottom: 24,
           }}
         >
-          <StatTile label="Total members" value={membership.totalMembers.toLocaleString()} />
-          <StatTile label="Active coaches" value={membership.activeCoaches.toLocaleString()} />
+          <StatTile
+            label="Total members"
+            value={membership.totalMembers.toLocaleString()}
+            viz={{ kind: 'bars', data: membership.tierBreakdown.map((t) => t.count) }}
+          />
+          <StatTile
+            label="Active coaches"
+            value={membership.activeCoaches.toLocaleString()}
+            viz={{ kind: 'ring', value: membership.coachCapacityPct }}
+            hint={`${Math.round(membership.coachCapacityPct * 100)}% capacity used`}
+          />
           <StatTile
             label="Active assignments"
             value={membership.activeAssignments.toLocaleString()}
             hint="coach ↔ member"
+            viz={{ kind: 'spark', data: membership.dailySignups28.map((d) => d.count) }}
           />
           <StatTile
             label="Plan videos ready"
             value={membership.readyVideos.toLocaleString()}
             hint="published"
           />
+        </div>
+      ) : null}
+
+      {membership ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 2fr) minmax(220px, 1fr)',
+            gap: 16,
+            alignItems: 'stretch',
+            marginBottom: 24,
+          }}
+        >
+          <ChartCard
+            title="Signups"
+            caption="Last 14 days"
+            data={buildSignupTrend(membership.dailySignups28)}
+          />
+          <Card>
+            <CardHeader title="Coach capacity" />
+            <div style={{ padding: '8px 4px 4px', display: 'flex', justifyContent: 'center' }}>
+              <GaugeArc
+                value={membership.coachCapacityPct}
+                caption="assignments vs. total capacity"
+              />
+            </div>
+          </Card>
+        </div>
+      ) : null}
+
+      {membership ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.4fr)',
+            gap: 16,
+            alignItems: 'start',
+            marginBottom: 24,
+          }}
+        >
+          <Card padded={false}>
+            <CardHeader title="Signups by weekday" />
+            <div style={{ padding: 18 }}>
+              <HeatGrid
+                columns={WEEKDAY_LABELS}
+                rows={buildSignupHeatmap(membership.dailySignups28)}
+                metricLabel="signups"
+              />
+            </div>
+          </Card>
+
+          <section>
+            <h2
+              style={{
+                fontFamily: 'var(--font-heading)',
+                fontWeight: 600,
+                fontSize: 15,
+                letterSpacing: '0.02em',
+                color: 'var(--gt-text)',
+                marginBottom: 12,
+              }}
+            >
+              Recent signups
+            </h2>
+            <DataTable
+              columns={SIGNUP_COLUMNS}
+              rows={membership.recentSignups}
+              rowKey={(r) => r.id}
+              empty="No members have signed up yet."
+            />
+          </section>
         </div>
       ) : null}
 
@@ -230,29 +321,6 @@ export default async function AdminOverviewPage() {
             </Card>
           ) : null}
         </div>
-      ) : null}
-
-      {membership ? (
-        <section>
-          <h2
-            style={{
-              fontFamily: 'var(--font-heading)',
-              fontWeight: 600,
-              fontSize: 15,
-              letterSpacing: '0.02em',
-              color: 'var(--gt-text)',
-              marginBottom: 12,
-            }}
-          >
-            Recent signups
-          </h2>
-          <DataTable
-            columns={SIGNUP_COLUMNS}
-            rows={membership.recentSignups}
-            rowKey={(r) => r.id}
-            empty="No members have signed up yet."
-          />
-        </section>
       ) : null}
     </div>
   );

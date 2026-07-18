@@ -26,6 +26,7 @@ import {
   SectionLabel,
   Stepper,
   Tag,
+  nativeOnly,
 } from '../../../components/ui';
 import {
   getAudit,
@@ -47,6 +48,7 @@ import {
   type DurationChoice,
 } from '../../../features/staff/duration';
 import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
+import { ReauthSheet, useReauth } from '../../../features/staff/ReauthGate';
 import { useAuth } from '../../../state/auth';
 
 /**
@@ -187,6 +189,10 @@ function OverrideSheet({
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Step-up (plan §3 #14): a tier override is a paid-entitlement change — the
+  // most destructive action on this screen — so committing it requires a fresh
+  // password re-entry (5-min in-memory window shared across the console).
+  const reauth = useReauth();
 
   // Custom date parts default ~90 days out. Lazy initializers read the clock
   // once at mount (never during render — React purity).
@@ -226,11 +232,18 @@ function OverrideSheet({
     setWindowTouched(true);
   }
 
-  async function save(): Promise<void> {
+  function save(): void {
     if (!dirty) {
       onClose();
       return;
     }
+    // Gate the commit behind a fresh password step-up (plan §3 #14). When the
+    // window is still fresh doSave runs immediately; otherwise the ReauthSheet
+    // prompts first and runs it only after the password is confirmed.
+    reauth.guard(() => void doSave());
+  }
+
+  async function doSave(): Promise<void> {
     setSaving(true);
     setError(null);
     try {
@@ -258,8 +271,9 @@ function OverrideSheet({
       : 'Expiry unchanged';
 
   return (
+    <>
     <Modal visible transparent animationType="none" onRequestClose={onClose}>
-      <Animated.View entering={FadeIn.duration(120)} style={styles.sheetRoot}>
+      <Animated.View entering={nativeOnly(FadeIn.duration(120))} style={styles.sheetRoot}>
         {/* iOS needs explicit avoidance for the Reason input inside a Modal;
             Android's adjustResize already handles it. */}
         <KeyboardAvoidingView
@@ -406,7 +420,7 @@ function OverrideSheet({
                 <Button
                   label={dirty ? 'Apply' : 'No change'}
                   style={styles.sheetBtn}
-                  onPress={() => void save()}
+                  onPress={() => save()}
                   disabled={saving || !dirty}
                   loading={saving}
                 />
@@ -416,6 +430,9 @@ function OverrideSheet({
         </KeyboardAvoidingView>
       </Animated.View>
     </Modal>
+    {/* Step-up password prompt before committing the tier override (§3 #14). */}
+    <ReauthSheet controller={reauth} />
+    </>
   );
 }
 

@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
@@ -17,17 +18,21 @@ import {
   PressableScale,
   Screen,
   ScreenHeader,
+  SectionLabel,
   Sheet,
   Tag,
 } from '../../../components/ui';
 import {
   createVideo,
   deleteVideo,
+  getModerationQueue,
   getVideos,
+  removeModerationItem,
   StaffApiError,
   toStaffError,
   updateVideo,
   type VideoCreateResult,
+  type StaffErrorCode,
   type Tier,
   type VideoRow,
   type VideoStatus,
@@ -35,6 +40,36 @@ import {
 import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { searchExercises } from '../../../lib/exercises';
 import { useAuth } from '../../../state/auth';
+
+/**
+ * P1-9 client contract (M2 owns features/staff/api.ts — coded against the
+ * EXACT export names from its brief; the row shape below is this screen's
+ * best-effort guess and may need reconciling at the integration gate):
+ *   getModerationQueue(kind, token) => Promise<ModerationItem[]>
+ *   removeModerationItem(kind, id, token) => Promise<void>
+ * Gated `moderation.manage` — independent of `content.manage` (org-wide
+ * video CRUD), so a content_admin sees both, but the two are separate keys.
+ */
+type ModerationKind = 'milestones' | 'custom-foods' | 'progress-photos';
+
+interface ModerationItem {
+  id: string;
+  accountId: string;
+  accountDisplayName: string;
+  /** Milestone title / food name / photo caption — the item's headline. */
+  title: string;
+  /** Secondary line — milestone note / food brand-macros / photo date. */
+  detail: string;
+  /** Populated only for progress-photos. */
+  imageUrl?: string | null;
+  createdAt: string;
+}
+
+const MODERATION_TABS: { key: ModerationKind; label: string }[] = [
+  { key: 'milestones', label: 'Milestones' },
+  { key: 'custom-foods', label: 'Custom foods' },
+  { key: 'progress-photos', label: 'Progress photos' },
+];
 
 /**
  * Admin · Content — the plan-video library.
@@ -466,6 +501,175 @@ function VideoCard({
   );
 }
 
+// ── Moderation tabs (P1-9) ──────────────────────────────────────
+
+function ModerationRow({
+  item,
+  kind,
+  busy,
+  onRemovePress,
+}: {
+  item: ModerationItem;
+  kind: ModerationKind;
+  busy: boolean;
+  onRemovePress: () => void;
+}) {
+  return (
+    <View style={styles.modRow}>
+      {kind === 'progress-photos' && item.imageUrl ? (
+        <Image
+          source={{ uri: item.imageUrl }}
+          style={styles.modThumb}
+          contentFit="cover"
+          transition={100}
+        />
+      ) : (
+        <View style={[styles.modThumb, styles.modThumbPlaceholder]}>
+          <Ionicons
+            name={kind === 'milestones' ? 'trophy-outline' : 'nutrition-outline'}
+            size={18}
+            color={colors.textFaint}
+          />
+        </View>
+      )}
+      <View style={styles.modRowText}>
+        <AppText variant="bodyBold" numberOfLines={1}>
+          {item.title}
+        </AppText>
+        <AppText variant="caption" numberOfLines={1}>
+          {item.accountDisplayName} · {item.detail}
+        </AppText>
+      </View>
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={`Remove ${item.title}`}
+        disabled={busy}
+        onPress={onRemovePress}
+        style={[styles.modRemoveBtn, busy && styles.actionDisabled]}
+      >
+        {busy ? (
+          <ActivityIndicator size="small" color={colors.error} />
+        ) : (
+          <Ionicons name="trash-outline" size={18} color={colors.error} />
+        )}
+      </PressableScale>
+    </View>
+  );
+}
+
+function ModerationTabs({ token }: { token: string }) {
+  const [kind, setKind] = useState<ModerationKind>('milestones');
+  const [items, setItems] = useState<ModerationItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  // Tracked separately from the display line so 'not_configured' (an unbuilt
+  // route, not a connectivity problem) can hide the Retry affordance —
+  // retrying a client-side stub error deterministically fails the same way
+  // every time and would otherwise read as a real network glitch.
+  const [errorCode, setErrorCode] = useState<StaffErrorCode | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ModerationItem | null>(null);
+
+  const load = useCallback(
+    async (k: ModerationKind) => {
+      setLoading(true);
+      setError(null);
+      setErrorCode(null);
+      try {
+        setItems(await getModerationQueue(k, token));
+      } catch (err) {
+        const code = toStaffError(err).code;
+        setErrorCode(code);
+        setError(errorLine(code));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [token],
+  );
+
+  useEffect(() => {
+    void load(kind);
+  }, [kind, load]);
+
+  async function doRemove(): Promise<void> {
+    if (!removeTarget) return;
+    const target = removeTarget;
+    setRemoveTarget(null);
+    setBusyId(target.id);
+    try {
+      await removeModerationItem(kind, target.id, token);
+      await load(kind);
+    } catch (err) {
+      const code = toStaffError(err).code;
+      setErrorCode(code);
+      setError(errorLine(code));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <Animated.View entering={enterUp(0)} style={styles.modBlock}>
+      <SectionLabel>Moderation</SectionLabel>
+      <View style={styles.chipRow}>
+        {MODERATION_TABS.map((t) => (
+          <Chip
+            key={t.key}
+            label={t.label}
+            selected={kind === t.key}
+            onPress={() => setKind(t.key)}
+          />
+        ))}
+      </View>
+
+      {loading ? (
+        <View style={styles.modCentre}>
+          <ActivityIndicator color={colors.accent} />
+        </View>
+      ) : error ? (
+        <View style={styles.modCentre}>
+          <AppText variant="caption" center color={colors.textDim}>
+            {error}
+          </AppText>
+          {errorCode !== 'not_configured' ? (
+            <Button label="Retry" variant="secondary" onPress={() => void load(kind)} />
+          ) : null}
+        </View>
+      ) : items.length === 0 ? (
+        <AppText variant="caption" color={colors.textFaint} style={styles.modEmpty}>
+          Nothing to review here.
+        </AppText>
+      ) : (
+        items.map((item) => (
+          <ModerationRow
+            key={item.id}
+            item={item}
+            kind={kind}
+            busy={busyId === item.id}
+            onRemovePress={() => setRemoveTarget(item)}
+          />
+        ))
+      )}
+
+      <ConfirmDialog
+        visible={removeTarget !== null}
+        title="Remove this item?"
+        message={
+          removeTarget
+            ? `"${removeTarget.title}" will be removed from ${removeTarget.accountDisplayName}'s account. This can't be undone.`
+            : undefined
+        }
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        danger
+        onConfirm={() => void doRemove()}
+        onCancel={() => setRemoveTarget(null)}
+      />
+    </Animated.View>
+  );
+}
+
 // ── Screen ───────────────────────────────────────────────────────
 
 export default function AdminContentScreen() {
@@ -475,6 +679,10 @@ export default function AdminContentScreen() {
   // A plain coach holds only 'content.video.own' and uses the separate
   // staff/coach/videos.tsx screen — this console is not their route.
   const allowed = staffCan(staffPermissions, 'content.manage');
+  // P1-9: moderation queues (milestones/custom foods/progress photos) are a
+  // SEPARATE key from content.manage — a moderator without video-publish
+  // rights should still reach this section.
+  const canModerate = staffCan(staffPermissions, 'moderation.manage');
 
   const [videos, setVideos] = useState<VideoRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -544,7 +752,7 @@ export default function AdminContentScreen() {
 
   if (!allowed) {
     return (
-      <Screen>
+      <Screen scroll={canModerate}>
         <Animated.View entering={enterDown()} style={styles.headerRow}>
           <PressableScale
             accessibilityRole="button"
@@ -556,12 +764,16 @@ export default function AdminContentScreen() {
           </PressableScale>
         </Animated.View>
         <ScreenHeader eyebrow="Admin console" title="Content" style={styles.header} />
-        <Animated.View entering={enterUp(0)} style={styles.locked}>
-          <Ionicons name="lock-closed" size={28} color={colors.textFaint} />
-          <AppText variant="caption" center color={colors.textFaint}>
-            Only a content admin, main admin or super admin can manage the video library.
-          </AppText>
-        </Animated.View>
+        {canModerate && token ? (
+          <ModerationTabs token={token} />
+        ) : (
+          <Animated.View entering={enterUp(0)} style={styles.locked}>
+            <Ionicons name="lock-closed" size={28} color={colors.textFaint} />
+            <AppText variant="caption" center color={colors.textFaint}>
+              Only a content admin, main admin or super admin can manage the video library.
+            </AppText>
+          </Animated.View>
+        )}
       </Screen>
     );
   }
@@ -580,6 +792,8 @@ export default function AdminContentScreen() {
       </Animated.View>
 
       <ScreenHeader eyebrow="Admin console" title="Content" style={styles.header} />
+
+      {canModerate && token ? <ModerationTabs token={token} /> : null}
 
       {/* Native upload — pick a video, fill the details, push to the host. */}
       <UploadPanel token={token} onUploaded={load} />
@@ -687,6 +901,8 @@ function errorLine(code: string): string {
       return 'That video no longer exists.';
     case 'invalid':
       return 'That change was rejected. Try again.';
+    case 'not_configured':
+      return "Custom food moderation isn't built yet — check back in a future update.";
     default:
       return "Couldn't reach the server. Check your connection and retry.";
   }
@@ -725,6 +941,38 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   noteText: { flex: 1 },
+  modBlock: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+    gap: spacing.md,
+  },
+  modCentre: { paddingVertical: spacing.lg, alignItems: 'center', gap: spacing.md },
+  modEmpty: { paddingVertical: spacing.sm },
+  modRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    minHeight: 64,
+  },
+  modThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+  },
+  modThumbPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+  modRowText: { flex: 1, gap: 2, minWidth: 0 },
+  modRemoveBtn: {
+    width: touch.min,
+    height: touch.min,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   uploadPanel: {
     gap: spacing.md,
     marginBottom: spacing.lg,

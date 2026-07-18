@@ -21,8 +21,10 @@ import {
 } from '../../../components/ui';
 import {
   assignClient,
+  cancelCoachRequest,
   endAssignment,
   getCoaches,
+  getCoachRequestsOversight,
   getMemberDetail,
   getMembers,
   toStaffError,
@@ -32,6 +34,26 @@ import {
 } from '../../../features/staff/api';
 import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
+
+/**
+ * P1-8 client contract (M2 owns features/staff/api.ts — coded against the
+ * EXACT export names from its brief; the row shape below is this screen's
+ * best-effort guess and may need reconciling at the integration gate):
+ *   getCoachRequestsOversight(token) => Promise<CoachRequestOversightRow[]>
+ *   cancelCoachRequest(id, token) => Promise<void>
+ * Gated `moderation.manage` (W2's server brief) — independent of `coach.assign`,
+ * so a content_admin who can't open the roster can still oversee the queue.
+ */
+interface CoachRequestOversightRow {
+  id: string;
+  userId: string;
+  displayName: string;
+  email: string;
+  coachId: string;
+  coachDisplayName: string;
+  ageDays: number;
+  createdAt: string;
+}
 
 /**
  * Admin · Coaches — the coach roster with per-coach client management.
@@ -473,6 +495,137 @@ function CoachDetail({
 }
 
 // ════════════════════════════════════════════════════════════════
+// P1-8: pending coach_requests oversight (moderation.manage)
+// ════════════════════════════════════════════════════════════════
+
+/** Short relative age ("3m", "2h", "5d") — mirrors the audit/support screens. */
+function relativeAge(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const diff = Date.now() - then;
+  if (diff < 0) return 'now';
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'now';
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d`;
+}
+
+function PendingRequestsOversight({ token }: { token: string }) {
+  const [rows, setRows] = useState<CoachRequestOversightRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [cancelTarget, setCancelTarget] = useState<CoachRequestOversightRow | null>(null);
+  const [cancelBusy, setCancelBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setRows(await getCoachRequestsOversight(token));
+    } catch (e) {
+      setError(ERR_TEXT[toStaffError(e).code]);
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function doCancel(): Promise<void> {
+    if (!cancelTarget) return;
+    const target = cancelTarget;
+    setCancelTarget(null);
+    setCancelBusy(true);
+    try {
+      await cancelCoachRequest(target.id, token);
+      await load();
+    } catch (e) {
+      setError(ERR_TEXT[toStaffError(e).code]);
+    } finally {
+      setCancelBusy(false);
+    }
+  }
+
+  return (
+    <Animated.View entering={enterUp(0)} style={styles.oversightBlock}>
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={`Pending mentorship requests${rows.length ? `, ${rows.length}` : ''}`}
+        onPress={() => setExpanded((v) => !v)}
+        style={styles.oversightHeader}
+      >
+        <SectionLabel>Pending mentorship requests</SectionLabel>
+        <View style={styles.oversightHeaderRight}>
+          {rows.length > 0 ? <Tag label={String(rows.length)} variant="dim" /> : null}
+          <Ionicons
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={18}
+            color={colors.textDim}
+          />
+        </View>
+      </PressableScale>
+
+      {expanded ? (
+        loading ? (
+          <View style={styles.searchingRow}>
+            <ActivityIndicator color={colors.textDim} />
+          </View>
+        ) : error ? (
+          <RetryLine message={error} onRetry={() => void load()} />
+        ) : rows.length === 0 ? (
+          <AppText variant="caption" color={colors.textFaint} style={styles.emptyLine}>
+            No pending requests.
+          </AppText>
+        ) : (
+          <View style={styles.list}>
+            {rows.map((r) => (
+              <View key={r.id} style={styles.memberRow}>
+                <View style={styles.memberText}>
+                  <AppText variant="bodyBold" numberOfLines={1}>
+                    {r.displayName || r.email}
+                  </AppText>
+                  <AppText variant="caption" numberOfLines={1}>
+                    Requested {r.coachDisplayName} · {relativeAge(r.createdAt)} ago
+                  </AppText>
+                </View>
+                <Button
+                  label="Cancel"
+                  variant="danger"
+                  onPress={() => setCancelTarget(r)}
+                  disabled={cancelBusy}
+                  style={styles.rowBtn}
+                />
+              </View>
+            ))}
+          </View>
+        )
+      ) : null}
+
+      <ConfirmDialog
+        visible={cancelTarget !== null}
+        title="Cancel this request?"
+        message={
+          cancelTarget
+            ? `${cancelTarget.displayName || cancelTarget.email}'s pending request to ${cancelTarget.coachDisplayName} will be closed.`
+            : undefined
+        }
+        confirmLabel="Cancel request"
+        cancelLabel="Keep it"
+        danger
+        onConfirm={() => void doCancel()}
+        onCancel={() => setCancelTarget(null)}
+      />
+    </Animated.View>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
 // Coach roster
 // ════════════════════════════════════════════════════════════════
 
@@ -484,6 +637,10 @@ export default function AdminCoachesScreen() {
   // the admin console but hold no `coach.assign`, so without this they'd render
   // the roster and immediately 403 on getCoaches. Fail closed to a locked view.
   const allowed = staffCan(staffPermissions, 'coach.assign');
+  // P1-8: oversight of the pending mentorship-request queue is independent of
+  // roster access — a content_admin holding only moderation.manage should
+  // still be able to see and cancel stale requests.
+  const canModerateRequests = staffCan(staffPermissions, 'moderation.manage');
   const [coaches, setCoaches] = useState<CoachRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -535,12 +692,16 @@ export default function AdminCoachesScreen() {
           </PressableScale>
         </Animated.View>
         <ScreenHeader eyebrow="Admin console" title="Coaches" style={styles.header} />
-        <Animated.View entering={enterUp(0)} style={styles.locked}>
-          <Ionicons name="lock-closed" size={28} color={colors.textFaint} />
-          <AppText variant="caption" center color={colors.textFaint}>
-            You don&apos;t have access to coach management.
-          </AppText>
-        </Animated.View>
+        {canModerateRequests && token ? (
+          <PendingRequestsOversight token={token} />
+        ) : (
+          <Animated.View entering={enterUp(0)} style={styles.locked}>
+            <Ionicons name="lock-closed" size={28} color={colors.textFaint} />
+            <AppText variant="caption" center color={colors.textFaint}>
+              You don&apos;t have access to coach management.
+            </AppText>
+          </Animated.View>
+        )}
       </Screen>
     );
   }
@@ -570,6 +731,8 @@ export default function AdminCoachesScreen() {
       </Animated.View>
 
       <ScreenHeader eyebrow="Admin console" title="Coaches" style={styles.header} />
+
+      {canModerateRequests && token ? <PendingRequestsOversight token={token} /> : null}
 
       {loading ? (
         <View style={styles.loadingBlock}>
@@ -643,6 +806,20 @@ const styles = StyleSheet.create({
   },
   header: { marginBottom: spacing.gutter },
   hint: { marginTop: spacing.sm, paddingHorizontal: spacing.xs },
+  oversightBlock: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+    gap: spacing.md,
+  },
+  oversightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: touch.min,
+  },
+  oversightHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   list: { gap: spacing.md },
   // Charcoal list rows (brief §11c): fill contrast, no hairline borders.
   coachRow: {

@@ -76,6 +76,11 @@ describe('ALL_PERMISSIONS key strings (snapshot — a rename must break this)', 
         'moderation.manage',
         'catalog.manage',
         'gamification.manage',
+        'meals.own',
+        'orders.fulfill',
+        'partners.manage',
+        'orders.review',
+        'gyms.manage',
       ],
     );
   });
@@ -280,18 +285,63 @@ describe('console role sets', () => {
   });
 });
 
-describe('GRANTABLE_ROLES excludes nutrition_admin (A6)', () => {
-  it('is STAFF_ROLES minus nutrition_admin', () => {
+describe('GRANTABLE_ROLES excludes nutrition_admin (A6) + partner (marketplace wave)', () => {
+  it('is STAFF_ROLES minus nutrition_admin and partner', () => {
     assert.equal(GRANTABLE_ROLES.includes('nutrition_admin'), false);
+    // partner is minted ONLY via POST /api/admin/partners (which also writes the
+    // meal_partners identity row) — never the generic staff-grant path.
+    assert.equal(GRANTABLE_ROLES.includes('partner'), false);
     assert.deepEqual(
       [...GRANTABLE_ROLES],
-      STAFF_ROLES.filter((r) => r !== 'nutrition_admin'),
+      STAFF_ROLES.filter((r) => r !== 'nutrition_admin' && r !== 'partner'),
     );
   });
   it('still contains every other role', () => {
     for (const role of STAFF_ROLES) {
-      if (role === 'nutrition_admin') continue;
+      if (role === 'nutrition_admin' || role === 'partner') continue;
       assert.equal(GRANTABLE_ROLES.includes(role), true);
+    }
+  });
+});
+
+describe('partner role (marketplace wave)', () => {
+  it('preset is exactly meals.own + orders.fulfill', () => {
+    assert.deepEqual([...ROLE_PRESETS.partner], ['meals.own', 'orders.fulfill']);
+  });
+  it('holds its two keys and nothing else', () => {
+    assert.equal(hasPermission('partner', 'meals.own'), true);
+    assert.equal(hasPermission('partner', 'orders.fulfill'), true);
+    for (const perm of ALL_PERMISSIONS) {
+      if (perm === 'meals.own' || perm === 'orders.fulfill') continue;
+      assert.equal(hasPermission('partner', perm), false, `partner / ${perm}`);
+    }
+  });
+  it('never opens the admin or coach console', () => {
+    assert.equal(ADMIN_CONSOLE_ROLES.includes('partner'), false);
+    assert.equal(COACH_CONSOLE_ROLES.includes('partner'), false);
+  });
+});
+
+describe('marketplace admin keys sit in NO sub-role preset (super/main bypass only)', () => {
+  const superMainOnly: Permission[] = ['partners.manage', 'orders.review', 'gyms.manage'];
+  it('only the bypass roles hold them', () => {
+    for (const perm of superMainOnly) {
+      for (const role of STAFF_ROLES) {
+        const expected = role === 'super_admin' || role === 'main_admin';
+        assert.equal(hasPermission(role, perm), expected, `${role} / ${perm}`);
+      }
+    }
+  });
+});
+
+describe('meals.own / orders.fulfill live ONLY on partner (+ bypass)', () => {
+  it('no other role carries them', () => {
+    for (const perm of ['meals.own', 'orders.fulfill'] as const) {
+      for (const role of STAFF_ROLES) {
+        const expected =
+          role === 'partner' || role === 'super_admin' || role === 'main_admin';
+        assert.equal(hasPermission(role, perm), expected, `${role} / ${perm}`);
+      }
     }
   });
 });

@@ -91,6 +91,11 @@ export default function StaffHubScreen() {
 
   const showCoach = canOpenCoachConsole(staffPermissions);
   const showAdmin = canOpenAdminConsole(staffPermissions);
+  // Partner is a web-only role: its permissions (meals.own / orders.fulfill)
+  // grant no mobile console, so both cards are already hidden. Show a clear
+  // "manage on the web portal" notice instead of the generic no-console empty
+  // state — never the admin/coach consoles.
+  const isPartner = staffRole === 'partner';
 
   return (
     <Screen scroll>
@@ -146,7 +151,20 @@ export default function StaffHubScreen() {
         />
       ) : null}
 
-      {!showCoach && !showAdmin ? (
+      {isPartner ? (
+        <Animated.View entering={enterUp(1)} style={styles.notice}>
+          <IconChip icon="globe-outline" iconColor={colors.accent} />
+          <View style={styles.cardText}>
+            <AppText variant="bodyBold" numberOfLines={1}>
+              Manage your restaurant on the web
+            </AppText>
+            <AppText variant="caption">
+              The partner portal — today&apos;s orders, your menu, subscriptions and
+              earnings — is on the web. Sign in at the partner portal from a browser.
+            </AppText>
+          </View>
+        </Animated.View>
+      ) : !showCoach && !showAdmin ? (
         <Animated.View entering={enterUp(1)} style={styles.empty}>
           <AppText variant="caption" center color={colors.textFaint}>
             Your account is staff, but no console is enabled for your role yet.
@@ -233,6 +251,18 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   cardText: { flex: 1, gap: 2 },
+  // Partner web-portal notice — same charcoal fill-contrast row as the console
+  // cards, but non-interactive (no chevron): there is nothing to route to.
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    minHeight: 64,
+    marginBottom: spacing.md,
+  },
   empty: { marginTop: spacing.xl, paddingHorizontal: spacing.md },
   exitGroup: { marginTop: spacing.xl },
 });

@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
+import { nativeOnly } from './motion';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { warnHaptic } from '../../lib/haptics';
 import { AppText } from './AppText';
@@ -92,14 +93,14 @@ export function ConfirmDialog({
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onCancel}>
-      <Animated.View entering={FadeIn.duration(120)} style={{ flex: 1 }}>
+      <Animated.View entering={nativeOnly(FadeIn.duration(120))} style={{ flex: 1 }}>
         <Pressable
           style={styles.backdrop}
           onPress={onCancel}
           accessibilityRole="button"
           accessibilityLabel="Dismiss"
         >
-          <Animated.View entering={FadeIn.duration(120)}>
+          <Animated.View entering={nativeOnly(FadeIn.duration(120))}>
             {/* Stop backdrop presses from falling through the card. */}
             <Pressable
               ref={cardRef}

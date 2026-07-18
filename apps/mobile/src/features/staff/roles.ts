@@ -14,6 +14,7 @@ export const ROLE_LABEL: Record<StaffRole, string> = {
   content_admin: 'Content admin',
   support_admin: 'Support admin',
   coach: 'Coach',
+  partner: 'Meal partner',
 };
 
 /** Label for a role, with a safe generic fallback for null/unknown. */

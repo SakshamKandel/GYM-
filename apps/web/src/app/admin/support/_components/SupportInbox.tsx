@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Badge,
@@ -15,6 +15,15 @@ import {
 import type { SupportMessage, SupportThreadRow } from './types';
 
 const MAX_LEN = 2000;
+
+type TabKey = 'open' | 'mine' | 'resolved' | 'all';
+
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'open', label: 'Open' },
+  { key: 'mine', label: 'Assigned to me' },
+  { key: 'resolved', label: 'Resolved' },
+  { key: 'all', label: 'All' },
+];
 
 /** Short relative age ("3m", "2h", "5d") with an absolute fallback. */
 function relativeTime(iso: string): string {
@@ -46,12 +55,55 @@ function clockTime(iso: string): string {
  * only) and, alongside it, POST .../read to mark the account's inbound rows
  * readByCoach=true server-side (F2: mark-read is a distinct POST, never a
  * side effect of GET, so a plain top-level navigation can't silently clear
- * the unread queue). Closing the drawer (or sending a reply) triggers
- * router.refresh() so the table's unread badges and stat tiles reflect that.
+ * the unread queue). Closing the drawer (or sending a reply, resolving,
+ * reopening, or assigning) triggers router.refresh() so the table's unread
+ * badges, lifecycle chips, and stat tiles reflect that.
+ *
+ * Lifecycle tabs (plan §3 P1-11) filter the ALREADY-LOADED `threads` array
+ * client-side — this inbox has never been paginated (support ticket volume
+ * is small relative to the member base), so there is no extra network round
+ * trip per tab switch, and no request-race guard is needed for the list
+ * itself (only the per-thread drawer load still needs one — see reqSeq
+ * below).
  */
-export function SupportInbox({ threads }: { threads: SupportThreadRow[] }) {
+export function SupportInbox({
+  threads,
+  viewerId,
+}: {
+  threads: SupportThreadRow[];
+  viewerId: string;
+}) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabKey>('open');
+
+  const filtered = useMemo(() => {
+    switch (tab) {
+      case 'open':
+        return threads.filter((t) => t.status === 'open');
+      case 'resolved':
+        return threads.filter((t) => t.status === 'resolved');
+      case 'mine':
+        return threads.filter((t) => t.assignedTo === viewerId);
+      case 'all':
+      default:
+        return threads;
+    }
+  }, [threads, tab, viewerId]);
+
+  function tabCount(key: TabKey): number {
+    switch (key) {
+      case 'open':
+        return threads.filter((t) => t.status === 'open').length;
+      case 'resolved':
+        return threads.filter((t) => t.status === 'resolved').length;
+      case 'mine':
+        return threads.filter((t) => t.assignedTo === viewerId).length;
+      case 'all':
+      default:
+        return threads.length;
+    }
+  }
 
   const selected = openId ? threads.find((t) => t.account.id === openId) ?? null : null;
 
@@ -68,13 +120,29 @@ export function SupportInbox({ threads }: { threads: SupportThreadRow[] }) {
     },
     { key: 'tier', header: 'Tier', render: (r) => <TierChip tier={r.account.tier} /> },
     {
+      key: 'status',
+      header: 'Status',
+      render: (r) => (
+        <Badge tone={r.status === 'resolved' ? 'positive' : 'warning'}>{r.status}</Badge>
+      ),
+    },
+    {
+      key: 'assigned',
+      header: 'Assigned',
+      render: (r) => (
+        <span style={{ color: r.assignedToLabel ? 'var(--gt-text)' : 'var(--gt-text-dim)' }}>
+          {r.assignedToLabel ?? 'Unassigned'}
+        </span>
+      ),
+    },
+    {
       key: 'last',
       header: 'Last message',
       render: (r) => (
         <span
           style={{
             display: 'block',
-            maxWidth: 420,
+            maxWidth: 360,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -105,20 +173,55 @@ export function SupportInbox({ threads }: { threads: SupportThreadRow[] }) {
 
   return (
     <>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        {TABS.map((t) => {
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              style={{
+                padding: '7px 14px',
+                borderRadius: 10,
+                cursor: 'pointer',
+                fontFamily: 'var(--font-heading)',
+                fontSize: 13,
+                fontWeight: 600,
+                background: active ? 'var(--gt-accent)' : 'transparent',
+                color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
+                border: active ? '1px solid var(--gt-accent)' : '1px solid var(--gt-border)',
+              }}
+            >
+              {t.label} · {tabCount(t.key)}
+            </button>
+          );
+        })}
+      </div>
+
       <DataTable
         columns={columns}
-        rows={threads}
+        rows={filtered}
         rowKey={(r) => r.account.id}
         onRowClick={(r) => setOpenId(r.account.id)}
         rowAriaLabel={(r) =>
           `Open ticket for ${r.account.displayName.trim() || r.account.email}`
         }
-        empty="No support tickets yet."
+        empty={
+          tab === 'open'
+            ? 'No open tickets — all clear.'
+            : tab === 'resolved'
+              ? 'No resolved tickets yet.'
+              : tab === 'mine'
+                ? 'No tickets assigned to you.'
+                : 'No support tickets yet.'
+        }
       />
 
       <SupportThreadDrawer
         accountId={openId}
         fallback={selected}
+        viewerId={viewerId}
         onClose={onClose}
         onReplied={() => router.refresh()}
       />
@@ -129,11 +232,13 @@ export function SupportInbox({ threads }: { threads: SupportThreadRow[] }) {
 function SupportThreadDrawer({
   accountId,
   fallback,
+  viewerId,
   onClose,
   onReplied,
 }: {
   accountId: string | null;
   fallback: SupportThreadRow | null;
+  viewerId: string;
   onClose: () => void;
   onReplied: () => void;
 }) {
@@ -142,6 +247,8 @@ function SupportThreadDrawer({
   const [error, setError] = useState<string | null>(null);
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Monotonic request sequence (mirrors MembersDirectory's fetchPage guard /
@@ -189,8 +296,10 @@ function SupportThreadDrawer({
       setMessages([]);
       setBody('');
       setError(null);
+      setLifecycleError(null);
       return;
     }
+    setLifecycleError(null);
     void load(accountId);
   }, [accountId, load]);
 
@@ -241,6 +350,39 @@ function SupportThreadDrawer({
     }
   }
 
+  /**
+   * Shared runner for the three lifecycle actions (resolve/reopen/assign) —
+   * each is a POST with no body (resolve/reopen) or a small JSON body
+   * (assign). On success, re-loads the thread's own state isn't needed (the
+   * list-level fields live on `fallback`/`threads` in the parent), so we just
+   * bubble up `onReplied()` — the parent's router.refresh() re-fetches the
+   * server-rendered page, which is where status/assignedTo actually live.
+   */
+  async function runLifecycleAction(path: string, body?: unknown): Promise<void> {
+    if (!accountId || lifecycleBusy) return;
+    setLifecycleBusy(true);
+    setLifecycleError(null);
+    try {
+      const res = await fetch(`/api/admin/support/threads/${accountId}/${path}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      if (!res.ok) {
+        setLifecycleError(
+          res.status === 403 ? 'You do not have permission to do that.' : 'Could not update the ticket.',
+        );
+        return;
+      }
+      onReplied();
+    } catch {
+      setLifecycleError('Network error. Check your connection and retry.');
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
+
   const header = fallback?.account.displayName.trim() || fallback?.account.email || 'Support ticket';
 
   return (
@@ -270,7 +412,7 @@ function SupportThreadDrawer({
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <span
               className="gt-numeric"
-              style={{ fontSize: 12, color: trimmed.length > MAX_LEN ? '#ff8178' : 'var(--gt-text-dim)' }}
+              style={{ fontSize: 12, color: trimmed.length > MAX_LEN ? 'var(--gt-danger)' : 'var(--gt-text-dim)' }}
             >
               {trimmed.length}/{MAX_LEN}
             </span>
@@ -287,6 +429,85 @@ function SupportThreadDrawer({
         </div>
       ) : null}
 
+      {fallback ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 10,
+            marginBottom: 14,
+            padding: '10px 12px',
+            borderRadius: 10,
+            border: '1px solid var(--gt-border)',
+          }}
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+            <Badge tone={fallback.status === 'resolved' ? 'positive' : 'warning'}>
+              {fallback.status}
+            </Badge>
+            <span style={{ color: 'var(--gt-text-dim)' }}>
+              {fallback.assignedToLabel
+                ? fallback.assignedTo === viewerId
+                  ? 'Assigned to you'
+                  : `Assigned to ${fallback.assignedToLabel}`
+                : 'Unassigned'}
+            </span>
+          </span>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {fallback.assignedTo === viewerId ? (
+              <Button
+                size="sm"
+                disabled={lifecycleBusy}
+                onClick={() => void runLifecycleAction('assign', { assigneeId: null })}
+              >
+                Unassign
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                disabled={lifecycleBusy}
+                onClick={() => void runLifecycleAction('assign', { assigneeId: viewerId })}
+              >
+                Assign to me
+              </Button>
+            )}
+            {fallback.status === 'resolved' ? (
+              <Button size="sm" disabled={lifecycleBusy} onClick={() => void runLifecycleAction('reopen')}>
+                Reopen
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={lifecycleBusy}
+                onClick={() => void runLifecycleAction('resolve')}
+              >
+                Resolve
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {lifecycleError ? (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 14,
+            padding: '10px 12px',
+            borderRadius: 10,
+            border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+            background: 'var(--gt-danger-weak)',
+            color: 'var(--gt-danger)',
+            fontSize: 13,
+          }}
+        >
+          {lifecycleError}
+        </div>
+      ) : null}
+
       {error ? (
         <div
           role="alert"
@@ -294,9 +515,9 @@ function SupportThreadDrawer({
             marginBottom: 14,
             padding: '10px 12px',
             borderRadius: 10,
-            border: '1px solid rgba(255,107,96,0.3)',
-            background: 'rgba(255,107,96,0.08)',
-            color: '#ff8178',
+            border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+            background: 'var(--gt-danger-weak)',
+            color: 'var(--gt-danger)',
             fontSize: 13,
           }}
         >

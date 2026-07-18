@@ -5,7 +5,7 @@ export { AppText } from './AppText';
 export { AppTextInput } from './AppTextInput';
 export { Button } from './Button';
 export { Card } from './Card';
-export { enterDown, enterFade, enterUp, layoutSpring, PRESS_SPRING, SHEET_SPRING } from './motion';
+export { enterDown, enterFade, enterUp, layoutSpring, nativeOnly, PRESS_SPRING, SHEET_SPRING } from './motion';
 export { CategoryTile } from './CategoryTile';
 export { Chip } from './Chip';
 export { ConfirmDialog } from './ConfirmDialog';

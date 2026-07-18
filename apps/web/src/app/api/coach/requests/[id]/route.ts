@@ -24,6 +24,15 @@ export const runtime = 'nodejs';
  *              the member just sees the coach has no room.
  */
 
+/**
+ * A pending request older than this can no longer be accepted/declined here.
+ * Mirrors STALE_MS in GET /api/admin/oversight/coach-requests — that route's
+ * sweep only runs when an admin loads the oversight page (no cron), so this
+ * endpoint enforces its own age check rather than trusting the sweep to have
+ * already run.
+ */
+const STALE_MS = 14 * 24 * 60 * 60 * 1000;
+
 const postSchema = z.object({ action: z.enum(['accept', 'decline']) });
 
 export function OPTIONS() {
@@ -43,6 +52,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       userId: coachRequests.userId,
       coachId: coachRequests.coachId,
       status: coachRequests.status,
+      createdAt: coachRequests.createdAt,
     })
     .from(coachRequests)
     .where(eq(coachRequests.id, id))
@@ -50,6 +60,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const request = rows[0];
   if (!request || request.coachId !== principal.id || request.status !== 'pending') {
     return json({ error: 'not_found' }, 404);
+  }
+
+  if (Date.now() - request.createdAt.getTime() > STALE_MS) {
+    // Auto-expire inline (CAS — a concurrent decision elsewhere always wins).
+    const updated = await db
+      .update(coachRequests)
+      .set({ status: 'canceled', decidedAt: new Date() })
+      .where(and(eq(coachRequests.id, request.id), eq(coachRequests.status, 'pending')))
+      .returning({ id: coachRequests.id });
+    if (updated.length > 0) {
+      await logAudit(principal, 'coach_request.auto_expire', 'coach_request', request.id, {
+        userId: request.userId,
+        pendingSince: request.createdAt.toISOString(),
+      });
+    }
+    return json({ error: 'expired' }, 404);
   }
 
   const parsed = postSchema.safeParse(await readJson(req));

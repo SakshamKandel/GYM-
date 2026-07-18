@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing } from '@gym/ui-tokens';
@@ -44,7 +45,7 @@ const styles = StyleSheet.create({
   },
 });
 
-export function ProgressReportCard({
+export const ProgressReportCard = memo(function ProgressReportCard({
   sessions,
   prCount,
   weightDeltaText,
@@ -92,4 +93,4 @@ export function ProgressReportCard({
       </View>
     </Card>
   );
-}
+});

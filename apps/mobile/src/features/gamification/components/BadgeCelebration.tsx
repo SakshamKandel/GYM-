@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 import Animated, { FadeOut, ReduceMotion, ZoomIn } from 'react-native-reanimated';
 import type { BadgeDef } from '@gym/shared';
 import { spacing } from '@gym/ui-tokens';
-import { AppText, Button, Sheet } from '../../../components/ui';
+import { AppText, Button, nativeOnly, Sheet } from '../../../components/ui';
 import { BadgeMedal } from '../../../components/ui/badges/BadgeMedal';
 import { PrCelebration } from '../../training/components/PrCelebration';
 import { successHaptic } from '../../../lib/haptics';
@@ -62,7 +62,7 @@ export function BadgeCelebration({ visible, badges, onClose }: Props) {
         <View style={styles.medalStage}>
           <View style={styles.burstWrap} pointerEvents="none">
             {visible ? (
-              <Animated.View exiting={FadeOut.duration(SHEET_CLOSE_MS)}>
+              <Animated.View exiting={nativeOnly(FadeOut.duration(SHEET_CLOSE_MS))}>
                 <PrCelebration onDone={() => {}} size={BURST_SIZE} />
               </Animated.View>
             ) : null}
@@ -74,7 +74,7 @@ export function BadgeCelebration({ visible, badges, onClose }: Props) {
                 .damping(14)
                 .stiffness(160)
                 .reduceMotion(ReduceMotion.System)}
-              exiting={FadeOut.duration(SHEET_CLOSE_MS)}
+              exiting={nativeOnly(FadeOut.duration(SHEET_CLOSE_MS))}
             >
               <BadgeMedal badge={first!} status="logged" size={MEDAL_SIZE} />
             </Animated.View>

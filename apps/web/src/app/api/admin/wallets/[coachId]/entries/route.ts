@@ -35,6 +35,11 @@ const bodySchema = z
     // Escape hatch to record a payout that exceeds the tracked balance (e.g.
     // reconciling a pre-app disbursement); off by default so the floor holds.
     override: z.boolean().optional(),
+    // Optional idempotency key: a double-clicked or network-retried payout/
+    // adjustment carrying the same key records ONE ledger row instead of
+    // double-deducting the coach's tracked balance (manual entries otherwise
+    // land with NULL source and never dedup against each other).
+    idempotencyKey: z.string().trim().min(1).max(200).optional(),
   })
   .refine((v) => (v.type === 'payout' ? v.amountMinor < 0 : v.amountMinor !== 0), {
     message: 'payout must be negative; adjustment must be non-zero',
@@ -53,7 +58,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ coachId
 
   const parsed = bodySchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { type, amountMinor, currency, note, override } = parsed.data;
+  const { type, amountMinor, currency, note, override, idempotencyKey } = parsed.data;
 
   const db = getDb();
   const [coach] = await db
@@ -64,36 +69,41 @@ export async function POST(req: Request, { params }: { params: Promise<{ coachId
   if (!coach || coach.role !== 'coach') return json({ error: 'coach_not_found' }, 404);
 
   // Payout balance floor (E7): a payout must not drive the coach's balance in
-  // that currency negative — over-paid money is unrecoverable in-app. Callers
-  // can pass override:true to record a reconciling payout beyond the balance.
-  if (type === 'payout' && !override) {
-    const balances = await coachWalletBalances(coachId);
-    const current = balances.find((b) => b.currency === currency)?.amountMinor ?? 0;
-    if (current + amountMinor < 0) {
-      return json(
-        { error: 'insufficient_balance', balanceMinor: current, currency },
-        409,
-      );
-    }
-  }
-
-  const entry = await recordWalletEntry({
+  // that currency negative — over-paid money is unrecoverable in-app. The floor
+  // is now enforced ATOMICALLY inside recordWalletEntry (enforceFloor) so two
+  // concurrent payouts can't both read the same balance and race past it.
+  // override:true records a reconciling payout beyond the balance.
+  const result = await recordWalletEntry({
     coachId,
     type,
     amountMinor,
     currency,
     note: note ?? null,
     createdBy: principal.id,
+    enforceFloor: type === 'payout' && !override,
+    sourceType: idempotencyKey ? 'admin_manual' : null,
+    sourceId: idempotencyKey ?? null,
   });
 
-  await logAudit(
-    principal,
-    'wallet.adjust',
-    'wallet_ledger',
-    entry.id,
-    { coachId, type, amountMinor, currency: entry.currency },
-    clientIp(req),
-  );
+  if (!result.ok) {
+    const balances = await coachWalletBalances(coachId);
+    const current = balances.find((b) => b.currency === currency)?.amountMinor ?? 0;
+    return json({ error: 'insufficient_balance', balanceMinor: current, currency }, 409);
+  }
 
-  return json({ entry }, 201);
+  const { entry, duplicate } = result;
+
+  // A deduped replay is a no-op — don't write a second audit row for it.
+  if (!duplicate) {
+    await logAudit(
+      principal,
+      'wallet.adjust',
+      'wallet_ledger',
+      entry.id,
+      { coachId, type, amountMinor, currency: entry.currency },
+      clientIp(req),
+    );
+  }
+
+  return json({ entry }, duplicate ? 200 : 201);
 }

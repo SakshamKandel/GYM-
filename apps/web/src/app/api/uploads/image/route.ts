@@ -1,7 +1,9 @@
 import { admins } from '@gym/db';
+import type { Permission } from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { bearerToken, userForToken } from '@/lib/auth';
+import { bearerToken, type StaffRole, userForToken } from '@/lib/auth';
+import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
@@ -22,13 +24,21 @@ export const runtime = 'nodejs';
  *  - progress_photo, payment_receipt, application_avatar → any signed-in
  *    member (an "open application intent" is enough for application_avatar —
  *    it's used BEFORE the account has a coach_applications row).
+ *  - meal_receipt → any signed-in member (eSewa/Khalti payment proof for a meal
+ *    order or weekly billing cycle — never public, like payment_receipt).
  *  - coach_avatar, custom_exercise, diet_item → the caller must already hold
  *    admins.role='coach' (queried fresh — never trusted from the JWT/session
  *    shape, since roles can change between requests).
+ *  - meal_photo → the caller must hold admins.role='partner' (a meal-partner
+ *    account, for its own menu-item images).
+ *  - gym_photo → admin-upload only, gated on the `gyms.manage` permission
+ *    (super/main preset or a delegated per-account override) rather than a fixed
+ *    role list, so a sub-role that was delegated gym management can still upload.
  *
  * Access mode per kind decides the Cloudinary storage type: authenticated
- * (progress_photo, payment_receipt — never public) vs public (everything
- * else — avatars/exercise/diet images are meant to be openly rendered).
+ * (progress_photo, payment_receipt, meal_receipt — never public) vs public
+ * (everything else — avatars/exercise/diet/meal/gym images are meant to be
+ * openly rendered).
  *
  * Rate-limited 20/hour/account. 503 { error: 'image_not_configured' } when
  * the image-capable provider (Cloudinary) isn't configured.
@@ -41,6 +51,9 @@ const IMAGE_KINDS = [
   'coach_avatar',
   'custom_exercise',
   'diet_item',
+  'meal_photo',
+  'meal_receipt',
+  'gym_photo',
 ] as const;
 type ImageKind = (typeof IMAGE_KINDS)[number];
 
@@ -49,7 +62,19 @@ const MEMBER_KINDS = new Set<ImageKind>([
   'progress_photo',
   'payment_receipt',
   'application_avatar',
+  'meal_receipt',
 ]);
+
+/**
+ * Staff kinds that require a SPECIFIC `admins.role`. `gym_photo` is deliberately
+ * absent — it is permission-gated (`gyms.manage`) below, not role-gated.
+ */
+const STAFF_KIND_ROLE: Partial<Record<ImageKind, StaffRole>> = {
+  coach_avatar: 'coach',
+  custom_exercise: 'coach',
+  diet_item: 'coach',
+  meal_photo: 'partner',
+};
 
 /** Cloudinary storage access mode per kind — see module doc comment above. */
 const ACCESS_BY_KIND: Record<ImageKind, 'public' | 'authenticated'> = {
@@ -59,6 +84,9 @@ const ACCESS_BY_KIND: Record<ImageKind, 'public' | 'authenticated'> = {
   coach_avatar: 'public',
   custom_exercise: 'public',
   diet_item: 'public',
+  meal_photo: 'public',
+  meal_receipt: 'authenticated',
+  gym_photo: 'public',
 };
 
 const bodySchema = z.object({ kind: z.enum(IMAGE_KINDS) });
@@ -92,7 +120,23 @@ export async function POST(req: Request) {
       .from(admins)
       .where(eq(admins.accountId, user.id))
       .limit(1);
-    if (rows[0]?.role !== 'coach') return json({ error: 'forbidden' }, 403);
+    const role = rows[0]?.role;
+    if (!role) return json({ error: 'forbidden' }, 403);
+
+    if (kind === 'gym_photo') {
+      // Admin-upload only, gated on the delegable `gyms.manage` permission
+      // (super/main preset OR a per-account override) — not a fixed role list.
+      let permissions: ReadonlySet<Permission>;
+      try {
+        permissions = await effectivePermissionSet({ id: user.id, email: user.email, role });
+      } catch (err) {
+        console.error('gym_photo upload permission lookup failed:', err);
+        return json({ error: 'authorization_unavailable' }, 503);
+      }
+      if (!permissions.has('gyms.manage')) return json({ error: 'forbidden' }, 403);
+    } else if (role !== STAFF_KIND_ROLE[kind]) {
+      return json({ error: 'forbidden' }, 403);
+    }
   }
 
   try {

@@ -35,6 +35,13 @@ export const STAFF_ROLES = [
   'content_admin',
   'support_admin',
   'coach',
+  // Meal-delivery restaurant operator (2026-07-18). Web-only console. Rank 0 —
+  // outranks nobody; its capabilities are permission-gated (meals.own /
+  // orders.fulfill), NOT rank-gated, so no sub-role can "manage" a partner via
+  // rank. Deliberately EXCLUDED from GRANTABLE_ROLES (permissions.ts) so it can
+  // never be minted through the generic staff-grant path — only via
+  // POST /api/admin/partners, which also writes the meal_partners identity row.
+  'partner',
 ] as const;
 
 export type StaffRole = (typeof STAFF_ROLES)[number];
@@ -55,6 +62,10 @@ export const STAFF_ROLE_RANK: Record<StaffRole, number> = {
   content_admin: 1,
   support_admin: 1,
   coach: 1,
+  // Below every sub-role. partner outranks nobody and nobody "manages" it by
+  // rank — partner operations are permission-gated. main_admin (rank 2)
+  // strictly outranks it so a bogus partner grant could still be cleaned up.
+  partner: 0,
 };
 
 /** True when `actor` STRICTLY outranks `target` (equal rank is NOT enough). */

@@ -11,6 +11,7 @@ import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
+import { CoachRequestsOversight } from './_components/CoachRequestsOversight';
 import {
   type ClientAssignment,
   type CoachSummary,
@@ -156,6 +157,7 @@ export default async function AdminCoachesPage() {
   const permissions = await effectivePermissionSet(principal);
   const canAssign = permissions.has('coach.assign');
   if (!canAssign) redirect('/admin');
+  const canModerate = permissions.has('moderation.manage');
 
   const [coaches, clientsByCoach, tierRequestsByCoach] = await Promise.all([
     loadCoaches(),
@@ -202,6 +204,8 @@ export default async function AdminCoachesPage() {
         tierRequestsByCoach={tierRequestsByCoach}
         canEdit={canAssign}
       />
+
+      {canModerate ? <CoachRequestsOversight /> : null}
     </div>
   );
 }

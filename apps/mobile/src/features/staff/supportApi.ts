@@ -52,12 +52,20 @@ const supportAccountSchema = z.object({
   tier: tierSchema,
 });
 
+const threadStatusSchema = z.enum(['open', 'resolved']);
+export type SupportThreadStatus = z.infer<typeof threadStatusSchema>;
+
 const supportThreadRowSchema = z.object({
   account: supportAccountSchema,
   lastBody: z.string().catch(''),
   lastAt: z.string(),
   lastSender: z.enum(['user', 'coach']),
   unread: z.number().catch(0),
+  // Lifecycle state (P1-11) — additive. An older server that omits these
+  // resolves to the implicit default (open/unassigned) rather than nuking
+  // the whole row, matching how the schema models absence.
+  status: threadStatusSchema.catch('open'),
+  assignedTo: z.string().nullable().catch(null),
 });
 export type SupportThreadRow = z.infer<typeof supportThreadRowSchema>;
 
@@ -151,10 +159,71 @@ function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown): T
 
 // ── Endpoints ─────────────────────────────────────────────────
 
-/** GET /api/admin/support/threads → the inbox, unread-first then newest-first. */
-export async function getAdminSupportThreads(token: string): Promise<SupportThreadRow[]> {
-  const data = await supportRequest({ method: 'GET', path: '/api/admin/support/threads', token });
+export interface SupportThreadFilters {
+  /** 'open' | 'resolved' | 'all' (server default is 'all'). */
+  status?: SupportThreadStatus | 'all';
+  /** Only 'mine' is meaningful server-side — keeps threads assigned to the caller. */
+  assignee?: 'mine';
+}
+
+/**
+ * GET /api/admin/support/threads?status=&assignee= → the inbox, unread-first
+ * then newest-first. Omitting `status` returns every thread regardless of
+ * lifecycle state (the server default is 'all', not 'open').
+ */
+export async function getAdminSupportThreads(
+  token: string,
+  filters: SupportThreadFilters = {},
+): Promise<SupportThreadRow[]> {
+  const params = new URLSearchParams();
+  if (filters.status) params.set('status', filters.status);
+  if (filters.assignee) params.set('assignee', filters.assignee);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const data = await supportRequest({
+    method: 'GET',
+    path: `/api/admin/support/threads${query}`,
+    token,
+  });
   return parse(supportThreadsSchema, data).threads;
+}
+
+/**
+ * POST /api/admin/support/threads/[accountId]/resolve (or .../reopen) — no
+ * body on either. `resolved:true` moves the thread out of the default open
+ * queue; `resolved:false` reopens it. `unread` remains the actual work
+ * signal — resolving/reopening never touches it. Requires
+ * `support.thread.reply`.
+ */
+export async function resolveSupportThread(
+  accountId: string,
+  resolved: boolean,
+  token: string,
+): Promise<void> {
+  await supportRequest({
+    method: 'POST',
+    path: `/api/admin/support/threads/${encodeURIComponent(accountId)}/${resolved ? 'resolve' : 'reopen'}`,
+    token,
+  });
+}
+
+/**
+ * POST /api/admin/support/threads/[accountId]/assign {assigneeId} → assigns
+ * the thread to a staff account, or unassigns it when `staffAccountId` is
+ * `null`. A non-null id must resolve to an existing staff account
+ * ('invalid' otherwise). Drives the "assigned to me" filter. Requires
+ * `support.thread.reply`.
+ */
+export async function assignSupportThread(
+  accountId: string,
+  staffAccountId: string | null,
+  token: string,
+): Promise<void> {
+  await supportRequest({
+    method: 'POST',
+    path: `/api/admin/support/threads/${encodeURIComponent(accountId)}/assign`,
+    token,
+    body: { assigneeId: staffAccountId },
+  });
 }
 
 /**

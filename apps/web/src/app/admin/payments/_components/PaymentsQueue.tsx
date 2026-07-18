@@ -365,8 +365,8 @@ export function PaymentsQueue({
               style={{
                 fontSize: 10,
                 fontWeight: 700,
-                color: '#f0a020',
-                border: '1px solid #f0a020',
+                color: 'var(--gt-warning)',
+                border: '1px solid var(--gt-warning)',
                 borderRadius: 5,
                 padding: '1px 4px',
                 letterSpacing: '0.03em',
@@ -426,7 +426,7 @@ export function PaymentsQueue({
                 fontSize: 13,
                 fontWeight: 600,
                 background: active ? 'var(--gt-red)' : 'transparent',
-                color: active ? '#fff' : 'var(--gt-text)',
+                color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
                 border: active ? '1px solid var(--gt-red)' : '1px solid var(--gt-border)',
               }}
             >
@@ -472,8 +472,8 @@ export function PaymentsQueue({
                   style={{
                     fontSize: 11,
                     fontWeight: 700,
-                    color: '#f0a020',
-                    border: '1px solid #f0a020',
+                    color: 'var(--gt-warning)',
+                    border: '1px solid var(--gt-warning)',
                     borderRadius: 6,
                     padding: '2px 6px',
                   }}
@@ -544,7 +544,7 @@ export function PaymentsQueue({
                   </span>
                 </div>
                 {preview.needsConfirm ? (
-                  <div style={{ color: '#f0a020', fontSize: 12 }}>
+                  <div style={{ color: 'var(--gt-warning)', fontSize: 12 }}>
                     {preview.reason === 'higher_current'
                       ? 'This would downgrade an active higher tier — confirm required.'
                       : 'This would put an expiry on a permanent tier — confirm required.'}
@@ -612,7 +612,7 @@ export function PaymentsQueue({
                 {confirmPreview ? (
                   <div
                     style={{
-                      border: '1px solid #f0a020',
+                      border: '1px solid var(--gt-warning)',
                       borderRadius: 10,
                       padding: 12,
                       fontSize: 13,
@@ -674,7 +674,7 @@ export function PaymentsQueue({
               </div>
             ) : null}
 
-            {error ? <div style={{ color: '#ff8178', fontSize: 13 }}>{error}</div> : null}
+            {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div> : null}
           </div>
         ) : null}
       </Drawer>

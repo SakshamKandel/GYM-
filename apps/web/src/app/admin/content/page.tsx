@@ -6,8 +6,8 @@ import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
 import { isVideoConfigured } from '@/lib/video';
+import { ContentTabs } from './_components/ContentTabs';
 import type { Tier, VideoListItem, VideoStatus } from './_components/types';
-import { VideoLibrary } from './_components/VideoLibrary';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,9 +62,17 @@ export default async function AdminContentPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
   const permissions = await effectivePermissionSet(principal);
-  if (!permissions.has('content.manage')) redirect('/admin');
+  const canManageContent = permissions.has('content.manage');
+  const canModerate = permissions.has('moderation.manage');
+  // Either capability grants access to this route now — content.manage sees
+  // the video library, moderation.manage sees the moderation tabs. Someone
+  // with neither has nothing to do here.
+  if (!canManageContent && !canModerate) redirect('/admin');
 
-  const videos = await loadVideos();
+  // Only read the video library when it will actually render — a
+  // moderation-only caller (e.g. a future content_admin split) shouldn't pay
+  // for a query it can't see.
+  const videos = canManageContent ? await loadVideos() : [];
   const configured = isVideoConfigured();
 
   const total = videos.length;
@@ -75,27 +83,34 @@ export default async function AdminContentPage() {
     <div style={{ maxWidth: 1100 }}>
       <PageHeader
         title="Content"
-        subtitle="Form-check videos shown inside the training plans. Each video is gated to a membership tier — members below it don't see it."
+        subtitle="Form-check videos shown inside the training plans, plus moderation for member-visible coach content."
       />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-          gap: 14,
-          marginBottom: 24,
-        }}
-      >
-        <StatTile label="Videos" value={total} />
-        <StatTile label="Ready" value={ready} hint={total > 0 ? `of ${total}` : undefined} />
-        <StatTile
-          label="Processing"
-          value={processing}
-          hint={processing > 0 ? 'awaiting host' : undefined}
-        />
-      </div>
+      {canManageContent ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: 14,
+            marginBottom: 24,
+          }}
+        >
+          <StatTile label="Videos" value={total} />
+          <StatTile label="Ready" value={ready} hint={total > 0 ? `of ${total}` : undefined} />
+          <StatTile
+            label="Processing"
+            value={processing}
+            hint={processing > 0 ? 'awaiting host' : undefined}
+          />
+        </div>
+      ) : null}
 
-      <VideoLibrary initialVideos={videos} videoConfigured={configured} />
+      <ContentTabs
+        videos={videos}
+        videoConfigured={configured}
+        canManageContent={canManageContent}
+        canModerate={canModerate}
+      />
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { getDb } from '@/lib/db';
 import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
 import { getVideoProvider } from '@/lib/video';
+import { DownloadCsv } from '../_components/DownloadCsv';
 import {
   type PaymentRequestRow,
   type PaymentStatusCounts,
@@ -147,6 +148,7 @@ export default async function AdminPaymentsPage() {
       <PageHeader
         title="Payments"
         subtitle="Manual eSewa, Khalti, and bank-transfer payments awaiting review. Approving grants the tier for the paid window."
+        action={<DownloadCsv href="/api/admin/exports/payment-requests" />}
       />
 
       <div

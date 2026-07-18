@@ -166,14 +166,14 @@ export function AssignClient({
       />
 
       {notAccepting ? (
-        <div style={{ fontSize: 12, color: '#e0a34a', marginTop: 6 }}>
+        <div style={{ fontSize: 12, color: 'var(--gt-warning)', marginTop: 6 }}>
           This coach is marked as not accepting new clients — assign only if
           intentional.
         </div>
       ) : null}
 
       {error ? (
-        <div style={{ color: '#ff8178', fontSize: 13, marginTop: 8 }}>{error}</div>
+        <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 8 }}>{error}</div>
       ) : null}
 
       {forceTarget ? (

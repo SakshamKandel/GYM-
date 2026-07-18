@@ -1,12 +1,13 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
   AppTextInput,
+  Chip,
   enterDown,
   enterUp,
   PressableScale,
@@ -16,9 +17,11 @@ import {
   Tag,
 } from '../../../components/ui';
 import {
+  assignSupportThread,
   getAdminSupportThread,
   getAdminSupportThreads,
   replyToSupportThread,
+  resolveSupportThread,
   toSupportError,
   type SupportErrorCode,
   type SupportMessage,
@@ -26,6 +29,28 @@ import {
 } from '../../../features/staff/supportApi';
 import { canReviewSupport, replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
+
+/**
+ * P1-11 client contract (M2 owns features/staff/supportApi.ts — coded
+ * against the EXACT export names from its brief):
+ *   resolveSupportThread(accountId, resolved, token) => Promise<void>
+ *   assignSupportThread(accountId, assigneeAccountId | null, token) => Promise<void>
+ * Assumes `SupportThreadRow` grows `status: 'open' | 'resolved'` and
+ * `assignedTo: string | null` (FP0's thread-state schema) — accessed
+ * defensively below so an interim build without those fields degrades to
+ * "all open, unassigned" instead of crashing.
+ */
+type ThreadFilter = 'open' | 'resolved' | 'mine';
+
+function threadStatus(row: SupportThreadRow): 'open' | 'resolved' {
+  const s = (row as { status?: unknown }).status;
+  return s === 'resolved' ? 'resolved' : 'open';
+}
+
+function threadAssignee(row: SupportThreadRow): string | null {
+  const a = (row as { assignedTo?: unknown }).assignedTo;
+  return typeof a === 'string' ? a : null;
+}
 
 /**
  * Admin · Support — every account with a support ticket (SCALE-UP-PLAN §4.4).
@@ -110,12 +135,18 @@ function Bubble({ message }: { message: SupportMessage }) {
 
 export default function AdminSupportScreen() {
   const token = useAuth((s) => s.token);
+  const myAccountId = useAuth((s) => s.user?.id ?? null);
   const staffPermissions = useAuth((s) => s.staffPermissions);
   const allowed = canReviewSupport(staffPermissions);
 
   const [rows, setRows] = useState<SupportThreadRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // P1-11: lifecycle filters. Unread stays the primary work signal (sort
+  // order comes from the server); this only narrows WHICH threads show —
+  // resolved threads leave the default (Open) queue.
+  const [filter, setFilter] = useState<ThreadFilter>('open');
 
   const [selected, setSelected] = useState<SupportThreadRow | null>(null);
   const [messages, setMessages] = useState<SupportMessage[]>([]);
@@ -124,8 +155,24 @@ export default function AdminSupportScreen() {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
 
   const scrollRef = useRef<ScrollView>(null);
+
+  // Guards against the same race the web SupportInbox drawer fixed with its
+  // own reqSeq ref: staff opens thread A, backs out, opens thread B before
+  // A's fetch resolves — without this, A's response (arriving after B's)
+  // would overwrite `messages` while `selected` still shows B.
+  const threadReqSeq = useRef(0);
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((r) => {
+      if (filter === 'resolved') return threadStatus(r) === 'resolved';
+      if (filter === 'mine') return threadAssignee(r) === myAccountId && myAccountId !== null;
+      return threadStatus(r) !== 'resolved';
+    });
+  }, [rows, filter, myAccountId]);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -148,30 +195,69 @@ export default function AdminSupportScreen() {
   const loadThread = useCallback(
     async (accountId: string) => {
       if (!token) return;
+      const mySeq = ++threadReqSeq.current;
       setThreadLoading(true);
       setThreadError(null);
       try {
-        setMessages(await getAdminSupportThread(accountId, token));
+        const result = await getAdminSupportThread(accountId, token);
+        if (mySeq !== threadReqSeq.current) return; // superseded by a newer open/close
+        setMessages(result);
       } catch (e) {
+        if (mySeq !== threadReqSeq.current) return;
         setThreadError(loadErrorLine(toSupportError(e).code));
       } finally {
-        setThreadLoading(false);
+        if (mySeq === threadReqSeq.current) setThreadLoading(false);
       }
     },
     [token],
   );
 
   function openThread(row: SupportThreadRow): void {
+    threadReqSeq.current += 1; // supersede any in-flight load for the previously open thread
     setSelected(row);
     setMessages([]);
     setDraft('');
     setSendError(null);
+    setLifecycleError(null);
     void loadThread(row.account.id);
   }
 
   function closeThread(): void {
+    threadReqSeq.current += 1; // supersede any in-flight load for the closed thread
     setSelected(null);
     void load();
+  }
+
+  async function doResolveToggle(): Promise<void> {
+    if (!token || !selected || lifecycleBusy) return;
+    const nextResolved = threadStatus(selected) !== 'resolved';
+    setLifecycleBusy(true);
+    setLifecycleError(null);
+    try {
+      await resolveSupportThread(selected.account.id, nextResolved, token);
+      await load();
+      setSelected(null);
+    } catch (e) {
+      setLifecycleError(loadErrorLine(toSupportError(e).code));
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
+
+  async function doAssignToggle(): Promise<void> {
+    if (!token || !selected || !myAccountId || lifecycleBusy) return;
+    const isMine = threadAssignee(selected) === myAccountId;
+    setLifecycleBusy(true);
+    setLifecycleError(null);
+    try {
+      await assignSupportThread(selected.account.id, isMine ? null : myAccountId, token);
+      await load();
+      setSelected(null);
+    } catch (e) {
+      setLifecycleError(loadErrorLine(toSupportError(e).code));
+    } finally {
+      setLifecycleBusy(false);
+    }
   }
 
   useEffect(() => {
@@ -221,6 +307,16 @@ export default function AdminSupportScreen() {
     <Screen scroll>
       <BackRow onBack={goBack} />
 
+      <Animated.View entering={enterDown()} style={styles.filterRow}>
+        <Chip label="Open" selected={filter === 'open'} onPress={() => setFilter('open')} />
+        <Chip
+          label="Resolved"
+          selected={filter === 'resolved'}
+          onPress={() => setFilter('resolved')}
+        />
+        <Chip label="Mine" selected={filter === 'mine'} onPress={() => setFilter('mine')} />
+      </Animated.View>
+
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.accent} />
@@ -229,13 +325,17 @@ export default function AdminSupportScreen() {
         <View style={styles.retryWrap}>
           <RetryLine message={error} onRetry={() => void load()} />
         </View>
-      ) : rows.length === 0 ? (
+      ) : filteredRows.length === 0 ? (
         <AppText variant="caption" color={colors.textFaint} style={styles.emptyLine}>
-          No support tickets yet.
+          {filter === 'resolved'
+            ? 'No resolved tickets.'
+            : filter === 'mine'
+              ? 'No tickets assigned to you.'
+              : 'No open support tickets.'}
         </AppText>
       ) : (
         <View style={styles.list}>
-          {rows.map((r, i) => (
+          {filteredRows.map((r, i) => (
             <Animated.View key={r.account.id} entering={enterUp(Math.min(i, 6))}>
               <PressableScale
                 accessibilityRole="button"
@@ -248,6 +348,9 @@ export default function AdminSupportScreen() {
                     <AppText variant="bodyBold" numberOfLines={1} style={styles.rowNameGrow}>
                       {r.account.displayName.trim() || r.account.email}
                     </AppText>
+                    {threadStatus(r) === 'resolved' ? (
+                      <Tag label="Resolved" variant="dim" />
+                    ) : null}
                     {r.unread > 0 ? (
                       <View style={styles.unreadDot}>
                         <AppText variant="label" color={colors.onBlock}>
@@ -284,6 +387,64 @@ export default function AdminSupportScreen() {
               </AppText>
               <Tag label={selected.account.tier.toUpperCase()} variant="dim" />
             </View>
+
+            {/* P1-11: resolve/reopen + assign-to-me lifecycle actions. */}
+            <View style={styles.lifecycleRow}>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel={
+                  threadStatus(selected) === 'resolved' ? 'Reopen ticket' : 'Resolve ticket'
+                }
+                disabled={lifecycleBusy}
+                onPress={() => void doResolveToggle()}
+                style={[styles.lifecycleChip, lifecycleBusy && styles.actionDisabled]}
+              >
+                <Ionicons
+                  name={
+                    threadStatus(selected) === 'resolved'
+                      ? 'refresh-outline'
+                      : 'checkmark-done-outline'
+                  }
+                  size={16}
+                  color={colors.text}
+                />
+                <AppText variant="caption" color={colors.text}>
+                  {threadStatus(selected) === 'resolved' ? 'Reopen' : 'Resolve'}
+                </AppText>
+              </PressableScale>
+              {myAccountId ? (
+                <PressableScale
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    threadAssignee(selected) === myAccountId
+                      ? 'Unassign from me'
+                      : 'Assign to me'
+                  }
+                  disabled={lifecycleBusy}
+                  onPress={() => void doAssignToggle()}
+                  style={[styles.lifecycleChip, lifecycleBusy && styles.actionDisabled]}
+                >
+                  <Ionicons
+                    name={
+                      threadAssignee(selected) === myAccountId
+                        ? 'person-remove-outline'
+                        : 'person-add-outline'
+                    }
+                    size={16}
+                    color={colors.text}
+                  />
+                  <AppText variant="caption" color={colors.text}>
+                    {threadAssignee(selected) === myAccountId ? 'Assigned to me' : 'Assign to me'}
+                  </AppText>
+                </PressableScale>
+              ) : null}
+              {lifecycleBusy ? <ActivityIndicator size="small" color={colors.textDim} /> : null}
+            </View>
+            {lifecycleError ? (
+              <AppText variant="caption" color={colors.error}>
+                {lifecycleError}
+              </AppText>
+            ) : null}
 
             {threadLoading ? (
               <View style={styles.centerSm}>
@@ -401,6 +562,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   emptyLine: { marginTop: spacing.lg, paddingHorizontal: spacing.xs },
+  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
   list: { gap: spacing.sm },
   row: {
     flexDirection: 'row',
@@ -431,6 +593,17 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   sheetEmail: { flex: 1 },
+  lifecycleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  lifecycleChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: touch.min,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+  },
+  actionDisabled: { opacity: 0.4 },
   sheetScroll: { maxHeight: 360 },
   sheetScrollContent: { paddingVertical: spacing.sm, gap: spacing.xs },
   bubbleRow: { flexDirection: 'row' },

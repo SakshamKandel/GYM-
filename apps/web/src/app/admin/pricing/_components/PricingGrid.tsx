@@ -237,7 +237,7 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
         </Card>
       ))}
 
-      {error ? <div style={{ color: '#ff8178', fontSize: 13 }}>{error}</div> : null}
+      {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div> : null}
 
       <div>
         <Button variant="primary" disabled={!dirty || saving} onClick={() => void save()}>

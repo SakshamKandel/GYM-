@@ -55,6 +55,7 @@ import {
 import { searchHref } from '../../features/nutrition/nav';
 import { useCoachDiet, type CoachDietSection } from '../../features/nutrition/coachDiet';
 import { FoodLogDetailSheet } from '../../features/nutrition/FoodLogDetailSheet';
+import { pushPath } from '../../features/meals/nav';
 import { SuggestionsSection } from '../../features/nutrition/SuggestionsSection';
 import { useNutritionDay } from '../../features/nutrition/useNutritionDay';
 
@@ -446,6 +447,28 @@ export default function FoodScreen() {
           </PressableScale>
         </Animated.View>
       ) : null}
+
+      {/* Meal delivery teaser (plan §6 P12) — single entry point into the
+          partner meal-delivery flow; /meals owns the full discovery/order/
+          subscription surface. Same copyRow visual language as the coach diet
+          card above it. */}
+      <Animated.View entering={enterUp(5)}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Order meals for delivery"
+          onPress={() => pushPath('/meals')}
+          style={styles.copyRow}
+        >
+          <IconChip icon="bicycle-outline" />
+          <View style={styles.copyInfo}>
+            <AppText variant="bodyBold">Order meals</AppText>
+            <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+              Delivery from local partners — one-time or weekly
+            </AppText>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+        </PressableScale>
+      </Animated.View>
 
       {/* Meals — one charcoal block per meal, log rows as raised tiles */}
       {!loaded ? null : logs.length === 0 ? (

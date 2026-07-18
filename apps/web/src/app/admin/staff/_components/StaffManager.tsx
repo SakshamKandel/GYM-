@@ -1,6 +1,12 @@
 'use client';
 
-import { assignableRolesFor, canManageRole, GRANTABLE_ROLES } from '@gym/shared';
+import {
+  ALL_PERMISSIONS,
+  assignableRolesFor,
+  canManageRole,
+  GRANTABLE_ROLES,
+  type Permission,
+} from '@gym/shared';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -51,7 +57,7 @@ interface MemberHit {
 }
 
 const selectStyle: React.CSSProperties = {
-  background: 'var(--gt-input-bg, #131416)',
+  background: 'var(--gt-surface)',
   color: 'var(--gt-text)',
   border: '1px solid var(--gt-border)',
   borderRadius: 8,
@@ -88,6 +94,12 @@ function friendlyStaffError(status: number, code: string | null): string {
       return 'That account is no longer staff.';
     case 'invalid_role':
       return 'That role cannot be granted.';
+    case 'invalid_permission':
+      return 'That permission is not recognised.';
+    case 'cannot_modify_super_admin':
+      return 'A super admin’s permissions cannot be overridden.';
+    case 'partner_override_forbidden':
+      return 'A partner account may only ever hold its two delivery permissions.';
     default:
       break;
   }
@@ -96,6 +108,130 @@ function friendlyStaffError(status: number, code: string | null): string {
   if (status === 400) return 'That change is not allowed.';
   return 'Something went wrong. Try again.';
 }
+
+/**
+ * Human copy for each permission key, keyed by the exact @gym/shared literal.
+ * Display only — the effective/override truth comes from the server payload.
+ * Any key without an entry falls back to the raw key so a newly added
+ * permission still renders (and this map is exhaustively covered by a
+ * `satisfies Record<Permission, …>`, so a new key breaks the type until copy is
+ * supplied).
+ */
+const PERMISSION_META = {
+  'members.read': { label: 'Read members', desc: 'View the member directory.' },
+  'members.suspend': {
+    label: 'Suspend members',
+    desc: 'Suspend or reactivate member accounts.',
+  },
+  'coach.assign': { label: 'Assign coaches', desc: 'Assign a coach to a member.' },
+  'subscription.override': {
+    label: 'Override subscription',
+    desc: 'Change a member’s subscription tier.',
+  },
+  'audit.read': { label: 'Read audit log', desc: 'View the admin audit trail.' },
+  'roles.grant': {
+    label: 'Manage staff roles',
+    desc: 'Grant, change, or revoke staff roles.',
+  },
+  'support.thread.read': {
+    label: 'Read support threads',
+    desc: 'List and read member support tickets.',
+  },
+  'support.thread.reply': {
+    label: 'Reply to support',
+    desc: 'Reply into a support thread.',
+  },
+  'coach.application.review': {
+    label: 'Review coach applications',
+    desc: 'Approve/reject applications and tier requests.',
+  },
+  'payments.review': {
+    label: 'Review payments',
+    desc: 'Approve, reject, or refund payment requests.',
+  },
+  'promo.manage': { label: 'Manage promo codes', desc: 'Create and toggle promo codes.' },
+  'pricing.manage': { label: 'Manage pricing', desc: 'Edit regional tier prices.' },
+  'wallet.manage': {
+    label: 'Manage wallets',
+    desc: 'View wallets, record adjustments and payouts.',
+  },
+  'content.manage': {
+    label: 'Manage content',
+    desc: 'Org-wide plan-video CRUD (any row).',
+  },
+  'content.video.own': {
+    label: 'Manage own videos',
+    desc: 'CRUD only videos this coach created.',
+  },
+  'coach.message.user': {
+    label: 'Message clients',
+    desc: 'Reply into an assigned client’s thread.',
+  },
+  'coach.user.read': {
+    label: 'Read clients',
+    desc: 'Read assigned clients’ threads and profile.',
+  },
+  'coach.wallet.read': {
+    label: 'Read own wallet',
+    desc: 'A coach reading their own wallet balance.',
+  },
+  'client.tier_grant': {
+    label: 'Grant client tiers',
+    desc: 'Coach-initiated client tier grants (off by default).',
+  },
+  'broadcast.send': {
+    label: 'Send broadcasts',
+    desc: 'Send announcements and push broadcasts.',
+  },
+  'members.manage_credentials': {
+    label: 'Manage credentials',
+    desc: 'Password reset, force sign-out, identity fixes.',
+  },
+  'payouts.review': {
+    label: 'Review payouts',
+    desc: 'Approve, reject, or mark coach payouts paid.',
+  },
+  'analytics.read': {
+    label: 'Read analytics',
+    desc: 'View revenue, churn, and coach-performance analytics.',
+  },
+  'permissions.override': {
+    label: 'Manage permissions',
+    desc: 'Grant or strip per-account permission overrides.',
+  },
+  'moderation.manage': {
+    label: 'Moderate content',
+    desc: 'Custom foods, progress photos, milestones.',
+  },
+  'catalog.manage': {
+    label: 'Manage catalog',
+    desc: 'CRUD the exercises and plans catalog.',
+  },
+  'gamification.manage': {
+    label: 'Manage gamification',
+    desc: 'XP corrections, badge audit/revoke, challenge moderation.',
+  },
+  'meals.own': {
+    label: 'Manage own meals',
+    desc: 'Partner-only: CRUD this restaurant’s own menu and fulfill its orders.',
+  },
+  'orders.fulfill': {
+    label: 'Fulfill orders',
+    desc: 'Partner-only: advance a meal order through its delivery states.',
+  },
+  'partners.manage': {
+    label: 'Manage meal partners',
+    desc: 'Create, edit, and deactivate restaurant partner accounts.',
+  },
+  'orders.review': {
+    label: 'Review meal orders',
+    desc: 'Oversight and override across every partner’s orders.',
+  },
+  'gyms.manage': {
+    label: 'Manage gyms',
+    desc: 'CRUD the nearby-gyms directory and its photos.',
+  },
+} satisfies Record<Permission, { label: string; desc: string }>;
 
 export function StaffManager({
   staff,
@@ -132,6 +268,11 @@ export function StaffManager({
     member: StaffMember;
     newRole: StaffRole | null;
   } | null>(null);
+
+  // Per-account permission overrides (P2-20). Opened for a manageable, non-self
+  // staff row so the operator can grant one extra capability or strip a preset
+  // one on top of the role. super_admin rows are never eligible (safety floor).
+  const [permsTarget, setPermsTarget] = useState<StaffMember | null>(null);
 
   async function changeRole(accountId: string, role: StaffRole) {
     setBusyId(accountId);
@@ -314,6 +455,16 @@ export function StaffManager({
               gap: 4,
             }}
           >
+            {!isSelf && manageable && row.role !== 'super_admin' ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => setPermsTarget(row)}
+              >
+                Permissions
+              </Button>
+            ) : null}
             {isSelf ? (
               <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>You</span>
             ) : !manageable ? (
@@ -342,7 +493,7 @@ export function StaffManager({
               />
             )}
             {err ? (
-              <span style={{ fontSize: 12, color: '#ff8178', maxWidth: 220 }}>
+              <span style={{ fontSize: 12, color: 'var(--gt-danger)', maxWidth: 220 }}>
                 {err}
               </span>
             ) : null}
@@ -391,7 +542,311 @@ export function StaffManager({
           router.refresh();
         }}
       />
+
+      <PermissionsModal target={permsTarget} onClose={() => setPermsTarget(null)} />
     </div>
+  );
+}
+
+/** One permission's provenance, mirroring the GET/PUT payload rows. */
+interface PermissionRow {
+  key: Permission;
+  preset: boolean;
+  override: 'allow' | 'deny' | null;
+  effective: boolean;
+}
+
+interface PermissionsPayload {
+  accountId: string;
+  role: StaffRole;
+  locked: boolean;
+  permissions: PermissionRow[];
+}
+
+/**
+ * Per-account permission overrides (P2-20). Loads the target's effective
+ * permission set with provenance, then lets the operator set each key to
+ * Default (role preset), Grant (force-allow), or Deny (force-strip). Every
+ * choice is an immediate single-key PUT that returns the fresh payload, so the
+ * panel always reflects server truth — no optimistic drift. The header states
+ * the rule the operator is composing: effective = preset + grants − denials.
+ *
+ * The route re-checks the permission, rank, self-target, and super_admin floor
+ * independently; the greying here is a courtesy, not the guard.
+ */
+function PermissionsModal({
+  target,
+  onClose,
+}: {
+  target: StaffMember | null;
+  onClose: () => void;
+}) {
+  const open = target != null;
+  const accountId = target?.accountId ?? null;
+
+  const [payload, setPayload] = useState<PermissionsPayload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busyKey, setBusyKey] = useState<Permission | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (id: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/staff/${encodeURIComponent(id)}/permissions`,
+        { credentials: 'include' },
+      );
+      if (!res.ok) {
+        const code = await errorCodeOf(res);
+        setError(friendlyStaffError(res.status, code));
+        setPayload(null);
+        return;
+      }
+      setPayload((await res.json()) as PermissionsPayload);
+    } catch {
+      setError('Network error.');
+      setPayload(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // (Re)load whenever a new target opens; clear stale state on close.
+  useEffect(() => {
+    if (!accountId) {
+      setPayload(null);
+      setError(null);
+      return;
+    }
+    void load(accountId);
+  }, [accountId, load]);
+
+  async function setOverride(perm: Permission, allow: boolean | null) {
+    if (!accountId) return;
+    setBusyKey(perm);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/staff/${encodeURIComponent(accountId)}/permissions`,
+        {
+          method: 'PUT',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ perm, allow }),
+        },
+      );
+      if (!res.ok) {
+        const code = await errorCodeOf(res);
+        setError(friendlyStaffError(res.status, code));
+        return;
+      }
+      // The PUT returns the fresh, fully-merged payload — adopt it wholesale so
+      // the panel can never disagree with what enforcement will do.
+      setPayload((await res.json()) as PermissionsPayload);
+    } catch {
+      setError('Network error.');
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  const overrideCount =
+    payload?.permissions.filter((p) => p.override != null).length ?? 0;
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Permissions"
+      width={560}
+      footer={
+        <Button variant="ghost" onClick={onClose}>
+          Done
+        </Button>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div>
+          <p style={{ fontSize: 14, color: 'var(--gt-text)', margin: 0 }}>
+            {target?.coachName || target?.displayName || target?.email}
+          </p>
+          <p style={{ fontSize: 12, color: 'var(--gt-text-dim)', margin: '4px 0 0' }}>
+            {target ? staffRoleLabel(target.role) : ''} · effective ={' '}
+            <strong style={{ color: 'var(--gt-text)' }}>preset</strong> + grants − denials
+            {overrideCount > 0 ? ` · ${overrideCount} override${overrideCount === 1 ? '' : 's'}` : ''}
+          </p>
+        </div>
+
+        {loading ? (
+          <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+            Loading permissions…
+          </div>
+        ) : payload ? (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              maxHeight: 420,
+              overflowY: 'auto',
+            }}
+          >
+            {payload.locked ? (
+              <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                A super admin holds every permission and cannot be overridden.
+              </div>
+            ) : null}
+            {payload.permissions.map((row) => (
+              <PermissionControl
+                key={row.key}
+                row={row}
+                busy={busyKey === row.key}
+                disabled={payload.locked || (busyKey != null && busyKey !== row.key)}
+                onChange={(allow) => void setOverride(row.key, allow)}
+              />
+            ))}
+          </div>
+        ) : null}
+
+        {error ? <div style={{ fontSize: 13, color: 'var(--gt-danger)' }}>{error}</div> : null}
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * One permission line: label + description, an effective-state badge, and a
+ * three-way Default / Grant / Deny selector. "Default" clears the override
+ * (revert to preset); Grant/Deny write an explicit allow/deny. The currently
+ * selected mode is derived from `row.override` (null → Default).
+ */
+function PermissionControl({
+  row,
+  busy,
+  disabled,
+  onChange,
+}: {
+  row: PermissionRow;
+  busy: boolean;
+  disabled: boolean;
+  onChange: (allow: boolean | null) => void;
+}) {
+  const meta = PERMISSION_META[row.key];
+  const mode: 'default' | 'allow' | 'deny' =
+    row.override === 'allow' ? 'allow' : row.override === 'deny' ? 'deny' : 'default';
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '8px 10px',
+        borderRadius: 8,
+        border: '1px solid var(--gt-border)',
+        background: row.override != null ? 'var(--gt-surface-sunken)' : 'transparent',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 13,
+            fontFamily: 'var(--font-heading)',
+            fontWeight: 600,
+          }}
+        >
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {meta?.label ?? row.key}
+          </span>
+          {row.effective ? (
+            <Badge tone="positive">On</Badge>
+          ) : (
+            <Badge tone="neutral">Off</Badge>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--gt-text-dim)', marginTop: 2 }}>
+          {meta?.desc ?? row.key} · preset {row.preset ? 'grants' : 'denies'} this
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 0, flexShrink: 0 }} role="group" aria-label={`${meta?.label ?? row.key} override`}>
+        <SegBtn
+          label="Default"
+          active={mode === 'default'}
+          activeText="var(--gt-text)"
+          busy={busy}
+          disabled={disabled}
+          onClick={() => onChange(null)}
+        />
+        <SegBtn
+          label="Grant"
+          active={mode === 'allow'}
+          activeTone="var(--gt-success)"
+          busy={busy}
+          disabled={disabled}
+          onClick={() => onChange(true)}
+        />
+        <SegBtn
+          label="Deny"
+          active={mode === 'deny'}
+          activeTone="var(--gt-danger)"
+          busy={busy}
+          disabled={disabled}
+          onClick={() => onChange(false)}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** One segment of the Default/Grant/Deny control. */
+function SegBtn({
+  label,
+  active,
+  activeTone = 'var(--gt-border-strong)',
+  activeText = 'var(--gt-accent-ink)',
+  busy,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  activeTone?: string;
+  /** Text color while active — pass 'var(--gt-text)' when activeTone is a light wash. */
+  activeText?: string;
+  busy: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      disabled={disabled || busy}
+      onClick={onClick}
+      style={{
+        fontSize: 12,
+        fontFamily: 'var(--font-heading)',
+        padding: '5px 10px',
+        border: '1px solid var(--gt-border)',
+        marginLeft: -1,
+        background: active ? activeTone : 'transparent',
+        color: active ? activeText : 'var(--gt-text-dim)',
+        cursor: disabled || busy ? 'default' : 'pointer',
+        opacity: disabled || busy ? 0.55 : 1,
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -581,7 +1036,7 @@ function OffboardModal({
             />
             <CountLine n={counts.activeDietPlans} label="assigned diet plan" verb="archive" />
             {counts.walletBalances.length > 0 ? (
-              <div style={{ color: '#e0b341', marginTop: 4 }}>
+              <div style={{ color: 'var(--gt-warning)', marginTop: 4 }}>
                 ⚠ Outstanding wallet balance: {formatBalances(counts.walletBalances)} — settle
                 payouts before revoking (the ledger is preserved either way).
               </div>
@@ -604,7 +1059,7 @@ function OffboardModal({
           </div>
         ) : null}
 
-        {error ? <div style={{ fontSize: 13, color: '#ff8178' }}>{error}</div> : null}
+        {error ? <div style={{ fontSize: 13, color: 'var(--gt-danger)' }}>{error}</div> : null}
       </div>
     </Modal>
   );
@@ -805,7 +1260,7 @@ function GrantRoleModal({
               gap: 6,
               padding: '10px 12px',
               borderRadius: 10,
-              border: '1px solid var(--gt-red)',
+              border: '1px solid var(--gt-accent)',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -967,7 +1422,7 @@ function GrantRoleModal({
         </label>
 
         {error ? (
-          <div style={{ fontSize: 13, color: '#ff8178' }}>{error}</div>
+          <div style={{ fontSize: 13, color: 'var(--gt-danger)' }}>{error}</div>
         ) : null}
       </div>
     </Modal>

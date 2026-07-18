@@ -56,6 +56,11 @@ export function OPTIONS() {
 export async function GET(req: Request) {
   const principal = await requireStaff(req);
   if (principal instanceof Response) return principal;
+  // Defense-in-depth (plan §1.4): a partner holds none of the per-section
+  // permissions below, so it would already get a 200 with `ops:{}` and no
+  // membership/activity — but the delivery-only role has no business on any
+  // admin surface, so refuse it outright before any query runs.
+  if (principal.role === 'partner') return json({ error: 'forbidden' }, 403);
 
   let permissions: ReadonlySet<Permission>;
   try {
@@ -72,7 +77,15 @@ export async function GET(req: Request) {
 
   const db = getDb();
   const now = new Date();
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  // Month boundary in Nepal time (UTC+5:45, no DST) — the product bills Nepal,
+  // so a payment settled just after local midnight on the 1st must count toward
+  // the new month, not the prior UTC month (a UTC-computed boundary misattributes
+  // near-midnight Nepal-time transactions).
+  const NEPAL_OFFSET_MS = (5 * 60 + 45) * 60 * 1000;
+  const nowNepal = new Date(now.getTime() + NEPAL_OFFSET_MS);
+  const monthStart = new Date(
+    Date.UTC(nowNepal.getUTCFullYear(), nowNepal.getUTCMonth(), 1) - NEPAL_OFFSET_MS,
+  );
 
   const body: Record<string, unknown> = {};
 
@@ -189,11 +202,26 @@ export async function GET(req: Request) {
   }
 
   if (canPayments) {
-    const [pending, revenue] = await Promise.all([
+    const [pending, gross, refunds] = await Promise.all([
       db
         .select({ n: count() })
         .from(paymentRequests)
         .where(eq(paymentRequests.status, 'pending')),
+      // Gross recognized this month, keyed on settledAt — set once at approval
+      // and NOT overwritten by a later refund (which only touches status/
+      // decidedAt). So a prior-month sale refunded this month is not re-counted
+      // in this month's gross, and a same-month sale still appears here.
+      db
+        .select({
+          currency: paymentRequests.currency,
+          total: sql<string>`sum(${paymentRequests.amountMinor})::text`,
+        })
+        .from(paymentRequests)
+        .where(gte(paymentRequests.settledAt, monthStart))
+        .groupBy(paymentRequests.currency),
+      // Refunds processed this month subtract from revenue: a refund flips
+      // status→'refunded' and stamps decidedAt at the refund time, so cash that
+      // left this month is reflected as a negative instead of silently vanishing.
       db
         .select({
           currency: paymentRequests.currency,
@@ -201,17 +229,19 @@ export async function GET(req: Request) {
         })
         .from(paymentRequests)
         .where(
-          and(
-            eq(paymentRequests.status, 'approved'),
-            gte(paymentRequests.decidedAt, monthStart),
-          ),
+          and(eq(paymentRequests.status, 'refunded'), gte(paymentRequests.decidedAt, monthStart)),
         )
         .groupBy(paymentRequests.currency),
     ]);
     ops.pendingPayments = Number(pending[0]?.n ?? 0);
-    ops.revenueThisMonth = revenue.map((r) => ({
-      currency: r.currency,
-      amountMinor: Number(r.total ?? 0),
+    const netByCurrency = new Map<string, number>();
+    for (const r of gross) netByCurrency.set(r.currency, Number(r.total ?? 0));
+    for (const r of refunds) {
+      netByCurrency.set(r.currency, (netByCurrency.get(r.currency) ?? 0) - Number(r.total ?? 0));
+    }
+    ops.revenueThisMonth = Array.from(netByCurrency, ([currency, amountMinor]) => ({
+      currency,
+      amountMinor,
     }));
   }
 

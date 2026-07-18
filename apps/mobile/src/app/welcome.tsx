@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, Path, Text as SvgText, TextPath } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
-import { AppText, PressableScale, ProgressBar, Ring } from '../components/ui';
+import { AppText, nativeOnly, PressableScale, ProgressBar, Ring } from '../components/ui';
 
 /**
  * Welcome — full-bleed red poster (owner's Planable-style reference, REVAMP
@@ -59,7 +59,7 @@ export default function WelcomeScreen() {
       >
         <View style={styles.column}>
           {/* Top bar: wordmark + Skip. */}
-          <Animated.View entering={FadeInDown.duration(300)} style={styles.topBar}>
+          <Animated.View entering={nativeOnly(FadeInDown.duration(300))} style={styles.topBar}>
             <AppText variant="label" color={colors.onBlock}>
               GYM TRACKER
             </AppText>
@@ -86,7 +86,7 @@ export default function WelcomeScreen() {
             <View importantForAccessibility="no-hide-descendants" style={styles.collageInner}>
               {/* Charcoal "next workout" sticker — tilted right. */}
               <Animated.View
-                entering={FadeInDown.springify().damping(14).delay(150)}
+                entering={nativeOnly(FadeInDown.springify().damping(14).delay(150))}
                 style={styles.glassCard}
               >
                 <View style={styles.glassIcon}>
@@ -116,7 +116,7 @@ export default function WelcomeScreen() {
 
               {/* Cream focus card — tilted left, overlapping. */}
               <Animated.View
-                entering={FadeInUp.springify().damping(14).delay(280)}
+                entering={nativeOnly(FadeInUp.springify().damping(14).delay(280))}
                 style={styles.creamCard}
               >
                 <View style={styles.creamTop}>
@@ -156,7 +156,7 @@ export default function WelcomeScreen() {
 
               {/* Circular-text badge with Newie at the center. */}
               <Animated.View
-                entering={ZoomIn.springify().damping(12).delay(420)}
+                entering={nativeOnly(ZoomIn.springify().damping(12).delay(420))}
                 style={styles.badge}
               >
                 <Svg width={BADGE} height={BADGE} viewBox={`0 0 ${BADGE} ${BADGE}`}>
@@ -189,7 +189,7 @@ export default function WelcomeScreen() {
             style={styles.headline}
           >
             <View importantForAccessibility="no-hide-descendants">
-              <Animated.View entering={FadeInUp.springify().delay(520)} style={styles.hRow}>
+              <Animated.View entering={nativeOnly(FadeInUp.springify().delay(520))} style={styles.hRow}>
                 <AppText variant="display" color={colors.onBlock} style={styles.hText}>
                   Take{' '}
                 </AppText>
@@ -199,7 +199,7 @@ export default function WelcomeScreen() {
                   </AppText>
                 </View>
               </Animated.View>
-              <Animated.View entering={FadeInUp.springify().delay(620)} style={styles.hRow}>
+              <Animated.View entering={nativeOnly(FadeInUp.springify().delay(620))} style={styles.hRow}>
                 <AppText variant="display" color={colors.onBlock} style={styles.hText}>
                   of{' '}
                 </AppText>
@@ -210,7 +210,7 @@ export default function WelcomeScreen() {
                   {' '}your
                 </AppText>
               </Animated.View>
-              <Animated.View entering={FadeInUp.springify().delay(720)}>
+              <Animated.View entering={nativeOnly(FadeInUp.springify().delay(720))}>
                 <AppText variant="display" color={colors.onBlock} style={styles.hText}>
                   training.
                 </AppText>
@@ -218,14 +218,14 @@ export default function WelcomeScreen() {
             </View>
           </View>
 
-          <Animated.View entering={FadeIn.delay(800)}>
+          <Animated.View entering={nativeOnly(FadeIn.delay(800))}>
             <AppText variant="body" color={colors.onBlock} style={styles.tagline}>
               Workouts, food and progress — one app, one coach.
             </AppText>
           </Animated.View>
 
           {/* CTA stack. */}
-          <Animated.View entering={FadeInUp.springify().delay(880)} style={styles.actions}>
+          <Animated.View entering={nativeOnly(FadeInUp.springify().delay(880))} style={styles.actions}>
             <PressableScale
               accessibilityRole="button"
               accessibilityLabel="Get started — about 2 minutes to set up"

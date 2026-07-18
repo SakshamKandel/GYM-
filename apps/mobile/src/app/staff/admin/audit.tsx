@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { ActivityIndicator, Share, StyleSheet, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
@@ -16,12 +16,32 @@ import {
   Tag,
 } from '../../../components/ui';
 import {
+  exportCsvToFile,
   getAudit,
   type AuditEntry,
   toStaffError,
 } from '../../../features/staff/api';
 import { replaceStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
+
+/**
+ * P1-10 CSV export contract: exportCsvToFile(kind, token) => Promise<string>
+ * (M2 owns features/staff/api.ts — see the fuller note in members.tsx) downloads
+ * the CSV straight to a local file and returns its `file://` URI — a short,
+ * constant-size string, unlike the CSV content itself. No expo-sharing
+ * dependency exists in this app, so the file goes through RN's built-in Share
+ * sheet (which attaches it via `url` on iOS); the fallback block below shows
+ * the on-device path as selectable text (never the CSV content — that would
+ * risk the same crash/freeze this fix removes).
+ */
+async function shareFile(uri: string): Promise<void> {
+  try {
+    await Share.share({ url: uri });
+  } catch {
+    // Share sheet dismissed/unavailable — the file stays on-device; its path
+    // stays visible in the fallback block as the copy-path fallback.
+  }
+}
 
 /**
  * Admin · Audit trail (super_admin + main_admin).
@@ -118,6 +138,30 @@ export default function AuditScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // P1-10: CSV export of the audit trail, shared via the OS share sheet —
+  // with a selectable-link fallback sheet when the share sheet is
+  // unavailable or dismissed.
+  const [csvBusy, setCsvBusy] = useState(false);
+  const [csvLinkOpen, setCsvLinkOpen] = useState(false);
+  const [csvLink, setCsvLink] = useState<string | null>(null);
+  const [csvError, setCsvError] = useState<string | null>(null);
+
+  async function exportAuditCsv(): Promise<void> {
+    if (!token || csvBusy) return;
+    setCsvBusy(true);
+    setCsvError(null);
+    try {
+      const uri = await exportCsvToFile('audit', token);
+      setCsvLink(uri);
+      setCsvLinkOpen(true);
+      await shareFile(uri);
+    } catch (err) {
+      setCsvError(toStaffError(err).code === 'forbidden' ? "You don't have export access." : "Couldn't export the audit log.");
+    } finally {
+      setCsvBusy(false);
+    }
+  }
+
   /** Load page one for the current filter (replaces the list). */
   const load = useCallback(
     async (action: string) => {
@@ -189,7 +233,50 @@ export default function AuditScreen() {
 
   return (
     <Screen scroll>
-      <BackRow title="Audit trail" onBack={goBack} />
+      <BackRow
+        title="Audit trail"
+        onBack={goBack}
+        action={
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Export audit log as CSV"
+            accessibilityState={{ disabled: csvBusy }}
+            disabled={csvBusy}
+            onPress={() => void exportAuditCsv()}
+            style={styles.headerActionBtn}
+          >
+            {csvBusy ? (
+              <ActivityIndicator size="small" color={colors.text} />
+            ) : (
+              <Ionicons name="download-outline" size={20} color={colors.text} />
+            )}
+          </PressableScale>
+        }
+      />
+
+      {csvError ? (
+        <AppText variant="caption" color={colors.error} style={styles.csvErrorText}>
+          {csvError}
+        </AppText>
+      ) : null}
+
+      {/* Copy-path fallback: no expo-sharing dependency exists in this app,
+          so the share sheet is RN's built-in Share; if it's dismissed or
+          unavailable the on-device file path stays here as selectable text
+          (the CSV itself was streamed straight to disk, never held in memory
+          as one giant string, and never rendered here). */}
+      {csvLinkOpen && csvLink ? (
+        <View style={styles.csvLinkBlock}>
+          <AppText variant="caption" color={colors.textDim}>
+            Export saved on this device (long-press to copy the file path if the share sheet
+            didn&apos;t open):
+          </AppText>
+          <Text selectable style={styles.selectableLink}>
+            {csvLink}
+          </Text>
+          <Button label="Dismiss" variant="secondary" onPress={() => setCsvLinkOpen(false)} />
+        </View>
+      ) : null}
 
       <Animated.View entering={enterDown()} style={styles.filterRow}>
         {ACTION_FILTERS.map((f) => (
@@ -259,7 +346,15 @@ export default function AuditScreen() {
 }
 
 /** Shared back row + revamp header (no native header — matches the app). */
-function BackRow({ title, onBack }: { title: string; onBack: () => void }) {
+function BackRow({
+  title,
+  onBack,
+  action,
+}: {
+  title: string;
+  onBack: () => void;
+  action?: ReactNode;
+}) {
   return (
     <>
       <Animated.View entering={enterDown()} style={styles.headerRow}>
@@ -272,7 +367,7 @@ function BackRow({ title, onBack }: { title: string; onBack: () => void }) {
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </PressableScale>
       </Animated.View>
-      <ScreenHeader eyebrow="Admin console" title={title} style={styles.header} />
+      <ScreenHeader eyebrow="Admin console" title={title} style={styles.header} action={action} />
     </>
   );
 }
@@ -310,6 +405,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   header: { marginBottom: spacing.gutter },
+  headerActionBtn: {
+    width: touch.min,
+    height: touch.min,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  csvErrorText: { marginBottom: spacing.sm },
+  csvLinkBlock: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  selectableLink: {
+    fontFamily: 'monospace',
+    fontSize: 13,
+    color: colors.text,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
   locked: {
     marginTop: spacing.xxl,
     alignItems: 'center',

@@ -319,9 +319,9 @@ export function AuditTable({
             marginBottom: 12,
             padding: '10px 14px',
             borderRadius: 10,
-            border: '1px solid rgba(255,107,96,0.30)',
-            background: 'rgba(255,107,96,0.10)',
-            color: '#ff8178',
+            border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+            background: 'var(--gt-danger-weak)',
+            color: 'var(--gt-danger)',
             fontSize: 13,
           }}
         >

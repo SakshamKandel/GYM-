@@ -357,7 +357,7 @@ export function CoachDetail({
             </div>
 
             {editError ? (
-              <div style={{ color: '#ff8178', fontSize: 13, marginTop: 10 }}>
+              <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 10 }}>
                 {editError}
               </div>
             ) : null}
@@ -468,7 +468,7 @@ export function CoachDetail({
               })}
             </div>
             {requestError ? (
-              <div style={{ color: '#ff8178', fontSize: 13, marginTop: 10 }}>
+              <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 10 }}>
                 {requestError}
               </div>
             ) : null}
@@ -483,7 +483,7 @@ export function CoachDetail({
         />
 
         {error ? (
-          <div style={{ color: '#ff8178', fontSize: 13, marginTop: 12 }}>
+          <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 12 }}>
             {error}
           </div>
         ) : null}

@@ -65,7 +65,12 @@ export function Screen({
           style,
         ]}
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps={keyboardAware ? 'handled' : undefined}
+        // Always 'handled' (not just when keyboardAware): with the default
+        // ('never') a ScrollView eats the FIRST tap on any focusable child
+        // while the keyboard is open — the classic "I have to tap twice / my
+        // typing didn't register" symptom. 'handled' lets buttons/inputs take
+        // the tap first and only dismisses the keyboard on taps to empty space.
+        keyboardShouldPersistTaps="handled"
         refreshControl={refreshControl}
       >
         {children}

@@ -276,7 +276,7 @@ export function BroadcastComposer({
           </span>
         </div>
 
-        {error ? <div style={{ color: '#ff8178', fontSize: 13 }}>{error}</div> : null}
+        {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div> : null}
         {result ? (
           <div
             style={{
@@ -285,7 +285,7 @@ export function BroadcastComposer({
               border: '1px solid var(--gt-border)',
               borderRadius: 10,
               padding: '10px 12px',
-              background: 'var(--gt-surface-2, transparent)',
+              background: 'var(--gt-surface-sunken)',
             }}
           >
             Sent to <strong>{result.recipients}</strong> member
