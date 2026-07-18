@@ -51,7 +51,7 @@ function slugify(name: string): string {
 const categorySchema = z.enum(GYM_CATEGORIES as unknown as [GymCategory, ...GymCategory[]]);
 const amenitySchema = z.enum(GYM_AMENITIES as unknown as [GymAmenity, ...GymAmenity[]]);
 
-export const createSchema = z.object({
+const createSchema = z.object({
   slug: z
     .string()
     .trim()
