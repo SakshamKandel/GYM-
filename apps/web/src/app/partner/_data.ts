@@ -7,6 +7,7 @@ import {
   mealOrders,
   meals,
   mealSubscriptions,
+  savedAddresses,
   type Db,
 } from '@gym/db';
 import {
@@ -48,6 +49,9 @@ export interface PartnerOrderView {
   deliveryName: string;
   deliveryPhone: string;
   deliveryAddressText: string;
+  /** Geocoded delivery pin for rider navigation; null when the address is text-only. */
+  deliveryLat: number | null;
+  deliveryLng: number | null;
   deliveryNotes: string;
   items: { name: string; qty: number; priceMinorSnapshot: number }[];
   totalMinor: number;
@@ -60,8 +64,12 @@ type OrderRow = typeof mealOrders.$inferSelect;
 type ItemRow = typeof mealOrderItems.$inferSelect;
 
 /** Wrap the shared projection and serialize its one Date field for the client. */
-export function serializePartnerOrder(order: OrderRow, items: readonly ItemRow[]): PartnerOrderView {
-  const v = buildPartnerOrderView(order, items);
+export function serializePartnerOrder(
+  order: OrderRow,
+  items: readonly ItemRow[],
+  fallback?: { lat: number | null; lng: number | null },
+): PartnerOrderView {
+  const v = buildPartnerOrderView(order, items, fallback);
   return { ...v, placedAt: v.placedAt.toISOString() };
 }
 
@@ -155,15 +163,18 @@ export async function loadActiveOrders(
   const predicates = [eq(mealOrders.partnerId, partnerId), notInArray(mealOrders.status, terminal)];
   if (opts.source) predicates.push(eq(mealOrders.source, opts.source));
 
-  const orders = await db
-    .select()
+  const rows = await db
+    .select({ order: mealOrders, addrLat: savedAddresses.lat, addrLng: savedAddresses.lng })
     .from(mealOrders)
+    .leftJoin(savedAddresses, eq(savedAddresses.id, mealOrders.addressId))
     .where(and(...predicates))
     .orderBy(asc(mealOrders.cutoffAt))
     .limit(500);
-  if (orders.length === 0) return [];
-  const items = await itemsByOrder(db, orders.map((o) => o.id));
-  return orders.map((o) => serializePartnerOrder(o, items.get(o.id) ?? []));
+  if (rows.length === 0) return [];
+  const items = await itemsByOrder(db, rows.map((r) => r.order.id));
+  return rows.map((r) =>
+    serializePartnerOrder(r.order, items.get(r.order.id) ?? [], { lat: r.addrLat, lng: r.addrLng }),
+  );
 }
 
 /** One status-transition event in an order's append-only timeline (partner-safe). */
@@ -189,12 +200,14 @@ export async function loadOrderDetail(
   partnerId: string,
   orderId: string,
 ): Promise<PartnerOrderDetail | null> {
-  const [order] = await db
-    .select()
+  const [row] = await db
+    .select({ order: mealOrders, addrLat: savedAddresses.lat, addrLng: savedAddresses.lng })
     .from(mealOrders)
+    .leftJoin(savedAddresses, eq(savedAddresses.id, mealOrders.addressId))
     .where(and(eq(mealOrders.id, orderId), eq(mealOrders.partnerId, partnerId)))
     .limit(1);
-  if (!order) return null;
+  if (!row) return null;
+  const order = row.order;
 
   const [items, events] = await Promise.all([
     db.select().from(mealOrderItems).where(eq(mealOrderItems.orderId, orderId)),
@@ -211,7 +224,7 @@ export async function loadOrderDetail(
   ]);
 
   return {
-    ...serializePartnerOrder(order, items),
+    ...serializePartnerOrder(order, items, { lat: row.addrLat, lng: row.addrLng }),
     timeline: events.map((e) => ({
       fromStatus: e.fromStatus as OrderStatus | null,
       toStatus: e.toStatus as OrderStatus,
@@ -245,15 +258,18 @@ export function deriveStoreState(menu: readonly PartnerMenuItem[]): PartnerStore
 /** Terminal (delivered / cancelled / refused) orders, newest first — read-only history. */
 export async function loadHistoryOrders(db: Db, partnerId: string): Promise<PartnerOrderView[]> {
   const terminal = [...TERMINAL_ORDER_STATUSES];
-  const orders = await db
-    .select()
+  const rows = await db
+    .select({ order: mealOrders, addrLat: savedAddresses.lat, addrLng: savedAddresses.lng })
     .from(mealOrders)
+    .leftJoin(savedAddresses, eq(savedAddresses.id, mealOrders.addressId))
     .where(and(eq(mealOrders.partnerId, partnerId), inArray(mealOrders.status, terminal)))
     .orderBy(desc(mealOrders.placedAt))
     .limit(200);
-  if (orders.length === 0) return [];
-  const items = await itemsByOrder(db, orders.map((o) => o.id));
-  return orders.map((o) => serializePartnerOrder(o, items.get(o.id) ?? []));
+  if (rows.length === 0) return [];
+  const items = await itemsByOrder(db, rows.map((r) => r.order.id));
+  return rows.map((r) =>
+    serializePartnerOrder(r.order, items.get(r.order.id) ?? [], { lat: r.addrLat, lng: r.addrLng }),
+  );
 }
 
 /** The partner's own menu (non-deleted meals + their availability slots). */

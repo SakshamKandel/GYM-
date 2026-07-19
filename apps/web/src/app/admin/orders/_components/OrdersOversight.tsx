@@ -365,7 +365,7 @@ export function OrdersOversight({
                 <div style={{ color: 'var(--gt-text-dim)', marginTop: 4 }}>{selected.deliveryNotes}</div>
               ) : null}
               {selected.deliveryLat != null && selected.deliveryLng != null ? (
-                <div style={{ marginTop: 8 }}>
+                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <LocationPicker
                     mode="pin"
                     value={{ lat: selected.deliveryLat, lng: selected.deliveryLng }}
@@ -374,8 +374,26 @@ export function OrdersOversight({
                     height={200}
                     ariaLabel="Delivery location"
                   />
+                  <a
+                    href={`https://www.google.com/maps?q=${selected.deliveryLat},${selected.deliveryLng}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      alignSelf: 'flex-start',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: 'var(--gt-accent-strong)',
+                      textDecoration: 'none',
+                    }}
+                  >
+                    Open in Google Maps →
+                  </a>
                 </div>
-              ) : null}
+              ) : (
+                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                  No map pin — customer address is text-only.
+                </div>
+              )}
             </Row>
 
             <div>

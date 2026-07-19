@@ -84,8 +84,17 @@ export function buildMemberOrderView(order: OrderRow, items: readonly ItemRow[])
  * delivery); free-text `deliveryNotes` is re-masked (anti-poaching, idempotent
  * over the maskPii already applied at store). Exported for P5's partner routes
  * so isolation lives in one audited place.
+ *
+ * The geocoded delivery pin (lat/lng) is legitimate partner-facing delivery data
+ * for rider navigation. It reads from the frozen order snapshot; `fallback`
+ * supplies the live saved-address coords for pre-snapshot orders (resolved by a
+ * read-time left join) and is used only when the snapshot column is null.
  */
-export function buildPartnerOrderView(order: OrderRow, items: readonly ItemRow[]) {
+export function buildPartnerOrderView(
+  order: OrderRow,
+  items: readonly ItemRow[],
+  fallback?: { lat: number | null; lng: number | null },
+) {
   return {
     orderId: order.id,
     status: order.status,
@@ -95,6 +104,8 @@ export function buildPartnerOrderView(order: OrderRow, items: readonly ItemRow[]
     deliveryName: order.deliveryName,
     deliveryPhone: order.deliveryPhone,
     deliveryAddressText: order.deliveryAddressText,
+    deliveryLat: order.deliveryLat ?? fallback?.lat ?? null,
+    deliveryLng: order.deliveryLng ?? fallback?.lng ?? null,
     deliveryNotes: maskPii(order.deliveryNotes),
     items: items.map((item) => ({
       name: item.nameSnapshot,

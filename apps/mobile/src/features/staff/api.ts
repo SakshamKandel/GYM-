@@ -2859,6 +2859,11 @@ const adminOrderRowSchema = z.object({
   deliveryName: z.string(),
   deliveryPhone: z.string(),
   deliveryAddressText: z.string(),
+  // Free-text delivery note (already PII-masked server-side).
+  deliveryNotes: z.string().catch(''),
+  // Geocoded delivery pin for rider navigation; null when address is text-only.
+  deliveryLat: z.number().nullable().catch(null),
+  deliveryLng: z.number().nullable().catch(null),
   items: z.array(z.unknown()).transform((arr) =>
     arr.flatMap((raw): AdminOrderItem[] => {
       const parsed = adminOrderItemSchema.safeParse(raw);

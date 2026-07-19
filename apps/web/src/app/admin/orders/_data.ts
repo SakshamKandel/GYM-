@@ -47,8 +47,9 @@ export interface AdminOrderRow {
   deliveryPhone: string;
   deliveryAddressText: string;
   deliveryNotes: string;
-  // Geocoded delivery point, resolved from the linked saved address when it has
-  // one (nullable: legacy orders, deleted addresses, or addresses never pinned).
+  // Geocoded delivery point, from the frozen order snapshot; falls back to the
+  // linked saved address's live coords when the snapshot is null (pre-snapshot
+  // orders). Nullable: legacy orders, deleted addresses, or never pinned.
   deliveryLat: number | null;
   deliveryLng: number | null;
   cutoffAt: string;
@@ -86,8 +87,8 @@ export async function loadAdminOrders(
       partnerName: mealPartners.name,
       accountEmail: accounts.email,
       accountDisplayName: accounts.displayName,
-      deliveryLat: savedAddresses.lat,
-      deliveryLng: savedAddresses.lng,
+      addrLat: savedAddresses.lat,
+      addrLng: savedAddresses.lng,
     })
     .from(mealOrders)
     .innerJoin(mealPartners, eq(mealPartners.id, mealOrders.partnerId))
@@ -135,8 +136,8 @@ export async function loadAdminOrders(
       deliveryPhone: o.deliveryPhone,
       deliveryAddressText: o.deliveryAddressText,
       deliveryNotes: o.deliveryNotes,
-      deliveryLat: r.deliveryLat,
-      deliveryLng: r.deliveryLng,
+      deliveryLat: o.deliveryLat ?? r.addrLat,
+      deliveryLng: o.deliveryLng ?? r.addrLng,
       cutoffAt: o.cutoffAt.toISOString(),
       placedAt: o.placedAt.toISOString(),
       confirmedAt: o.confirmedAt ? o.confirmedAt.toISOString() : null,

@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Linking, ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { canActorAdvance, formatMoney, ORDER_STATUSES, type OrderStatus } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -328,14 +328,50 @@ export default function AdminOrdersScreen() {
               <Tag label={METHOD_LABEL[selected.paymentMethod]} variant="dim" />
             </View>
 
-            <SectionLabel>Delivery</SectionLabel>
-            <AppText variant="body">{selected.deliveryName}</AppText>
-            <AppText variant="caption" color={colors.textDim}>
-              {selected.deliveryPhone}
-            </AppText>
+            <SectionLabel>Customer</SectionLabel>
+            <AppText variant="bodyBold">{selected.deliveryName}</AppText>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel={`Call ${selected.deliveryName} at ${selected.deliveryPhone}`}
+              onPress={() =>
+                void Linking.openURL(`tel:${selected.deliveryPhone.replace(/[^+\d]/g, '')}`)
+              }
+              style={styles.contactRow}
+            >
+              <Ionicons name="call-outline" size={18} color={colors.accent} />
+              <AppText variant="body" color={colors.accent}>
+                {selected.deliveryPhone}
+              </AppText>
+            </PressableScale>
             <AppText variant="caption" color={colors.textDim}>
               {selected.deliveryAddressText}
             </AppText>
+            {selected.deliveryNotes ? (
+              <AppText variant="caption" color={colors.textFaint} style={styles.noteLine}>
+                Note: {selected.deliveryNotes}
+              </AppText>
+            ) : null}
+            {selected.deliveryLat != null && selected.deliveryLng != null ? (
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="Open delivery location in maps"
+                onPress={() =>
+                  void Linking.openURL(
+                    `https://www.google.com/maps?q=${selected.deliveryLat},${selected.deliveryLng}`,
+                  )
+                }
+                style={styles.contactRow}
+              >
+                <Ionicons name="map-outline" size={18} color={colors.accent} />
+                <AppText variant="body" color={colors.accent}>
+                  Open map
+                </AppText>
+              </PressableScale>
+            ) : (
+              <AppText variant="caption" color={colors.textFaint} style={styles.noteLine}>
+                No map pin — address is text-only.
+              </AppText>
+            )}
             <AppText variant="caption" color={colors.textFaint} style={styles.slotLine}>
               {selected.deliveryDate} · {selected.window} · placed {relativeTime(selected.placedAt)}
             </AppText>
@@ -492,6 +528,13 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   slotLine: { marginTop: spacing.xs },
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minHeight: touch.min,
+  },
+  noteLine: { marginTop: spacing.xs },
   itemRow: {
     flexDirection: 'row',
     alignItems: 'center',

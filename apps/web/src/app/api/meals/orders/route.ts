@@ -108,7 +108,13 @@ export async function POST(req: Request) {
 
   // Address must belong to the caller and be live.
   const [address] = await db
-    .select({ phone: savedAddresses.phone, line: savedAddresses.line, area: savedAddresses.area })
+    .select({
+      phone: savedAddresses.phone,
+      line: savedAddresses.line,
+      area: savedAddresses.area,
+      lat: savedAddresses.lat,
+      lng: savedAddresses.lng,
+    })
     .from(savedAddresses)
     .where(
       and(
@@ -179,6 +185,9 @@ export async function POST(req: Request) {
       deliveryName: me.displayName || 'Customer',
       deliveryPhone: address.phone,
       deliveryAddressText,
+      // Freeze the geocoded pin from the chosen address (null when unpinned).
+      deliveryLat: address.lat,
+      deliveryLng: address.lng,
       deliveryNotes: notes ? maskPii(notes) : '',
       subtotalMinor: financials.subtotalMinor,
       deliveryFeeMinor: financials.deliveryFeeMinor,

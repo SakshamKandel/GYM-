@@ -282,6 +282,8 @@ export async function materializeDueOrders(
         phone: savedAddresses.phone,
         line: savedAddresses.line,
         area: savedAddresses.area,
+        lat: savedAddresses.lat,
+        lng: savedAddresses.lng,
       })
       .from(savedAddresses)
       .where(inArray(savedAddresses.id, addressIds));
@@ -390,6 +392,9 @@ export async function materializeDueOrders(
           deliveryName,
           deliveryPhone: address.phone,
           deliveryAddressText,
+          // Freeze the geocoded pin from the address at spawn (null if unpinned).
+          deliveryLat: address.lat,
+          deliveryLng: address.lng,
           deliveryNotes: '',
           subtotalMinor: planned.pricePerDayMinor,
           deliveryFeeMinor: 0,

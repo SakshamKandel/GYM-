@@ -395,6 +395,24 @@ function BoardCard({
             {formatMoney(order.totalMinor, currency)}
           </span>
         </div>
+        {order.deliveryAddressText ? (
+          <div
+            style={{
+              fontSize: 12,
+              color: 'var(--gt-text-dim)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+            title={order.deliveryAddressText}
+          >
+            <span aria-hidden="true">📍</span>
+            {order.deliveryAddressText}
+          </div>
+        ) : null}
         <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
           {itemCount} item{itemCount === 1 ? '' : 's'} ·{' '}
           {order.items.map((it) => `${it.qty}× ${it.name}`).join(', ')}

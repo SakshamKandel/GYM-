@@ -1975,6 +1975,12 @@ export const mealOrders = pgTable(
     deliveryName: text('delivery_name').notNull(),
     deliveryPhone: text('delivery_phone').notNull(),
     deliveryAddressText: text('delivery_address_text').notNull(),
+    // Geocoded delivery point, frozen at order create from the chosen saved
+    // address (nullable: the address was never pinned). A later edit to the
+    // address must never move a past order's pin — this is a snapshot, and reads
+    // fall back to the live saved_addresses coords only when it is null.
+    deliveryLat: doublePrecision('delivery_lat'),
+    deliveryLng: doublePrecision('delivery_lng'),
     deliveryNotes: text('delivery_notes').notNull().default(''),
     subtotalMinor: integer('subtotal_minor').notNull(),
     deliveryFeeMinor: integer('delivery_fee_minor').notNull().default(0),
