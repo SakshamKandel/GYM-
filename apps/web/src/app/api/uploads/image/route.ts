@@ -7,6 +7,7 @@ import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { staffTokenFromCookie } from '@/lib/staffSession';
 import { getVideoProvider, NotConfiguredError } from '@/lib/video';
 
 export const runtime = 'nodejs';
@@ -96,7 +97,10 @@ export function OPTIONS() {
 }
 
 export async function POST(req: Request) {
-  const token = bearerToken(req);
+  // Bearer (mobile/API callers) OR the browser consoles' httpOnly gt_staff
+  // cookie (partner/coach/admin portals upload via same-origin fetches) —
+  // same dual acceptance as requireStaff in lib/authz.ts.
+  const token = bearerToken(req) ?? (await staffTokenFromCookie());
   if (!token) return json({ error: 'unauthorized' }, 401);
   const user = await userForToken(token);
   if (!user) return json({ error: 'unauthorized' }, 401);
