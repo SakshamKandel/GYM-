@@ -41,6 +41,7 @@ import {
   type Tier,
 } from '../../../features/staff/api';
 import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
+import { useBottomClearance } from '../../../lib/systemBars';
 import {
   StaffHeaderAction,
   StaffSignOutDialog,
@@ -410,6 +411,10 @@ export default function CoachInboxScreen() {
   const token = useAuth((s) => s.token);
   const staffPermissions = useAuth((s) => s.staffPermissions);
   const signOut = useStaffSignOut();
+  // The Screen shell runs with `edges={{ bottom: false }}`, so the roster must
+  // clear the system navigation area itself. useBottomClearance covers the
+  // OEM builds that report insets.bottom=0 under edge-to-edge (3-button bar).
+  const bottomClearance = useBottomClearance();
   // The five coach-tool queues are all server-gated on `coach.user.read`
   // (/api/coach/{attention,review,verify,flags,challenges}). A coach who
   // reaches this console on a different retained coach key (e.g.
@@ -673,7 +678,11 @@ export default function CoachInboxScreen() {
           data={rows}
           keyExtractor={(r) => r.id}
           renderItem={renderItem}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            // Last interactive rows must scroll clear of the system nav bar.
+            { paddingBottom: Math.max(bottomClearance, spacing.xxl) },
+          ]}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl

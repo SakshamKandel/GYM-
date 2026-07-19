@@ -3,7 +3,6 @@ import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
@@ -25,6 +24,7 @@ import {
   Tag,
 } from '../../components/ui';
 import { successHaptic } from '../../lib/haptics';
+import { useBottomClearance } from '../../lib/systemBars';
 import { useAuth } from '../../state/auth';
 import {
   cancelCoachRequest,
@@ -206,7 +206,9 @@ export default function CoachProfileScreen() {
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
   const my = useMyCoach();
-  const insets = useSafeAreaInsets();
+  // System-bar clearance for the pinned CTA (48dp fallback on Android devices
+  // that report a 0 bottom inset under edge-to-edge).
+  const bottomClearance = useBottomClearance();
 
   const [coach, setCoach] = useState<CoachDetail | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -597,7 +599,7 @@ export default function CoachProfileScreen() {
       {showCtaBar ? (
         <Animated.View
           entering={enterFade(2)}
-          style={[styles.ctaBar, { paddingBottom: insets.bottom + spacing.md }]}
+          style={[styles.ctaBar, { paddingBottom: bottomClearance + spacing.md }]}
         >
           <View style={styles.ctaInner}>
             {actionError !== null && !sheetOpen ? (

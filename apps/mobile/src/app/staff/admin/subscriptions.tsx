@@ -12,7 +12,6 @@ import {
   View,
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
@@ -50,6 +49,7 @@ import {
 } from '../../../features/staff/duration';
 import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { ReauthSheet, useReauth } from '../../../features/staff/ReauthGate';
+import { useBottomClearance } from '../../../lib/systemBars';
 import { useAuth } from '../../../state/auth';
 
 /**
@@ -185,7 +185,10 @@ function OverrideSheet({
   onClose: () => void;
   onSaved: (tier: Tier) => void;
 }) {
-  const insets = useSafeAreaInsets();
+  // Real clearance above the system nav bar — some OEM Android builds report
+  // insets.bottom = 0 under edge-to-edge, which sat the save controls under
+  // the 48dp 3-button bar (lib/systemBars falls back to that height).
+  const bottomClearance = useBottomClearance();
   const [picked, setPicked] = useState<Tier>(member.tier);
   // The window the operator wants. `null` (permanent) is the safe default so a
   // plain tier bump doesn't silently attach an expiry; touching a duration chip
@@ -293,7 +296,7 @@ function OverrideSheet({
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={[
                 styles.sheetScroll,
-                { paddingBottom: insets.bottom + spacing.xxl },
+                { paddingBottom: bottomClearance + spacing.xxl },
               ]}
             >
               <AppText variant="label">Override tier</AppText>

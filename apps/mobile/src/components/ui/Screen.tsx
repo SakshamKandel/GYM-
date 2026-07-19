@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing } from '@gym/ui-tokens';
+import { useBottomClearance } from '../../lib/systemBars';
 
 /** Screen shell: near-black canvas (`colors.bg`), 20px gutters, safe-area aware. */
 
@@ -52,8 +53,11 @@ export function Screen({
   edges,
 }: Props) {
   const insets = useSafeAreaInsets();
+  // Not raw insets.bottom: some Android OEM builds report 0 under edge-to-edge,
+  // which would sink pinned buttons/last content under the 48dp 3-button bar.
+  const bottomClearance = useBottomClearance();
   const padTop = edges?.top === false ? 0 : insets.top + TOP_AIR;
-  const padBottom = (edges?.bottom === false ? 0 : insets.bottom) + bottomInset;
+  const padBottom = (edges?.bottom === false ? 0 : bottomClearance) + bottomInset;
 
   if (scroll) {
     const scrollView = (

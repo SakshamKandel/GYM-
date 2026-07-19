@@ -15,6 +15,7 @@ import Animated, {
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import { AppText, Button, enterUp, PRESS_SPRING, PressableScale, Screen } from '../../components/ui';
 import { tapHaptic, warnHaptic } from '../../lib/haptics';
+import { useBottomClearance } from '../../lib/systemBars';
 import { lookupBarcode } from '../../lib/api/openFoodFacts';
 import { getRepo } from '../../lib/repo';
 import { parseDateParam, parseMealParam } from '../../features/nutrition/logic';
@@ -159,6 +160,10 @@ export default function ScanScreen() {
   const meal = parseMealParam(params.meal);
   const date = parseDateParam(params.date);
   const insets = useSafeAreaInsets();
+  // OEM 3-button-nav devices can report insets.bottom=0 under edge-to-edge —
+  // useBottomClearance falls back to the 48dp system bar so the result sheet's
+  // bottom button stays tappable.
+  const bottomClearance = useBottomClearance();
 
   const [permission, requestPermission] = useCameraPermissions();
   const [phase, setPhase] = useState<ScanPhase>({ kind: 'scanning' });
@@ -310,7 +315,7 @@ export default function ScanScreen() {
 
       {phase.kind === 'notFound' || phase.kind === 'error' ? (
         <View
-          style={[styles.sheetWrap, { bottom: insets.bottom + spacing.xl }]}
+          style={[styles.sheetWrap, { bottom: bottomClearance + spacing.xl }]}
           pointerEvents="box-none"
         >
           <Animated.View entering={enterUp(0)} style={styles.sheet}>

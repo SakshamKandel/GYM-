@@ -7,6 +7,7 @@ import Svg, { Defs, Path, Text as SvgText, TextPath } from 'react-native-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import { AppText, nativeOnly, PressableScale, ProgressBar, Ring } from '../components/ui';
+import { useBottomClearance } from '../lib/systemBars';
 
 /**
  * Welcome — full-bleed red poster (owner's Planable-style reference, REVAMP
@@ -38,6 +39,9 @@ const BADGE_CIRCLE_D = [
 
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
+  // OEM 3-button builds can report insets.bottom=0 under edge-to-edge; the
+  // clearance hook falls back to the 48dp bar so the CTA stack stays tappable.
+  const bottomClearance = useBottomClearance();
 
   const start = () => router.push('/onboarding');
   const signIn = () => router.push('/auth/sign-in');
@@ -52,7 +56,7 @@ export default function WelcomeScreen() {
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingTop: insets.top + spacing.md, paddingBottom: insets.bottom + spacing.lg },
+          { paddingTop: insets.top + spacing.md, paddingBottom: bottomClearance + spacing.lg },
         ]}
         showsVerticalScrollIndicator={false}
         bounces={false}

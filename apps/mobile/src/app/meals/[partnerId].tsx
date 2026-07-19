@@ -3,7 +3,6 @@ import { Image, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
@@ -22,6 +21,7 @@ import {
   Tag,
 } from '../../components/ui';
 import { formatMoney } from '@gym/shared';
+import { useBottomClearance } from '../../lib/systemBars';
 import { useAuth } from '../../state/auth';
 import { useMealMenu } from '../../features/meals/hooks';
 import { cartLineCount, cartSubtotalMinor, useMealCart } from '../../features/meals/cartStore';
@@ -192,7 +192,10 @@ function MealItemCard({ meal }: { meal: MenuMeal }) {
 
 export default function PartnerMenuScreen() {
   const { partnerId } = useLocalSearchParams<{ partnerId: string }>();
-  const insets = useSafeAreaInsets();
+  // OEM-safe bottom clearance: some 3-button Android builds report
+  // insets.bottom = 0 under edge-to-edge, which sank the cart bar's Checkout
+  // button beneath the 48dp system bar (lib/systemBars).
+  const bottomClearance = useBottomClearance();
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
   const [diet, setDiet] = useState<MealDietType | null>(null);
@@ -404,7 +407,7 @@ export default function PartnerMenuScreen() {
       {count > 0 ? (
         <Animated.View
           entering={enterFade(0)}
-          style={[styles.cartBar, { bottom: insets.bottom + spacing.lg }]}
+          style={[styles.cartBar, { bottom: bottomClearance + spacing.lg }]}
         >
           <View style={styles.cartInfo}>
             <AppText variant="bodyBold" color={colors.onBlock}>

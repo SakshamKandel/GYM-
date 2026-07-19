@@ -24,6 +24,7 @@ import {
 } from '../../../../components/ui';
 import { addDays, posterDate, toIsoDate, todayIso } from '../../../../lib/dates';
 import { successHaptic } from '../../../../lib/haptics';
+import { useBottomClearance } from '../../../../lib/systemBars';
 import { useAuth } from '../../../../state/auth';
 import {
   getCoachInbox,
@@ -179,6 +180,10 @@ export default function CoachThreadScreen() {
   const params = useLocalSearchParams<{ userId: string; name?: string; tier?: string }>();
   const userId = params.userId;
   const insets = useSafeAreaInsets();
+  // Composer clearance above the SYSTEM nav area — some OEM 3-button builds
+  // report insets.bottom=0 under edge-to-edge, which would leave the input
+  // and send button under the 48dp bar; useBottomClearance falls back there.
+  const bottomClearance = useBottomClearance();
 
   // The URL params are a snapshot from when the row was tapped in the inbox —
   // if the client's name or tier changed since (e.g. a tier upgrade applied
@@ -461,7 +466,7 @@ export default function CoachThreadScreen() {
 
         {/* Pill composer beside the red send circle — no hairline above; the
             filled pill separates itself from the thread (no-border law). */}
-        <View style={[styles.inputBar, { paddingBottom: insets.bottom + spacing.sm }]}>
+        <View style={[styles.inputBar, { paddingBottom: bottomClearance + spacing.sm }]}>
           <AppTextInput
             style={styles.input}
             value={draft}

@@ -15,7 +15,6 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Gesture,
   GestureDetector,
@@ -31,6 +30,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { colors, radius, spacing } from '@gym/ui-tokens';
+import { useBottomClearance } from '../../lib/systemBars';
 import { AppText } from './AppText';
 import { SHEET_SPRING } from './motion';
 
@@ -98,7 +98,11 @@ const styles = StyleSheet.create({
 });
 
 export function Sheet({ visible, onClose, title, children }: SheetProps) {
-  const insets = useSafeAreaInsets();
+  // Clearance above the SYSTEM navigation area under the sheet's last control.
+  // useBottomClearance falls back to the full 3-button height on Android
+  // devices that report insets.bottom = 0 under edge-to-edge, which left the
+  // bottom of every sheet untappable under the 48dp bar.
+  const bottomClearance = useBottomClearance();
   const reduceMotion = useReducedMotion();
   const [rendered, setRendered] = useState(false);
 
@@ -198,7 +202,7 @@ export function Sheet({ visible, onClose, title, children }: SheetProps) {
   const panel = (
     <Animated.View
       accessibilityViewIsModal
-      style={[styles.panel, { paddingBottom: insets.bottom + spacing.lg }, panelStyle]}
+      style={[styles.panel, { paddingBottom: bottomClearance + spacing.lg }, panelStyle]}
     >
       <View style={styles.grabber} />
       {title ? (

@@ -1,8 +1,8 @@
 import { StyleSheet, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import { AppText, PressableScale } from '../../../components/ui';
+import { useBottomClearance } from '../../../lib/systemBars';
 
 /**
  * Sticky bottom action bar for the gym detail page (brief §2) — Call /
@@ -57,10 +57,13 @@ const styles = StyleSheet.create({
 });
 
 export function GymActionBar({ onDirections, onCall, onWebsite, gymName }: Props) {
-  const insets = useSafeAreaInsets();
+  // useBottomClearance (not raw insets.bottom): some Android OEM builds report
+  // a 0 bottom inset under edge-to-edge, which slid these buttons under the
+  // 48dp 3-button bar. spacing.md stays additive as breathing room on top.
+  const bottomClearance = useBottomClearance();
 
   return (
-    <View style={[styles.bar, { paddingBottom: insets.bottom + spacing.md }]}>
+    <View style={[styles.bar, { paddingBottom: bottomClearance + spacing.md }]}>
       <View style={styles.inner}>
         {onCall ? (
           <PressableScale

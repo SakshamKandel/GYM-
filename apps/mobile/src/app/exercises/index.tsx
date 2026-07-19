@@ -22,6 +22,7 @@ import { useRecentExercises, type RecentExercise } from '../../features/training
 import { pushPath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
 import { MUSCLE_GROUPS, searchExercises } from '../../lib/exercises';
+import { useBottomClearance } from '../../lib/systemBars';
 
 /**
  * Exercise library — 873 bundled exercises, fully offline.
@@ -262,6 +263,9 @@ function ExerciseRow({
 
 export default function ExerciseLibraryScreen() {
   const insets = useSafeAreaInsets();
+  // Scroll-end clearance for the list — insets.bottom lies (0) on some OEM
+  // 3-button Android builds, so the last row would hide under the system bar.
+  const bottomClearance = useBottomClearance();
   const { select, muscle: muscleQuery, swapIndex } = useLocalSearchParams<{
     select?: string;
     muscle?: string;
@@ -416,7 +420,7 @@ export default function ExerciseLibraryScreen() {
           )}
           ItemSeparatorComponent={RowGap}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xl }}
+          contentContainerStyle={{ paddingBottom: bottomClearance + spacing.xl }}
           ListEmptyComponent={
             <Animated.View entering={enterFade(0)} style={styles.emptyWrap}>
               <IconChip icon="search" color={colors.surface} iconColor={colors.textFaint} size={52} />
