@@ -49,10 +49,14 @@ interface Props {
   onAction: (sub: MealSubscription, action: 'pause' | 'resume' | 'cancel') => void;
   onSkip: (sub: MealSubscription) => void;
   onPay: (sub: MealSubscription) => void;
+  onEdit: (sub: MealSubscription) => void;
 }
 
-export function SubscriptionPlanCard({ sub, onAction, onSkip, onPay }: Props) {
+export function SubscriptionPlanCard({ sub, onAction, onSkip, onPay, onEdit }: Props) {
   const bill = sub.pendingCycle;
+  // B5: a receipt already uploaded is "under review", NOT a live Pay button —
+  // otherwise the card keeps inviting a second payment for the same week.
+  const underReview = !!bill?.receiptSubmitted;
   const nextDay = sub.status === 'active' && !bill ? nextDeliveryLabel(sub.daysOfWeek) : null;
 
   return (
@@ -110,34 +114,57 @@ export function SubscriptionPlanCard({ sub, onAction, onSkip, onPay }: Props) {
         </View>
       ) : null}
 
+      {sub.status === 'active' && (sub.upcomingDeliveries?.length ?? 0) > 0 ? (
+        <AppText variant="caption" color={colors.textFaint}>
+          Deliveries scheduled for {sub.upcomingDeliveries!.slice(0, 3).map((d) => d.date).join(', ')}
+          {sub.upcomingDeliveries!.length > 3 ? '…' : ''}
+        </AppText>
+      ) : null}
+
       {bill ? (
         <View style={styles.billRow}>
           <View style={styles.billText}>
             <View style={styles.billTopLine}>
-              <AppText variant="bodyBold" color={colors.error}>
-                {formatMoney(bill.amountMinor, bill.currency)} due
+              <AppText variant="bodyBold" color={underReview ? colors.textDim : colors.error}>
+                {formatMoney(bill.amountMinor, bill.currency)} {underReview ? '' : 'due'}
               </AppText>
-              <Tag label="Payment due" variant="outline" color={colors.error} />
+              <Tag
+                label={underReview ? 'Receipt under review' : 'Payment due'}
+                variant="outline"
+                color={underReview ? colors.textDim : colors.error}
+              />
             </View>
             <AppText variant="caption" color={colors.textDim}>
-              Week of {bill.weekStart} — deliveries pause until this is paid.
+              {underReview
+                ? `Week of ${bill.weekStart} — we'll confirm once staff review your receipt.`
+                : `Week of ${bill.weekStart} — deliveries pause until this is paid.`}
             </AppText>
           </View>
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel={`Pay the ${formatMoney(bill.amountMinor, bill.currency)} bill for this plan`}
-            onPress={() => onPay(sub)}
-            style={[styles.actionBtn, styles.payBtn]}
-          >
-            <AppText variant="bodyBold" color={colors.onBlock}>
-              Pay bill
-            </AppText>
-          </PressableScale>
+          {underReview ? null : (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel={`Pay the ${formatMoney(bill.amountMinor, bill.currency)} bill for this plan`}
+              onPress={() => onPay(sub)}
+              style={[styles.actionBtn, styles.payBtn]}
+            >
+              <AppText variant="bodyBold" color={colors.onBlock}>
+                Pay bill
+              </AppText>
+            </PressableScale>
+          )}
         </View>
       ) : null}
 
       {sub.status !== 'cancelled' ? (
         <View style={styles.actionsRow}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Edit this plan"
+            onPress={() => onEdit(sub)}
+            style={styles.actionBtn}
+          >
+            <AppText variant="bodyBold">Edit</AppText>
+          </PressableScale>
           {sub.status === 'active' ? (
             <PressableScale
               accessibilityRole="button"

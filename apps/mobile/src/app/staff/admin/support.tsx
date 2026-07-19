@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
@@ -158,6 +158,8 @@ export default function AdminSupportScreen() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  // B31: pull-to-refresh state.
+  const [refreshing, setRefreshing] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
 
@@ -188,10 +190,20 @@ export default function AdminSupportScreen() {
     }
   }, [token]);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount; load() owns its own loading/error state.
-    if (allowed) void load();
-  }, [allowed, load]);
+  // B31: refetch on every focus (not just mount) — a reply sent from the web
+  // console, or another admin resolving/assigning a thread, left this queue
+  // stale until a full app remount otherwise.
+  useFocusEffect(
+    useCallback(() => {
+      if (allowed) void load();
+    }, [allowed, load]),
+  );
+
+  async function onRefresh(): Promise<void> {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }
 
   const loadThread = useCallback(
     async (accountId: string) => {
@@ -311,7 +323,16 @@ export default function AdminSupportScreen() {
   }
 
   return (
-    <Screen scroll>
+    <Screen
+      scroll
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => void onRefresh()}
+          tintColor={colors.accent}
+        />
+      }
+    >
       <BackRow onBack={goBack} />
 
       <Animated.View entering={enterDown()} style={styles.filterRow}>

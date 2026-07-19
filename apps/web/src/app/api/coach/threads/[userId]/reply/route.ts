@@ -1,11 +1,10 @@
 import { coachMessages } from '@gym/db';
 import { maskPii } from '@gym/shared';
-import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -75,15 +74,19 @@ export async function POST(
   const message = inserted[0];
   if (!message) return json({ error: 'invalid' }, 400);
 
-  // Best-effort notify; never blocks or fails the reply (sendPushToAccount
-  // never throws and no-ops without FIREBASE_SERVICE_ACCOUNT_B64). Wrapped in
-  // after() so the serverless runtime keeps the FCM send alive past the
-  // response instead of freezing it mid-flight.
-  after(() => sendPushToAccount(userId, {
-    title: 'New message from your coach',
-    body: body.length > 140 ? `${body.slice(0, 137)}...` : body,
-    data: { type: 'coach_message', messageId: message.id },
-  }));
+  // Best-effort notify (WP-2 / Pack K): writes the member's durable inbox row +
+  // respects their prefs/quiet-hours, then pushes. Fire-and-forget — never
+  // blocks or fails the reply. The body is already maskPii'd above; the coach is
+  // the author, so it is the member's own coach speaking (no cross-user leak).
+  void notify(
+    'coach_message_client',
+    { accountId: userId },
+    {
+      title: 'New message from your coach',
+      body: body.length > 140 ? `${body.slice(0, 137)}...` : body,
+      data: { type: 'coach_chat', id: userId },
+    },
+  );
 
   await logAudit(principal, 'coach.reply', 'account', userId, { len: body.length });
 

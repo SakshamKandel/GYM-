@@ -33,6 +33,7 @@ const PARTNER_NAV: NavGroup[] = [
       { href: '/partner/menu', label: 'Menu' },
       { href: '/partner/store', label: 'Store Controls' },
       { href: '/partner/earnings', label: 'Earnings' },
+      { href: '/partner/wallet', label: 'Wallet' },
       { href: '/partner/profile', label: 'Profile' },
     ],
   },

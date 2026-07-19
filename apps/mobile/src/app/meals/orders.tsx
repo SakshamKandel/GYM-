@@ -133,6 +133,18 @@ export default function MyMealOrdersScreen() {
     partners.reload();
   }
 
+  // Live tracking polling (Pack A): while there's at least one non-terminal
+  // order, quietly re-check its status every 20s instead of leaving the
+  // member to refresh manually to learn a status just changed.
+  const LIVE_POLL_MS = 20_000;
+  const hasLiveOrders = (live.data?.length ?? 0) > 0;
+  useEffect(() => {
+    if (!authed || !hasLiveOrders) return;
+    const id = setInterval(() => live.reload(), LIVE_POLL_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed, hasLiveOrders]);
+
   function goBack(): void {
     if (router.canGoBack()) router.back();
     else replacePath('/meals');
@@ -251,6 +263,11 @@ export default function MyMealOrdersScreen() {
                         onOpenDetail={setDetailOrder}
                         onCancel={setPendingCancel}
                         onReceipt={setReceiptOrder}
+                        onSupport={(order, reason) =>
+                          pushPath(
+                            `/support?context=order&orderId=${encodeURIComponent(order.id)}&reason=${encodeURIComponent(reason)}`,
+                          )
+                        }
                       />
                     ))}
                   </View>
@@ -343,6 +360,11 @@ export default function MyMealOrdersScreen() {
         token={token}
         partnerName={detailOrder ? partnerName(detailOrder.partnerId) : undefined}
         onClose={() => setDetailOrder(null)}
+        onOrderChanged={(updated) => {
+          if (updated) setDetailOrder(updated);
+          live.reload();
+          past.reload();
+        }}
       />
     </Screen>
   );

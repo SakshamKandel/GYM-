@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS streaks (
   current INTEGER NOT NULL DEFAULT 0, best INTEGER NOT NULL DEFAULT 0, last_workout_date TEXT,
   PRIMARY KEY (owner_id, id)
 );
+CREATE TABLE IF NOT EXISTS food_favorites (
+  owner_id TEXT NOT NULL, food_id TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (owner_id, food_id)
+);
 `;
 
 const OWNER_INDEXES = `
@@ -767,6 +771,24 @@ export async function createSqliteRepo(): Promise<RepoStore> {
         f.kcal, f.protein, f.carbs, f.fat, new Date().toISOString(),
       );
     },
+    async logFoodBatch(logs) {
+      if (logs.length === 0) return;
+      const loggedAt = new Date().toISOString();
+      // Fixes B19 — one exclusive transaction, so a failure partway through
+      // (e.g. a duplicate id) rolls the WHOLE batch back instead of leaving
+      // a half-copied day with no indication anything went wrong.
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        for (const f of logs) {
+          await transaction.runAsync(
+            `INSERT INTO food_logs
+             (owner_id, id, date, meal, food_id, food_name, grams, kcal, protein, carbs, fat, logged_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+            ownerId, f.id, f.date, f.meal, f.foodId, f.foodName, f.grams,
+            f.kcal, f.protein, f.carbs, f.fat, loggedAt,
+          );
+        }
+      });
+    },
     async deleteFoodLog(id) {
       await db.runAsync('DELETE FROM food_logs WHERE owner_id = ? AND id = ?', ownerId, id);
     },
@@ -856,6 +878,40 @@ export async function createSqliteRepo(): Promise<RepoStore> {
            ON fl.food_id = f.id
          WHERE f.owner_id = ? ORDER BY fl.last DESC LIMIT ?`,
         ownerId, ownerId, limit,
+      );
+      return rows.map(toFood);
+    },
+    async toggleFavoriteFood(foodId) {
+      const existing = await db.getFirstAsync<{ food_id: string }>(
+        'SELECT food_id FROM food_favorites WHERE owner_id = ? AND food_id = ?',
+        ownerId, foodId,
+      );
+      if (existing) {
+        await db.runAsync(
+          'DELETE FROM food_favorites WHERE owner_id = ? AND food_id = ?', ownerId, foodId,
+        );
+        return false;
+      }
+      await db.runAsync(
+        `INSERT INTO food_favorites (owner_id, food_id, created_at) VALUES (?, ?, ?)
+         ON CONFLICT(owner_id, food_id) DO NOTHING`,
+        ownerId, foodId, new Date().toISOString(),
+      );
+      return true;
+    },
+    async isFavoriteFood(foodId) {
+      const row = await db.getFirstAsync<{ food_id: string }>(
+        'SELECT food_id FROM food_favorites WHERE owner_id = ? AND food_id = ?',
+        ownerId, foodId,
+      );
+      return row !== null;
+    },
+    async getFavoriteFoods(limit) {
+      const rows = await db.getAllAsync<FoodRow>(
+        `SELECT f.* FROM foods f
+         JOIN food_favorites fav ON fav.owner_id = f.owner_id AND fav.food_id = f.id
+         WHERE f.owner_id = ? ORDER BY fav.created_at DESC LIMIT ?`,
+        ownerId, limit,
       );
       return rows.map(toFood);
     },
@@ -971,6 +1027,7 @@ export async function createSqliteRepo(): Promise<RepoStore> {
         await transaction.runAsync('DELETE FROM weight_logs WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM measurements WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM food_logs WHERE owner_id = ?', ownerId);
+        await transaction.runAsync('DELETE FROM food_favorites WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM foods WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM water_logs WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM step_logs WHERE owner_id = ?', ownerId);

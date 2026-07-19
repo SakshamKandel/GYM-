@@ -1,8 +1,8 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
-import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { formatMoney } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -156,6 +156,8 @@ export default function AdminMealPaymentsScreen() {
   const [deciding, setDeciding] = useState(false);
   const [decideError, setDecideError] = useState<string | null>(null);
   const [receiptFailed, setReceiptFailed] = useState(false);
+  // B31: pull-to-refresh state.
+  const [refreshing, setRefreshing] = useState(false);
 
   // G8: a slow response for tab A must not clobber a faster tab-switch to B.
   const listSeq = useRef(0);
@@ -180,9 +182,19 @@ export default function AdminMealPaymentsScreen() {
     [token],
   );
 
-  useEffect(() => {
-    if (allowed) void load(status);
-  }, [allowed, status, load]);
+  // B31: refetch on every focus, not just mount — a decision made elsewhere
+  // (web console, another admin) left this queue stale otherwise.
+  useFocusEffect(
+    useCallback(() => {
+      if (allowed) void load(status);
+    }, [allowed, status, load]),
+  );
+
+  async function onRefresh(): Promise<void> {
+    setRefreshing(true);
+    await load(status);
+    setRefreshing(false);
+  }
 
   function openDetail(row: MealPaymentRequestRow): void {
     setSelected(row);
@@ -241,7 +253,16 @@ export default function AdminMealPaymentsScreen() {
   }
 
   return (
-    <Screen scroll>
+    <Screen
+      scroll
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => void onRefresh()}
+          tintColor={colors.accent}
+        />
+      }
+    >
       <BackRow onBack={goBack} />
 
       <Animated.View entering={enterDown()} style={styles.tabsRow}>

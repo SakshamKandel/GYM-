@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -36,6 +36,8 @@ interface Props {
   flash: boolean;
   onFlashDone: () => void;
   unitPref: UnitPref;
+  /** Long-press a DONE row to open its edit/delete sheet. No-op when null/logged is null. */
+  onEdit?: (() => void) | null;
 }
 
 const styles = StyleSheet.create({
@@ -122,6 +124,7 @@ export function SetRow({
   flash,
   onFlashDone,
   unitPref,
+  onEdit,
 }: Props) {
   const flashOpacity = useSharedValue(0);
   const tagScale = useSharedValue(flash ? 1.15 : 1);
@@ -152,9 +155,19 @@ export function SetRow({
   const tagStyle = useAnimatedStyle(() => ({ transform: [{ scale: tagScale.value }] }));
 
   const targetText = repRange ? `${repRange} reps` : isCurrent || logged ? '' : 'open set';
+  const editable = logged !== null && onEdit != null;
 
   return (
-    <View style={[styles.row, isCurrent && styles.current]}>
+    <Pressable
+      disabled={!editable}
+      onLongPress={editable ? onEdit ?? undefined : undefined}
+      delayLongPress={350}
+      accessibilityRole={editable ? 'button' : undefined}
+      accessibilityLabel={
+        editable ? `Set ${setNo}, ${logged ? fmtSet(logged, unitPref) : ''}. Long press to edit or delete.` : undefined
+      }
+      style={[styles.row, isCurrent && styles.current]}
+    >
       {flash ? (
         <Animated.View pointerEvents="none" style={[styles.flashFill, flashStyle]} />
       ) : null}
@@ -202,6 +215,6 @@ export function SetRow({
           </AppText>
         )}
       </View>
-    </View>
+    </Pressable>
   );
 }

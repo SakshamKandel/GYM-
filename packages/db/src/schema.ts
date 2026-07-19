@@ -313,7 +313,12 @@ export const accounts = pgTable('accounts', {
   // analytics. Nullable — unknown until the client sends a hint.
   country: text('country'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  // WP-2 cron (trial-expiry / renewal-nudge) scans the expiring-window every run;
+  // this partial index keeps that a bounded index scan instead of a full-table
+  // scan (§7.4-P2). Partial → only rows with a set expiry are indexed.
+  index('accounts_tier_expires').on(t.tierExpiresAt).where(sql`${t.tierExpiresAt} is not null`),
+]);
 
 /** Opaque 64-char hex session tokens, 30-day expiry. */
 export const sessions = pgTable(
@@ -1834,6 +1839,9 @@ export const meals = pgTable(
     currency: text('currency', { enum: ['NPR', 'USD'] }).notNull(),
     isActive: boolean('is_active').notNull().default(true),
     isDeleted: boolean('is_deleted').notNull().default(false),
+    // Pack F real inventory — max units orderable per slot. Nullable = unlimited
+    // (additive-safe; existing meals stay unlimited).
+    slotCapacity: integer('slot_capacity'),
     sortOrder: integer('sort_order').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -1859,6 +1867,8 @@ export const mealAvailability = pgTable(
       .references(() => meals.id, { onDelete: 'cascade' }),
     dayOfWeek: integer('day_of_week').notNull(), // 0=Sun … 6=Sat (KTM)
     window: text('window', { enum: ['lunch', 'dinner'] }).notNull(),
+    // Pack F — partner-toggled per-slot sold-out flag (additive; default false).
+    soldOut: boolean('sold_out').notNull().default(false),
   },
   (t) => [uniqueIndex('meal_availability_meal_day_window').on(t.mealId, t.dayOfWeek, t.window)],
 );
@@ -1914,7 +1924,13 @@ export const mealBillingCycles = pgTable(
     pricePerDayMinor: integer('price_per_day_minor').notNull(),
     currency: text('currency').notNull(),
     amountMinor: integer('amount_minor').notNull().default(0), // frozen at close
-    status: text('status', { enum: ['open', 'awaiting_payment', 'paid', 'void'] })
+    // 'receipt_submitted' (Pack G / B5): a member uploaded an eSewa/Khalti receipt
+    // and it is awaiting staff review — distinct from awaiting_payment (Pay CTA
+    // active) so the card can render "under review". Additive text enum value
+    // (drizzle text columns carry no DB CHECK, so this is metadata-only safe).
+    status: text('status', {
+      enum: ['open', 'awaiting_payment', 'receipt_submitted', 'paid', 'void'],
+    })
       .notNull()
       .default('open'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -2035,6 +2051,10 @@ export const mealOrders = pgTable(
     subtotalMinor: integer('subtotal_minor').notNull(),
     deliveryFeeMinor: integer('delivery_fee_minor').notNull().default(0),
     smallOrderFeeMinor: integer('small_order_fee_minor').notNull().default(0),
+    // Server-repriced gratuity (Pack D). Additive-safe: defaults 0 and `totalMinor`
+    // (notNull) continues to be the authoritative sum INCLUDING this tip — the
+    // route recomputes total on tip set (validateTipMinor bounds it; §7.2-S5).
+    tipMinor: integer('tip_minor').notNull().default(0),
     totalMinor: integer('total_minor').notNull(),
     currency: text('currency', { enum: ['NPR', 'USD'] }).notNull(),
     paymentMethod: text('payment_method', { enum: ['esewa', 'khalti', 'cod'] }).notNull(),
@@ -2115,6 +2135,9 @@ export const mealOrderEvents = pgTable(
     toStatus: text('to_status').notNull(),
     actorId: text('actor_id').references(() => accounts.id, { onDelete: 'set null' }),
     actorRole: text('actor_role'),
+    // Per-transition reason (refuse/cancel), maskPii'd before store (B7). Nullable
+    // — legacy rows and normal advances carry no note.
+    note: text('note'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('meal_order_events_order').on(t.orderId)],
@@ -2264,4 +2287,351 @@ export const gymPhotos = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('gym_photos_gym').on(t.gymId)],
+);
+
+// ===========================================================================
+// v1.1 PROFESSIONAL COMPLETENESS (2026-07-19 — plan §5 WP-1). Additive-only.
+// Money in integer minor units. Every new table is owner-scoped through the API
+// layer (hard-rule 3). New free-text member fields are maskPii'd before store.
+// ===========================================================================
+
+/** Deep-link payload carried on a notification row (mobile routes on data.type). */
+export interface NotificationData {
+  type: string; // 'order' | 'cycle' | 'tier' | 'coach_chat' | 'support' | 'gym' | …
+  id?: string;
+}
+
+/**
+ * A member's post-delivery rating of a meal order → aggregated into a partner
+ * score on discovery (Pack C). Write path is gated (WP-3): caller must OWN the
+ * order AND it must be `delivered`; `unique(orderId)` blocks re-rating. `note`
+ * is maskPii'd before store.
+ */
+export const mealOrderRatings = pgTable(
+  'meal_order_ratings',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    orderId: text('order_id')
+      .notNull()
+      .references(() => mealOrders.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    partnerId: text('partner_id')
+      .notNull()
+      .references(() => mealPartners.id, { onDelete: 'cascade' }),
+    stars: integer('stars').notNull(), // 1-5 (starsSchema in @gym/shared)
+    note: text('note').notNull().default(''), // maskPii'd
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('meal_order_ratings_order').on(t.orderId), // one rating per order
+    index('meal_order_ratings_partner').on(t.partnerId), // partner aggregate
+  ],
+);
+
+/**
+ * A member-raised problem with a delivered/paid order (Pack E non-delivery rail).
+ * Openable ONLY from a terminal delivered/paid state; the `open|reviewing`
+ * partial unique blocks spam (at most one live dispute per order). Resolution is
+ * ADMIN-authoritative and NEVER auto-refunds (§7.2-S3). `note`/`resolution` are
+ * maskPii'd before store.
+ */
+export const mealDisputes = pgTable(
+  'meal_disputes',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    orderId: text('order_id')
+      .notNull()
+      .references(() => mealOrders.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    reason: text('reason', {
+      enum: ['not_delivered', 'wrong_items', 'quality', 'late', 'other'],
+    }).notNull(),
+    note: text('note').notNull().default(''), // maskPii'd
+    status: text('status', { enum: ['open', 'reviewing', 'resolved', 'rejected'] })
+      .notNull()
+      .default('open'),
+    resolution: text('resolution'), // admin note on resolve/reject (maskPii'd)
+    decidedBy: text('decided_by').references(() => accounts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('meal_disputes_account').on(t.accountId),
+    // Staff queue: open-first, oldest-first.
+    index('meal_disputes_status_created').on(t.status, t.createdAt),
+    // At most ONE live dispute per order (blocks spam / double-file).
+    uniqueIndex('meal_disputes_one_live')
+      .on(t.orderId)
+      .where(sql`${t.status} in ('open','reviewing')`),
+  ],
+);
+
+/**
+ * Partner payout requests — the partner half of the earner payout rail (Pack I),
+ * mirroring `coach_payout_requests`. `partnerId` is derived from `requirePartner`
+ * (never the request body — §7.2-S1). Admin approve is a permission-gated CAS
+ * (`pending→approved`) that writes exactly one `partner_wallet_ledger` payout row.
+ */
+export const partnerPayoutRequests = pgTable(
+  'partner_payout_requests',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    partnerId: text('partner_id')
+      .notNull()
+      .references(() => mealPartners.id, { onDelete: 'cascade' }),
+    currency: text('currency').notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    status: text('status', { enum: ['pending', 'approved', 'rejected', 'paid'] })
+      .notNull()
+      .default('pending'),
+    note: text('note'),
+    disbursementRef: text('disbursement_ref'),
+    decidedBy: text('decided_by').references(() => accounts.id, { onDelete: 'set null' }),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('partner_payout_requests_partner_status').on(t.partnerId, t.status),
+    index('partner_payout_requests_status_requested').on(t.status, t.requestedAt),
+    // At most ONE pending payout request per partner.
+    uniqueIndex('partner_payout_requests_one_pending')
+      .on(t.partnerId)
+      .where(sql`${t.status} = 'pending'`),
+  ],
+);
+
+/**
+ * Partner earner ledger (Pack I), mirroring `wallet_ledger`. restrict (not
+ * cascade): money history must never vanish with a partner row. Net held =
+ * Σ earning + Σ adjustment − Σ payout (partnerBalance in @gym/shared). The
+ * `unique(sourceType,sourceId)` key makes both the historical held backfill
+ * (§9.4) and payout approval idempotent — no double-credit / double-decrement.
+ */
+export const partnerWalletLedger = pgTable(
+  'partner_wallet_ledger',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    partnerId: text('partner_id')
+      .notNull()
+      .references(() => mealPartners.id, { onDelete: 'restrict' }),
+    type: text('type', { enum: ['earning', 'adjustment', 'payout'] }).notNull(),
+    amountMinor: integer('amount_minor').notNull(),
+    currency: text('currency').notNull(),
+    sourceType: text('source_type'), // e.g. 'order' | 'subscription_cycle' | 'payout' | 'admin'
+    sourceId: text('source_id'),
+    note: text('note'),
+    createdBy: text('created_by').references(() => accounts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('partner_wallet_ledger_partner_created').on(t.partnerId, t.createdAt),
+    uniqueIndex('partner_wallet_ledger_source').on(t.sourceType, t.sourceId),
+  ],
+);
+
+/**
+ * Durable notification inbox + outbox (Pack B / E2). `notify()` (WP-2) writes the
+ * row FIRST (durable, `sentAt=null`) then dispatches the push (flips `sentAt`); a
+ * crash between commit and FCM-send is reconciled by the `retry-unsent` cron.
+ * `dedupeKey` (partial-unique) is the at-least-once idempotency key cron/senders
+ * set (e.g. `trial_expiry:{accountId}:{yyyy-mm-dd}`) so a re-run / double-fire is
+ * a no-op — mirrors the `revenuecat_events` / `wallet_ledger` idempotency pattern.
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    event: text('event').notNull(), // a NotificationEvent key (@gym/shared)
+    title: text('title').notNull(), // server-templated (§7.2-S2)
+    body: text('body').notNull(),
+    data: jsonb('data').$type<NotificationData>(), // deep-link payload (nullable)
+    readAt: timestamp('read_at', { withTimezone: true }),
+    sentAt: timestamp('sent_at', { withTimezone: true }), // null = push not yet dispatched
+    dedupeKey: text('dedupe_key'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Notification-center list, newest-first (P1 pagination sort).
+    index('notifications_account_created').on(t.accountId, t.createdAt),
+    // retry-unsent cron drains stragglers.
+    index('notifications_unsent').on(t.sentAt).where(sql`${t.sentAt} is null`),
+    // At-least-once idempotency — a set dedupeKey is globally unique.
+    uniqueIndex('notifications_dedupe')
+      .on(t.dedupeKey)
+      .where(sql`${t.dedupeKey} is not null`),
+  ],
+);
+
+/** Category → channel toggle map on a notification_prefs row. */
+export type NotificationPrefCategories = Record<string, { push: boolean }>;
+
+/**
+ * Per-account notification preferences + quiet hours (Pack B / E3 reusable
+ * consent store). Default all-on: a missing row (or missing category key) is
+ * treated as enabled by `notify()`. `quietHours{Start,End}` are minutes-of-day
+ * (0-1439, KTM wall-clock), nullable = no quiet window.
+ */
+export const notificationPrefs = pgTable('notification_prefs', {
+  accountId: text('account_id')
+    .primaryKey()
+    .references(() => accounts.id, { onDelete: 'cascade' }),
+  categories: jsonb('categories').$type<NotificationPrefCategories>().notNull().default({}),
+  quietHoursStart: integer('quiet_hours_start'), // minutes-of-day (KTM), nullable
+  quietHoursEnd: integer('quiet_hours_end'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * A member's genuine review of a gym (Pack C / M). `unique(gymId,accountId)` =
+ * one review per member per gym. `status` supports the moderation queue
+ * (visible/hidden). Discovery renders `gyms.rating` ONLY once real reviews exist
+ * (WP-11 gates on reviewCount>0). `note` maskPii'd.
+ */
+export const gymReviews = pgTable(
+  'gym_reviews',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    gymId: text('gym_id')
+      .notNull()
+      .references(() => gyms.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    stars: integer('stars').notNull(), // 1-5
+    note: text('note').notNull().default(''), // maskPii'd
+    status: text('status', { enum: ['visible', 'hidden'] }).notNull().default('visible'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('gym_reviews_gym_account').on(t.gymId, t.accountId),
+    index('gym_reviews_gym_status').on(t.gymId, t.status),
+  ],
+);
+
+/** A member's saved/shortlisted gym (Pack M). Composite PK = one row per pair. */
+export const gymFavorites = pgTable(
+  'gym_favorites',
+  {
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    gymId: text('gym_id')
+      .notNull()
+      .references(() => gyms.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.gymId] }),
+    index('gym_favorites_account').on(t.accountId),
+  ],
+);
+
+/** A member-reported correction to a gym listing → admin queue (Pack M). */
+export const gymReports = pgTable(
+  'gym_reports',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    gymId: text('gym_id')
+      .notNull()
+      .references(() => gyms.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    field: text('field', {
+      enum: ['hours', 'phone', 'address', 'location', 'closed', 'other'],
+    }).notNull(),
+    note: text('note').notNull().default(''), // maskPii'd
+    status: text('status', { enum: ['open', 'resolved', 'dismissed'] })
+      .notNull()
+      .default('open'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('gym_reports_status_created').on(t.status, t.createdAt)],
+);
+
+/**
+ * A member's review of their coach (Pack C / L). `unique(coachId,memberId)` =
+ * one review per relationship. Display policy (min-N threshold) is a product
+ * ruling (§6); the mechanism ships here. `note` maskPii'd.
+ */
+export const coachReviews = pgTable(
+  'coach_reviews',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    memberId: text('member_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    stars: integer('stars').notNull(), // 1-5
+    note: text('note').notNull().default(''), // maskPii'd
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('coach_reviews_coach_member').on(t.coachId, t.memberId),
+    index('coach_reviews_coach').on(t.coachId),
+  ],
+);
+
+/**
+ * Private coach CRM note about a client (Pack K). Coach-authored, never shown to
+ * the member. One live note per (coach,client) upserted; `note` maskPii'd.
+ */
+export const coachClientNotes = pgTable(
+  'coach_client_notes',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    note: text('note').notNull().default(''), // maskPii'd; private to the coach
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('coach_client_notes_coach_user').on(t.coachId, t.userId)],
+);
+
+/** A coach's saved quick-reply template (Pack K). */
+export const coachMessageTemplates = pgTable(
+  'coach_message_templates',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    coachId: text('coach_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    title: text('title').notNull().default(''),
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('coach_message_templates_coach').on(t.coachId)],
 );

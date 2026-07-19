@@ -4,7 +4,7 @@ import Animated from 'react-native-reanimated';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
-import { ktmDateString } from '@gym/shared';
+import { formatMoney, ktmDateString } from '@gym/shared';
 import {
   AppText,
   AppTextInput,
@@ -102,7 +102,19 @@ export default function MyMealSubscriptionsScreen() {
         setPending(null);
         reload();
       } catch (err) {
-        setActionError(mealErrorMessage(toMealsError(err).code));
+        const apiErr = toMealsError(err);
+        // Pack G: a funded future week can't self-serve cancel — the server
+        // still returns an ESTIMATED proration so the member sees what they're
+        // owed instead of just a dead-end block message.
+        const refund = apiErr.details?.refund as
+          | { estimatedMinor: number; currency: string | null; unusedDays: number }
+          | undefined;
+        const base = mealErrorMessage(apiErr.code);
+        setActionError(
+          refund && refund.estimatedMinor > 0 && refund.currency
+            ? `${base} Estimated refund: ${formatMoney(refund.estimatedMinor, refund.currency)} for ${refund.unusedDays} unused day${refund.unusedDays === 1 ? '' : 's'} — contact support to complete it.`
+            : base,
+        );
         warnHaptic();
       } finally {
         setBusy(false);
@@ -197,6 +209,7 @@ export default function MyMealSubscriptionsScreen() {
                     setSkipError(null);
                   }}
                   onPay={(sub) => setPaySub(sub)}
+                  onEdit={(sub) => pushPath(`/meals/subscription-edit?id=${encodeURIComponent(sub.id)}`)}
                 />
               ))}
             </Animated.View>

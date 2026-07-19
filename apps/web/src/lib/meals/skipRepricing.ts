@@ -25,6 +25,7 @@ export interface AtomicCycleReceiptArgs {
   method: 'esewa' | 'khalti';
   receiptUrl: string;
   note: string | null;
+  now: Date;
 }
 
 /** Shared transaction-scoped mutex for skip repricing and cycle receipt submit. */
@@ -171,7 +172,12 @@ export function atomicSubscriptionSkipSql(args: AtomicSubscriptionSkipArgs): SQL
 /**
  * Insert a cycle receipt from the cycle's live amount while holding the same
  * lock as skip repricing. Rejected history is ignored; pending/approved rows
- * remain live blockers.
+ * remain live blockers. On a successful insert the cycle is flipped
+ * awaiting_payment→receipt_submitted (B5 / Pack G) so the member card can render
+ * "under review" and dunning (which only nudges awaiting_payment cycles) stops
+ * chasing a bill the member has already paid — pending staff review. The flip is
+ * a same-transaction CAS gated on the insert, so it can never fire without a
+ * receipt and a concurrent skip that repriced first simply loses the CAS.
  */
 export function atomicCycleReceiptSql(args: AtomicCycleReceiptArgs): SQL {
   return sql`
@@ -200,6 +206,14 @@ export function atomicCycleReceiptSql(args: AtomicCycleReceiptArgs): SQL {
         and cycle.amount_minor > 0
         and not exists (select 1 from live_request)
       returning id, status
+    ),
+    flipped_cycle as (
+      update meal_billing_cycles cycle
+      set status = 'receipt_submitted', updated_at = ${args.now}
+      where cycle.id = ${args.cycleId}
+        and cycle.status = 'awaiting_payment'
+        and exists (select 1 from inserted_request)
+      returning cycle.id
     )
     select
       case

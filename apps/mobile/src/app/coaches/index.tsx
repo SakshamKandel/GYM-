@@ -1,6 +1,7 @@
+import { useCallback, useState } from 'react';
 import { StyleSheet } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
@@ -18,6 +19,7 @@ import {
 } from '../../components/ui';
 import { EmptyArt } from '../../components/visual';
 import { CoachCard } from '../../features/mentorship/components/CoachCard';
+import { listCoachRequests, type CoachRequestRow } from '../../features/mentorship/api';
 import { useCoachDirectory, useMyCoach } from '../../features/mentorship/hooks';
 import { pushPath } from '../../features/mentorship/nav';
 import { useAuth } from '../../state/auth';
@@ -93,8 +95,38 @@ const styles = StyleSheet.create({
 export default function CoachDirectoryScreen() {
   const status = useAuth((s) => s.status);
   const staffRole = useAuth((s) => s.staffRole);
+  const token = useAuth((s) => s.token);
   const { coaches, loading, error, retry } = useCoachDirectory();
-  const { request } = useMyCoach();
+  const { coach, request } = useMyCoach();
+  const [lastDeclined, setLastDeclined] = useState<CoachRequestRow | null>(null);
+
+  // Pack L: "structured decline reason surfaced as a next step" — the coach
+  // request history already carries every outcome; a member who was never
+  // shown their most recent decline gets a quiet next-step banner here
+  // (only when there's no pending request and no assigned coach — a
+  // successful later outcome always takes priority over an old decline).
+  useFocusEffect(
+    useCallback(() => {
+      if (status !== 'signedIn' || token === null || coach !== null || request !== null) {
+        setLastDeclined(null);
+        return;
+      }
+      let active = true;
+      void listCoachRequests(token)
+        .then((rows) => {
+          if (!active) return;
+          // Rows arrive newest-first (server orders by createdAt desc).
+          const latest = rows.find((r) => r.status === 'declined') ?? null;
+          setLastDeclined(latest);
+        })
+        .catch(() => {
+          // Best-effort — the banner just doesn't show this visit.
+        });
+      return () => {
+        active = false;
+      };
+    }, [status, token, coach, request]),
+  );
 
   function goBack(): void {
     if (router.canGoBack()) router.back();
@@ -145,6 +177,23 @@ export default function CoachDirectoryScreen() {
         </Animated.View>
       ) : (
         <>
+          {request === null && lastDeclined !== null ? (
+            <Animated.View entering={enterUp(0)}>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel={`Your request to ${lastDeclined.coachName} wasn't accepted. Tap to browse other coaches`}
+                onPress={() => setLastDeclined(null)}
+                style={styles.pendingRow}
+              >
+                <Ionicons name="information-circle-outline" size={14} color={colors.textDim} />
+                <AppText variant="caption" style={styles.pendingText}>
+                  {`${lastDeclined.coachName} couldn't take you on — browse other coaches below.`}
+                </AppText>
+                <Ionicons name="close" size={15} color={colors.textDim} />
+              </PressableScale>
+            </Animated.View>
+          ) : null}
+
           {request !== null ? (
             <Animated.View entering={enterUp(0)}>
               <PressableScale

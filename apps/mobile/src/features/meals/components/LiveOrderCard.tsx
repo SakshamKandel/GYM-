@@ -6,7 +6,9 @@ import { AppText, Card, PressableScale, Tag } from '../../../components/ui';
 import { OrderStatusStepper } from './OrderStatusStepper';
 import { orderItemsSummary, relativeDay, formatCalendarDate, windowName, windowTimeRange } from './orderView';
 import {
-  canMemberCancelOrder,
+  cancelBlockMessage,
+  cancelBlockNeedsSupport,
+  memberOrderCancelState,
   orderNeedsReceipt,
   orderStatusLabel,
   orderStatusTone,
@@ -35,13 +37,22 @@ interface Props {
   onOpenDetail: (order: MealOrder) => void;
   onCancel: (order: MealOrder) => void;
   onReceipt: (order: MealOrder) => void;
+  /** B2: the member taps into support with this order pre-attached — shown
+   * instead of Cancel when money is already in flight (payment under review
+   * or captured), so the tap never dead-ends on a guaranteed 409. */
+  onSupport?: (order: MealOrder, reason: string) => void;
 }
 
-export function LiveOrderCard({ order, partnerName, onOpenDetail, onCancel, onReceipt }: Props) {
+export function LiveOrderCard({ order, partnerName, onOpenDetail, onCancel, onReceipt, onSupport }: Props) {
   const terminal = order.status === 'cancelled' || order.status === 'refused';
   const day = relativeDay(order.deliveryDate) ?? formatCalendarDate(order.deliveryDate);
   const tone = orderStatusTone(order.status);
-  const canCancel = canMemberCancelOrder(order);
+  const cancelState = memberOrderCancelState(order);
+  const canCancel = cancelState.allowed;
+  const supportBlock =
+    !cancelState.allowed && cancelState.blocked && cancelBlockNeedsSupport(cancelState.blocked)
+      ? cancelState.blocked
+      : null;
   const needsReceipt = orderNeedsReceipt(order);
 
   if (terminal) {
@@ -134,7 +145,7 @@ export function LiveOrderCard({ order, partnerName, onOpenDetail, onCancel, onRe
         </View>
       </PressableScale>
 
-      {canCancel || needsReceipt ? (
+      {canCancel || needsReceipt || supportBlock ? (
         <View style={styles.actionsRow}>
           {needsReceipt ? (
             <PressableScale
@@ -156,6 +167,15 @@ export function LiveOrderCard({ order, partnerName, onOpenDetail, onCancel, onRe
               <AppText variant="bodyBold" color={colors.error}>
                 Cancel
               </AppText>
+            </PressableScale>
+          ) : supportBlock && onSupport ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Contact support to cancel this order"
+              onPress={() => onSupport(order, cancelBlockMessage(supportBlock) ?? '')}
+              style={styles.actionBtn}
+            >
+              <AppText variant="bodyBold">Contact support</AppText>
             </PressableScale>
           ) : null}
         </View>

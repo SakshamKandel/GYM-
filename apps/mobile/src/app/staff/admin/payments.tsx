@@ -1,8 +1,16 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image } from 'expo-image';
-import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
+import {
+  ActivityIndicator,
+  RefreshControl,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import Animated from 'react-native-reanimated';
 import { formatMoney } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -175,6 +183,9 @@ export default function AdminPaymentsScreen() {
   const [previewExpiry, setPreviewExpiry] = useState<string | null | undefined>(undefined);
   const [previewError, setPreviewError] = useState(false);
 
+  // B31: pull-to-refresh state.
+  const [refreshing, setRefreshing] = useState(false);
+
   // P1-10: CSV export of the payment-request queue.
   const [csvBusy, setCsvBusy] = useState(false);
   const [csvError, setCsvError] = useState<string | null>(null);
@@ -219,9 +230,20 @@ export default function AdminPaymentsScreen() {
     [token],
   );
 
-  useEffect(() => {
-    if (allowed) void load(status);
-  }, [allowed, status, load]);
+  // B31: refetch on every focus (not just mount) — approving/refunding on
+  // another screen (or the web console) left this queue stale until a full
+  // app remount.
+  useFocusEffect(
+    useCallback(() => {
+      if (allowed) void load(status);
+    }, [allowed, status, load]),
+  );
+
+  async function onRefresh(): Promise<void> {
+    setRefreshing(true);
+    await load(status);
+    setRefreshing(false);
+  }
 
   function openDetail(row: PaymentRequestRow): void {
     setSelected(row);
@@ -316,7 +338,16 @@ export default function AdminPaymentsScreen() {
   }
 
   return (
-    <Screen scroll>
+    <Screen
+      scroll
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => void onRefresh()}
+          tintColor={colors.accent}
+        />
+      }
+    >
       <BackRow
         onBack={goBack}
         action={

@@ -16,6 +16,7 @@ import {
 } from '@/components/console';
 import { DownloadCsv } from '../../_components/DownloadCsv';
 import type { AdminOrderRow } from '../_data';
+import { OrderTimeline } from './OrderTimeline';
 
 // Client-only: Leaflet touches `window` at import, so never SSR this.
 const LocationPicker = dynamic(
@@ -26,8 +27,10 @@ const LocationPicker = dynamic(
 /**
  * Admin all-partner order oversight (plan §2/§3/§7 P6). Toolbar+DataTable+
  * review Drawer (queue-page template): server-driven date/partner/status/scope
- * filters re-fetch the guarded API route; a client-only text search narrows the
- * fetched set locally. The Drawer's action buttons are computed from
+ * filters AND the free-text search box all re-fetch the guarded API route
+ * (B14 — search used to filter only the already-fetched page; a debounced
+ * `q` param now matches the full server-side set, same idiom as the members
+ * directory). The Drawer's action buttons are computed from
  * `canActorAdvance(from, to, 'admin')` — this UI can never offer a transition
  * the server would reject, and `POST …/override` re-validates it anyway.
  */
@@ -104,8 +107,11 @@ export function OrdersOversight({
   const [busy, setBusy] = useState(false);
   const [drawerError, setDrawerError] = useState<string | null>(null);
 
-  // Re-fetch from the guarded API whenever a server-side filter changes. Skip
-  // the very first render — the page already server-loaded the default
+  // Re-fetch from the guarded API whenever a server-side filter changes,
+  // debouncing the free-text search box so each keystroke doesn't fire a
+  // round trip (B14 — `q` is matched against the FULL table server-side, not
+  // just the already-fetched page; mirrors the members directory's pattern).
+  // Skip the very first render — the page already server-loaded the default
   // (scope=active, no other filters) view.
   const isFirstRun = useRef(true);
   useEffect(() => {
@@ -114,38 +120,44 @@ export function OrdersOversight({
       return;
     }
     const controller = new AbortController();
-    setLoading(true);
-    const params = new URLSearchParams();
-    if (date) params.set('date', date);
-    if (partnerId) params.set('partnerId', partnerId);
-    if (status) params.set('status', status);
-    params.set('scope', scope);
-    void (async () => {
-      try {
-        const res = await fetch(`/api/admin/orders?${params.toString()}`, {
-          credentials: 'include',
-          signal: controller.signal,
-        });
-        if (!res.ok) {
+    const t = setTimeout(() => {
+      setLoading(true);
+      const params = new URLSearchParams();
+      if (date) params.set('date', date);
+      if (partnerId) params.set('partnerId', partnerId);
+      if (status) params.set('status', status);
+      params.set('scope', scope);
+      if (query.trim()) params.set('q', query.trim());
+      void (async () => {
+        try {
+          const res = await fetch(`/api/admin/orders?${params.toString()}`, {
+            credentials: 'include',
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            setLoading(false);
+            return;
+          }
+          const data = (await res.json()) as { orders: AdminOrderRow[] };
+          setOrders(data.orders);
           setLoading(false);
-          return;
+        } catch {
+          if (controller.signal.aborted) return;
+          setLoading(false);
         }
-        const data = (await res.json()) as { orders: AdminOrderRow[] };
-        setOrders(data.orders);
-        setLoading(false);
-      } catch {
-        if (controller.signal.aborted) return;
-        setLoading(false);
-      }
-    })();
-    return () => controller.abort();
+      })();
+    }, query.trim() ? 300 : 0);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date, partnerId, status, scope]);
+  }, [date, partnerId, status, scope, query]);
 
   // CSV export mirrors the ACTIVE server-side filters (date/partnerId/status/
   // scope) so "download" always matches what the board is currently showing —
-  // the client-only free-text search box is NOT sent (the export route has no
-  // notion of it; it filters the full matching set, not just the fetched page).
+  // the export route (owned outside this package) has no `q` param; it's a
+  // date/partner/status/scope rollup by design, not a search-result dump.
   const exportHref = useMemo(() => {
     const params = new URLSearchParams();
     if (date) params.set('date', date);
@@ -156,16 +168,9 @@ export function OrdersOversight({
     return `/api/admin/exports/meal-orders${qs ? `?${qs}` : ''}`;
   }, [date, partnerId, status, scope]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return orders;
-    return orders.filter(
-      (o) =>
-        o.partnerName.toLowerCase().includes(q) ||
-        o.accountEmail.toLowerCase().includes(q) ||
-        o.accountDisplayName.toLowerCase().includes(q),
-    );
-  }, [orders, query]);
+  // The server already applies `q` against the full matching set (B14); no
+  // client-side re-filtering here — `orders` IS the filtered set.
+  const filtered = orders;
 
   const selected = orders.find((o) => o.id === selectedId) ?? null;
 
@@ -198,7 +203,13 @@ export function OrdersOversight({
         credentials: 'include',
         body: JSON.stringify({
           toStatus,
-          reason: toStatus === 'cancelled' ? reason.trim() || undefined : undefined,
+          // B13: a refuse also carries the typed reason — the server used to
+          // only persist it for 'cancelled', silently discarding what an admin
+          // typed into the SAME textarea when refusing instead.
+          reason:
+            toStatus === 'cancelled' || toStatus === 'refused'
+              ? reason.trim() || undefined
+              : undefined,
         }),
       });
       if (!res.ok) {
@@ -437,7 +448,23 @@ export function OrdersOversight({
               </div>
             </div>
 
-            {selected.cancelReason ? <Row label="Cancel reason">{selected.cancelReason}</Row> : null}
+            {selected.cancelReason ? <Row label="Reason">{selected.cancelReason}</Row> : null}
+
+            <div>
+              <div
+                style={{
+                  fontSize: 12,
+                  letterSpacing: '0.03em',
+                  textTransform: 'uppercase',
+                  color: 'var(--gt-text-dim)',
+                  fontFamily: 'var(--font-heading)',
+                  marginBottom: 6,
+                }}
+              >
+                History
+              </div>
+              <OrderTimeline orderId={selected.id} />
+            </div>
 
             {availableTargets.length > 0 ? (
               <div

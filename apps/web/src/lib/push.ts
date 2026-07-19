@@ -22,6 +22,21 @@ export interface PushMessage {
   data?: Record<string, unknown>;
 }
 
+/**
+ * Outcome of a single-account push dispatch — the signal `notify()`'s durable
+ * outbox uses to decide `notifications.sentAt` (§8.2, E2):
+ *  - `sent`          → at least one device received it; flip `sentAt=now`.
+ *  - `no_recipient`  → nothing to deliver (FCM unconfigured, no registered
+ *                      tokens, or every token was dead & pruned). RESOLVED —
+ *                      a retry can't help, so `notify` still sets `sentAt` and
+ *                      the `retry-unsent` cron leaves it alone.
+ *  - `error`         → a transient failure (FCM threw / multicast issued but
+ *                      zero delivered for a non-token reason). NOT resolved —
+ *                      `sentAt` stays null so `retry-unsent` re-attempts within
+ *                      its bounded window.
+ */
+export type PushDispatch = 'sent' | 'no_recipient' | 'error';
+
 // ── Firebase Admin singleton ──────────────────────────────────
 
 let cachedApp: App | null = null;
@@ -126,15 +141,22 @@ function stringifyData(data?: Record<string, unknown>): Record<string, string> {
 /**
  * Send a push to every device registered to an account. NEVER throws — a push
  * failure (bad token, FCM down, misconfigured credential) must not break the
- * buddy action that triggered it. Safe to call fire-and-forget with `void`.
+ * business action that triggered it. Safe to call fire-and-forget with `void`.
+ *
+ * Returns a `PushDispatch` so the `notify()` outbox can distinguish "delivered"
+ * / "nothing to deliver" (both RESOLVED) from a "transient failure" (retryable).
+ * Existing fire-and-forget callers ignore the return value unchanged.
  */
-export async function sendPushToAccount(accountId: string, message: PushMessage): Promise<void> {
+export async function sendPushToAccount(
+  accountId: string,
+  message: PushMessage,
+): Promise<PushDispatch> {
   try {
     const app = firebaseApp();
-    if (!app) return; // credential absent/invalid — silently skip.
+    if (!app) return 'no_recipient'; // credential absent/invalid — nothing to send.
 
     const tokens = await tokensForAccount(accountId);
-    if (tokens.length === 0) return;
+    if (tokens.length === 0) return 'no_recipient';
 
     const response = await getMessaging(app).sendEachForMulticast({
       tokens,
@@ -162,8 +184,24 @@ export async function sendPushToAccount(accountId: string, message: PushMessage)
         return undefined;
       }),
     );
+
+    if (response.successCount > 0) return 'sent';
+    // Multicast issued but nothing landed. If EVERY failure was a dead/invalid
+    // token (now pruned), there is no live recipient and a retry is pointless —
+    // resolved. Otherwise treat it as a transient error worth a retry.
+    const allDeadTokens = response.responses.every((r) => {
+      if (r.success) return false;
+      const code = r.error?.code;
+      return (
+        code === 'messaging/registration-token-not-registered' ||
+        code === 'messaging/invalid-registration-token' ||
+        code === 'messaging/invalid-argument'
+      );
+    });
+    return allDeadTokens ? 'no_recipient' : 'error';
   } catch (err) {
-    // Log and swallow — the caller (a buddy route) must still return normally.
+    // Log and swallow — the caller must still return normally.
     console.error('[push] sendPushToAccount failed', err);
+    return 'error';
   }
 }

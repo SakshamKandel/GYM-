@@ -34,6 +34,8 @@ interface OwnerMemoryState {
   measurements: Measurement[];
   foods: FoodItem[];
   foodLogs: (FoodLog & { loggedAt: string })[];
+  /** Ids of favorited foods, keyed to the ms timestamp favorited (local-only). */
+  favoriteFoodIds: Record<string, number>;
   water: Record<string, number>;
   steps: Record<string, number>;
   streak: Streak;
@@ -61,6 +63,7 @@ function emptyOwnerState(): OwnerMemoryState {
     measurements: [],
     foods: [],
     foodLogs: [],
+    favoriteFoodIds: {},
     water: {},
     steps: {},
     streak: { current: 0, best: 0, lastWorkoutDate: null },
@@ -301,6 +304,15 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
       state.foodLogs.push({ ...f, loggedAt: new Date().toISOString() });
       persist();
     },
+    async logFoodBatch(logs) {
+      if (logs.length === 0) return;
+      // No I/O between pushes — either every entry lands or (on a thrown
+      // validation error before this point) none do, matching sqlite's
+      // transactional guarantee for B19.
+      const loggedAt = new Date().toISOString();
+      state.foodLogs.push(...logs.map((f) => ({ ...f, loggedAt })));
+      persist();
+    },
     async deleteFoodLog(id) {
       state.foodLogs = state.foodLogs.filter((f) => f.id !== id);
       persist();
@@ -364,6 +376,29 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
         if (!prev || f.loggedAt > prev) lastUsed.set(f.foodId, f.loggedAt);
       }
       const ordered = [...lastUsed.entries()].sort((a, b) => b[1].localeCompare(a[1]));
+      const out: FoodItem[] = [];
+      for (const [foodId] of ordered) {
+        const food = state.foods.find((f) => f.id === foodId);
+        if (food) out.push(food);
+        if (out.length >= limit) break;
+      }
+      return out;
+    },
+    async toggleFavoriteFood(foodId) {
+      if (foodId in state.favoriteFoodIds) {
+        delete state.favoriteFoodIds[foodId];
+        persist();
+        return false;
+      }
+      state.favoriteFoodIds[foodId] = Date.now();
+      persist();
+      return true;
+    },
+    async isFavoriteFood(foodId) {
+      return foodId in state.favoriteFoodIds;
+    },
+    async getFavoriteFoods(limit) {
+      const ordered = Object.entries(state.favoriteFoodIds).sort((a, b) => b[1] - a[1]);
       const out: FoodItem[] = [];
       for (const [foodId] of ordered) {
         const food = state.foods.find((f) => f.id === foodId);
@@ -457,6 +492,14 @@ export async function createMemoryRepo(): Promise<RepoStore> {
             Array.isArray(owner.workoutBlueprints)
           ) {
             owner.workoutBlueprints = {};
+          }
+          // Stores created before favorites landed lack the map entirely.
+          if (
+            typeof owner.favoriteFoodIds !== 'object' ||
+            owner.favoriteFoodIds === null ||
+            Array.isArray(owner.favoriteFoodIds)
+          ) {
+            owner.favoriteFoodIds = {};
           }
         }
       }

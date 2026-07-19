@@ -11,12 +11,19 @@
 export { loadDeliveryConfig } from './config';
 export {
   buildMemberOrderView,
+  buildOrderReceipt,
   buildPartnerOrderView,
   computeOrderFinancials,
   type PricedLine,
 } from './orders';
 export { advanceOrderStatus, type AdvanceOrderParams, type AdvanceOrderResult } from './advance';
-export { materializeDueOrders, type MaterializeScope } from './materialize';
+export {
+  autoPauseIfOverdue,
+  materializeDueOrders,
+  staleAwaitingCycles,
+  type MaterializeScope,
+  type StaleCycle,
+} from './materialize';
 export { subscriptionPaymentMutationBlock } from './paymentSafety';
 export {
   atomicCycleReceiptSql,
@@ -31,7 +38,11 @@ export {
 } from './subscriptionEdit';
 export { guardedMealSoftDeleteSql } from './menuSubscriptionSafety';
 export {
+  buildCycleInvoice,
   buildSubscriptionCycleAdjustments,
+  prorateUnusedPaidDays,
   quoteSubscriptionPlan,
+  upcomingDeliveryDates,
+  type CycleInvoice,
   type SubscriptionPlanShape,
 } from './subscriptionPlan';

@@ -1,9 +1,14 @@
 import {
-  canActorAdvance,
+  DISPUTE_REASONS,
+  formatMoney,
   isSlotOrderable,
   ktmAddDays,
   ktmDateString,
   MEAL_WINDOW_TIMES,
+  memberCancelability,
+  tipOptions,
+  type DisputeReason,
+  type MemberCancelBlock,
   type MealWindow,
 } from '@gym/shared';
 import type { MealDietType, MealGoalTag, MealOrder, MealOrderStatus, MealPaymentMethod } from './api';
@@ -153,11 +158,44 @@ export function orderTimeline(order: MealOrder): TimelineStep[] {
   }));
 }
 
-/** May the member cancel this order right now (structural + cutoff)? Mirrors
- * the server's rule for the UI's cancel affordance; the route re-checks it. */
+/**
+ * The single source of truth for the member cancel affordance (B1) — a thin
+ * wrapper over `@gym/shared`'s `memberCancelability` (the exact rule the
+ * server enforces) so the UI never shows a Cancel button the route will
+ * always 409. Payment-in-flight (`payment_review_required`/`refund_required`)
+ * takes precedence over cutoff — those need a support/refund path, not a
+ * plain cancel.
+ */
+export function memberOrderCancelState(
+  order: MealOrder,
+  now: Date = new Date(),
+): { allowed: boolean; blocked?: MemberCancelBlock } {
+  return memberCancelability({ status: order.status, paymentStatus: order.paymentStatus, cutoffAt: new Date(order.cutoffAt) }, now);
+}
+
+/** May the member cancel this order right now? Convenience boolean over
+ * {@link memberOrderCancelState} for call sites that don't need the reason. */
 export function canMemberCancelOrder(order: MealOrder, now: Date = new Date()): boolean {
-  if (!canActorAdvance(order.status, 'cancelled', 'member')) return false;
-  return now.getTime() < new Date(order.cutoffAt).getTime();
+  return memberOrderCancelState(order, now).allowed;
+}
+
+/** Short banner copy for a blocked cancel (B1/B2) — precedes a "Contact
+ * support" forward path rather than dead-ending the tap. `null` for
+ * `past_cutoff` (that case just hides the button; no banner needed). */
+export function cancelBlockMessage(blocked: MemberCancelBlock): string | null {
+  switch (blocked) {
+    case 'payment_review_required':
+      return 'A payment receipt is under review — contact support to cancel this order.';
+    case 'refund_required':
+      return 'This order is already paid — contact support so the refund and cancellation happen together.';
+    case 'past_cutoff':
+      return null;
+  }
+}
+
+/** Does this blocked reason need a "Contact support" forward path (B2/E)? */
+export function cancelBlockNeedsSupport(blocked: MemberCancelBlock): boolean {
+  return blocked === 'payment_review_required' || blocked === 'refund_required';
 }
 
 /** Does this order still need an eSewa/Khalti receipt submitted? */
@@ -247,7 +285,65 @@ export function mealErrorMessage(code: string): string {
       return 'Something went wrong preparing that payment — try again.';
     case 'invalid':
       return 'Check your details and try again.';
+    case 'already_rated':
+      return "You've already rated this order.";
+    case 'not_delivered':
+      return "This order hasn't been delivered yet — you can rate or tip it once it arrives.";
+    case 'invalid_tip':
+      return 'Enter a valid tip amount and try again.';
+    case 'tip_locked':
+      return "This order has already been paid — the tip can't be changed.";
+    case 'dispute_exists':
+      return 'You already have an open report for this order — check its status before filing another.';
+    case 'not_disputable':
+      return "This order isn't eligible for a dispute yet.";
     default:
       return "Couldn't reach the server — check your connection and try again.";
+  }
+}
+
+// ── Price-change interstitial (B9/B10/Pack F) ────────────────────────
+
+/** "Price updated Rs 450→Rs 470, confirm?" copy for the checkout guard's
+ * 409 `price_changed` response. */
+export function priceChangeMessage(quotedMinor: number, currentMinor: number, currency: string): string {
+  return `Price updated ${formatMoney(quotedMinor, currency)} → ${formatMoney(currentMinor, currency)} — confirm to place at the new total.`;
+}
+
+/** Per-line "X unavailable — remove & continue" copy (B11) for a quote's 422
+ * `meal_unavailable` response, naming the specific meal when the server sent
+ * a name (it may not for a wholly unknown id). */
+export function mealUnavailableLineMessage(mealName: string | null | undefined): string {
+  return mealName
+    ? `${mealName} isn't available for this slot anymore — remove it and continue.`
+    : "One of these meals isn't available for this slot anymore — remove it and continue.";
+}
+
+// ── Tips (Pack D) ─────────────────────────────────────────────────────
+
+export { tipOptions };
+
+/** "10%" / "No tip" preset button label. */
+export function tipPresetLabel(percent: number): string {
+  return percent === 0 ? 'No tip' : `${percent}%`;
+}
+
+// ── Disputes / report-a-problem (Pack E) ─────────────────────────────
+
+export { DISPUTE_REASONS };
+export type { DisputeReason };
+
+export function disputeReasonLabel(reason: DisputeReason): string {
+  switch (reason) {
+    case 'not_delivered':
+      return 'Never arrived';
+    case 'wrong_items':
+      return 'Wrong items';
+    case 'quality':
+      return 'Quality issue';
+    case 'late':
+      return 'Arrived very late';
+    case 'other':
+      return 'Something else';
   }
 }

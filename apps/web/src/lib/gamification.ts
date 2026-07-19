@@ -34,7 +34,6 @@ import {
 import { and, eq, gte, inArray, lt, or } from 'drizzle-orm';
 import { acceptedBuddyIds } from './buddy';
 import { getDb } from './db';
-import { sendPushToAccount } from './push';
 
 /**
  * Gamification award engine — the SINGLE place that computes and persists XP,
@@ -722,18 +721,10 @@ async function evaluateBuddyQuests(db: Db, accountId: string, monthKey: string):
           .onConflictDoNothing({ target: [xpEvents.accountId, xpEvents.kind, xpEvents.sourceKey] });
       }
 
-      await Promise.all([
-        sendPushToAccount(accountId, {
-          title: 'Buddy quest complete',
-          body: 'You and your buddy both hit 12 session-days this month.',
-          data: { type: 'badge_earned', badgeId: 'buddy_quest' },
-        }),
-        sendPushToAccount(buddyId, {
-          title: 'Buddy quest complete',
-          body: 'You and your buddy both hit 12 session-days this month.',
-          data: { type: 'badge_earned', badgeId: 'buddy_quest' },
-        }),
-      ]);
+      // B30 (WP-2): the buddy-quest completion push was removed — the Buddy
+      // feature was deleted end-to-end (2026-07-17/18), so this send site
+      // targeted a screen/deep-link that no longer exists. The badge + XP award
+      // above still land (idempotent) for legacy pairs; there is simply no push.
     }
   }
 }

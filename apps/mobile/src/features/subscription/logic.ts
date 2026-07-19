@@ -51,6 +51,44 @@ export function fallbackPriceRegion(): PriceRegion {
   return resolveRegion(regionHint());
 }
 
+// ── Tier expiry (Pack J) ──────────────────────────────────────────────────
+
+/** Resolved expiry state for a membership window, for the renew/expiry copy. */
+export interface TierExpiryInfo {
+  /** Whole days until expiry (ceil; negative once past). null when no expiry. */
+  daysLeft: number | null;
+  /** True only when a real expiry exists and is strictly in the past. */
+  expired: boolean;
+  /** Localized date, e.g. "Jul 25, 2026", or null when there's no expiry. */
+  dateLabel: string | null;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Interpret an account's `tierExpiresAt` (raw ISO from /api/me) for the paywall
+ * expiry banner and membership-card line. Pure — no I/O. A null/undefined or
+ * unparseable value is "no expiry" (free/permanent): daysLeft null, not expired.
+ */
+export function tierExpiryInfo(
+  tierExpiresAt: string | null | undefined,
+  now: Date = new Date(),
+): TierExpiryInfo {
+  if (!tierExpiresAt) return { daysLeft: null, expired: false, dateLabel: null };
+  const ms = Date.parse(tierExpiresAt);
+  if (Number.isNaN(ms)) return { daysLeft: null, expired: false, dateLabel: null };
+  const dateLabel = new Date(ms).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+  return {
+    daysLeft: Math.ceil((ms - now.getTime()) / DAY_MS),
+    expired: ms < now.getTime(),
+    dateLabel,
+  };
+}
+
 /** DEFAULT_TIER_PRICES row for `tier` in the fallback region (never empty —
  * every tier has a row in every region). */
 export function fallbackTierPrice(tier: Tier): { amountMinor: number; currency: string } {

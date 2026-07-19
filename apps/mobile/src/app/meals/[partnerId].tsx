@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -19,6 +19,7 @@ import {
   Screen,
   ScreenHeader,
   SkeletonRow,
+  Tag,
 } from '../../components/ui';
 import { formatMoney } from '@gym/shared';
 import { useAuth } from '../../state/auth';
@@ -66,9 +67,12 @@ const styles = StyleSheet.create({
   subscribeText: { flex: 1 },
   list: { gap: spacing.md },
   card: { gap: spacing.sm },
+  cardSoldOut: { opacity: 0.6 },
   cardTop: { flexDirection: 'row', gap: spacing.md },
   photo: { width: 72, height: 72, borderRadius: radius.md, backgroundColor: colors.surfaceRaised },
   cardMain: { flex: 1, gap: 2 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  nameText: { flex: 1 },
   priceRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs },
   qtyRow: {
     flexDirection: 'row',
@@ -106,9 +110,17 @@ const styles = StyleSheet.create({
 function MealItemCard({ meal }: { meal: MenuMeal }) {
   const qty = useMealCart((s) => s.lines[meal.id]?.qty ?? 0);
   const setQty = useMealCart((s) => s.setQty);
+  // Pack F real inventory (B... sold-out surfacing): disable ordering instead
+  // of hiding the meal outright, and zero any quantity already in the cart —
+  // a partner toggling sold-out mid-browse must not leave a stale cart line.
+  const soldOut = meal.soldOut;
+  useEffect(() => {
+    if (soldOut && qty > 0) setQty(meal, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soldOut]);
 
   return (
-    <Card style={styles.card}>
+    <Card style={[styles.card, soldOut && styles.cardSoldOut]}>
       <View style={styles.cardTop}>
         {meal.imageUrl ? (
           <Image source={{ uri: meal.imageUrl }} style={styles.photo} accessibilityIgnoresInvertColors />
@@ -116,9 +128,12 @@ function MealItemCard({ meal }: { meal: MenuMeal }) {
           <View style={styles.photo} />
         )}
         <View style={styles.cardMain}>
-          <AppText variant="bodyBold" numberOfLines={1}>
-            {meal.name}
-          </AppText>
+          <View style={styles.nameRow}>
+            <AppText variant="bodyBold" numberOfLines={1} style={styles.nameText}>
+              {meal.name}
+            </AppText>
+            {soldOut ? <Tag label="Sold out" variant="outline" color={colors.textDim} /> : null}
+          </View>
           <AppText variant="caption" color={colors.textDim} numberOfLines={2}>
             {meal.description || dietLabel(meal.dietType)}
           </AppText>
@@ -142,28 +157,34 @@ function MealItemCard({ meal }: { meal: MenuMeal }) {
           {dietLabel(meal.dietType)}
           {meal.goalTags.length > 0 ? ` · ${meal.goalTags.map(goalLabel).join(', ')}` : ''}
         </AppText>
-        <View style={styles.qtyControls}>
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel={`Remove one ${meal.name}`}
-            disabled={qty === 0}
-            onPress={() => setQty(meal, qty - 1)}
-            style={styles.qtyBtn}
-          >
-            <Ionicons name="remove" size={18} color={qty === 0 ? colors.textFaint : colors.text} />
-          </PressableScale>
-          <AppText variant="bodyBold" tabular style={{ minWidth: 20, textAlign: 'center' }}>
-            {qty}
+        {soldOut ? (
+          <AppText variant="caption" color={colors.textDim}>
+            Not available for this slot
           </AppText>
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel={`Add one ${meal.name}`}
-            onPress={() => setQty(meal, Math.min(qty + 1, 20))}
-            style={styles.qtyBtn}
-          >
-            <Ionicons name="add" size={18} color={colors.text} />
-          </PressableScale>
-        </View>
+        ) : (
+          <View style={styles.qtyControls}>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel={`Remove one ${meal.name}`}
+              disabled={qty === 0}
+              onPress={() => setQty(meal, qty - 1)}
+              style={styles.qtyBtn}
+            >
+              <Ionicons name="remove" size={18} color={qty === 0 ? colors.textFaint : colors.text} />
+            </PressableScale>
+            <AppText variant="bodyBold" tabular style={{ minWidth: 20, textAlign: 'center' }}>
+              {qty}
+            </AppText>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel={`Add one ${meal.name}`}
+              onPress={() => setQty(meal, Math.min(qty + 1, 20))}
+              style={styles.qtyBtn}
+            >
+              <Ionicons name="add" size={18} color={colors.text} />
+            </PressableScale>
+          </View>
+        )}
       </View>
     </Card>
   );
@@ -189,7 +210,7 @@ export default function PartnerMenuScreen() {
   );
   const filterDate = useMemo(() => slots.find((s) => s.window === windowFilter)?.date, [slots, windowFilter]);
 
-  const { data: meals, loading, error, retry } = useMealMenu(
+  const { data: meals, loading, error, retry, reload } = useMealMenu(
     status === 'signedIn' ? token : null,
     partnerId ?? null,
     { diet: diet ?? undefined, goal: goal ?? undefined, date: filterDate, window: windowFilter },
@@ -198,6 +219,38 @@ export default function PartnerMenuScreen() {
   useEffect(() => {
     if (partnerId) setPartner(partnerId);
   }, [partnerId, setPartner]);
+
+  // B12/Pack F: the menu only ever loaded on-focus, so a partner edit made
+  // while a member is browsing was invisible until they navigated away and
+  // back. A quiet background poll catches it and surfaces a dismissible
+  // "menu updated" toast the moment prices/availability actually change.
+  const MENU_POLL_MS = 30_000;
+  const prevSignatureRef = useRef<string | null>(null);
+  const [menuUpdated, setMenuUpdated] = useState(false);
+  // A filter change (window/diet/goal) refetches a DIFFERENT meal set, so the
+  // signature legitimately differs — that is NOT a partner edit. Drop the
+  // baseline (and any live toast) on every filter change so the next load
+  // silently re-baselines and only a genuine mid-browse partner edit surfaces
+  // the "Menu updated" toast.
+  useEffect(() => {
+    prevSignatureRef.current = null;
+    setMenuUpdated(false);
+  }, [diet, goal, windowFilter]);
+  useEffect(() => {
+    if (!meals) return;
+    const signature = JSON.stringify(
+      meals.map((m) => [m.id, m.priceMinor, m.soldOut]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    );
+    if (prevSignatureRef.current !== null && prevSignatureRef.current !== signature) {
+      setMenuUpdated(true);
+    }
+    prevSignatureRef.current = signature;
+  }, [meals]);
+  useEffect(() => {
+    if (status !== 'signedIn' || !partnerId) return;
+    const id = setInterval(reload, MENU_POLL_MS);
+    return () => clearInterval(id);
+  }, [status, partnerId, reload]);
 
   const count = cartLineCount(lines);
   const subtotal = cartSubtotalMinor(lines);
@@ -294,6 +347,22 @@ export default function PartnerMenuScreen() {
               ))}
             </View>
           </Animated.View>
+
+          {menuUpdated ? (
+            <Animated.View entering={enterFade(0)}>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="Menu updated — tap to dismiss"
+                onPress={() => setMenuUpdated(false)}
+                style={styles.subscribeRow}
+              >
+                <Ionicons name="refresh-circle" size={16} color={colors.accent} />
+                <AppText variant="caption" style={styles.subscribeText}>
+                  Menu updated — prices or availability changed.
+                </AppText>
+              </PressableScale>
+            </Animated.View>
+          ) : null}
 
           {error ? (
             <Animated.View entering={enterFade(0)}>

@@ -1,7 +1,8 @@
-import type { mealOrderItems, mealOrders } from '@gym/db';
+import type { mealOrderEvents, mealOrderItems, mealOrders } from '@gym/db';
 import {
   computeFees,
   maskPii,
+  orderNumber,
   type MealDeliveryConfig,
 } from '@gym/shared';
 
@@ -14,6 +15,7 @@ import {
 
 type OrderRow = typeof mealOrders.$inferSelect;
 type ItemRow = typeof mealOrderItems.$inferSelect;
+type EventRow = typeof mealOrderEvents.$inferSelect;
 
 /** A priced line as the client submits it (qty × the server-resolved price). */
 export interface PricedLine {
@@ -21,14 +23,34 @@ export interface PricedLine {
   qty: number;
 }
 
-/** Server-authoritative subtotal + fee breakdown for a one-time order. */
+/**
+ * Server-authoritative subtotal + fee + tip breakdown for a one-time order. The
+ * optional `tipMinor` (Pack D) is folded into `totalMinor` — it MUST already have
+ * passed `validateTipMinor` at the route (this helper only trusts it enough to
+ * floor negatives/NaN, never to bound-check). `totalMinor` stays the single
+ * authoritative sum the create route freezes and the price-change guard compares.
+ */
 export function computeOrderFinancials(
   lines: readonly PricedLine[],
   cfg: MealDeliveryConfig,
-): { subtotalMinor: number; deliveryFeeMinor: number; smallOrderFeeMinor: number; totalMinor: number } {
+  tipMinor = 0,
+): {
+  subtotalMinor: number;
+  deliveryFeeMinor: number;
+  smallOrderFeeMinor: number;
+  tipMinor: number;
+  totalMinor: number;
+} {
   const subtotalMinor = lines.reduce((sum, l) => sum + l.priceMinor * l.qty, 0);
   const { deliveryFeeMinor, smallOrderFeeMinor, totalMinor } = computeFees(subtotalMinor, cfg);
-  return { subtotalMinor, deliveryFeeMinor, smallOrderFeeMinor, totalMinor };
+  const safeTip = Number.isFinite(tipMinor) ? Math.max(0, Math.trunc(tipMinor)) : 0;
+  return {
+    subtotalMinor,
+    deliveryFeeMinor,
+    smallOrderFeeMinor,
+    tipMinor: safeTip,
+    totalMinor: totalMinor + safeTip,
+  };
 }
 
 /** One line item as serialized to the MEMBER (macros included). */
@@ -50,6 +72,9 @@ function memberItemView(item: ItemRow) {
 export function buildMemberOrderView(order: OrderRow, items: readonly ItemRow[]) {
   return {
     id: order.id,
+    // Human-readable code for the confirmation screen / tracking / support (the
+    // id remains authoritative; this is display only, stable for a given id).
+    orderNumber: orderNumber(order.id),
     source: order.source,
     partnerId: order.partnerId,
     subscriptionId: order.subscriptionId,
@@ -62,6 +87,7 @@ export function buildMemberOrderView(order: OrderRow, items: readonly ItemRow[])
     subtotalMinor: order.subtotalMinor,
     deliveryFeeMinor: order.deliveryFeeMinor,
     smallOrderFeeMinor: order.smallOrderFeeMinor,
+    tipMinor: order.tipMinor,
     totalMinor: order.totalMinor,
     currency: order.currency,
     paymentMethod: order.paymentMethod,
@@ -74,6 +100,42 @@ export function buildMemberOrderView(order: OrderRow, items: readonly ItemRow[])
     cancelledAt: order.cancelledAt,
     cancelReason: order.cancelReason,
     items: items.map(memberItemView),
+  };
+}
+
+/**
+ * The downloadable/shareable receipt/invoice for an order (Pack A). Frozen
+ * contract consumed by `GET /api/meals/orders/[id]/receipt` (WP-3) and rendered
+ * by the member app + partner/admin drawers (WP-6/WP-7/WP-8). Owner-scoped: the
+ * route resolves the order under `accountId = me.id` before calling this. The
+ * `timeline` is the append-only status audit (oldest-first), each row carrying
+ * its per-transition `note` (refuse/cancel reason) when present.
+ */
+export function buildOrderReceipt(
+  order: OrderRow,
+  items: readonly ItemRow[],
+  events: readonly EventRow[],
+) {
+  return {
+    orderNumber: orderNumber(order.id),
+    placedAt: order.placedAt,
+    items: items.map((item) => ({
+      name: item.nameSnapshot,
+      qty: item.qty,
+      priceMinorSnapshot: item.priceMinorSnapshot,
+    })),
+    subtotalMinor: order.subtotalMinor,
+    deliveryFeeMinor: order.deliveryFeeMinor,
+    smallOrderFeeMinor: order.smallOrderFeeMinor,
+    tipMinor: order.tipMinor,
+    totalMinor: order.totalMinor,
+    currency: order.currency,
+    status: order.status,
+    timeline: events.map((event) => ({
+      status: event.toStatus,
+      at: event.createdAt,
+      note: event.note ?? null,
+    })),
   };
 }
 

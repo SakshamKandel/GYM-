@@ -81,6 +81,12 @@ export interface Repo {
 
   // ── Food ────────────────────────────────────────────────────
   logFood(f: FoodLog): Promise<void>;
+  /**
+   * Insert multiple food logs as one all-or-nothing unit (fixes B19 —
+   * "copy yesterday" must never leave a partial day behind when one row in
+   * the middle of the batch fails). Empty array is a no-op.
+   */
+  logFoodBatch(logs: FoodLog[]): Promise<void>;
   deleteFoodLog(id: string): Promise<void>;
   getFoodLogs(date: string): Promise<FoodLog[]>;
   /** kcal totals for each of the given dates (missing dates → 0). */
@@ -93,6 +99,11 @@ export interface Repo {
   searchLocalFoods(query: string, limit: number): Promise<FoodItem[]>;
   /** Most recently logged distinct foods. */
   getRecentFoods(limit: number): Promise<FoodItem[]>;
+  /** Flip a food's favorite flag (local-only, not synced). Returns the new state. */
+  toggleFavoriteFood(foodId: string): Promise<boolean>;
+  isFavoriteFood(foodId: string): Promise<boolean>;
+  /** Favorited foods, most recently favorited first. */
+  getFavoriteFoods(limit: number): Promise<FoodItem[]>;
 
   // ── Water ───────────────────────────────────────────────────
   getWaterMl(date: string): Promise<number>;

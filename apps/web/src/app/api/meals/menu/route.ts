@@ -1,5 +1,5 @@
 import { mealAvailability, mealPartners, meals } from '@gym/db';
-import { isMealAvailableForDate, type MealAvailabilitySlot } from '@gym/shared';
+import { isMealAvailableForDate, ktmDayOfWeek, type MealAvailabilitySlot } from '@gym/shared';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
@@ -76,6 +76,7 @@ export async function GET(req: Request) {
       goalTags: meals.goalTags,
       priceMinor: meals.priceMinor,
       currency: meals.currency,
+      slotCapacity: meals.slotCapacity,
     })
     .from(meals)
     .where(and(...predicates))
@@ -84,22 +85,35 @@ export async function GET(req: Request) {
   // Goal filter is over the array column — done in-process on the (small) menu.
   let result = goal ? rows.filter((m) => m.goalTags.includes(goal)) : rows;
 
-  // Availability filter: keep only meals orderable for the requested delivery
-  // slot. A meal with no availability rows is always-available (partner opt-in).
+  // Availability filter + Pack F sold-out surfacing: keep only meals orderable
+  // for the requested slot (a meal with no availability rows is always-available)
+  // and mark those the partner has toggled sold-out for THIS (dayOfWeek, window)
+  // so the client can render them disabled instead of hiding them silently.
+  const soldOutIds = new Set<string>();
   if (date && window && result.length > 0) {
     const ids = result.map((m) => m.id);
     const availRows = await db
-      .select({ mealId: mealAvailability.mealId, dayOfWeek: mealAvailability.dayOfWeek, window: mealAvailability.window })
+      .select({
+        mealId: mealAvailability.mealId,
+        dayOfWeek: mealAvailability.dayOfWeek,
+        window: mealAvailability.window,
+        soldOut: mealAvailability.soldOut,
+      })
       .from(mealAvailability)
       .where(inArray(mealAvailability.mealId, ids));
     const byMeal = new Map<string, MealAvailabilitySlot[]>();
+    const dow = ktmDayOfWeek(date);
     for (const a of availRows) {
       const list = byMeal.get(a.mealId) ?? [];
       list.push({ dayOfWeek: a.dayOfWeek, window: a.window });
       byMeal.set(a.mealId, list);
+      if (a.soldOut && a.dayOfWeek === dow && a.window === window) soldOutIds.add(a.mealId);
     }
     result = result.filter((m) => isMealAvailableForDate(byMeal.get(m.id) ?? [], date, window));
   }
 
-  return json({ meals: result }, 200);
+  return json(
+    { meals: result.map((m) => ({ ...m, soldOut: soldOutIds.has(m.id) })) },
+    200,
+  );
 }

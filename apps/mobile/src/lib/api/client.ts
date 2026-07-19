@@ -75,11 +75,25 @@ export function toApiError(err: unknown): ApiError {
 
 const tierSchema: z.ZodType<Tier> = z.enum(['starter', 'silver', 'gold', 'elite']);
 
+/** Provenance of the account's stored tier grant (mirrors accounts.tier_source). */
+export type TierSource = 'console' | 'manual_payment' | 'revenuecat' | 'preview' | 'coach';
+const tierSourceSchema = z.enum(['console', 'manual_payment', 'revenuecat', 'preview', 'coach']);
+
 const userSchema = z.object({
   id: z.string(),
   email: z.string(),
   displayName: z.string(),
   tier: tierSchema,
+  /**
+   * ISO instant the current paid tier lapses; null = no expiry (free/permanent).
+   * Optional so older responses (login/register, which omit it) still parse —
+   * GET /api/me and POST /api/subscription/tier always carry it. RAW value:
+   * present even when already past, so the app can show "expired — renew" while
+   * `tier` has collapsed to 'starter'. WP-9 / Pack J (B22).
+   */
+  tierExpiresAt: z.string().nullable().optional(),
+  tierSource: tierSourceSchema.nullable().optional(),
+  tierSourceId: z.string().nullable().optional(),
 });
 
 export type AuthUser = z.infer<typeof userSchema>;
@@ -89,6 +103,15 @@ const sessionSchema = z.object({ token: z.string(), user: userSchema });
 export type AuthSession = z.infer<typeof sessionSchema>;
 
 const meSchema = z.object({ user: userSchema });
+/**
+ * POST /api/subscription/tier response: the updated user plus the instant the
+ * change takes effect — `now` for an upgrade / immediate downgrade, or the
+ * paid-window end for a cancel-at-period-end (Pack J period-end semantics).
+ */
+const tierChangeSchema = z.object({
+  user: userSchema,
+  effectiveAt: z.string().nullable().optional(),
+});
 const okSchema = z.object({ ok: z.literal(true) });
 const deletionBlockerCodeSchema = z.enum(ACCOUNT_DELETION_BLOCKER_CODES);
 const accountDeletionImpactSchema: z.ZodType<AccountDeletionImpact> = z.object({
@@ -298,21 +321,31 @@ export async function logout(token: string): Promise<void> {
   parseAs(okSchema, data);
 }
 
+/** The outcome of a tier change: the updated user + when it takes effect. */
+export interface TierChangeResult {
+  user: AuthUser;
+  /** ISO instant the change takes effect (now, or a cancel's period end). */
+  effectiveAt: string | null;
+}
+
 /**
  * Set the account's subscription tier SERVER-SIDE (the paywall's "Choose
- * plan"). The server is the tier authority — PUT /api/profile no longer
- * writes accounts.tier — so gated features stay locked until this returns.
- * Resolves with the updated user (same shape as GET /api/me) so the caller
- * can adopt it into the auth store immediately, no extra round trip.
+ * plan" / "Cancel"). The server is the tier authority — PUT /api/profile no
+ * longer writes accounts.tier — so gated features stay locked until this
+ * returns. Resolves with the updated user (same shape as GET /api/me) plus
+ * `effectiveAt`: for a downgrade to 'starter' the server keeps access until the
+ * paid window ends (period-end semantics), so `effectiveAt` is that end date;
+ * an upgrade / immediate downgrade returns `now`.
  */
-export async function setSubscriptionTier(token: string, tier: Tier): Promise<AuthUser> {
+export async function setSubscriptionTier(token: string, tier: Tier): Promise<TierChangeResult> {
   const data = await request({
     method: 'POST',
     path: '/api/subscription/tier',
     body: { tier },
     token,
   });
-  return parseAs(meSchema, data).user;
+  const parsed = parseAs(tierChangeSchema, data);
+  return { user: parsed.user, effectiveAt: parsed.effectiveAt ?? null };
 }
 
 /**
@@ -1009,6 +1042,14 @@ const catalogSchema = z.object({
   currency: z.string(),
   tiers: z.array(catalogTierSchema),
   trialDays: z.number(),
+  /**
+   * Server billing mode. 'live' means paid tiers can NOT be granted by the
+   * self-serve tier endpoint (it 402s) — the paywall pre-detects this and shows
+   * a store / manual-payment affordance instead of a Choose CTA that reverts
+   * (B23 flicker + Pack J honest INTL affordance). Optional/defaulted so an
+   * older server response still parses (absent → treated as 'preview').
+   */
+  billingMode: z.enum(['preview', 'live']).optional(),
 });
 export type SubscriptionCatalog = z.infer<typeof catalogSchema>;
 

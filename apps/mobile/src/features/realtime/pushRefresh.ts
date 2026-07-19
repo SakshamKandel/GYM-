@@ -2,6 +2,7 @@ import * as Notifications from 'expo-notifications';
 import { AppState, Platform } from 'react-native';
 import { hydrateCheckIns } from '../checkin/store';
 import { useGamificationBadges } from '../gamification/store';
+import { triggerMyCoachRefresh } from '../mentorship/hooks';
 import { refreshServerSuggestions } from '../progression/hooks';
 import { useAuth } from '../../state/auth';
 
@@ -29,6 +30,11 @@ import { useAuth } from '../../state/auth';
  *    one — e.g. buddy quest, coach's pick, challenge complete). Re-fetching
  *    also refreshes newlyEarnedIds so the Badges screen's celebration can
  *    fire next time it's focused.
+ *  - 'coach' → triggerMyCoachRefresh() (WP-10's `coach_unassigned` push: a
+ *    coach released this member). `useMyCoach()` has no global store of its
+ *    own, so this calls every mounted instance's `reload` directly instead
+ *    — the unassign banner on coach-chat.tsx (and any other screen reading
+ *    `useMyCoach`) updates immediately rather than waiting for a focus event.
  *  - 'coach_message' → no store to refresh. The chat thread lives in
  *    useCoachThread's component state and reloads on screen focus, so the
  *    thread is already fresh whenever the member can actually see it. The
@@ -101,6 +107,9 @@ function refreshForEvent(type: string): void {
     case 'tier_request_decided':
     case 'payment_decided':
       void useAuth.getState().refresh();
+      break;
+    case 'coach':
+      triggerMyCoachRefresh();
       break;
     case 'coach_plan':
     // falls through — no global store exists yet (see the module doc); the

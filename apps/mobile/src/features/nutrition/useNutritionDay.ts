@@ -81,7 +81,15 @@ export function useNutritionDay(date: string): DayState & {
   const copyLogs = useCallback(
     async (cloned: FoodLog[]) => {
       const repo = await getRepo();
-      for (const log of cloned) await repo.logFood(log);
+      try {
+        // Fixes B19 — logFoodBatch is one all-or-nothing write; a failure
+        // partway through used to leave a partial "copied" day with no
+        // rollback and no indication anything had gone wrong.
+        await repo.logFoodBatch(cloned);
+      } catch (err) {
+        console.error('[nutrition] copy-yesterday failed', err);
+        throw err;
+      }
       const next = await load();
       setState(next);
     },

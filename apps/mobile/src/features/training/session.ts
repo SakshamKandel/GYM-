@@ -71,6 +71,16 @@ interface SessionState {
   setPendingRpe: (rpe: number | null) => void;
   /** PR-check, persist, advance the pointer and start the rest timer. */
   commitSet: (weightKg: number, reps: number) => Promise<void>;
+  /** Edit an already-logged set's weight/reps in place (re-checks the PR flag). */
+  updateLoggedSet: (setId: string, weightKg: number, reps: number) => Promise<void>;
+  /** Remove an already-logged set and renumber the exercise's remaining sets. */
+  deleteLoggedSet: (setId: string) => Promise<void>;
+  /**
+   * Replace the exercise at `index` with a different one — only offered
+   * before any set has been logged for that slot, so history never gets
+   * split across two exercise identities mid-block.
+   */
+  swapExercise: (index: number, exerciseId: string) => void;
   startRest: (sec: number) => void;
   adjustRest: (deltaSec: number) => void;
   skipRest: () => void;
@@ -98,6 +108,46 @@ function raiseBaseline(repoBest: number | null, sessionBest: number | null): num
   if (repoBest === null) return sessionBest;
   if (sessionBest === null) return repoBest;
   return Math.max(repoBest, sessionBest);
+}
+
+/**
+ * Recompute `isPr` for an exercise's ENTIRE logged-set list against the repo
+ * baseline, walking setNo order and folding in the running session-best as
+ * we go (mirrors commitSet's per-set math applied to the whole list at once).
+ *
+ * Editing or deleting a set can change which lift is the session's best, so
+ * recomputing only the touched set (the previous bug) leaves siblings with a
+ * stale `isPr` — a false-positive second "PR" badge after an edit raises the
+ * touched set past a sibling, or a false-negative after deleting the set
+ * that actually held the record. This is the single source of truth both
+ * `updateLoggedSet` and `deleteLoggedSet` call after mutating the list, so
+ * the in-session UI, the local repo, and (via `syncWorkouts`) the synced
+ * `isPr` the coach console reads all agree with each other.
+ */
+function recomputePrFlags(
+  sets: SetLog[],
+  repoBestE1Rm: number | null,
+  repoBestWeight: number | null,
+): SetLog[] {
+  const ordered = [...sets].sort((a, b) => a.setNo - b.setNo);
+  let sessionBestE1Rm: number | null = null;
+  let sessionBestWeight: number | null = null;
+  return ordered.map((set) => {
+    const pr = checkPr({
+      weightKg: set.weightKg,
+      reps: set.reps,
+      previousBestE1Rm: raiseBaseline(repoBestE1Rm, sessionBestE1Rm),
+      previousBestWeightKg: raiseBaseline(repoBestWeight, sessionBestWeight),
+    });
+    if (set.reps <= 12) {
+      // mirrors getBestE1Rm's eligibility rule
+      const e1rm = epley1Rm(set.weightKg, set.reps);
+      sessionBestE1Rm = sessionBestE1Rm === null ? e1rm : Math.max(sessionBestE1Rm, e1rm);
+    }
+    sessionBestWeight =
+      sessionBestWeight === null ? set.weightKg : Math.max(sessionBestWeight, set.weightKg);
+    return set.isPr === pr.isPr ? set : { ...set, isPr: pr.isPr };
+  });
 }
 
 function planExerciseToSession(pe: {
@@ -493,6 +543,109 @@ export const useSession = create<SessionState>()((set, get) => {
         pendingRpe: null,
       });
       get().startRest(ex.restSec);
+    },
+
+    updateLoggedSet: async (setId, weightKg, reps) => {
+      const s = get();
+      if (s.status !== 'active' || !s.workoutId) return;
+      const idx = s.exercises.findIndex((e) => e.loggedSets.some((x) => x.id === setId));
+      if (idx < 0) return;
+      const ex = s.exercises[idx];
+      const target = ex?.loggedSets.find((x) => x.id === setId);
+      if (!ex || !target) return;
+
+      const repo = await getRepo();
+      const [bestE1Rm, bestWeight] = await Promise.all([
+        repo.getBestE1Rm(ex.exerciseId, s.workoutId),
+        repo.getBestWeight(ex.exerciseId, s.workoutId),
+      ]);
+      // Apply the edit, then recompute isPr for EVERY set in the exercise
+      // (not just the edited one) — editing this set's weight/reps can
+      // change which lift is the session's best, so a sibling's isPr can go
+      // stale otherwise (see recomputePrFlags's doc).
+      const edited = ex.loggedSets.map((x) => (x.id === setId ? { ...x, weightKg, reps } : x));
+      const recomputed = recomputePrFlags(edited, bestE1Rm, bestWeight);
+      const changed = recomputed.filter((x) => {
+        const before = ex.loggedSets.find((p) => p.id === x.id);
+        return (
+          before === undefined ||
+          before.weightKg !== x.weightKg ||
+          before.reps !== x.reps ||
+          before.isPr !== x.isPr
+        );
+      });
+      await Promise.all(changed.map((x) => repo.updateSet(x)));
+      set({
+        exercises: get().exercises.map((e, i) => (i === idx ? { ...e, loggedSets: recomputed } : e)),
+      });
+    },
+
+    deleteLoggedSet: async (setId) => {
+      const s = get();
+      if (s.status !== 'active' || !s.workoutId) return;
+      const idx = s.exercises.findIndex((e) => e.loggedSets.some((x) => x.id === setId));
+      if (idx < 0) return;
+      const ex = s.exercises[idx];
+      if (!ex) return;
+
+      const repo = await getRepo();
+      await repo.deleteSet(setId);
+      // Renumber the remaining sets to a dense 1..N sequence: commitSet uses
+      // `loggedSets.length + 1` for the NEXT set's number, and cross-workout
+      // ghost matching (getLastSetsForExercise → ghostTarget) keys off setNo
+      // — a gap or a duplicate would misalign either one. Then recompute
+      // isPr for every remaining set: deleting the session's PR-holder must
+      // hand the flag to whichever remaining lift is now genuinely the best
+      // (see recomputePrFlags's doc) — the old code never touched isPr here.
+      const remaining = ex.loggedSets.filter((x) => x.id !== setId);
+      const renumbered = remaining.map((x, i) => ({ ...x, setNo: i + 1 }));
+      const [bestE1Rm, bestWeight] = await Promise.all([
+        repo.getBestE1Rm(ex.exerciseId, s.workoutId),
+        repo.getBestWeight(ex.exerciseId, s.workoutId),
+      ]);
+      const recomputed = recomputePrFlags(renumbered, bestE1Rm, bestWeight);
+      const changed = recomputed.filter((x) => {
+        const before = remaining.find((p) => p.id === x.id);
+        return before === undefined || before.setNo !== x.setNo || before.isPr !== x.isPr;
+      });
+      await Promise.all(changed.map((x) => repo.updateSet(x)));
+      set({
+        exercises: get().exercises.map((e, i) => (i === idx ? { ...e, loggedSets: recomputed } : e)),
+      });
+    },
+
+    swapExercise: (index, exerciseId) => {
+      const s = get();
+      if (s.status !== 'active') return;
+      const current = s.exercises[index];
+      if (!current || current.loggedSets.length > 0) return;
+      const info = getExercise(exerciseId);
+      if (!info) return;
+      const entry: SessionExercise = {
+        exerciseId,
+        exerciseName: info.name,
+        equipment: info.equipment,
+        targetSets: current.targetSets,
+        repRange: current.repRange,
+        restSec: current.restSec,
+        loggedSets: [],
+        lastSets: [],
+      };
+      set({ exercises: s.exercises.map((e, i) => (i === index ? entry : e)) });
+      // Ghost targets + blueprint persistence arrive in the background, same
+      // pattern as addExercise — never block the swap tap on them.
+      void (async () => {
+        const repo = await getRepo();
+        const workoutId = get().workoutId;
+        if (!workoutId) return;
+        await repo.saveWorkoutBlueprint(workoutId, sessionExercisesToBlueprint(get().exercises));
+        const lastSets = await repo.getLastSetsForExercise(exerciseId, workoutId);
+        set({
+          exercises: get().exercises.map((e, i) => (i === index ? { ...e, lastSets } : e)),
+        });
+      })().catch(() => {
+        // In-memory session stays responsive even if the background refresh fails.
+      });
     },
 
     startRest: (sec) => {

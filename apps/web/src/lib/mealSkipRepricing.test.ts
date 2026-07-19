@@ -76,6 +76,7 @@ describe('cycle receipt serialization', () => {
         method: 'esewa',
         receiptUrl: 'meal_receipt/00000000-0000-0000-0000-000000000001',
         note: null,
+        now: new Date('2026-07-19T00:00:00.000Z'),
       }),
     );
 

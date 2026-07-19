@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, Share, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import { formatMoney } from '@gym/shared';
-import { AppText, Button, Sheet, Tag } from '../../../components/ui';
+import { AppText, Button, PressableScale, Sheet, Tag } from '../../../components/ui';
 import { fetchMealMenu, toMealsError, type MealOrder } from '../api';
 import { useMealCart } from '../cartStore';
 import { pushPath } from '../nav';
@@ -19,12 +19,16 @@ import {
   orderEventRows,
   orderFeeRows,
   orderItemCount,
+  orderItemsSummary,
   relativeDay,
   formatCalendarDate,
   sumOrderMacros,
   windowName,
   windowTimeRange,
 } from './orderView';
+import { RatingPanel } from './RatingPanel';
+import { TipPanel } from './TipPanel';
+import { DisputePanel } from './DisputePanel';
 
 /**
  * Full order detail sheet: macro roll-up (protein + calories lead — this is a
@@ -47,20 +51,44 @@ type ReorderState =
   | { phase: 'error'; message: string }
   | { phase: 'none' };
 
+type ActivePanel = 'none' | 'rating' | 'tip' | 'dispute';
+
 interface Props {
   order: MealOrder | null;
   token: string | null;
   partnerName?: string;
   onClose: () => void;
+  /** Fires after a tip update changes the order's total, or after a rating /
+   * dispute submits — lets the caller refresh its own list state. */
+  onOrderChanged?: (order?: MealOrder) => void;
 }
 
-export function OrderDetailSheet({ order, token, partnerName, onClose }: Props) {
+export function OrderDetailSheet({ order, token, partnerName, onClose, onOrderChanged }: Props) {
   const [reorder, setReorder] = useState<ReorderState>({ phase: 'idle' });
+  const [panel, setPanel] = useState<ActivePanel>('none');
 
-  // Reset the reorder affordance whenever a different order opens the sheet.
+  // Reset the reorder affordance + any open panel whenever a different order
+  // opens the sheet (or the sheet closes).
   useEffect(() => {
     setReorder({ phase: 'idle' });
+    setPanel('none');
   }, [order?.id]);
+
+  function shareReceipt(): void {
+    if (!order) return;
+    const lines = order.items.map((item) => `${item.qty}x ${item.name} — ${formatMoney(item.priceMinorSnapshot * item.qty, order.currency)}`);
+    const message = [
+      `Order ${order.orderNumber || order.id}`,
+      partnerName ?? '',
+      orderItemsSummary(order),
+      ...lines,
+      `Total: ${formatMoney(order.totalMinor, order.currency)}`,
+      `Status: ${orderStatusLabel(order.status)}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    void Share.share({ message, title: `Order ${order.orderNumber || order.id}` });
+  }
 
   function doReorder(): void {
     if (!order || !token || reorder.phase === 'loading') return;
@@ -103,6 +131,7 @@ export function OrderDetailSheet({ order, token, partnerName, onClose }: Props) 
                 {partnerName ?? 'Your order'}
               </AppText>
               <AppText variant="caption" color={colors.textDim}>
+                {order.orderNumber ? `${order.orderNumber} · ` : ''}
                 {day} · {windowName(order.window)} · {windowTimeRange(order.window)}
               </AppText>
             </View>
@@ -253,6 +282,89 @@ export function OrderDetailSheet({ order, token, partnerName, onClose }: Props) 
             ) : null}
           </View>
 
+          {/* Receipt / rate / tip / report — Pack A/C/D/E */}
+          <View style={styles.quickActionsRow}>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Share order receipt"
+              onPress={shareReceipt}
+              style={styles.quickActionBtn}
+            >
+              <Ionicons name="share-outline" size={16} color={colors.text} />
+              <AppText variant="caption">Receipt</AppText>
+            </PressableScale>
+            {order.status === 'delivered' ? (
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="Rate this order"
+                onPress={() => setPanel(panel === 'rating' ? 'none' : 'rating')}
+                style={styles.quickActionBtn}
+              >
+                <Ionicons name="star-outline" size={16} color={colors.text} />
+                <AppText variant="caption">Rate</AppText>
+              </PressableScale>
+            ) : null}
+            {order.paymentStatus === 'unpaid' && order.status !== 'cancelled' && order.status !== 'refused' ? (
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="Add or change tip"
+                onPress={() => setPanel(panel === 'tip' ? 'none' : 'tip')}
+                style={styles.quickActionBtn}
+              >
+                <Ionicons name="cash-outline" size={16} color={colors.text} />
+                <AppText variant="caption">Tip</AppText>
+              </PressableScale>
+            ) : null}
+            {order.status === 'delivered' ? (
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="Report a problem with this order"
+                onPress={() => setPanel(panel === 'dispute' ? 'none' : 'dispute')}
+                style={styles.quickActionBtn}
+              >
+                <Ionicons name="flag-outline" size={16} color={colors.text} />
+                <AppText variant="caption">Report</AppText>
+              </PressableScale>
+            ) : null}
+          </View>
+
+          {panel === 'rating' && token ? (
+            <View style={styles.panelWrap}>
+              <RatingPanel
+                token={token}
+                orderId={order.id}
+                onDone={() => {
+                  setPanel('none');
+                  onOrderChanged?.();
+                }}
+              />
+            </View>
+          ) : null}
+          {panel === 'tip' && token ? (
+            <View style={styles.panelWrap}>
+              <TipPanel
+                token={token}
+                order={order}
+                onDone={(updated) => {
+                  setPanel('none');
+                  onOrderChanged?.(updated);
+                }}
+              />
+            </View>
+          ) : null}
+          {panel === 'dispute' && token ? (
+            <View style={styles.panelWrap}>
+              <DisputePanel
+                token={token}
+                orderId={order.id}
+                onDone={() => {
+                  setPanel('none');
+                  onOrderChanged?.();
+                }}
+              />
+            </View>
+          ) : null}
+
           {/* Reorder */}
           {reorder.phase === 'none' ? (
             <AppText variant="caption" color={colors.textDim} center style={styles.reorderNote}>
@@ -336,6 +448,22 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   addressLine: { marginTop: 2 },
+  quickActionsRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg, flexWrap: 'wrap' },
+  quickActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minHeight: touch.min,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+  },
+  panelWrap: {
+    marginTop: spacing.md,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+  },
   reorderNote: { marginTop: spacing.lg },
   reorderBtn: { marginTop: spacing.md, marginBottom: spacing.sm },
 });

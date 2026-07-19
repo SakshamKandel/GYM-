@@ -14,6 +14,7 @@ import {
   buildSubscriptionCycleAdjustments,
   loadDeliveryConfig,
   materializeDueOrders,
+  prorateUnusedPaidDays,
   quoteSubscriptionPlan,
   subscriptionPaymentMutationBlock,
   type AtomicSubscriptionEditOutcome,
@@ -47,6 +48,58 @@ export function OPTIONS() {
   return preflight();
 }
 
+/**
+ * Estimate the refund owed across a plan's PAID future weekly cycles when the
+ * member cancels (Pack G proration). Read-only: it sums `prorateUnusedPaidDays`
+ * over every paid cycle whose billed week hasn't fully elapsed, minus skips. The
+ * number is an ESTIMATE support acts on — this route never moves money.
+ */
+async function estimatePaidProration(
+  db: ReturnType<typeof getDb>,
+  subscriptionId: string,
+  daysOfWeek: number[],
+  today: string,
+): Promise<{ estimatedMinor: number; currency: string | null; unusedDays: number }> {
+  const cycles = await db
+    .select({
+      weekStart: mealBillingCycles.weekStart,
+      pricePerDayMinor: mealBillingCycles.pricePerDayMinor,
+      amountMinor: mealBillingCycles.amountMinor,
+      currency: mealBillingCycles.currency,
+    })
+    .from(mealBillingCycles)
+    .where(
+      and(
+        eq(mealBillingCycles.subscriptionId, subscriptionId),
+        eq(mealBillingCycles.status, 'paid'),
+        gte(mealBillingCycles.weekEnd, today),
+      ),
+    );
+  if (cycles.length === 0) return { estimatedMinor: 0, currency: null, unusedDays: 0 };
+
+  const skipRows = await db
+    .select({ deliveryDate: mealSubSkips.deliveryDate })
+    .from(mealSubSkips)
+    .where(and(eq(mealSubSkips.subscriptionId, subscriptionId), gte(mealSubSkips.deliveryDate, today)));
+  const skipDates = new Set(skipRows.map((r) => r.deliveryDate));
+
+  let estimatedMinor = 0;
+  let unusedDays = 0;
+  for (const c of cycles) {
+    const p = prorateUnusedPaidDays({
+      weekStart: c.weekStart,
+      daysOfWeek,
+      pricePerDayMinor: c.pricePerDayMinor,
+      amountMinor: c.amountMinor,
+      today,
+      skipDates,
+    });
+    estimatedMinor += p.refundMinor;
+    unusedDays += p.unusedDays;
+  }
+  return { estimatedMinor, currency: cycles[0]?.currency ?? null, unusedDays };
+}
+
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await authedUser(req);
   if (!me) return json({ error: 'unauthorized' }, 401);
@@ -64,6 +117,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       paymentMethod: mealSubscriptions.paymentMethod,
       startDate: mealSubscriptions.startDate,
       status: mealSubscriptions.status,
+      daysOfWeek: mealSubscriptions.daysOfWeek,
       updatedAt: mealSubscriptions.updatedAt,
     })
     .from(mealSubscriptions)
@@ -209,7 +263,22 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       subscriptionId: sub.id,
       scope: { kind: 'remaining' },
     });
-    if (paymentBlock) return json({ error: paymentBlock }, 409);
+    if (paymentBlock) {
+      // Cancelling a plan with a funded future week can't self-serve refund
+      // (money un-moves only on the admin rail), but the member deserves to see
+      // what they're owed and be routed to support (Pack G). Surface a proration
+      // ESTIMATE alongside the block — informational only, never moves money.
+      if (target === 'cancelled' && paymentBlock === 'refund_required') {
+        const refund = await estimatePaidProration(
+          db,
+          sub.id,
+          sub.daysOfWeek,
+          ktmDateString(new Date()),
+        );
+        return json({ error: paymentBlock, refund }, 409);
+      }
+      return json({ error: paymentBlock }, 409);
+    }
   }
 
   const updated = await db

@@ -6,6 +6,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { greeceCoachReply } from '@/lib/groqCoach';
 import { json, preflight, readJson } from '@/lib/http';
+import { notify } from '@/lib/notify';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -130,13 +131,15 @@ export async function POST(req: Request) {
   // regardless of tier. Only relevant to 'coach_chat' — skip the round trip
   // entirely for 'support' posts.
   let hasCoach = false;
+  let coachId: string | null = null;
   if (kind === 'coach_chat') {
     const assigned = await db
-      .select({ id: coachAssignments.id })
+      .select({ id: coachAssignments.id, coachId: coachAssignments.coachId })
       .from(coachAssignments)
       .where(and(eq(coachAssignments.userId, user.id), eq(coachAssignments.status, 'active')))
       .limit(1);
     hasCoach = assigned.length > 0;
+    coachId = assigned[0]?.coachId ?? null;
   }
 
   // coach_chat is still the Elite promise made real (or an assigned member) —
@@ -165,6 +168,39 @@ export async function POST(req: Request) {
 
   const userMsg = insertedUser[0];
   if (!userMsg) return json({ error: 'invalid' }, 400);
+
+  // Inbound-work notifications (WP-2 / Pack B/K) — fire-and-forget, never block
+  // or fail the send. §7.2-S2: the member's message + name are member-authored,
+  // so they are maskPii'd (`body` already is) and attributed before reaching a
+  // privileged (staff / coach) recipient — a member must not be able to forge a
+  // platform-authored push through the free-text field.
+  const snippet = body.length > 120 ? `${body.slice(0, 117)}...` : body;
+  const who = maskPii(user.displayName).trim() || 'A member';
+  if (kind === 'support') {
+    // Every support ticket lands in the admin support inbox — notify staff who
+    // can read it (mirrors the coach-application fan-out), Elite auto-reply or not.
+    void notify(
+      'support_message_staff',
+      { role: 'staff', permission: 'support.thread.read' },
+      {
+        title: 'New support message',
+        body: `${who}: ${snippet}`,
+        data: { type: 'support', id: user.id },
+      },
+    );
+  } else if (kind === 'coach_chat' && hasCoach && coachId) {
+    // The assigned human coach answers via the console — tell them a client
+    // wrote in (their inbox otherwise only refreshes on focus).
+    void notify(
+      'coach_message_client',
+      { accountId: coachId },
+      {
+        title: 'New message from your client',
+        body: `${who}: ${snippet}`,
+        data: { type: 'coach_chat', id: user.id },
+      },
+    );
+  }
 
   // Human-coach handoff — coach_chat thread ONLY: if this account has an ACTIVE
   // coach assignment, a real coach owns the reply, so skip the AI auto-reply and

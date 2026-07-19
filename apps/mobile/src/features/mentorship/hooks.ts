@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { useAuth } from '../../state/auth';
 import {
@@ -80,6 +80,31 @@ export function useCoachDirectory(): CoachDirectoryState {
 
 // ── My coach / pending request ────────────────────────────────
 
+/**
+ * Every currently-mounted `useMyCoach()` instance's `reload`, so a
+ * `coach_unassigned` push arriving while Coach Chat (or anywhere else that
+ * renders `useMyCoach`) is already open can force an immediate re-fetch
+ * instead of waiting for the next focus event. `useMyCoach` has no zustand
+ * store of its own (unlike the checkin/gamification/suggestion caches this
+ * file's siblings piggyback on), so this tiny listener set is the minimal
+ * bridge — features/realtime/pushRefresh.ts calls `triggerMyCoachRefresh()`
+ * on the 'coach' push event; it never throws and no-ops when nothing is
+ * mounted.
+ */
+const myCoachReloadListeners = new Set<() => void>();
+
+/** Best-effort: re-run every mounted `useMyCoach()`'s reload. Never throws. */
+export function triggerMyCoachRefresh(): void {
+  for (const listener of myCoachReloadListeners) {
+    try {
+      listener();
+    } catch {
+      // A listener's own reload already swallows its errors — this guard is
+      // just so one bad subscriber can't stop the rest from refreshing.
+    }
+  }
+}
+
 export interface MyCoachData {
   /** The assigned coach, or null (none / signed out / not loaded yet). */
   coach: AssignedCoach | null;
@@ -117,6 +142,15 @@ export function useMyCoach(): MyCoachData {
       reload();
     }, [reload]),
   );
+
+  // Subscribe this instance's reload to the push-triggered refresh channel
+  // for as long as it's mounted (see `triggerMyCoachRefresh` above).
+  useEffect(() => {
+    myCoachReloadListeners.add(reload);
+    return () => {
+      myCoachReloadListeners.delete(reload);
+    };
+  }, [reload]);
 
   const valid = snap !== null && snap.token === token;
   return {

@@ -4,6 +4,7 @@ import { requirePartner } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import {
+  loadPartnerSubscriptionHeldMinor,
   loadSubscriptionForecast,
   loadSubscriptionRoster,
   type PartnerSubscriptionRow,
@@ -46,10 +47,17 @@ export async function GET(req: Request) {
 
   const db = getDb();
   const today = ktmDateString(new Date());
-  const [roster, forecast]: [PartnerSubscriptionRow[], SubscriptionForecast] = await Promise.all([
+  const [roster, forecast, subscriptionHeldMinor]: [
+    PartnerSubscriptionRow[],
+    SubscriptionForecast,
+    number,
+  ] = await Promise.all([
     loadSubscriptionRoster(db, partnerId, today),
     loadSubscriptionForecast(db, partnerId, today, weeks),
+    loadPartnerSubscriptionHeldMinor(db, partnerId),
   ]);
 
-  return json({ roster, forecast }, 200);
+  // Prepaid-digital subscription revenue the PLATFORM currently holds for this
+  // partner (Σ paid billing cycles) — a transparency figure for the roster page.
+  return json({ roster, forecast, subscriptionHeldMinor }, 200);
 }

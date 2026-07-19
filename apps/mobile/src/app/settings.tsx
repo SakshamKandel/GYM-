@@ -41,11 +41,12 @@ import {
 } from '../lib/notifications';
 import { deleteAccount, logoutAll, toApiError } from '../lib/api/client';
 import { resetStackTo } from '../lib/nav';
+import { syncProfileNow } from '../lib/profileSync';
 import { patchWeeklyTarget, toGamificationError } from '../lib/api/gamification';
 import { getPublicLeaderboard, setPublicBoardHidden } from '../lib/api/social';
 import { getRepo } from '../lib/repo';
 import { SEED_PLANS } from '../lib/seed/plans';
-import { MembershipCard } from '../features/subscription/components/MembershipCard';
+import { MembershipCardAny } from '../features/subscription/components/MembershipCardAny';
 import { useEffectiveTier } from '../lib/tier';
 import { useAuth } from '../state/auth';
 import { publicBoardHiddenFor, useGamificationDisplay } from '../state/gamification';
@@ -55,10 +56,13 @@ import { useSecurity } from '../state/security';
 import { ProfileGamification } from '../features/gamification/components/ProfileGamification';
 import { useGamificationBadges } from '../features/gamification/store';
 import { getSupportUnread } from '../features/support/api';
+import { getNotifications } from '../features/notifications/api';
 import { useWeeklyStreak } from '../features/streak/hooks';
+import { useMyCoach } from '../features/mentorship/hooks';
 import { pushPath } from '../features/auth/nav';
 import { pushStaff, STAFF_ROUTES } from '../features/staff/nav';
 import { biometricsAvailable } from '../features/security/AppLock';
+import { PinSetupSheet } from '../features/security/PinSetupSheet';
 import {
   BIRTH_YEAR,
   HEIGHT_CM,
@@ -86,6 +90,14 @@ const TIER_LABEL: Record<Tier, string> = {
   gold: 'Gold',
   elite: 'Elite',
 };
+
+/** Re-lock grace window options (Pack P) — 0 = always re-prompt (prior behavior). */
+const LOCK_TIMEOUT_OPTIONS: { minutes: number; label: string }[] = [
+  { minutes: 0, label: 'Immediately' },
+  { minutes: 1, label: '1 min' },
+  { minutes: 5, label: '5 min' },
+  { minutes: 15, label: '15 min' },
+];
 
 function accountDeletionFailureMessage(error: ReturnType<typeof toApiError>): string {
   if (error.code === 'unauthorized') {
@@ -443,6 +455,7 @@ export default function SettingsScreen() {
   // ("Priority support"); every tier may open the row (SCALE-UP-PLAN §4.4).
   const tier = useEffectiveTier();
   const [supportUnread, setSupportUnread] = useState(0);
+  const [notifUnread, setNotifUnread] = useState(0);
   const daysPerWeek = useProfile((s) => s.daysPerWeek);
   const update = useProfile((s) => s.update);
 
@@ -466,6 +479,23 @@ export default function SettingsScreen() {
         return;
       }
       void getSupportUnread(authToken).then(setSupportUnread);
+    }, [authStatus, authToken]),
+  );
+
+  // Notification-center unread badge (Pack P) — same plain focus-fetch
+  // discipline as the support badge above; getNotifications never throws
+  // into the UI (its own client wraps every failure), so a rejected promise
+  // here would be a genuine bug, not a network hiccup — still guarded with
+  // `.catch` since this row must never be able to break Settings.
+  useFocusEffect(
+    useCallback(() => {
+      if (authStatus !== 'signedIn' || authToken === null) {
+        setNotifUnread(0);
+        return;
+      }
+      void getNotifications(authToken, { limit: 1 })
+        .then((page) => setNotifUnread(page.unreadCount))
+        .catch(() => setNotifUnread(0));
     }, [authStatus, authToken]),
   );
 
@@ -523,6 +553,13 @@ export default function SettingsScreen() {
 
   const biometricLock = useSecurity((s) => s.biometricLock);
   const setBiometricLock = useSecurity((s) => s.setBiometricLock);
+  // PIN app-lock fallback + re-lock grace timeout (Pack P).
+  const pinHash = useSecurity((s) => s.pinHash);
+  const setPinHash = useSecurity((s) => s.setPinHash);
+  const lockTimeoutMinutes = useSecurity((s) => s.lockTimeoutMinutes);
+  const setLockTimeoutMinutes = useSecurity((s) => s.setLockTimeoutMinutes);
+  const [pinSetupVisible, setPinSetupVisible] = useState(false);
+  const [confirmingPinOff, setConfirmingPinOff] = useState(false);
   const [confirmingBioOff, setConfirmingBioOff] = useState(false);
   const [bioInfo, setBioInfo] = useState<string | null>(null);
   const [bioBusy, setBioBusy] = useState(false);
@@ -539,6 +576,9 @@ export default function SettingsScreen() {
   const setReminderTime = useReminders((s) => s.setTime);
   const setMorningNudgeOn = useReminders((s) => s.setMorningNudgeOn);
   const setCheckInReminderOn = useReminders((s) => s.setCheckInReminderOn);
+  // Data-driven coach identity for the check-in reminder's copy (not a
+  // hardcoded name) — null/none-assigned falls back to generic copy.
+  const { coach: myCoach } = useMyCoach();
 
   /** Toggle the whole workout-reminder schedule on/off. */
   function onWorkoutRemindersToggle(next: boolean): void {
@@ -575,7 +615,7 @@ export default function SettingsScreen() {
   /** Toggle the weekly Sunday check-in reminder. */
   function onCheckInToggle(next: boolean): void {
     setCheckInReminderOn(next);
-    void scheduleCheckInReminder(next);
+    void scheduleCheckInReminder(next, myCoach?.displayName ?? null);
   }
 
   /**
@@ -729,9 +769,22 @@ export default function SettingsScreen() {
     else router.replace('/');
   }
 
+  /**
+   * B32: a rename used to sit in `useProfile`'s local store only until the
+   * debounced background sync (profileSync.ts) got around to it — a
+   * reinstall or sign-out in that ~3s window could lose the new name on a
+   * second device. `update()` still writes the store immediately (instant UI
+   * confirm), but `syncProfileNow()` fires the SAME whole-blob
+   * `PUT /api/profile` profileSync already uses right away, best-effort —
+   * mirrors the tier-selection flow, which forces the same immediate push
+   * for the same reason.
+   */
   function commitName(): void {
     const trimmed = nameDraft.trim();
-    if (trimmed) update({ displayName: trimmed });
+    if (trimmed) {
+      update({ displayName: trimmed });
+      syncProfileNow();
+    }
     setEditingName(false);
   }
 
@@ -859,13 +912,24 @@ export default function SettingsScreen() {
       {/* ── Membership card — the tier as a premium metal card face. Tapping
           opens the subscription screen (upgrade / manage). ── */}
       <Animated.View entering={enterUp(0)} style={styles.membershipCardWrap}>
-        <MembershipCard
+        <MembershipCardAny
           tier={serverTier}
           holderName={displayName || authUser?.displayName || ''}
           memberId={authUser?.id ?? null}
           signedIn={signedIn}
           onPress={() => pushPath('/subscribe')}
         />
+        {/* Design-edit badge riding the card's top-right corner — opens the
+            face picker. Sits half off the face so it never covers card art. */}
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Change card design"
+          hitSlop={8}
+          onPress={() => pushPath('/membership-card-design')}
+          style={styles.cardDesignBadge}
+        >
+          <Ionicons name="color-palette-outline" size={18} color={colors.text} />
+        </PressableScale>
       </Animated.View>
 
       {/* ── Account card — charcoal block: avatar, editable name, tier chip ── */}
@@ -1150,6 +1214,72 @@ export default function SettingsScreen() {
               <AppText color={colors.textDim} numberOfLines={1}>{TIER_LABEL[serverTier]}</AppText>
               <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
             </View>
+          </PressableScale>
+        </View>
+      </Animated.View>
+
+      {/* ── Account — profile editor, membership card, addresses, notifications ── */}
+      <Animated.View entering={enterUp(4)} layout={layoutSpring}>
+        <AppText variant="label" style={styles.sectionLabel}>
+          Account
+        </AppText>
+        <View style={styles.group}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Edit profile"
+            onPress={() => pushPath('/profile-edit')}
+            style={styles.row}
+          >
+            <IconChip icon="person-circle-outline" size={36} />
+            <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
+              Edit profile
+            </AppText>
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+          </PressableScale>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Membership card"
+            onPress={() => pushPath('/membership-card')}
+            style={styles.row}
+          >
+            <IconChip icon="card-outline" size={36} />
+            <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
+              Membership card
+            </AppText>
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+          </PressableScale>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Saved delivery addresses"
+            onPress={() => pushPath('/addresses')}
+            style={styles.row}
+          >
+            <IconChip icon="location-outline" size={36} />
+            <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
+              Saved addresses
+            </AppText>
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+          </PressableScale>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={
+              notifUnread > 0 ? `Notifications, ${notifUnread} unread` : 'Notifications'
+            }
+            onPress={() => pushPath('/notifications')}
+            style={styles.row}
+          >
+            <IconChip icon="notifications-outline" size={36} />
+            <AppText variant="bodyBold" style={styles.rowLabelGrow} numberOfLines={1}>
+              Notifications
+            </AppText>
+            {notifUnread > 0 ? (
+              <View style={styles.unreadPill} accessibilityLabel={`${notifUnread} unread`}>
+                <AppText variant="label" color={colors.onBlock} tabular>
+                  {notifUnread > 9 ? '9+' : String(notifUnread)}
+                </AppText>
+              </View>
+            ) : null}
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </PressableScale>
         </View>
       </Animated.View>
@@ -1469,6 +1599,67 @@ export default function SettingsScreen() {
                 ? 'Locked with your fingerprint when you leave the app'
                 : 'Anyone with your phone can open the app'}
             </AppText>
+
+            {/* PIN fallback (Pack P) — for phones with no fingerprint/face
+                hardware, or a member who just prefers a PIN. Independent of
+                the fingerprint toggle: either method (or both) arms the lock. */}
+            <View style={[styles.securityHeader, styles.securitySubRow]}>
+              <IconChip icon="keypad" size={36} color={colors.accentFaint} iconColor={colors.accent} />
+              <AppText variant="bodyBold" style={styles.securityTitle} numberOfLines={1}>
+                PIN unlock
+              </AppText>
+              <Switch
+                value={pinHash !== null}
+                onValueChange={(v) => {
+                  if (v) setPinSetupVisible(true);
+                  else setConfirmingPinOff(true);
+                }}
+                trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
+                thumbColor={pinHash !== null ? colors.accent : colors.textDim}
+                accessibilityLabel="PIN unlock"
+              />
+            </View>
+            <AppText
+              variant="caption"
+              color={pinHash !== null ? colors.textDim : colors.textFaint}
+              style={styles.securityStatus}
+            >
+              {pinHash !== null
+                ? 'Locked with a PIN when fingerprint isn’t available'
+                : 'No PIN set — fingerprint is the only lock method'}
+            </AppText>
+
+            {/* Re-lock grace timeout (Pack P) — only meaningful once a lock
+                method is on. */}
+            {biometricLock || pinHash !== null ? (
+              <>
+                <AppText variant="caption" color={colors.textFaint} style={styles.timeoutLabel}>
+                  Re-lock after leaving the app
+                </AppText>
+                <View style={styles.timeoutRow}>
+                  {LOCK_TIMEOUT_OPTIONS.map((opt) => (
+                    <PressableScale
+                      key={opt.minutes}
+                      accessibilityRole="button"
+                      accessibilityLabel={opt.label}
+                      accessibilityState={{ selected: lockTimeoutMinutes === opt.minutes }}
+                      onPress={() => setLockTimeoutMinutes(opt.minutes)}
+                      style={[
+                        styles.timeoutChip,
+                        lockTimeoutMinutes === opt.minutes && styles.timeoutChipActive,
+                      ]}
+                    >
+                      <AppText
+                        variant="caption"
+                        color={lockTimeoutMinutes === opt.minutes ? colors.onAccent : colors.textDim}
+                      >
+                        {opt.label}
+                      </AppText>
+                    </PressableScale>
+                  ))}
+                </View>
+              </>
+            ) : null}
           </View>
         </Animated.View>
       ) : null}
@@ -1588,6 +1779,32 @@ export default function SettingsScreen() {
         onCancel={() => setConfirmingBioOff(false)}
       />
       <ConfirmDialog
+        visible={confirmingPinOff}
+        title="Turn off PIN lock?"
+        message={
+          biometricLock
+            ? 'Fingerprint/face unlock still protects the app.'
+            : 'Anyone with your phone will be able to open the app.'
+        }
+        confirmLabel="Yes, turn off"
+        cancelLabel="No, keep it"
+        danger={!biometricLock}
+        onConfirm={() => {
+          setPinHash(null);
+          setConfirmingPinOff(false);
+          tapHaptic();
+        }}
+        onCancel={() => setConfirmingPinOff(false)}
+      />
+      <PinSetupSheet
+        visible={pinSetupVisible}
+        onClose={() => setPinSetupVisible(false)}
+        onSet={(hash) => {
+          setPinHash(hash);
+          successHaptic();
+        }}
+      />
+      <ConfirmDialog
         visible={exportError !== null}
         title="Export didn't work"
         message={exportError ?? ''}
@@ -1640,6 +1857,19 @@ const styles = StyleSheet.create({
 
   // Account card — charcoal block: avatar + editable name + tier chip
   membershipCardWrap: { marginTop: spacing.xl },
+  cardDesignBadge: {
+    position: 'absolute',
+    top: -10,
+    right: -6,
+    width: 40,
+    height: 40,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   accountSection: { marginTop: spacing.md },
   accountCard: {
     backgroundColor: colors.surface,
@@ -1877,8 +2107,19 @@ const styles = StyleSheet.create({
   // Security card
   securityCard: { paddingVertical: spacing.lg, gap: spacing.sm },
   securityHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  securitySubRow: { marginTop: spacing.md },
   securityTitle: { flex: 1 },
   securityStatus: { lineHeight: 18 },
+  timeoutLabel: { marginTop: spacing.sm },
+  timeoutRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  timeoutChip: {
+    minHeight: touch.min,
+    paddingHorizontal: spacing.md,
+    justifyContent: 'center',
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+  },
+  timeoutChipActive: { backgroundColor: colors.accent },
 
   // Danger zone — black block that recedes behind the charcoal sections
   dangerBlock: {

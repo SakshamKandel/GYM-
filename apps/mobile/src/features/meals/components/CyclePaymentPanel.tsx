@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Image, StyleSheet, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { formatMoney } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
@@ -21,7 +21,13 @@ import { mealErrorMessage, paymentMethodLabel } from '../logic';
 
 const styles = StyleSheet.create({
   wrap: { gap: spacing.md },
-  photoPreview: { width: 120, height: 120, borderRadius: radius.md, backgroundColor: colors.surfaceRaised },
+  photoPreview: {
+    width: 120,
+    height: 120,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+    resizeMode: 'cover',
+  },
 });
 
 export function CyclePaymentPanel({
@@ -86,7 +92,7 @@ export function CyclePaymentPanel({
       </AppText>
       {asset ? (
         <PressableScale accessibilityRole="button" accessibilityLabel="Change receipt photo" onPress={pick}>
-          <View style={styles.photoPreview} />
+          <Image source={{ uri: asset.uri }} style={styles.photoPreview} accessibilityIgnoresInvertColors />
         </PressableScale>
       ) : (
         <Button label="Attach receipt photo" variant="secondary" onPress={pick} />

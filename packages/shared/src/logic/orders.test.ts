@@ -36,6 +36,11 @@ const {
   repriceCycleForNewSkip,
   subscriptionActionTarget,
   weekBoundsFor,
+  memberCancelability,
+  partnerRefusableFrom,
+  partnerCanRefuse,
+  partnerRefuseTarget,
+  orderNumber,
 } = await import('./orders.ts');
 
 function ktm(y: number, mo: number, da: number, hh: number, mm = 0): Date {
@@ -110,6 +115,94 @@ describe('canActorAdvance — who may set what (§3)', () => {
   });
 });
 
+describe('memberCancelability — payment-aware cancel gate (B1)', () => {
+  const cutoff = ktm(2026, 7, 19, 10, 0);
+  const beforeCutoff = ktm(2026, 7, 19, 6, 0);
+  const afterCutoff = ktm(2026, 7, 19, 11, 0);
+
+  it('allows cancel of a pending, unpaid, pre-cutoff order', () => {
+    assert.deepEqual(
+      memberCancelability({ status: 'pending', paymentStatus: 'unpaid', cutoffAt: cutoff }, beforeCutoff),
+      { allowed: true },
+    );
+  });
+  it('blocks a receipt-in-review order (server would 409)', () => {
+    assert.deepEqual(
+      memberCancelability(
+        { status: 'pending', paymentStatus: 'receipt_submitted', cutoffAt: cutoff },
+        beforeCutoff,
+      ),
+      { allowed: false, blocked: 'payment_review_required' },
+    );
+  });
+  it('blocks a paid order → refund path', () => {
+    assert.deepEqual(
+      memberCancelability({ status: 'pending', paymentStatus: 'paid', cutoffAt: cutoff }, beforeCutoff),
+      { allowed: false, blocked: 'refund_required' },
+    );
+  });
+  it('money-in-flight takes precedence over a passed cutoff', () => {
+    assert.deepEqual(
+      memberCancelability({ status: 'pending', paymentStatus: 'paid', cutoffAt: cutoff }, afterCutoff),
+      { allowed: false, blocked: 'refund_required' },
+    );
+  });
+  it('blocks past cutoff when no money is in flight', () => {
+    assert.deepEqual(
+      memberCancelability({ status: 'pending', paymentStatus: 'unpaid', cutoffAt: cutoff }, afterCutoff),
+      { allowed: false, blocked: 'past_cutoff' },
+    );
+  });
+  it('non-pending statuses are not member-cancelable (no reason — affordance hides)', () => {
+    for (const status of ['confirmed', 'preparing', 'out_for_delivery', 'delivered'] as const) {
+      assert.deepEqual(
+        memberCancelability({ status, paymentStatus: 'unpaid', cutoffAt: cutoff }, beforeCutoff),
+        { allowed: false },
+      );
+    }
+  });
+});
+
+describe('partner refuse (B6/B7)', () => {
+  it('is refusable from every pre-delivery stage', () => {
+    for (const s of ['pending', 'confirmed', 'preparing', 'out_for_delivery'] as const) {
+      assert.equal(partnerCanRefuse(s), true);
+      assert.equal(partnerRefusableFrom.has(s), true);
+    }
+  });
+  it('is not refusable from a terminal stage', () => {
+    for (const s of ['delivered', 'cancelled', 'refused'] as const) {
+      assert.equal(partnerCanRefuse(s), false);
+      assert.equal(partnerRefuseTarget(s), null);
+    }
+  });
+  it('at-the-door refusal → refused; earlier stages → cancelled', () => {
+    assert.equal(partnerRefuseTarget('out_for_delivery'), 'refused');
+    assert.equal(partnerRefuseTarget('pending'), 'cancelled');
+    assert.equal(partnerRefuseTarget('confirmed'), 'cancelled');
+    assert.equal(partnerRefuseTarget('preparing'), 'cancelled');
+  });
+});
+
+describe('orderNumber', () => {
+  it('is deterministic for a given id and GM-prefixed 8-char base32', () => {
+    const id = '11111111-2222-3333-4444-abcdef012345';
+    const a = orderNumber(id);
+    const b = orderNumber(id);
+    assert.equal(a, b);
+    assert.match(a, /^GM-[0-9A-HJKMNP-TV-Z]{8}$/);
+  });
+  it('differs for different ids', () => {
+    assert.notEqual(
+      orderNumber('00000000-0000-0000-0000-000000000001'),
+      orderNumber('00000000-0000-0000-0000-000000000002'),
+    );
+  });
+  it('does not crash on an empty / non-hex id', () => {
+    assert.match(orderNumber(''), /^GM-0{8}$/);
+  });
+});
+
 describe('subscription machine', () => {
   it('active ↔ paused, both → cancelled, cancelled terminal', () => {
     assert.equal(canAdvanceSubscription('active', 'paused'), true);
@@ -134,6 +227,16 @@ describe('cycle machine', () => {
     assert.equal(canAdvanceCycle('awaiting_payment', 'void'), true);
     assert.equal(canAdvanceCycle('open', 'paid'), false);
     assert.equal(canAdvanceCycle('paid', 'void'), false);
+  });
+  it('awaiting_payment → receipt_submitted → paid; reject returns to awaiting_payment', () => {
+    assert.equal(canAdvanceCycle('awaiting_payment', 'receipt_submitted'), true);
+    assert.equal(canAdvanceCycle('receipt_submitted', 'paid'), true);
+    assert.equal(canAdvanceCycle('receipt_submitted', 'awaiting_payment'), true);
+    assert.equal(canAdvanceCycle('receipt_submitted', 'void'), true);
+    assert.equal(canAdvanceCycle('open', 'receipt_submitted'), false);
+  });
+  it('a receipt_submitted cycle is money-in-review (blocks ordinary mutation)', () => {
+    assert.equal(cyclePaymentMutationBlock('receipt_submitted'), 'payment_review_required');
   });
 });
 

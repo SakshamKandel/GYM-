@@ -25,6 +25,10 @@ interface RevenueResponse {
   currency: string;
   thisMonth: RevenueBucket;
   allTime: RevenueBucket;
+  /** Net owed — withdrawable held that decrements as payouts post (B27). */
+  heldMinor: number;
+  paidOutMinor: number;
+  ledgerDerived: boolean;
 }
 
 /** `25000, 'NPR'` → `Rs 250` · `250, 'USD'` → `$2.50`. */
@@ -89,10 +93,40 @@ export function PartnerRevenuePanel({ partnerId }: { partnerId: string }) {
       ) : error ? (
         <div style={{ fontSize: 13, color: 'var(--gt-danger)' }}>{error}</div>
       ) : data ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <BucketCard title="This month" bucket={data.thisMonth} currency={data.currency} />
-          <BucketCard title="All time" bucket={data.allTime} currency={data.currency} />
-        </div>
+        <>
+          {/*
+            Net owed — the money-truth figure. Unlike the gross "Digital held"
+            below (a raw sum), this decrements as payouts are disbursed (B27), so
+            it reflects what the platform actually still owes the partner.
+          */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 8,
+              padding: '10px 12px',
+              border: '1px solid var(--gt-border)',
+              borderRadius: 10,
+              background: 'var(--gt-surface-sunken)',
+            }}
+          >
+            <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+              Net owed
+              <span style={{ color: 'var(--gt-text-faint)' }}>
+                {' '}
+                · after {formatMoney(data.paidOutMinor, data.currency)} paid out
+              </span>
+            </span>
+            <span className="gt-numeric" style={{ fontSize: 17, fontWeight: 600 }}>
+              {formatMoney(data.heldMinor, data.currency)}
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <BucketCard title="This month" bucket={data.thisMonth} currency={data.currency} />
+            <BucketCard title="All time" bucket={data.allTime} currency={data.currency} />
+          </div>
+        </>
       ) : null}
     </div>
   );

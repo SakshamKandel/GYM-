@@ -1,11 +1,13 @@
 import { mealOrderItems, mealOrders } from '@gym/db';
-import { canActorAdvance, maskPii, orderPaymentMutationBlock } from '@gym/shared';
+import { canActorAdvance, maskPii, orderNumber, orderPaymentMutationBlock } from '@gym/shared';
 import { and, eq, inArray } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { advanceOrderStatus, buildMemberOrderView } from '@/lib/meals';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -36,6 +38,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const [order] = await db
     .select({
       id: mealOrders.id,
+      partnerId: mealOrders.partnerId,
       status: mealOrders.status,
       paymentStatus: mealOrders.paymentStatus,
       cutoffAt: mealOrders.cutoffAt,
@@ -77,6 +80,28 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       : null;
     return json({ error: currentBlock ?? 'conflict' }, 409);
   }
+
+  // Tell the partner (and order-ops staff) the member cancelled, so a kitchen
+  // stops preparing and admin sees the cancel (Pack A). Fire-and-forget. The
+  // member's reason is maskPii'd + attributed (§7.2-S2) when echoed to these
+  // privileged recipients — never presented as platform-authored.
+  const code = orderNumber(result.order.id);
+  const maskedReason = result.order.cancelReason ? maskPii(result.order.cancelReason) : '';
+  const cancelBody = maskedReason
+    ? `Order ${code} was cancelled by the member. Member note: ${maskedReason}`
+    : `Order ${code} was cancelled by the member.`;
+  after(() => {
+    void notify(
+      'order_cancelled_partner',
+      { partnerId: order.partnerId },
+      { title: 'Order cancelled', body: cancelBody, data: { type: 'order', id: result.order.id } },
+    );
+    void notify(
+      'order_cancelled_partner',
+      { role: 'staff', permission: 'orders.review' },
+      { title: 'Member cancelled an order', body: cancelBody, data: { type: 'order', id: result.order.id } },
+    );
+  });
 
   const items = await db
     .select()

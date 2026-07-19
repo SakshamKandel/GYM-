@@ -2,6 +2,7 @@ import { accounts, tierPrices, type Db } from '@gym/db';
 import { applyDiscount, DEFAULT_TIER_PRICES, resolveRegion } from '@gym/shared';
 import { and, count, eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { billingMode } from '@/lib/billing';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
@@ -114,5 +115,12 @@ export async function GET(req: Request) {
 
   const currency = merged[0]?.currency ?? (region === 'NP' ? 'NPR' : 'USD');
 
-  return json({ region, currency, tiers, trialDays: TRIAL_DAYS }, 200);
+  // `billingMode` lets the paywall pre-detect (before any tap) whether a paid
+  // tier can be granted by the self-serve POST /api/subscription/tier or must
+  // route through the store / manual-payment flow (Pack J honest affordance +
+  // B23: no optimistic apply → 402 → revert flicker). In 'live' mode the
+  // self-serve endpoint returns 402 for every paid tier, so the client shows an
+  // "Available in the app store" affordance (INTL) or the eSewa/Khalti section
+  // (NP) instead of a Choose CTA that always fails.
+  return json({ region, currency, tiers, trialDays: TRIAL_DAYS, billingMode: billingMode() }, 200);
 }

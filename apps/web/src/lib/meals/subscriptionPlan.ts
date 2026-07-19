@@ -9,6 +9,7 @@ import {
   cutoffFor,
   ktmAddDays,
   ktmDayOfWeek,
+  type CycleStatus,
   type MealDeliveryConfig,
   type MealWindow,
 } from '@gym/shared';
@@ -259,4 +260,101 @@ export function buildSubscriptionCycleAdjustments(params: {
       amountMinor: nextStatus === 'awaiting_payment' ? plannedSlots * pricePerDayMinor : 0,
     };
   });
+}
+
+/**
+ * The subscribed delivery slots for a plan across a forward window (Pack G:
+ * "deliveries scheduled for …"). Pure — the caller supplies `today` (KTM) and
+ * the plan shape; skips are subtracted. Bounded by `horizonDays` and `max`. Used
+ * by GET /subscriptions to render the upcoming-deliveries confirmation block.
+ */
+export function upcomingDeliveryDates(params: {
+  daysOfWeek: number[];
+  window: MealWindow;
+  startDate: string;
+  fromDate: string;
+  horizonDays: number;
+  skipDates?: ReadonlySet<string>;
+  max?: number;
+}): { date: string; window: MealWindow }[] {
+  const { daysOfWeek, window, startDate, fromDate, horizonDays } = params;
+  const skips = params.skipDates ?? new Set<string>();
+  const max = params.max ?? Number.POSITIVE_INFINITY;
+  // Start no earlier than the plan's own start date (a not-yet-started plan
+  // projects from startDate, not today).
+  const anchor = fromDate >= startDate ? fromDate : startDate;
+  const out: { date: string; window: MealWindow }[] = [];
+  for (let offset = 0; offset <= horizonDays && out.length < max; offset += 1) {
+    const date = ktmAddDays(anchor, offset);
+    if (!daysOfWeek.includes(ktmDayOfWeek(date))) continue;
+    if (skips.has(date)) continue;
+    out.push({ date, window });
+  }
+  return out;
+}
+
+/**
+ * Refund owed on a PAID weekly cycle when a member self-cancels/pauses mid-week
+ * (Pack G proration). Pure money math — NEVER moves money (the refund still
+ * flows through the admin-authoritative rail). A day is "unused" only when it is
+ * strictly AFTER `today` (KTM): today's delivery and every past day are treated
+ * as committed/consumed. Skipped days are excluded. The refund is
+ * `unusedDays × pricePerDayMinor`, clamped into `[0, amountMinor]` so a repriced
+ * or partially-consumed cycle can never over-refund (§7.2 money bounds).
+ */
+export function prorateUnusedPaidDays(params: {
+  weekStart: string;
+  daysOfWeek: number[];
+  pricePerDayMinor: number;
+  amountMinor: number;
+  today: string;
+  skipDates?: ReadonlySet<string>;
+}): { unusedDays: number; refundMinor: number } {
+  const skips = params.skipDates ?? new Set<string>();
+  const price = Math.max(0, Math.trunc(params.pricePerDayMinor));
+  const cap = Math.max(0, Math.trunc(params.amountMinor));
+  let unusedDays = 0;
+  for (let i = 0; i < 7; i += 1) {
+    const date = ktmAddDays(params.weekStart, i);
+    if (date <= params.today) continue; // committed / consumed
+    if (!params.daysOfWeek.includes(ktmDayOfWeek(date))) continue;
+    if (skips.has(date)) continue;
+    unusedDays += 1;
+  }
+  return { unusedDays, refundMinor: Math.min(unusedDays * price, cap) };
+}
+
+/** A member-facing itemized weekly-cycle invoice/receipt (Pack G). */
+export interface CycleInvoice {
+  cycleId: string;
+  weekStart: string;
+  weekEnd: string;
+  plannedSlots: number;
+  pricePerDayMinor: number;
+  amountMinor: number;
+  currency: string;
+  status: CycleStatus;
+}
+
+/** Project a billing-cycle row to the stable invoice shape WP-6 renders. */
+export function buildCycleInvoice(cycle: {
+  id: string;
+  weekStart: string;
+  weekEnd: string;
+  plannedSlots: number;
+  pricePerDayMinor: number;
+  amountMinor: number;
+  currency: string;
+  status: CycleStatus;
+}): CycleInvoice {
+  return {
+    cycleId: cycle.id,
+    weekStart: cycle.weekStart,
+    weekEnd: cycle.weekEnd,
+    plannedSlots: cycle.plannedSlots,
+    pricePerDayMinor: cycle.pricePerDayMinor,
+    amountMinor: cycle.amountMinor,
+    currency: cycle.currency,
+    status: cycle.status,
+  };
 }

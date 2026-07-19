@@ -1041,6 +1041,7 @@ const adminOverviewOpsSchema = z
     pendingApplications: z.number().optional(),
     pendingTierRequests: z.number().optional(),
     pendingPayments: z.number().optional(),
+    pendingMealPayments: z.number().optional(),
     revenueThisMonth: z.array(revenueByCurrencySchema).catch([]).optional(),
     unreadSupport: z.number().optional(),
   })

@@ -1,6 +1,16 @@
 import { useCallback, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
-import { fetchGymDetail, fetchGyms, toGymsError, type GymCard, type GymDetail } from './api';
+import {
+  fetchFavoriteGyms,
+  fetchGymDetail,
+  fetchGymReviews,
+  fetchGyms,
+  toGymsError,
+  type FavoriteGymCard,
+  type GymCard,
+  type GymDetail,
+  type GymReview,
+} from './api';
 
 /**
  * Nearby-gyms hooks. Both load on focus and are usable signed OUT (the
@@ -91,4 +101,84 @@ export function useGymDetail(slug: string): GymDetailState {
   }, [reload]);
 
   return { gym, loading: gym === null && !notFound && !error, notFound, error, retry };
+}
+
+export interface GymReviewsState {
+  reviews: GymReview[];
+  loading: boolean;
+  error: boolean;
+  /** Re-fetch on demand (e.g. right after the caller submits their own
+   * review) — independent of focus, unlike the other hooks here. */
+  refresh: () => void;
+}
+
+/** GET /api/gyms/[slug]/reviews (Pack C — powers GymReviewsSection). Loads on
+ * focus AND exposes an imperative `refresh` for the post-submit re-fetch. */
+export function useGymReviews(slug: string): GymReviewsState {
+  const [reviews, setReviews] = useState<GymReview[] | null>(null);
+  const [error, setError] = useState(false);
+
+  const reload = useCallback(() => {
+    if (!slug) return;
+    void (async () => {
+      try {
+        const next = await fetchGymReviews(slug);
+        setReviews(next);
+        setError(false);
+      } catch {
+        setError(true);
+      }
+    })();
+  }, [slug]);
+
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload]),
+  );
+
+  return { reviews: reviews ?? [], loading: reviews === null && !error, error, refresh: reload };
+}
+
+export interface FavoriteGymsState {
+  gyms: FavoriteGymCard[] | null;
+  loading: boolean;
+  error: boolean;
+  retry: () => void;
+}
+
+/** GET /api/gyms/favorites (Pack M — powers /gyms/saved). Member-only; pass
+ * `null` when signed out (returns an empty, non-loading state). */
+export function useFavoriteGyms(token: string | null): FavoriteGymsState {
+  const [snap, setSnap] = useState<FavoriteGymCard[] | null>(null);
+  const [error, setError] = useState(false);
+
+  const reload = useCallback(() => {
+    if (!token) {
+      setSnap([]);
+      return;
+    }
+    void (async () => {
+      try {
+        const next = await fetchFavoriteGyms(token);
+        setSnap(next);
+        setError(false);
+      } catch {
+        setError(true);
+      }
+    })();
+  }, [token]);
+
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload]),
+  );
+
+  const retry = useCallback(() => {
+    setError(false);
+    reload();
+  }, [reload]);
+
+  return { gyms: snap, loading: snap === null && !error, error, retry };
 }

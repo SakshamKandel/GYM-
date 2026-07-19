@@ -4,6 +4,7 @@ import { and, eq, gte, sql } from 'drizzle-orm';
 import { requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
+import { loadPartnerHeld } from '@/app/partner/_data';
 
 export const runtime = 'nodejs';
 
@@ -89,9 +90,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const today = ktmDateString(new Date());
   const monthStart = `${today.slice(0, 7)}-01`;
 
-  const [thisMonth, allTime] = await Promise.all([
+  const [thisMonth, allTime, held] = await Promise.all([
     loadRevenueBucket(db, id, monthStart),
     loadRevenueBucket(db, id, null),
+    // Net owed (B27): withdrawable held that DECREMENTS as payouts post, unlike
+    // the raw all-time `digitalHeldMinor` gross above.
+    loadPartnerHeld(db, id, partner.currency),
   ]);
 
   return json(
@@ -100,6 +104,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       currency: partner.currency,
       thisMonth,
       allTime,
+      // Ledger-aware money truth for the admin drawer.
+      heldMinor: held.heldMinor,
+      paidOutMinor: held.paidOutMinor,
+      ledgerDerived: held.ledgerDerived,
     },
     200,
   );

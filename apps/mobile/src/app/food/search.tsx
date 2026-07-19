@@ -28,7 +28,7 @@ import { getRepo } from '../../lib/repo';
 import { FoodRow } from '../../features/nutrition/FoodRow';
 import { parseDateParam, parseMealParam } from '../../features/nutrition/logic';
 import { customHref, portionHref, scanHref } from '../../features/nutrition/nav';
-import { useFoodSearch, useRecentFoods } from '../../features/nutrition/useFoodSearch';
+import { useFavoriteFoods, useFoodSearch, useRecentFoods } from '../../features/nutrition/useFoodSearch';
 
 const styles = StyleSheet.create({
   headerRow: {
@@ -96,15 +96,25 @@ export default function FoodSearchScreen() {
     return () => clearTimeout(t);
   }, [trimmed]);
   const { recent, loaded: recentLoaded } = useRecentFoods(12);
+  const { favorites, favoriteIds, loaded: favoritesLoaded, toggle: toggleFavorite } =
+    useFavoriteFoods(12);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
 
   async function pick(item: FoodItem): Promise<void> {
     if (saving) return;
     setSaving(true);
+    setSaveError(false);
     try {
       const repo = await getRepo();
       await repo.saveFood(item);
       router.push(portionHref(item.id, meal, date));
+    } catch (err) {
+      // Fixes B18 — a local-DB write failure used to throw unhandled with no
+      // catch, leaving the tap looking like it did nothing. Surface it and
+      // let the user retry instead of silently eating the error.
+      console.error('[food] saveFood failed', err);
+      setSaveError(true);
     } finally {
       setSaving(false);
     }
@@ -139,7 +149,10 @@ export default function FoodSearchScreen() {
           <AppTextInput
             autoFocus
             value={query}
-            onChangeText={setQuery}
+            onChangeText={(v) => {
+              setQuery(v);
+              if (saveError) setSaveError(false);
+            }}
             placeholder="Search foods…"
             returnKeyType="search"
             autoCorrect={false}
@@ -177,6 +190,15 @@ export default function FoodSearchScreen() {
         ) : null}
       </Animated.View>
 
+      {saveError ? (
+        <Animated.View entering={enterFade(0)} style={styles.statusRow}>
+          <Ionicons name="alert-circle" size={16} color={colors.error} />
+          <AppText variant="caption" color={colors.error}>
+            {"Couldn't save that food — try again"}
+          </AppText>
+        </Animated.View>
+      ) : null}
+
       <ScrollView
         style={styles.list}
         contentContainerStyle={styles.listContent}
@@ -191,7 +213,12 @@ export default function FoodSearchScreen() {
                 <View style={styles.rows}>
                   {local.map((item) => (
                     <Animated.View key={item.id} entering={enterUp(0)} layout={layoutSpring}>
-                      <FoodRow item={item} onPress={(f) => void pick(f)} />
+                      <FoodRow
+                        item={item}
+                        onPress={(f) => void pick(f)}
+                        favorite={favoriteIds.has(item.id)}
+                        onToggleFavorite={(f) => void toggleFavorite(f)}
+                      />
                     </Animated.View>
                   ))}
                 </View>
@@ -231,6 +258,27 @@ export default function FoodSearchScreen() {
           </Animated.View>
         ) : (
           <Animated.View key="recent" entering={enterFade(0)}>
+            {favoritesLoaded && favorites.length > 0 ? (
+              <>
+                <SectionLabel>Favorites</SectionLabel>
+                <View style={styles.rows}>
+                  {favorites.map((item, i) => (
+                    <Animated.View
+                      key={item.id}
+                      entering={enterUp(Math.min(i, 6))}
+                      layout={layoutSpring}
+                    >
+                      <FoodRow
+                        item={item}
+                        onPress={(f) => void pick(f)}
+                        favorite
+                        onToggleFavorite={(f) => void toggleFavorite(f)}
+                      />
+                    </Animated.View>
+                  ))}
+                </View>
+              </>
+            ) : null}
             <SectionLabel>Recent</SectionLabel>
             {recentLoaded && recent.length === 0 ? (
               <AppText variant="caption" color={colors.textDim}>
@@ -244,7 +292,12 @@ export default function FoodSearchScreen() {
                   entering={enterUp(Math.min(i, 6))}
                   layout={layoutSpring}
                 >
-                  <FoodRow item={item} onPress={(f) => void pick(f)} />
+                  <FoodRow
+                    item={item}
+                    onPress={(f) => void pick(f)}
+                    favorite={favoriteIds.has(item.id)}
+                    onToggleFavorite={(f) => void toggleFavorite(f)}
+                  />
                 </Animated.View>
               ))}
             </View>

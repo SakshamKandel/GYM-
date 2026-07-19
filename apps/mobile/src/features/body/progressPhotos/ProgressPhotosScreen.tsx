@@ -37,6 +37,7 @@ import {
   type CreatedProgressPhoto,
   type ProgressPhoto,
 } from './api';
+import { PhotoCompareSlider } from './PhotoCompareSlider';
 
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 
@@ -106,6 +107,10 @@ const styles = StyleSheet.create({
   deleteError: { marginTop: -spacing.sm },
   staleError: { marginBottom: spacing.lg, gap: spacing.md },
   upgrade: { marginTop: spacing.md },
+  compareOpenBtn: { marginBottom: spacing.xl },
+  compareCard: { gap: spacing.md, marginBottom: spacing.xl },
+  compareControls: { flexDirection: 'row', gap: spacing.lg },
+  compareStepper: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
 });
 
 function pickerFileName(asset: ImagePicker.ImagePickerAsset): string {
@@ -211,6 +216,13 @@ export function ProgressPhotosScreen() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<{ id: string; message: string } | null>(null);
   const [brokenImages, setBrokenImages] = useState<Set<string>>(() => new Set());
+
+  // Compare mode (Pack O): indexes into `visiblePhotos` (newest-first) — the
+  // "after" side defaults to the newest photo and "before" to the oldest so
+  // the slider opens on the most meaningful comparison by default.
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [beforeIdx, setBeforeIdx] = useState(0);
+  const [afterIdx, setAfterIdx] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -556,6 +568,76 @@ export function ProgressPhotosScreen() {
               />
             ) : null}
           </Card>
+
+          {visiblePhotos.length >= 2 ? (
+            <>
+              <SectionLabel>Compare</SectionLabel>
+              {compareOpen ? (
+                (() => {
+                  const maxIdx = visiblePhotos.length - 1;
+                  const b = Math.min(beforeIdx, maxIdx);
+                  const a = Math.min(afterIdx, maxIdx);
+                  return (
+                    <Card style={styles.compareCard}>
+                      <PhotoCompareSlider before={visiblePhotos[b]!} after={visiblePhotos[a]!} />
+                      <View style={styles.compareControls}>
+                        <View style={styles.compareStepper}>
+                          <Button
+                            label="◀"
+                            variant="secondary"
+                            onPress={() => setBeforeIdx((i) => Math.min(maxIdx, i + 1))}
+                            disabled={b >= maxIdx}
+                            accessibilityLabel="Show an earlier before photo"
+                          />
+                          <AppText variant="caption" color={colors.textDim}>
+                            Before
+                          </AppText>
+                          <Button
+                            label="▶"
+                            variant="secondary"
+                            onPress={() => setBeforeIdx((i) => Math.max(0, i - 1))}
+                            disabled={b <= 0}
+                            accessibilityLabel="Show a later before photo"
+                          />
+                        </View>
+                        <View style={styles.compareStepper}>
+                          <Button
+                            label="◀"
+                            variant="secondary"
+                            onPress={() => setAfterIdx((i) => Math.min(maxIdx, i + 1))}
+                            disabled={a >= maxIdx}
+                            accessibilityLabel="Show an earlier after photo"
+                          />
+                          <AppText variant="caption" color={colors.textDim}>
+                            After
+                          </AppText>
+                          <Button
+                            label="▶"
+                            variant="secondary"
+                            onPress={() => setAfterIdx((i) => Math.max(0, i - 1))}
+                            disabled={a <= 0}
+                            accessibilityLabel="Show a later after photo"
+                          />
+                        </View>
+                      </View>
+                      <Button label="Close compare" variant="ghost" onPress={() => setCompareOpen(false)} />
+                    </Card>
+                  );
+                })()
+              ) : (
+                <Button
+                  label="Compare before & after"
+                  variant="secondary"
+                  onPress={() => {
+                    setBeforeIdx(visiblePhotos.length - 1);
+                    setAfterIdx(0);
+                    setCompareOpen(true);
+                  }}
+                  style={styles.compareOpenBtn}
+                />
+              )}
+            </>
+          ) : null}
 
           <SectionLabel>Your private gallery</SectionLabel>
           {loadError && visiblePhotos.length > 0 ? (

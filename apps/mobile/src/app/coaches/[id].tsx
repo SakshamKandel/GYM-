@@ -616,6 +616,15 @@ export default function CoachProfileScreen() {
                   variant="secondary"
                   onPress={() => pushPath('/coach-chat')}
                 />
+                <Button
+                  label="Rate this coach"
+                  variant="ghost"
+                  onPress={() =>
+                    pushPath(
+                      `/coach-review?coachId=${encodeURIComponent(coach.id)}&coachName=${encodeURIComponent(coach.displayName)}`,
+                    )
+                  }
+                />
               </>
             ) : pendingHere ? (
               <>

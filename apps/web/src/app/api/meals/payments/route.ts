@@ -9,6 +9,7 @@ import {
   atomicCycleReceiptSql,
   mealCycleOperationLockSql,
 } from '@/lib/meals';
+import { notify } from '@/lib/notify';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -119,6 +120,7 @@ export async function POST(req: Request) {
             method,
             receiptUrl,
             note: note ? maskPii(note) : null,
+            now: new Date(),
           }),
         ),
       ]);
@@ -140,6 +142,21 @@ export async function POST(req: Request) {
           ? insertRow.request_status
           : 'pending';
       if (!requestId) return json({ error: 'conflict' }, 409);
+
+      // Inbound-work notice to the payments-review staff queue (Pack B / WP-2).
+      // Fire-and-forget: never blocks or fails the member's submission. The body
+      // is server-templated and carries no member free text (§7.2-S2 injection
+      // defense) — the receipt note stays masked in the DB, never in a push.
+      void notify(
+        'payment_request_staff',
+        { role: 'staff', permission: 'payments.review' },
+        {
+          title: 'New meal payment receipt',
+          body: 'A member submitted a weekly meal-plan payment receipt for review.',
+          data: { type: 'meal_payment', id: requestId },
+        },
+      );
+
       return json({ request: { id: requestId, status: requestStatus } }, 201);
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
@@ -232,6 +249,18 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error('[meals] order paymentStatus flip failed', err);
   }
+
+  // Inbound-work notice to the payments-review staff queue (Pack B / WP-2).
+  // Fire-and-forget; server-templated body with no member free text (§7.2-S2).
+  void notify(
+    'payment_request_staff',
+    { role: 'staff', permission: 'payments.review' },
+    {
+      title: 'New meal payment receipt',
+      body: 'A member submitted a meal-order payment receipt for review.',
+      data: { type: 'meal_payment', id: inserted.id },
+    },
+  );
 
   return json({ request: { id: inserted.id, status: inserted.status } }, 201);
 }

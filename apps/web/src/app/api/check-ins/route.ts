@@ -1,4 +1,4 @@
-import { checkIns } from '@gym/db';
+import { checkIns, coachAssignments } from '@gym/db';
 import { and, desc, eq, or } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
@@ -6,6 +6,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { runAwardEngine } from '@/lib/gamification';
 import { json, preflight, readJson } from '@/lib/http';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -51,6 +52,36 @@ const postSchema = z.object({
   }),
 });
 
+/**
+ * Push the member's currently-assigned coach a durable inbox row + notification
+ * that this client submitted a weekly check-in. No-op when the member has no
+ * active coach. Wrapped so a lookup failure can never surface to the member
+ * (the check-in already succeeded); `notify` is itself best-effort/no-throw.
+ */
+async function notifyAssignedCoach(userId: string, checkInId: string): Promise<void> {
+  try {
+    const rows = await getDb()
+      .select({ coachId: coachAssignments.coachId })
+      .from(coachAssignments)
+      .where(and(eq(coachAssignments.userId, userId), eq(coachAssignments.status, 'active')))
+      .limit(1);
+    const coachId = rows[0]?.coachId;
+    if (!coachId) return;
+    await notify(
+      'coach_checkin',
+      { accountId: coachId },
+      {
+        title: 'New client check-in',
+        body: 'A client just submitted their weekly check-in.',
+        data: { type: 'coach_client', id: userId },
+      },
+      { dedupeKey: `coach_checkin:${coachId}:${checkInId}` },
+    );
+  } catch (err) {
+    console.error(`[check-ins] coach notify failed user=${userId}`, err);
+  }
+}
+
 export function OPTIONS() {
   return preflight();
 }
@@ -86,6 +117,12 @@ export async function POST(req: Request) {
   const created = inserted[0];
   if (created) {
     after(() => runAwardEngine(user.id).then(() => undefined));
+    // Notify the member's active coach that a client check-in landed (Pack B /
+    // WP-2 `coach_checkin`). Best-effort, off the critical path via after();
+    // this member-facing route is outside api/coach/**, which is why the push
+    // was previously missing. Title/body are server-templated (no member free
+    // text → no injection surface).
+    after(() => notifyAssignedCoach(user.id, created.id));
     return json({ checkIn: created }, 201);
   }
 

@@ -3,6 +3,8 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { SetLog } from '@gym/shared';
+import { useBottomClearance } from '../../lib/systemBars';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import {
   AppText,
@@ -13,6 +15,7 @@ import {
   enterUp,
   FractionStat,
   layoutSpring,
+  Sheet,
 } from '../../components/ui';
 import { SuggestionRow } from '../../features/progression/components/SuggestionRow';
 import { refreshServerSuggestions, useSuggestion } from '../../features/progression/hooks';
@@ -20,6 +23,7 @@ import { LogEditor } from '../../features/training/components/LogEditor';
 import { RestTimerPanel } from '../../features/training/components/RestTimerPanel';
 import { ExerciseSection } from '../../features/training/components/ExerciseSection';
 import { PrCelebration } from '../../features/training/components/PrCelebration';
+import { SetActionSheet } from '../../features/training/components/SetActionSheet';
 import { formatClock } from '../../features/training/logic';
 import { pushPath, replacePath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
@@ -123,6 +127,7 @@ const styles = StyleSheet.create({
 
 export default function WorkoutScreen() {
   const insets = useSafeAreaInsets();
+  const bottomClearance = useBottomClearance();
   const unitPref = useProfile((s) => s.unitPref);
   const session = useSession();
   const [ready, setReady] = useState(session.status === 'active');
@@ -130,6 +135,9 @@ export default function WorkoutScreen() {
   const [logging, setLogging] = useState(false);
   /** Branded finish confirmation: 'finish' saves, 'discard' throws away an empty session. */
   const [finishPrompt, setFinishPrompt] = useState<null | 'finish' | 'discard'>(null);
+  /** A logged set opened via long-press — drives the edit/delete sheet. */
+  const [editingSet, setEditingSet] = useState<SetLog | null>(null);
+  const [savingSet, setSavingSet] = useState(false);
   /** Progression target the user tapped Apply on — piped into the editor prefill. */
   const [appliedSuggestion, setAppliedSuggestion] = useState<{
     exerciseId: string;
@@ -279,6 +287,25 @@ export default function WorkoutScreen() {
       .finally(() => setLogging(false));
   };
 
+  const handleSaveSet = (weightKg: number, reps: number): void => {
+    if (!editingSet || savingSet) return;
+    setSavingSet(true);
+    void useSession
+      .getState()
+      .updateLoggedSet(editingSet.id, weightKg, reps)
+      .finally(() => {
+        setSavingSet(false);
+        setEditingSet(null);
+      });
+  };
+
+  const handleDeleteSet = (): void => {
+    if (!editingSet) return;
+    const id = editingSet.id;
+    setEditingSet(null);
+    void useSession.getState().deleteLoggedSet(id);
+  };
+
   return (
     <View style={[styles.root, { paddingTop: insets.top + TOP_AIR }]}>
       <Animated.View entering={enterDown(0)} style={[styles.contentCap, styles.topStrip]}>
@@ -311,6 +338,8 @@ export default function WorkoutScreen() {
               unitPref={unitPref}
               onSelect={() => useSession.getState().setCurrent(i)}
               onFlashDone={() => useSession.getState().clearFlash()}
+              onEditSet={(set) => setEditingSet(set)}
+              onSwap={() => pushPath(`/exercises?select=1&swapIndex=${i}`)}
             />
           </Animated.View>
         ))}
@@ -337,7 +366,7 @@ export default function WorkoutScreen() {
         style={[
           styles.contentCap,
           styles.dock,
-          { paddingBottom: Math.max(insets.bottom, spacing.lg) },
+          { paddingBottom: Math.max(bottomClearance, spacing.lg) },
         ]}
       >
         {/* The ONE red hero block: what you're lifting + which set you're on. */}
@@ -439,6 +468,23 @@ export default function WorkoutScreen() {
           <PrCelebration key={celebrateId} onDone={() => setCelebrateId(null)} />
         </View>
       ) : null}
+
+      {/* Long-press a logged set → edit weight/reps or delete it outright. */}
+      <Sheet
+        visible={editingSet !== null}
+        onClose={() => setEditingSet(null)}
+        title="Edit set"
+      >
+        {editingSet ? (
+          <SetActionSheet
+            set={editingSet}
+            unitPref={unitPref}
+            onSave={handleSaveSet}
+            onDelete={handleDeleteSet}
+            saving={savingSet}
+          />
+        ) : null}
+      </Sheet>
     </View>
   );
 }

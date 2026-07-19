@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react';
 import { useEffect } from 'react';
-import { Platform, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   interpolate,
@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, type Href } from 'expo-router';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { tapHaptic } from '../../lib/haptics';
+import { useBottomClearance } from '../../lib/systemBars';
 import { useSession } from '../../features/training/session';
 
 /**
@@ -254,14 +255,11 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
   );
 
   // Clearance above the SYSTEM navigation area. insets.bottom is the truth
-  // (gesture bar ~24, 3-button bar ~48) now that the root SafeAreaProvider
-  // ships initial metrics — the Math.max floor only guards odd devices that
-  // still report 0 under edge-to-edge, so the dock can never sit on the
-  // system buttons again.
-  const systemClearance = Math.max(
-    insets.bottom,
-    Platform.OS === 'android' ? spacing.lg : 0,
-  );
+  // (gesture bar ~24, 3-button bar ~48); useBottomClearance falls back to the
+  // full 3-button height on Android devices that report 0 under edge-to-edge
+  // (a spacing.lg floor proved too short — the 48dp bar still covered the
+  // dock on OEM builds with broken inset reporting).
+  const systemClearance = useBottomClearance();
 
   return (
     <View

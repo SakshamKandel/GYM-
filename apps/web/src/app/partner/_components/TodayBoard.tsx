@@ -1,9 +1,16 @@
 'use client';
 
-import { canActorAdvance, ORDER_STATUSES, type MealWindow, type OrderStatus } from '@gym/shared';
+import {
+  canActorAdvance,
+  ORDER_STATUSES,
+  partnerCanRefuse,
+  partnerRefuseTarget,
+  type MealWindow,
+  type OrderStatus,
+} from '@gym/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Badge, Button, ConfirmButton, EmptyState } from '@/components/console';
+import { Badge, Button, EmptyState } from '@/components/console';
 import type { PartnerOrderView } from '../_data';
 import {
   formatDateLabel,
@@ -14,6 +21,7 @@ import {
   windowShort,
 } from '../_format';
 import { OrderDetailDrawer } from './OrderDetailDrawer';
+import { RefuseControl } from './RefuseControl';
 import { useCallbackRef } from './useCallbackRef';
 
 /**
@@ -22,11 +30,14 @@ import { useCallbackRef } from './useCallbackRef';
  * kanban of the fulfillment columns (Pending → Confirmed → Preparing → Out for
  * delivery). One-tap advance is optimistic and self-heals on a CAS conflict
  * (409 → refetch). The board polls every 15s, flags brand-new orders with a
- * badge + document-title flash, and highlights any order whose delivery window
- * has already started but isn't delivered.
+ * badge + document-title flash, an audible chime that repeats until
+ * acknowledged (B8), and highlights any order whose delivery window has
+ * already started but isn't delivered.
  */
 
 const POLL_MS = 15_000;
+const CHIME_REPEAT_MS = 20_000;
+const SOUND_PREF_KEY = 'gt-partner-board-sound';
 
 /** Board columns, left→right, matching the natural fulfillment flow. */
 const COLUMNS: { status: OrderStatus; label: string }[] = [
@@ -51,9 +62,37 @@ function nextAction(from: OrderStatus): OrderStatus | null {
   return to ?? null;
 }
 
-/** May the partner mark this order refused (only from out-for-delivery)? */
-function canRefuse(from: OrderStatus): boolean {
-  return canActorAdvance(from, 'refused', 'partner');
+/**
+ * Play a short two-tone chime via Web Audio (B8). Best-effort: browsers block
+ * audio before any user gesture, and older browsers may lack the API — both
+ * fail silently, leaving the visual badge + title flash as the fallback signal.
+ */
+function playChime(ctxRef: { current: AudioContext | null }) {
+  try {
+    const AudioCtxCtor: typeof AudioContext | undefined =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtxCtor) return;
+    if (!ctxRef.current) ctxRef.current = new AudioCtxCtor();
+    const ctx = ctxRef.current;
+    if (ctx.state === 'suspended') void ctx.resume();
+    const now = ctx.currentTime;
+    [880, 1318.5].forEach((freq, i) => {
+      const start = now + i * 0.16;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.3, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.18);
+    });
+  } catch {
+    /* audio unavailable — visual badge + title flash remain */
+  }
 }
 
 export function TodayBoard({
@@ -73,8 +112,31 @@ export function TodayBoard({
   const [newIds, setNewIds] = useState<Set<string>>(() => new Set());
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pollFailed, setPollFailed] = useState(false);
+  const [soundOn, setSoundOn] = useState(true);
 
   const knownIds = useRef<Set<string>>(new Set(initial.map((o) => o.orderId)));
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  // Sound-on/off preference persists across visits (localStorage) — a kitchen
+  // that mutes the board once shouldn't have to re-mute it every shift.
+  useEffect(() => {
+    try {
+      setSoundOn(window.localStorage.getItem(SOUND_PREF_KEY) !== 'off');
+    } catch {
+      /* storage unavailable (private mode) — default stays on */
+    }
+  }, []);
+  function toggleSound() {
+    setSoundOn((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SOUND_PREF_KEY, next ? 'on' : 'off');
+      } catch {
+        /* storage unavailable — the toggle still works for this session */
+      }
+      return next;
+    });
+  }
 
   const todaysOrders = useMemo(
     () => orders.filter((o) => o.deliveryDate === today),
@@ -118,6 +180,7 @@ export function TodayBoard({
           for (const o of fresh) next.add(o.orderId);
           return next;
         });
+        if (soundOn) playChime(audioCtxRef);
       }
       for (const o of fetched) knownIds.current.add(o.orderId);
       setOrders(fetched);
@@ -149,7 +212,16 @@ export function TodayBoard({
     };
   }, [newIds.size]);
 
-  async function advance(orderId: string, toStatus: OrderStatus) {
+  // Repeat-until-ack (B8): a backgrounded/asleep kitchen shouldn't miss a new
+  // order because it played once. Re-chimes on an interval for as long as any
+  // new order sits un-acknowledged; stops the instant `acknowledgeNew` fires.
+  useEffect(() => {
+    if (newIds.size === 0 || !soundOn) return;
+    const t = setInterval(() => playChime(audioCtxRef), CHIME_REPEAT_MS);
+    return () => clearInterval(t);
+  }, [newIds.size, soundOn]);
+
+  async function advance(orderId: string, toStatus: OrderStatus, reason?: string) {
     setBusyId(orderId);
     setErrorById((e) => ({ ...e, [orderId]: '' }));
     try {
@@ -157,7 +229,7 @@ export function TodayBoard({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ toStatus }),
+        body: JSON.stringify(reason ? { toStatus, reason } : { toStatus }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -227,6 +299,26 @@ export function TodayBoard({
             </button>
           ) : null}
         </div>
+        <button
+          onClick={toggleSound}
+          aria-label={soundOn ? 'Mute new-order chime' : 'Unmute new-order chime'}
+          title={soundOn ? 'New-order chime is on' : 'New-order chime is muted'}
+          style={{
+            border: '1px solid var(--gt-border-strong)',
+            borderRadius: 999,
+            padding: '4px 10px',
+            background: 'var(--gt-surface)',
+            color: 'var(--gt-text-dim)',
+            fontSize: 12,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <span aria-hidden="true">{soundOn ? '🔔' : '🔕'}</span>
+          {soundOn ? 'Sound on' : 'Muted'}
+        </button>
       </div>
 
       {hasOverdue ? (
@@ -303,7 +395,7 @@ function OverdueLane({
   nowMs: number;
   busyId: string | null;
   errorById: Record<string, string>;
-  onAdvance: (id: string, to: OrderStatus) => void;
+  onAdvance: (id: string, to: OrderStatus, reason?: string) => void;
   onOpen: (id: string) => void;
 }) {
   return (
@@ -368,7 +460,7 @@ function WindowLane({
   busyId: string | null;
   errorById: Record<string, string>;
   newIds: Set<string>;
-  onAdvance: (id: string, to: OrderStatus) => void;
+  onAdvance: (id: string, to: OrderStatus, reason?: string) => void;
   onOpen: (id: string) => void;
 }) {
   const lateCount = orders.filter((o) => isOrderLate(o, nowMs)).length;
@@ -468,11 +560,11 @@ function BoardCard({
   busy: boolean;
   error?: string;
   showDate?: boolean;
-  onAdvance: (id: string, to: OrderStatus) => void;
+  onAdvance: (id: string, to: OrderStatus, reason?: string) => void;
   onOpen: (id: string) => void;
 }) {
   const to = nextAction(order.status);
-  const refusable = canRefuse(order.status);
+  const refuseTarget = partnerCanRefuse(order.status) ? partnerRefuseTarget(order.status) : null;
   const digitalUnpaid =
     order.paymentMethod !== 'cod' &&
     order.paymentStatus !== 'paid' &&
@@ -568,14 +660,11 @@ function BoardCard({
         </Button>
       ) : null}
 
-      {refusable ? (
-        <ConfirmButton
-          label="Mark refused"
-          confirmLabel="Confirm refused"
-          busyLabel="Working…"
-          size="sm"
+      {refuseTarget ? (
+        <RefuseControl
+          label={refuseTarget === 'refused' ? 'Mark refused' : 'Reject order'}
           busy={busy}
-          onConfirm={() => onAdvance(order.orderId, 'refused')}
+          onConfirm={(reason) => onAdvance(order.orderId, refuseTarget, reason)}
         />
       ) : null}
 

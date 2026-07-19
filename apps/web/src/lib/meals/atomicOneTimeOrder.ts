@@ -29,6 +29,7 @@ export interface AtomicOneTimeOrderWrite {
   subtotalMinor: number;
   deliveryFeeMinor: number;
   smallOrderFeeMinor: number;
+  tipMinor: number;
   totalMinor: number;
   currency: 'NPR' | 'USD';
   paymentMethod: 'esewa' | 'khalti' | 'cod';
@@ -66,7 +67,7 @@ export function atomicOneTimeOrderSql(args: AtomicOneTimeOrderWrite): SQL {
         client_request_id, request_fingerprint, delivery_date, window,
         address_id, delivery_name, delivery_phone, delivery_address_text,
         delivery_lat, delivery_lng, delivery_notes, subtotal_minor,
-        delivery_fee_minor, small_order_fee_minor, total_minor, currency,
+        delivery_fee_minor, small_order_fee_minor, tip_minor, total_minor, currency,
         payment_method, payment_status, status, status_version, cutoff_at
       )
       select
@@ -75,7 +76,7 @@ export function atomicOneTimeOrderSql(args: AtomicOneTimeOrderWrite): SQL {
         ${args.addressId}, ${args.deliveryName}, ${args.deliveryPhone},
         ${args.deliveryAddressText}, ${args.deliveryLat}, ${args.deliveryLng},
         ${args.deliveryNotes}, ${args.subtotalMinor}, ${args.deliveryFeeMinor},
-        ${args.smallOrderFeeMinor}, ${args.totalMinor}, ${args.currency},
+        ${args.smallOrderFeeMinor}, ${args.tipMinor}, ${args.totalMinor}, ${args.currency},
         ${args.paymentMethod}, 'unpaid', 'pending', 0, ${args.cutoffAt}
       from active_partner
       returning id

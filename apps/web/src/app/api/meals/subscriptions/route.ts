@@ -1,14 +1,22 @@
-import { mealBillingCycles, mealSubscriptions } from '@gym/db';
-import { ktmAddDays, ktmDateString } from '@gym/shared';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { mealBillingCycles, mealSubSkips, mealSubscriptions } from '@gym/db';
+import {
+  ktmAddDays,
+  ktmDateString,
+  type CycleStatus,
+  type MealWindow,
+} from '@gym/shared';
+import { and, asc, eq, gte, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import {
   atomicSubscriptionCreateSql,
+  buildCycleInvoice,
   materializeDueOrders,
   quoteSubscriptionPlan,
+  upcomingDeliveryDates,
+  type CycleInvoice,
   type SubscriptionPlanShape,
 } from '@/lib/meals';
 import { partnerOperationLockSql } from '@/lib/partnerOperationLock';
@@ -29,6 +37,9 @@ export const runtime = 'nodejs';
  */
 
 const MAX_START_DAYS = 30;
+/** How far ahead the "deliveries scheduled for …" projection looks (Pack G). */
+const UPCOMING_HORIZON_DAYS = 14;
+const UPCOMING_MAX = 8;
 
 const createSchema = z.object({
   partnerId: z.string().min(1),
@@ -45,20 +56,37 @@ export function OPTIONS() {
   return preflight();
 }
 
+/**
+ * The caller's oldest still-actionable weekly bill for a plan (Pack G / B5):
+ * either `awaiting_payment` (Pay CTA active) or `receipt_submitted` (member has
+ * uploaded a receipt, staff reviewing → the card renders "under review", NOT a
+ * live Pay button). `receiptSubmitted` + `status` let the client distinguish the
+ * two without inferring; `invoice` is the itemized weekly receipt. Without this
+ * surface the member has no way to discover a `cycleId` to pay (the bill only
+ * ever otherwise surfaces via a push that may be missed/denied), so a digital
+ * subscription would silently never deliver once a cycle is billed.
+ */
 interface PendingCycle {
   id: string;
   weekStart: string;
   weekEnd: string;
   amountMinor: number;
   currency: string;
+  status: CycleStatus;
+  receiptSubmitted: boolean;
+  invoice: CycleInvoice;
 }
 
-/** Additive field (§8 contract is unaffected — mobile parses it leniently):
- * the caller's oldest still-unpaid weekly bill for this plan, if any. Without
- * this the member has no way to discover a `cycleId` to pay (the bill only
- * ever surfaces via a push notification, which may be missed/denied), so
- * their digital subscription silently never delivers once a cycle is billed. */
-function serialize(s: typeof mealSubscriptions.$inferSelect, pendingCycle: PendingCycle | null) {
+interface UpcomingDelivery {
+  date: string;
+  window: MealWindow;
+}
+
+function serialize(
+  s: typeof mealSubscriptions.$inferSelect,
+  pendingCycle: PendingCycle | null,
+  upcomingDeliveries: UpcomingDelivery[],
+) {
   return {
     id: s.id,
     partnerId: s.partnerId,
@@ -75,7 +103,29 @@ function serialize(s: typeof mealSubscriptions.$inferSelect, pendingCycle: Pendi
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
     pendingCycle,
+    upcomingDeliveries,
   };
+}
+
+/** Forward delivery projection for one plan (active plans only; else empty). */
+function upcomingFor(
+  sub: Pick<
+    typeof mealSubscriptions.$inferSelect,
+    'daysOfWeek' | 'window' | 'startDate' | 'status'
+  >,
+  skipDates: ReadonlySet<string>,
+  today: string,
+): UpcomingDelivery[] {
+  if (sub.status !== 'active') return [];
+  return upcomingDeliveryDates({
+    daysOfWeek: sub.daysOfWeek,
+    window: sub.window,
+    startDate: sub.startDate,
+    fromDate: today,
+    horizonDays: UPCOMING_HORIZON_DAYS,
+    skipDates,
+    max: UPCOMING_MAX,
+  });
 }
 
 export async function GET(req: Request) {
@@ -83,7 +133,8 @@ export async function GET(req: Request) {
   if (!me) return json({ error: 'unauthorized' }, 401);
 
   const db = getDb();
-  await materializeDueOrders(db, { kind: 'member', accountId: me.id });
+  const now = new Date();
+  await materializeDueOrders(db, { kind: 'member', accountId: me.id }, now);
 
   const rows = await db
     .select()
@@ -91,42 +142,88 @@ export async function GET(req: Request) {
     .where(eq(mealSubscriptions.accountId, me.id));
 
   const pendingBySub = new Map<string, PendingCycle>();
+  const skipsBySub = new Map<string, Set<string>>();
+  const today = ktmDateString(now);
   if (rows.length > 0) {
+    const subIds = rows.map((r) => r.id);
     const cycles = await db
       .select({
         id: mealBillingCycles.id,
         subscriptionId: mealBillingCycles.subscriptionId,
         weekStart: mealBillingCycles.weekStart,
         weekEnd: mealBillingCycles.weekEnd,
+        plannedSlots: mealBillingCycles.plannedSlots,
+        pricePerDayMinor: mealBillingCycles.pricePerDayMinor,
         amountMinor: mealBillingCycles.amountMinor,
         currency: mealBillingCycles.currency,
+        status: mealBillingCycles.status,
       })
       .from(mealBillingCycles)
       .where(
         and(
-          inArray(
-            mealBillingCycles.subscriptionId,
-            rows.map((r) => r.id),
-          ),
-          eq(mealBillingCycles.status, 'awaiting_payment'),
+          inArray(mealBillingCycles.subscriptionId, subIds),
+          // Both are "actionable/awaiting resolution": awaiting_payment (pay
+          // now) and receipt_submitted (uploaded, under staff review). Paid /
+          // void / open never surface as a pending bill.
+          inArray(mealBillingCycles.status, ['awaiting_payment', 'receipt_submitted']),
         ),
       )
       .orderBy(asc(mealBillingCycles.weekStart));
-    // Oldest unpaid week first per subscription (fairness) — orderBy asc + a
-    // Map that only sets-once keeps the first (earliest) match per sub.
+    // Oldest actionable week first per subscription (fairness) — orderBy asc +
+    // a Map that only sets-once keeps the first (earliest) match per sub.
     for (const c of cycles) {
       if (pendingBySub.has(c.subscriptionId)) continue;
-      pendingBySub.set(c.subscriptionId, {
-        id: c.id,
-        weekStart: c.weekStart,
-        weekEnd: c.weekEnd,
-        amountMinor: c.amountMinor,
-        currency: c.currency,
-      });
+      pendingBySub.set(c.subscriptionId, toPendingCycle(c));
+    }
+
+    // Skips (>= today) feed the forward delivery projection for active plans.
+    const skips = await db
+      .select({ subscriptionId: mealSubSkips.subscriptionId, deliveryDate: mealSubSkips.deliveryDate })
+      .from(mealSubSkips)
+      .where(and(inArray(mealSubSkips.subscriptionId, subIds), gte(mealSubSkips.deliveryDate, today)));
+    for (const s of skips) {
+      const set = skipsBySub.get(s.subscriptionId) ?? new Set<string>();
+      set.add(s.deliveryDate);
+      skipsBySub.set(s.subscriptionId, set);
     }
   }
 
-  return json({ subscriptions: rows.map((r) => serialize(r, pendingBySub.get(r.id) ?? null)) }, 200);
+  return json(
+    {
+      subscriptions: rows.map((r) =>
+        serialize(
+          r,
+          pendingBySub.get(r.id) ?? null,
+          upcomingFor(r, skipsBySub.get(r.id) ?? new Set<string>(), today),
+        ),
+      ),
+    },
+    200,
+  );
+}
+
+interface CycleRow {
+  id: string;
+  weekStart: string;
+  weekEnd: string;
+  plannedSlots: number;
+  pricePerDayMinor: number;
+  amountMinor: number;
+  currency: string;
+  status: CycleStatus;
+}
+
+function toPendingCycle(c: CycleRow): PendingCycle {
+  return {
+    id: c.id,
+    weekStart: c.weekStart,
+    weekEnd: c.weekEnd,
+    amountMinor: c.amountMinor,
+    currency: c.currency,
+    status: c.status,
+    receiptSubmitted: c.status === 'receipt_submitted',
+    invoice: buildCycleInvoice(c),
+  };
 }
 
 export async function POST(req: Request) {
@@ -210,5 +307,32 @@ export async function POST(req: Request) {
   // so the member immediately sees the bill or the upcoming delivery.
   await materializeDueOrders(db, { kind: 'member', accountId: me.id }, now);
 
-  return json({ subscription: serialize(sub, null) }, 201);
+  // Return the just-billed first cycle (Pack G / B3) so the client can jump
+  // straight to Pay without a second round-trip. Digital → awaiting_payment;
+  // COD → none (reconciles on delivery).
+  const [firstCycle] = await db
+    .select({
+      id: mealBillingCycles.id,
+      weekStart: mealBillingCycles.weekStart,
+      weekEnd: mealBillingCycles.weekEnd,
+      plannedSlots: mealBillingCycles.plannedSlots,
+      pricePerDayMinor: mealBillingCycles.pricePerDayMinor,
+      amountMinor: mealBillingCycles.amountMinor,
+      currency: mealBillingCycles.currency,
+      status: mealBillingCycles.status,
+    })
+    .from(mealBillingCycles)
+    .where(
+      and(
+        eq(mealBillingCycles.subscriptionId, subscriptionId),
+        inArray(mealBillingCycles.status, ['awaiting_payment', 'receipt_submitted']),
+      ),
+    )
+    .orderBy(asc(mealBillingCycles.weekStart))
+    .limit(1);
+
+  const pendingCycle = firstCycle ? toPendingCycle(firstCycle) : null;
+  const upcoming = upcomingFor(sub, new Set<string>(), today);
+
+  return json({ subscription: serialize(sub, pendingCycle, upcoming) }, 201);
 }

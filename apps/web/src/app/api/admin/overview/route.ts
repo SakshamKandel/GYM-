@@ -6,6 +6,7 @@ import {
   coachMessages,
   coachProfiles,
   coachTierRequests,
+  mealPaymentRequests,
   paymentRequests,
   planVideos,
 } from '@gym/db';
@@ -202,7 +203,7 @@ export async function GET(req: Request) {
   }
 
   if (canPayments) {
-    const [pending, gross, refunds] = await Promise.all([
+    const [pending, gross, refunds, pendingMealPayments] = await Promise.all([
       db
         .select({ n: count() })
         .from(paymentRequests)
@@ -232,8 +233,15 @@ export async function GET(req: Request) {
           and(eq(paymentRequests.status, 'refunded'), gte(paymentRequests.decidedAt, monthStart)),
         )
         .groupBy(paymentRequests.currency),
+      // Meal-order/subscription-cycle eSewa/Khalti receipts awaiting review —
+      // the sibling queue to `paymentRequests` above (B25 blind-tile fix).
+      db
+        .select({ n: count() })
+        .from(mealPaymentRequests)
+        .where(eq(mealPaymentRequests.status, 'pending')),
     ]);
     ops.pendingPayments = Number(pending[0]?.n ?? 0);
+    ops.pendingMealPayments = Number(pendingMealPayments[0]?.n ?? 0);
     const netByCurrency = new Map<string, number>();
     for (const r of gross) netByCurrency.set(r.currency, Number(r.total ?? 0));
     for (const r of refunds) {

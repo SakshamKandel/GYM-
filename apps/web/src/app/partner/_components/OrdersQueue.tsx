@@ -1,9 +1,15 @@
 'use client';
 
-import { canActorAdvance, ORDER_STATUSES, type OrderStatus } from '@gym/shared';
+import {
+  canActorAdvance,
+  ORDER_STATUSES,
+  partnerCanRefuse,
+  partnerRefuseTarget,
+  type OrderStatus,
+} from '@gym/shared';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { Badge, Button, ConfirmButton, EmptyState } from '@/components/console';
+import { Badge, Button, EmptyState } from '@/components/console';
 import type { PartnerOrderView } from '../_data';
 import {
   formatDateLabel,
@@ -14,6 +20,7 @@ import {
   PAYMENT_LABEL,
   windowLabel,
 } from '../_format';
+import { RefuseControl } from './RefuseControl';
 
 /**
  * The partner fulfillment queue (Today's Orders + Subscriptions fulfillment).
@@ -29,12 +36,16 @@ const ADVANCE_META: Partial<Record<OrderStatus, { label: string; variant: 'prima
   preparing: { label: 'Start preparing', variant: 'primary' },
   out_for_delivery: { label: 'Out for delivery', variant: 'primary' },
   delivered: { label: 'Mark delivered', variant: 'primary' },
-  refused: { label: 'Mark refused', variant: 'ghost' },
 };
 
+/** Forward advance targets only — refuse/reject is handled by RefuseControl (B6). */
 function advanceTargets(from: OrderStatus): OrderStatus[] {
   return ORDER_STATUSES.filter(
-    (to) => to !== 'cancelled' && canActorAdvance(from, to, 'partner') && ADVANCE_META[to],
+    (to) =>
+      to !== 'cancelled' &&
+      to !== 'refused' &&
+      canActorAdvance(from, to, 'partner') &&
+      ADVANCE_META[to],
   );
 }
 
@@ -60,7 +71,7 @@ export function OrdersQueue({
     return () => clearInterval(t);
   }, []);
 
-  async function advance(orderId: string, toStatus: OrderStatus) {
+  async function advance(orderId: string, toStatus: OrderStatus, reason?: string) {
     setBusyId(orderId);
     setErrorById((e) => ({ ...e, [orderId]: '' }));
     try {
@@ -68,7 +79,7 @@ export function OrdersQueue({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ toStatus }),
+        body: JSON.stringify(reason ? { toStatus, reason } : { toStatus }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -102,7 +113,7 @@ export function OrdersQueue({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       {visible.map((o) => {
         const targets = advanceTargets(o.status);
-        const canCancel = canActorAdvance(o.status, 'cancelled', 'partner');
+        const refuseTarget = partnerCanRefuse(o.status) ? partnerRefuseTarget(o.status) : null;
         const digitalUnpaid =
           o.paymentMethod !== 'cod' && o.paymentStatus !== 'paid' && o.paymentStatus !== 'refunded';
         const busy = busyId === o.orderId;
@@ -198,7 +209,7 @@ export function OrdersQueue({
               </div>
             </div>
 
-            {(targets.length > 0 || canCancel) && (
+            {(targets.length > 0 || refuseTarget) && (
               <div
                 style={{
                   marginTop: 14,
@@ -225,14 +236,11 @@ export function OrdersQueue({
                     </Button>
                   );
                 })}
-                {canCancel ? (
-                  <ConfirmButton
-                    label="Cancel"
-                    confirmLabel="Confirm cancel"
-                    busyLabel="Cancelling…"
-                    size="sm"
+                {refuseTarget ? (
+                  <RefuseControl
+                    label={refuseTarget === 'refused' ? 'Mark refused' : 'Cancel'}
                     busy={busy}
-                    onConfirm={() => void advance(o.orderId, 'cancelled')}
+                    onConfirm={(reason) => void advance(o.orderId, refuseTarget, reason)}
                   />
                 ) : null}
               </div>

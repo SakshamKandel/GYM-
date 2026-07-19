@@ -1,4 +1,5 @@
 import { mealPartners, meals, savedAddresses } from '@gym/db';
+import { validateTipMinor } from '@gym/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
@@ -36,6 +37,8 @@ const postSchema = z.object({
   addressId: z.string().min(1).optional(),
   window: z.enum(['lunch', 'dinner']),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  // Optional gratuity preview (Pack D). Server-repriced; folded into totalMinor.
+  tipMinor: z.number().int().min(0).optional(),
 });
 
 export function OPTIONS() {
@@ -59,7 +62,7 @@ export async function POST(req: Request) {
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { partnerId, items, addressId } = parsed.data;
+  const { partnerId, items, addressId, tipMinor } = parsed.data;
 
   const db = getDb();
   const cfg = await loadDeliveryConfig(db);
@@ -122,8 +125,20 @@ export async function POST(req: Request) {
         eq(meals.isDeleted, false),
       ),
     );
-  if (mealRows.length !== mealIds.length) return json({ error: 'meal_unavailable' }, 400);
   const mealById = new Map(mealRows.map((m) => [m.id, m]));
+  // B11 per-line failure: a deleted/deactivated meal must name WHICH line failed
+  // (never a bare slot message) so the client can show "X unavailable — remove &
+  // continue". Look the missing meal up by id (any state) to recover its display
+  // name for the interstitial; `null` when the id is entirely unknown.
+  const missingId = mealIds.find((id) => !mealById.has(id));
+  if (missingId) {
+    const [named] = await db
+      .select({ name: meals.name })
+      .from(meals)
+      .where(eq(meals.id, missingId))
+      .limit(1);
+    return json({ error: 'meal_unavailable', mealId: missingId, mealName: named?.name ?? null }, 422);
+  }
 
   // A partner's menu is single-currency; a mixed cart is a client bug.
   const currencies = new Set(mealRows.map((m) => m.currency));
@@ -131,7 +146,9 @@ export async function POST(req: Request) {
   const currency = mealRows[0].currency;
 
   const lines: PricedLine[] = items.map((i) => ({ priceMinor: mealById.get(i.mealId)!.priceMinor, qty: i.qty }));
-  const financials = computeOrderFinancials(lines, cfg);
+  const subtotalForTip = lines.reduce((sum, l) => sum + l.priceMinor * l.qty, 0);
+  const tipCheck = validateTipMinor(tipMinor ?? 0, subtotalForTip);
+  const financials = computeOrderFinancials(lines, cfg, tipCheck.tipMinor);
 
   // A successful quote is now guaranteed deliverable by the shared eligibility
   // rule above; create routes run that same rule again before writing.
@@ -140,6 +157,7 @@ export async function POST(req: Request) {
       subtotalMinor: financials.subtotalMinor,
       deliveryFeeMinor: financials.deliveryFeeMinor,
       smallOrderFeeMinor: financials.smallOrderFeeMinor,
+      tipMinor: financials.tipMinor,
       totalMinor: financials.totalMinor,
       currency,
       deliversTo: true,

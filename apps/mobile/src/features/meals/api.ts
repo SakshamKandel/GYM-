@@ -19,11 +19,17 @@ import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
 
 export class MealsApiError extends Error {
   readonly code: string;
+  /** The full error-response body (minus `error`), when the server sent one —
+   * e.g. `{quotedMinor,currentMinor}` on `price_changed`, `{mealId,mealName}`
+   * on `meal_unavailable`, `{refund}` on a subscription cancel `refund_required`
+   * block. Absent on network failures or plain `{error}` bodies. */
+  readonly details?: Record<string, unknown>;
 
-  constructor(code: string, message?: string) {
+  constructor(code: string, message?: string, details?: Record<string, unknown>) {
     super(message ?? code);
     this.name = 'MealsApiError';
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -104,6 +110,11 @@ const menuMealSchema = z.object({
   goalTags: z.array(goalTagSchema).catch([]),
   priceMinor: z.number(),
   currency: currencySchema,
+  // Pack F real inventory: the partner toggled this meal sold-out for the
+  // requested (date, window) slot. Only ever populated when the menu fetch
+  // carried both `date` and `window` filters; absent otherwise → false (never
+  // hides the meal, just disables ordering it — see MealItemCard).
+  soldOut: z.boolean().catch(false),
 });
 export type MenuMeal = z.infer<typeof menuMealSchema>;
 
@@ -138,6 +149,10 @@ export type MealOrderItem = z.infer<typeof orderItemSchema>;
 
 const orderSchema = z.object({
   id: z.string(),
+  // Short human-readable code (Pack A confirmation/receipt/tracking). Older
+  // cached shapes simply lack it — fall back to a raw-id-derived placeholder
+  // rather than crashing the parse (never actually hit against a live server).
+  orderNumber: z.string().catch(''),
   source: z.enum(['one_time', 'subscription']),
   partnerId: z.string(),
   subscriptionId: z.string().nullable(),
@@ -150,6 +165,7 @@ const orderSchema = z.object({
   subtotalMinor: z.number(),
   deliveryFeeMinor: z.number(),
   smallOrderFeeMinor: z.number(),
+  tipMinor: z.number().catch(0),
   totalMinor: z.number(),
   currency: currencySchema,
   paymentMethod: paymentMethodSchema,
@@ -178,14 +194,38 @@ const orderListSchema = z.object({
 
 // ── Subscriptions ─────────────────────────────────────────────────
 
+const cycleStatusSchema = z.enum(['open', 'awaiting_payment', 'receipt_submitted', 'paid', 'void']);
+
+const cycleInvoiceSchema = z.object({
+  cycleId: z.string(),
+  weekStart: z.string(),
+  weekEnd: z.string(),
+  plannedSlots: z.number(),
+  pricePerDayMinor: z.number(),
+  amountMinor: z.number(),
+  currency: z.string(),
+  status: cycleStatusSchema,
+});
+export type MealCycleInvoice = z.infer<typeof cycleInvoiceSchema>;
+
 const pendingCycleSchema = z.object({
   id: z.string(),
   weekStart: z.string(),
   weekEnd: z.string(),
   amountMinor: z.number(),
   currency: z.string(),
+  status: cycleStatusSchema.optional(),
+  // Pack G / B5: the member uploaded a receipt and it's awaiting staff review
+  // — the card must show "under review", NOT a live Pay button. Older cached
+  // shapes lack this field; a missing value reads as "not submitted" (safe
+  // default — never hides a genuinely pending Pay affordance).
+  receiptSubmitted: z.boolean().catch(false).optional(),
+  invoice: cycleInvoiceSchema.optional(),
 });
 export type MealPendingCycle = z.infer<typeof pendingCycleSchema>;
+
+const upcomingDeliverySchema = z.object({ date: z.string(), window: mealWindowSchema });
+export type MealUpcomingDelivery = z.infer<typeof upcomingDeliverySchema>;
 
 const subscriptionSchema = z.object({
   id: z.string(),
@@ -206,6 +246,9 @@ const subscriptionSchema = z.object({
   // weekly bill for this plan, if any — the only client-visible way to
   // discover a `cycleId` to pay via submitMealReceipt.
   pendingCycle: pendingCycleSchema.nullable().catch(null).optional(),
+  // "Deliveries scheduled for …" forward projection (Pack G). Older cached
+  // shapes lack it; absent → empty (the card simply omits the strip).
+  upcomingDeliveries: z.array(upcomingDeliverySchema).catch([]).optional(),
 });
 export type MealSubscription = z.infer<typeof subscriptionSchema>;
 
@@ -286,7 +329,7 @@ const paymentEnvelope = z.object({ request: paymentRequestSchema });
 
 // ── Fetch plumbing ────────────────────────────────────────────────
 
-const errorBodySchema = z.object({ error: z.string() });
+const errorBodySchema = z.object({ error: z.string() }).passthrough();
 
 interface RequestOptions {
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -320,13 +363,18 @@ async function mealsRequest(opts: RequestOptions): Promise<unknown> {
   }
 
   let code = res.status === 401 ? 'unauthorized' : res.status === 403 ? 'forbidden' : 'network';
+  let details: Record<string, unknown> | undefined;
   try {
     const parsed = errorBodySchema.safeParse(await res.json());
-    if (parsed.success) code = parsed.data.error;
+    if (parsed.success) {
+      code = parsed.data.error;
+      const { error: _error, ...rest } = parsed.data;
+      if (Object.keys(rest).length > 0) details = rest;
+    }
   } catch {
     // Body wasn't JSON — keep the status-derived code.
   }
-  throw new MealsApiError(code);
+  throw new MealsApiError(code, undefined, details);
 }
 
 function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown): T {
@@ -369,6 +417,55 @@ export async function fetchMealMenu(
   return parse(menuListSchema, data).meals;
 }
 
+// ── Checkout quote (POST /api/meals/quote) ──────────────────────────
+
+const mealQuoteSchema = z.object({
+  subtotalMinor: z.number(),
+  deliveryFeeMinor: z.number(),
+  smallOrderFeeMinor: z.number(),
+  tipMinor: z.number().catch(0),
+  totalMinor: z.number(),
+  currency: currencySchema,
+  // true = the partner delivers to the chosen address, false = out of range,
+  // null = undeterminable (no geocoded pin / text-only address).
+  deliversTo: z.boolean().nullable(),
+});
+export type MealQuote = z.infer<typeof mealQuoteSchema>;
+
+export interface MealQuoteInput {
+  partnerId: string;
+  items: { mealId: string; qty: number }[];
+  /** A saved delivery address id, when quoting against one. */
+  addressId?: string;
+  window: MealWindow;
+  /** 'YYYY-MM-DD' delivery date. */
+  date: string;
+  /** Optional gratuity preview (Pack D); server-repriced. */
+  tipMinor?: number;
+}
+
+/** POST /api/meals/quote → the priced order preview (subtotal + delivery fee +
+ * small-order fee + tip + grand total) plus `deliversTo` coverage, WITHOUT
+ * placing anything. On a `meal_unavailable` (422) the thrown MealsApiError's
+ * `details` carries `{mealId, mealName}` naming which line failed (B11) —
+ * never a bare slot message. */
+export async function fetchMealQuote(token: string, input: MealQuoteInput): Promise<MealQuote> {
+  const data = await mealsRequest({
+    method: 'POST',
+    path: '/api/meals/quote',
+    token,
+    body: {
+      partnerId: input.partnerId,
+      items: input.items,
+      ...(input.addressId !== undefined ? { addressId: input.addressId } : {}),
+      window: input.window,
+      date: input.date,
+      ...(input.tipMinor !== undefined ? { tipMinor: input.tipMinor } : {}),
+    },
+  });
+  return parse(mealQuoteSchema, data);
+}
+
 export interface CreateMealOrderInput {
   requestId: string;
   partnerId: string;
@@ -378,6 +475,12 @@ export interface CreateMealOrderInput {
   items: { mealId: string; qty: number }[];
   paymentMethod: MealPaymentMethod;
   notes?: string;
+  /** Optional checkout gratuity (Pack D) — server-repriced via validateTipMinor. */
+  tipMinor?: number;
+  /** The total the member was SHOWN at quote time (B10/Pack F price-change
+   * guard). A server re-price that disagrees returns 409 `price_changed`
+   * WITHOUT charging — see {@link MealsApiError.details}. */
+  expectedTotalMinor?: number;
 }
 
 /** POST /api/meals/orders → place a one-time order. The server freezes price,
@@ -585,4 +688,89 @@ export async function submitMealReceipt(
 ): Promise<MealPaymentRequestResult> {
   const data = await mealsRequest({ method: 'POST', path: '/api/meals/payments', token, body: { ...input } });
   return parse(paymentEnvelope, data).request;
+}
+
+// ── Post-delivery: rating / tip / dispute / receipt (Pack A/C/D/E) ─
+
+/** POST /api/meals/orders/[id]/rating {stars, note?} — only once the order is
+ * `delivered`; a second submit 409s `already_rated`. */
+export async function rateMealOrder(
+  token: string,
+  orderId: string,
+  input: { stars: number; note?: string },
+): Promise<void> {
+  await mealsRequest({
+    method: 'POST',
+    path: `/api/meals/orders/${encodeURIComponent(orderId)}/rating`,
+    token,
+    body: { ...input },
+  });
+}
+
+/** POST /api/meals/orders/[id]/tip {tipMinor} — server-repriced gratuity; only
+ * while the order is still `unpaid`. Returns the updated order (new total). */
+export async function setMealOrderTip(token: string, orderId: string, tipMinor: number): Promise<MealOrder> {
+  const data = await mealsRequest({
+    method: 'POST',
+    path: `/api/meals/orders/${encodeURIComponent(orderId)}/tip`,
+    token,
+    body: { tipMinor },
+  });
+  return parse(orderEnvelope, data).order;
+}
+
+/** A member's reason for filing a dispute (Pack E). Mirrors @gym/shared's
+ * `DisputeReason` union — kept a plain string here (not re-exported) so this
+ * client stays forward-compatible with a server-added reason. */
+export type MealDisputeReason = 'not_delivered' | 'wrong_items' | 'quality' | 'late' | 'other';
+
+/** POST /api/meals/orders/[id]/dispute {reason, note?} — files a non-delivery
+ * / problem case; only from a terminal delivered/paid state. Resolution is
+ * admin-authoritative (never auto-refunds) — this only opens the case. */
+export async function fileMealDispute(
+  token: string,
+  orderId: string,
+  input: { reason: MealDisputeReason; note?: string },
+): Promise<{ id: string; status: string }> {
+  const data = await mealsRequest({
+    method: 'POST',
+    path: `/api/meals/orders/${encodeURIComponent(orderId)}/dispute`,
+    token,
+    body: { ...input },
+  });
+  return parse(z.object({ dispute: z.object({ id: z.string(), status: z.string() }) }), data).dispute;
+}
+
+const receiptTimelineRowSchema = z.object({
+  status: orderStatusSchema,
+  at: z.string(),
+  note: z.string().nullable(),
+});
+
+const orderReceiptSchema = z.object({
+  orderNumber: z.string(),
+  placedAt: z.string(),
+  items: z.array(
+    z.object({ name: z.string(), qty: z.number(), priceMinorSnapshot: z.number() }),
+  ),
+  subtotalMinor: z.number(),
+  deliveryFeeMinor: z.number(),
+  smallOrderFeeMinor: z.number(),
+  tipMinor: z.number().catch(0),
+  totalMinor: z.number(),
+  currency: currencySchema,
+  status: orderStatusSchema,
+  timeline: z.array(receiptTimelineRowSchema).catch([]),
+});
+export type MealOrderReceipt = z.infer<typeof orderReceiptSchema>;
+
+/** GET /api/meals/orders/[id]/receipt → the downloadable/shareable invoice
+ * (order number, itemized fees, tip, total, status timeline). Owner-scoped. */
+export async function fetchMealOrderReceipt(token: string, orderId: string): Promise<MealOrderReceipt> {
+  const data = await mealsRequest({
+    method: 'GET',
+    path: `/api/meals/orders/${encodeURIComponent(orderId)}/receipt`,
+    token,
+  });
+  return parse(orderReceiptSchema, data);
 }

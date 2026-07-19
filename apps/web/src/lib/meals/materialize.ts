@@ -24,7 +24,7 @@ import {
   type MealWindow,
   type RotationMeal,
 } from '@gym/shared';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm';
 import { after } from 'next/server';
 import { sendPushToAccount } from '@/lib/push';
 import { loadDeliveryConfig } from './config';
@@ -460,4 +460,102 @@ export async function materializeDueOrders(
   } catch (err) {
     console.error('[meals] materializeDueOrders failed', err);
   }
+}
+
+// --- Dunning (Pack G) --------------------------------------------------------
+// The WP-2 `cycle-dunning` cron sends the payment-overdue *notice*; the
+// auto-pause *transition* below is WP-4's domain (the cron may schedule it).
+// A cycle that has flipped to `receipt_submitted` (member paid, staff reviewing)
+// is deliberately NOT stale — only `awaiting_payment` past its week end counts.
+
+/** A weekly cycle whose billed week has fully elapsed while still unpaid. */
+export interface StaleCycle {
+  id: string;
+  subscriptionId: string;
+  accountId: string;
+  weekEnd: string;
+}
+
+/**
+ * Overdue unpaid weekly cycles (`awaiting_payment` with `weekEnd < today` KTM),
+ * oldest-first, bounded. These are the dunning targets and the input the cron
+ * uses to decide which subscriptions to consider for auto-pause.
+ */
+export async function staleAwaitingCycles(
+  db: Db,
+  opts?: { now?: Date; limit?: number },
+): Promise<StaleCycle[]> {
+  const now = opts?.now ?? new Date();
+  const today = ktmDateString(now);
+  const rows = await db
+    .select({
+      id: mealBillingCycles.id,
+      subscriptionId: mealBillingCycles.subscriptionId,
+      accountId: mealBillingCycles.accountId,
+      weekEnd: mealBillingCycles.weekEnd,
+    })
+    .from(mealBillingCycles)
+    .where(and(eq(mealBillingCycles.status, 'awaiting_payment'), lt(mealBillingCycles.weekEnd, today)))
+    .orderBy(asc(mealBillingCycles.weekEnd))
+    .limit(opts?.limit ?? 500);
+  return rows.map((r) => ({
+    id: r.id,
+    subscriptionId: r.subscriptionId,
+    accountId: r.accountId,
+    weekEnd: r.weekEnd,
+  }));
+}
+
+/**
+ * Auto-pause a subscription that has accumulated `>= thresholdWeeks` overdue
+ * unpaid cycles (default 2). Idempotent + race-safe: the subscription flip is a
+ * CAS `active→paused`, and the overdue `awaiting_payment` cycles are voided so a
+ * week that can never be delivered (materialization horizon is only today+
+ * tomorrow) stops being payable and stops re-triggering dunning. A cycle in
+ * `receipt_submitted`/`paid` is never touched (money in review / funded). Money
+ * already collected is never un-moved here — refunds stay on the admin rail.
+ */
+export async function autoPauseIfOverdue(
+  db: Db,
+  subscriptionId: string,
+  opts?: { now?: Date; thresholdWeeks?: number },
+): Promise<{ paused: boolean; overdueWeeks: number }> {
+  const now = opts?.now ?? new Date();
+  const threshold = Math.max(1, opts?.thresholdWeeks ?? 2);
+  const today = ktmDateString(now);
+
+  const overdue = await db
+    .select({ id: mealBillingCycles.id })
+    .from(mealBillingCycles)
+    .where(
+      and(
+        eq(mealBillingCycles.subscriptionId, subscriptionId),
+        eq(mealBillingCycles.status, 'awaiting_payment'),
+        lt(mealBillingCycles.weekEnd, today),
+      ),
+    );
+  const overdueWeeks = overdue.length;
+  if (overdueWeeks < threshold) return { paused: false, overdueWeeks };
+
+  // CAS active→paused. A concurrent pause/cancel that won matches 0 rows here.
+  const paused = await db
+    .update(mealSubscriptions)
+    .set({ status: 'paused', updatedAt: now })
+    .where(and(eq(mealSubscriptions.id, subscriptionId), eq(mealSubscriptions.status, 'active')))
+    .returning({ id: mealSubscriptions.id });
+
+  // Void the elapsed unpaid cycles regardless of the CAS winner: an already-
+  // paused/cancelled plan still shouldn't carry payable bills for dead weeks.
+  await db
+    .update(mealBillingCycles)
+    .set({ status: 'void', updatedAt: now })
+    .where(
+      and(
+        eq(mealBillingCycles.subscriptionId, subscriptionId),
+        eq(mealBillingCycles.status, 'awaiting_payment'),
+        lt(mealBillingCycles.weekEnd, today),
+      ),
+    );
+
+  return { paused: paused.length > 0, overdueWeeks };
 }

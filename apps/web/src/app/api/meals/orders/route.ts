@@ -15,15 +15,19 @@ import {
   ktmAddDays,
   ktmDateString,
   maskPii,
+  orderNumber,
   TERMINAL_ORDER_STATUSES,
+  validateTipMinor,
   type MealAvailabilitySlot,
 } from '@gym/shared';
 import { and, asc, desc, eq, inArray, notInArray } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { deliveryEligibility, deliveryEligibilityError } from '@/lib/deliveryEligibility';
 import { json, preflight, readJson } from '@/lib/http';
+import { notify } from '@/lib/notify';
 import {
   mealOrderRequestFingerprint,
   mealOrderRequestIdSchema,
@@ -71,7 +75,24 @@ const postSchema = z.object({
     .max(20),
   paymentMethod: z.enum(['esewa', 'khalti', 'cod']),
   notes: z.string().trim().max(500).optional(),
+  // Optional checkout gratuity (Pack D). Server-repriced via validateTipMinor;
+  // folded into the authoritative totalMinor. Absent = 0.
+  tipMinor: z.number().int().min(0).optional(),
+  // The total the member was SHOWN at quote time (Pack F / B10 price-change
+  // guard). When present AND the guard flag is on, a server re-price that differs
+  // returns 409 price_changed WITHOUT charging. Absent = legacy behavior.
+  expectedTotalMinor: z.number().int().min(0).optional(),
 });
+
+/**
+ * B10 price-change guard kill-switch (§9.1 PRICE_CHANGE_GUARD_ENABLED, default
+ * off at deploy — "can wrongly block", flip after checkout smoke-tested). While
+ * off, `expectedTotalMinor` is accepted but never enforced (legacy behavior);
+ * WP-6 always sends it so flipping the flag needs no client change.
+ */
+function priceGuardEnabled(): boolean {
+  return process.env.PRICE_CHANGE_GUARD_ENABLED === 'true';
+}
 
 const getSchema = z.object({ scope: z.enum(['upcoming', 'history']).default('upcoming') });
 
@@ -131,7 +152,18 @@ export async function POST(req: Request) {
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { requestId, partnerId, deliveryDate, window, addressId, items, paymentMethod, notes } = parsed.data;
+  const {
+    requestId,
+    partnerId,
+    deliveryDate,
+    window,
+    addressId,
+    items,
+    paymentMethod,
+    notes,
+    tipMinor,
+    expectedTotalMinor,
+  } = parsed.data;
 
   const db = getDb();
   const requestFingerprint = mealOrderRequestFingerprint(parsed.data);
@@ -242,7 +274,27 @@ export async function POST(req: Request) {
   }
 
   const lines: PricedLine[] = items.map((i) => ({ priceMinor: mealById.get(i.mealId)!.priceMinor, qty: i.qty }));
-  const financials = computeOrderFinancials(lines, cfg);
+  // Server-reprice the tip too (§7.2-S5): the client value is only a hint that
+  // must pass validateTipMinor before it touches the total. A rejected tip
+  // fails safe to 0 (no tip) rather than aborting the order.
+  const subtotalForTip = lines.reduce((sum, l) => sum + l.priceMinor * l.qty, 0);
+  const tipCheck = validateTipMinor(tipMinor ?? 0, subtotalForTip);
+  const financials = computeOrderFinancials(lines, cfg, tipCheck.tipMinor);
+
+  // B10 price-change guard: if the member's shown total no longer matches the
+  // server re-price, charge NOTHING — return the two figures so the client can
+  // show a "Price updated X→Y, confirm?" interstitial and re-quote.
+  if (
+    priceGuardEnabled() &&
+    expectedTotalMinor != null &&
+    expectedTotalMinor !== financials.totalMinor
+  ) {
+    return json(
+      { error: 'price_changed', quotedMinor: expectedTotalMinor, currentMinor: financials.totalMinor },
+      409,
+    );
+  }
+
   const cutoffAt = cutoffFor(deliveryDate, window, 'Asia/Kathmandu', cfg);
   const deliveryAddressText = [address.line, address.area].filter((p) => p && p.length > 0).join(', ');
 
@@ -294,6 +346,7 @@ export async function POST(req: Request) {
       subtotalMinor: financials.subtotalMinor,
       deliveryFeeMinor: financials.deliveryFeeMinor,
       smallOrderFeeMinor: financials.smallOrderFeeMinor,
+      tipMinor: financials.tipMinor,
       totalMinor: financials.totalMinor,
       currency,
       paymentMethod,
@@ -313,6 +366,24 @@ export async function POST(req: Request) {
 
     const persisted = await loadExistingOneTimeOrder(db, me.id, requestId);
     if (!persisted) throw new Error('Atomic meal order insert returned no order');
+
+    // B29: tell the partner a new order landed (fatal gap for a delivery product
+    // if missing). Fire-and-forget, server-templated (order code + item count +
+    // slot — never member PII). Push + inbox; the portal poll/chime (WP-7) is the
+    // audible fallback. Only on a genuine create (201), not an idempotent replay.
+    const itemCount = persisted.items.reduce((sum, it) => sum + it.qty, 0);
+    after(() =>
+      notify(
+        'order_placed_partner',
+        { partnerId },
+        {
+          title: 'New order',
+          body: `Order ${orderNumber(persisted.order.id)} · ${itemCount} item${itemCount === 1 ? '' : 's'} · ${window} · ${deliveryDate}`,
+          data: { type: 'order', id: persisted.order.id },
+        },
+      ),
+    );
+
     return json({ order: buildMemberOrderView(persisted.order, persisted.items) }, 201);
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;

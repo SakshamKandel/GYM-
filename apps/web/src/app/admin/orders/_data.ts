@@ -15,7 +15,13 @@ import {
   type MealWindow,
   type OrderStatus,
 } from '@gym/shared';
-import { and, desc, eq, inArray, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, notInArray, or, sql } from 'drizzle-orm';
+
+/** Escapes ILIKE metacharacters (mirrors `/api/admin/members`'s helper) so a
+ * literal '%'/'_' in the search box can't widen or corrupt the match. */
+function escapeLike(raw: string): string {
+  return raw.replace(/[\\%_]/g, '\\$&');
+}
 
 /**
  * Server-only data layer for admin order oversight (plan §2/§3/§7 P6). Unlike
@@ -66,6 +72,10 @@ export interface AdminOrderFilters {
   partnerId?: string;
   status?: OrderStatus;
   scope: 'active' | 'history' | 'all';
+  /** Free-text search over partner name / member email / member display name
+   * (B14 — matched server-side against the FULL table, not just the already-
+   * fetched page). */
+  q?: string;
 }
 
 /** All-partner order oversight (§3/§7 "filters by date/partner/status"). */
@@ -80,6 +90,17 @@ export async function loadAdminOrders(
   const terminal = [...TERMINAL_ORDER_STATUSES];
   if (filters.scope === 'active') predicates.push(notInArray(mealOrders.status, terminal));
   if (filters.scope === 'history') predicates.push(inArray(mealOrders.status, terminal));
+  const q = filters.q?.trim();
+  if (q) {
+    const like = `%${escapeLike(q)}%`;
+    predicates.push(
+      or(
+        ilike(mealPartners.name, like),
+        ilike(accounts.email, like),
+        ilike(accounts.displayName, like),
+      )!,
+    );
+  }
 
   const rows = await db
     .select({

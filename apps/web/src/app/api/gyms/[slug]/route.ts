@@ -1,8 +1,10 @@
-import { gymPhotos, gyms } from '@gym/db';
-import { and, asc, eq } from 'drizzle-orm';
+import { gyms } from '@gym/db';
+import { and, eq } from 'drizzle-orm';
+import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { loadFavoritedSet, loadPhotosByGym, loadRatingAggregates, ratingFor } from '../_lib';
 
 export const runtime = 'nodejs';
 
@@ -11,6 +13,12 @@ export const runtime = 'nodejs';
  * mobile detail route is `/gyms/[slug]`, matching the schema's unique slug
  * column). 404 for drafts/archived/unverified rows so a client can't probe an
  * unpublished listing by guessing its slug.
+ *
+ * B17 fix: `rating`/`reviewCount` come from real `gym_reviews` (see `_lib.ts`)
+ * — the admin-authored columns are never surfaced here. An OPTIONAL bearer
+ * token (member only — a staff cookie is not accepted here, this is the
+ * public surface) adds `isFavorited` so the detail screen can preload the
+ * heart-icon state without a second round trip.
  */
 
 export function OPTIONS() {
@@ -38,11 +46,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
   const row = rows[0];
   if (!row) return json({ error: 'not_found' }, 404);
 
-  const photos = await db
-    .select({ id: gymPhotos.id, deliveryUrl: gymPhotos.deliveryUrl })
-    .from(gymPhotos)
-    .where(eq(gymPhotos.gymId, row.id))
-    .orderBy(asc(gymPhotos.sortOrder));
+  const [photosByGym, ratingByGym] = await Promise.all([
+    loadPhotosByGym([row.id]),
+    loadRatingAggregates([row.id]),
+  ]);
+
+  let isFavorited = false;
+  const token = bearerToken(req);
+  if (token) {
+    const user = await userForToken(token);
+    if (user) {
+      const favorited = await loadFavoritedSet(user.id, [row.id]);
+      isFavorited = favorited.has(row.id);
+    }
+  }
 
   const gym = {
     id: row.id,
@@ -62,9 +79,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     externalImageUrl: row.externalImageUrl,
     priceNote: row.priceNote,
     description: row.description,
-    rating: row.rating,
-    reviewCount: row.reviewCount,
-    photos,
+    photos: photosByGym.get(row.id) ?? [],
+    isFavorited,
+    ...ratingFor(ratingByGym, row.id),
   };
 
   return json({ gym }, 200);

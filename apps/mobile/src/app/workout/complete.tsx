@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Share, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useLocalSearchParams } from 'expo-router';
 import type { SetLog, WorkoutLog } from '@gym/shared';
@@ -18,9 +18,11 @@ import {
   ScreenHeader,
   SectionLabel,
   Sheet,
+  StreakFlame,
   Tag,
 } from '../../components/ui';
 import { photoForWorkout } from '../../components/visual';
+import { PrCelebration } from '../../features/training/components/PrCelebration';
 import {
   averageRpe,
   formatClock,
@@ -35,6 +37,7 @@ import { replacePath } from '../../features/training/nav';
 import { useTemplates } from '../../features/training/templates';
 import { PrUpgradeCard } from '../../features/subscription/PrUpgradeCard';
 import { posterDate } from '../../lib/dates';
+import { successHaptic } from '../../lib/haptics';
 import { getRepo } from '../../lib/repo';
 import { getPlanWorkout } from '../../lib/seed/plans';
 import { useProfile } from '../../state/profile';
@@ -51,7 +54,28 @@ import { useEffectiveTier } from '../../lib/tier';
 interface PreviousRun {
   workout: WorkoutLog;
   volumeKg: number;
+  /** True when this came from the fuzzy exercise-overlap fallback rather
+   * than an exact plan/name match — the compare card notes this so a
+   * freestyle session isn't silently compared against an unrelated one. */
+  fuzzy: boolean;
 }
+
+/** Exercise ids trained in a set list, for the fuzzy vs-last-time fallback. */
+function exerciseIdSet(sets: readonly SetLog[]): Set<string> {
+  return new Set(sets.map((s) => s.exerciseId));
+}
+
+/** Jaccard overlap of two exercise-id sets, in [0,1]. Empty either side → 0. */
+function exerciseOverlap(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const id of a) if (b.has(id)) intersection += 1;
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+/** Below this overlap ratio, two freestyle sessions aren't "the same workout". */
+const FUZZY_MATCH_THRESHOLD = 0.5;
 
 const styles = StyleSheet.create({
   // Thin decorative celebration strip above the numeric hero (photographic
@@ -128,6 +152,18 @@ const styles = StyleSheet.create({
   footer: { marginTop: spacing.xxl, gap: spacing.sm },
   sheetBody: { gap: spacing.md },
   sheetButton: { marginTop: spacing.sm },
+  // Day-1 "streak started" card — charcoal, not red (only one red block per
+  // screen, brand law). The burst plays once behind the flame, matching the
+  // BadgeCelebration treatment.
+  dayOneCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.md,
+  },
+  dayOneFlameStage: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  dayOneBurstWrap: { position: 'absolute', top: -30, left: -30 },
+  dayOneCopy: { flex: 1, gap: 2 },
 });
 
 export default function WorkoutCompleteScreen() {
@@ -137,6 +173,7 @@ export default function WorkoutCompleteScreen() {
   const [workout, setWorkout] = useState<WorkoutLog | null>(null);
   const [sets, setSets] = useState<SetLog[]>([]);
   const [previous, setPrevious] = useState<PreviousRun | null>(null);
+  const [isDayOne, setIsDayOne] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [templateSaved, setTemplateSaved] = useState(false);
@@ -155,6 +192,12 @@ export default function WorkoutCompleteScreen() {
       // The previous finished run of this same workout — same plan slot, or
       // same name for freestyle/template sessions. Recent history is plenty.
       const recent = await repo.getRecentWorkouts(40);
+      const priorFinished = recent.filter((r) => r.id !== w.id && r.finishedAt !== null);
+      // Day-1 moment (Pack O): no other finished workout exists — this is
+      // genuinely the member's first-ever completed session, the one place
+      // in the app that should say so before a streak number means anything.
+      if (mounted && priorFinished.length === 0) setIsDayOne(true);
+
       const prev = recent.find(
         (r) =>
           r.id !== w.id &&
@@ -163,14 +206,43 @@ export default function WorkoutCompleteScreen() {
             ? r.planWorkoutId === w.planWorkoutId
             : r.planWorkoutId === null && r.name === w.name),
       );
-      if (!prev) return;
-      const prevSets = await repo.getSetsForWorkout(prev.id);
-      if (mounted) setPrevious({ workout: prev, volumeKg: totalVolumeKg(prevSets) });
+      if (prev) {
+        const prevSets = await repo.getSetsForWorkout(prev.id);
+        if (mounted) setPrevious({ workout: prev, volumeKg: totalVolumeKg(prevSets), fuzzy: false });
+        return;
+      }
+
+      // Fuzzy vs-last-time fallback: no exact plan/name match (e.g. a
+      // freestyle session renamed between visits) — fall back to the most
+      // recent earlier workout that trained substantially the same exercises,
+      // so "vs last time" isn't silently empty for anyone off-plan.
+      const currentIds = exerciseIdSet(s);
+      if (currentIds.size === 0) return;
+      let bestMatch: WorkoutLog | null = null;
+      let bestSets: SetLog[] = [];
+      let bestScore = 0;
+      for (const r of priorFinished) {
+        if (r.startedAt >= w.startedAt) continue;
+        const rSets = await repo.getSetsForWorkout(r.id);
+        const score = exerciseOverlap(currentIds, exerciseIdSet(rSets));
+        if (score >= FUZZY_MATCH_THRESHOLD && score > bestScore) {
+          bestScore = score;
+          bestMatch = r;
+          bestSets = rSets;
+        }
+      }
+      if (bestMatch && mounted) {
+        setPrevious({ workout: bestMatch, volumeKg: totalVolumeKg(bestSets), fuzzy: true });
+      }
     })();
     return () => {
       mounted = false;
     };
   }, [id]);
+
+  useEffect(() => {
+    if (isDayOne) successHaptic();
+  }, [isDayOne]);
 
   const volume = Math.round(displayWeight(totalVolumeKg(sets), unitPref));
   const prSets = sets.filter((s) => s.isPr);
@@ -232,6 +304,29 @@ export default function WorkoutCompleteScreen() {
           title={workout?.name ?? 'Workout'}
         />
       </Animated.View>
+
+      {/* Day-1 moment (Pack O / journey 8): the very first finished workout
+          ever gets a one-shot "streak started" note before any numbers do.
+          A plain charcoal card, not red — the volume hero below stays the
+          screen's one energetic block (brand law). */}
+      {isDayOne ? (
+        <Animated.View entering={enterUp(0)}>
+          <Card style={styles.dayOneCard}>
+            <View style={styles.dayOneFlameStage}>
+              <View style={styles.dayOneBurstWrap} pointerEvents="none">
+                <PrCelebration key="day-one" onDone={() => {}} size={100} />
+              </View>
+              <StreakFlame active size={40} />
+            </View>
+            <View style={styles.dayOneCopy}>
+              <AppText variant="bodyBold">Day 1. Streak started.</AppText>
+              <AppText variant="caption" color={colors.textDim}>
+                Come back and log another session to keep it alive.
+              </AppText>
+            </View>
+          </Card>
+        </Animated.View>
+      ) : null}
 
       {/* Red hero: headline volume, with time / sets / PRs (· effort) below.
           Black ink only on the red block (brand law). */}
@@ -322,7 +417,9 @@ export default function WorkoutCompleteScreen() {
               ) : null}
             </View>
             <AppText variant="caption" color={colors.textFaint} numberOfLines={1}>
-              {`Compared with ${posterDate(previous.workout.date)}`}
+              {previous.fuzzy
+                ? `Closest match from ${posterDate(previous.workout.date)} — similar exercises, different name`
+                : `Compared with ${posterDate(previous.workout.date)}`}
             </AppText>
           </Card>
         </Animated.View>
@@ -344,6 +441,23 @@ export default function WorkoutCompleteScreen() {
               </AppText>
             </Animated.View>
           ))}
+          <Button
+            label={prSets.length === 1 ? 'Share this PR' : 'Share your PRs'}
+            variant="ghost"
+            onPress={() =>
+              void Share.share({
+                message:
+                  prSets.length === 1
+                    ? `New PR: ${prSets[0]!.exerciseName} ${formatWeightNumber(displayWeight(prSets[0]!.weightKg, unitPref))} ${unitPref} × ${prSets[0]!.reps}`
+                    : `New PRs today:\n${prSets
+                        .map(
+                          (s) =>
+                            `${s.exerciseName}: ${formatWeightNumber(displayWeight(s.weightKg, unitPref))} ${unitPref} × ${s.reps}`,
+                        )
+                        .join('\n')}`,
+              }).catch(() => undefined)
+            }
+          />
         </>
       ) : null}
 

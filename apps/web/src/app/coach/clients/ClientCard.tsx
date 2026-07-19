@@ -26,9 +26,10 @@ function relativeTime(date: Date): string {
 }
 
 /**
- * One assigned client. Whole card links to their coach thread. Shows name +
- * email, the tier shield (identity mark, shown once), a suspended chip when
- * the account is suspended, last-active relative time, and an unread count.
+ * One assigned client. Whole card links to their client-detail hub (WP-10:
+ * data + assign + notes + chat), replacing the old chat-only destination. Shows
+ * name + email, the tier shield (identity mark, shown once), a suspended chip
+ * when the account is suspended, last-active relative time, and an unread count.
  * Unread cards get a faint red left accent (the one place red is allowed —
  * an active-state signal).
  */
@@ -38,7 +39,7 @@ export function ClientCard({ client }: { client: Client }) {
 
   return (
     <Link
-      href={`/coach/threads/${client.userId}`}
+      href={`/coach/clients/${client.userId}`}
       className="gt-card"
       style={{
         display: 'flex',

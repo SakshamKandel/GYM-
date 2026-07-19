@@ -12,6 +12,7 @@ import {
   Button,
   Card,
   Chip,
+  ConfirmDialog,
   EmptyState,
   enterDown,
   enterUp,
@@ -24,18 +25,27 @@ import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { useAuth } from '../../state/auth';
 import { cartSubtotalMinor, useMealCart } from '../../features/meals/cartStore';
 import { useMealAddresses, useMealPartners, useMealQuote } from '../../features/meals/hooks';
-import type { MealQuoteInput } from '../../features/staff/api';
 import {
   createMealOrder,
   toMealsError,
   type MealAddress,
   type MealOrder,
   type MealPaymentMethod,
+  type MealQuoteInput,
 } from '../../features/meals/api';
 import { AddressSheet } from '../../features/meals/components/AddressSheet';
 import { deliveryStatus, DeliveryBadge } from '../../features/meals/components/DeliveryBadge';
 import { ReceiptUploadPanel } from '../../features/meals/components/ReceiptUploadPanel';
-import { isDigitalMethod, mealErrorMessage, slotLabel, upcomingSlots } from '../../features/meals/logic';
+import {
+  isDigitalMethod,
+  mealErrorMessage,
+  mealUnavailableLineMessage,
+  priceChangeMessage,
+  slotLabel,
+  tipOptions,
+  tipPresetLabel,
+  upcomingSlots,
+} from '../../features/meals/logic';
 import { pushPath, replacePath } from '../../features/meals/nav';
 
 /**
@@ -124,9 +134,20 @@ export default function CheckoutScreen() {
   }, [partner, method]);
   const [notes, setNotes] = useState('');
 
+  // Checkout gratuity preview (Pack D) — server-repriced on both quote and
+  // create; a preset selection resets whenever the cart subtotal changes so a
+  // stale absolute amount never survives a cart edit.
+  const [tipMinor, setTipMinor] = useState(0);
+  useEffect(() => {
+    setTipMinor(0);
+  }, [lines]);
+
   const [placing, setPlacing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [placedOrder, setPlacedOrder] = useState<MealOrder | null>(null);
+  // B9/B10/Pack F: a server re-price that disagrees with the shown quote at
+  // submit time surfaces here instead of silently charging the new total.
+  const [priceChange, setPriceChange] = useState<{ quotedMinor: number; currentMinor: number } | null>(null);
   const orderRequestIdRef = useRef<string | null>(null);
 
   // A failed request may have committed even when its response was lost. Keep
@@ -134,7 +155,8 @@ export default function CheckoutScreen() {
   // after the member changes any field that participates in the order payload.
   useEffect(() => {
     orderRequestIdRef.current = null;
-  }, [partnerId, lines, addressId, slot?.date, slot?.window, method, notes]);
+    setPriceChange(null);
+  }, [partnerId, lines, addressId, slot?.date, slot?.window, method, notes, tipMinor]);
 
   const items = Object.values(lines);
   const subtotal = cartSubtotalMinor(lines);
@@ -151,20 +173,32 @@ export default function CheckoutScreen() {
       ...(addressId ? { addressId } : {}),
       window: slot.window,
       date: slot.date,
+      tipMinor,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [partnerId, lines, addressId, slot?.date, slot?.window, slot?.orderable]);
-  const { quote, status: quoteStatus } = useMealQuote(token, quoteInput);
+  }, [partnerId, lines, addressId, slot?.date, slot?.window, slot?.orderable, tipMinor]);
+  const {
+    quote,
+    status: quoteStatus,
+    errorCode: quoteErrorCode,
+    errorDetails: quoteErrorDetails,
+  } = useMealQuote(token, quoteInput);
+  // B11: a deleted/deactivated meal names the specific line instead of a bare
+  // slot message.
+  const quoteMealUnavailable =
+    quoteStatus === 'error' && quoteErrorCode === 'meal_unavailable'
+      ? mealUnavailableLineMessage((quoteErrorDetails?.mealName as string | null | undefined) ?? null)
+      : null;
 
   function goBack(): void {
     if (router.canGoBack()) router.back();
     else replacePath('/meals');
   }
 
-  function place(): void {
+  function place(expectedTotalOverride?: number): void {
     if (placing || !token || !partnerId || !slot || !addressId || items.length === 0) return;
     // The shown total must be a fresh server quote before we let money move.
-    if (quoteStatus !== 'ready') return;
+    if (quoteStatus !== 'ready' || !quote) return;
     setPlacing(true);
     setError(null);
     void (async () => {
@@ -180,17 +214,29 @@ export default function CheckoutScreen() {
           items: items.map((l) => ({ mealId: l.meal.id, qty: l.qty })),
           paymentMethod: method,
           notes: notes.trim() || undefined,
+          tipMinor,
+          // B10/Pack F: what the member was just shown. A server re-price that
+          // disagrees returns 409 price_changed WITHOUT charging.
+          expectedTotalMinor: expectedTotalOverride ?? quote.totalMinor,
         });
         orderRequestIdRef.current = null;
+        setPriceChange(null);
         successHaptic();
         clearCart();
         if (isDigitalMethod(order.paymentMethod)) {
           setPlacedOrder(order);
         } else {
-          pushPath('/meals/orders');
+          pushPath(`/meals/order-confirmation?orderId=${encodeURIComponent(order.id)}`);
         }
       } catch (err) {
         const apiError = toMealsError(err);
+        if (apiError.code === 'price_changed') {
+          const quotedMinor = Number(apiError.details?.quotedMinor ?? 0);
+          const currentMinor = Number(apiError.details?.currentMinor ?? 0);
+          setPriceChange({ quotedMinor, currentMinor });
+          warnHaptic();
+          return;
+        }
         // A conflict is permanent for this key; mint a fresh key if the member
         // retries after the actionable error instead of trapping the checkout.
         if (apiError.code === 'idempotency_conflict') orderRequestIdRef.current = null;
@@ -229,8 +275,8 @@ export default function CheckoutScreen() {
           <ReceiptUploadPanel
             token={token}
             order={placedOrder}
-            onDone={() => pushPath('/meals/orders')}
-            onSkip={() => pushPath('/meals/orders')}
+            onDone={() => pushPath(`/meals/order-confirmation?orderId=${encodeURIComponent(placedOrder.id)}`)}
+            onSkip={() => pushPath(`/meals/order-confirmation?orderId=${encodeURIComponent(placedOrder.id)}`)}
           />
         </Card>
       </Screen>
@@ -328,7 +374,25 @@ export default function CheckoutScreen() {
         />
       </Animated.View>
 
-      <Animated.View entering={enterUp(4)}>
+      <Animated.View entering={enterUp(4)} style={styles.section}>
+        <SectionLabel>Add a tip (optional)</SectionLabel>
+        <View style={styles.chipRow}>
+          {tipOptions(quote?.subtotalMinor ?? subtotal).map((opt) => (
+            <Chip
+              key={opt.percent}
+              label={
+                opt.percent === 0
+                  ? tipPresetLabel(0)
+                  : `${tipPresetLabel(opt.percent)} (${formatMoney(opt.amountMinor, currency)})`
+              }
+              selected={tipMinor === opt.amountMinor}
+              onPress={() => setTipMinor(opt.amountMinor)}
+            />
+          ))}
+        </View>
+      </Animated.View>
+
+      <Animated.View entering={enterUp(5)}>
         <Card style={styles.summaryCard}>
           {items.map((l) => (
             <View key={l.meal.id} style={styles.summaryLine}>
@@ -348,6 +412,11 @@ export default function CheckoutScreen() {
               {formatMoney(quote?.subtotalMinor ?? subtotal, currency)}
             </AppText>
           </View>
+          {quote && quote.subtotalMinor !== subtotal ? (
+            <AppText variant="caption" color={colors.warning}>
+              Prices may have changed since you added these — the total above is the current, accurate one.
+            </AppText>
+          ) : null}
           <View style={styles.summaryLine}>
             <AppText variant="body" color={colors.textDim}>
               Delivery fee
@@ -370,6 +439,16 @@ export default function CheckoutScreen() {
               </AppText>
             </View>
           ) : null}
+          {quote && quote.tipMinor > 0 ? (
+            <View style={styles.summaryLine}>
+              <AppText variant="body" color={colors.textDim}>
+                Tip
+              </AppText>
+              <AppText variant="body" tabular>
+                {formatMoney(quote.tipMinor, currency)}
+              </AppText>
+            </View>
+          ) : null}
           <View style={styles.summaryLine}>
             <AppText variant="bodyBold">Total</AppText>
             <AppText variant="bodyBold" tabular>
@@ -382,7 +461,7 @@ export default function CheckoutScreen() {
             </AppText>
           ) : quoteStatus === 'error' ? (
             <AppText variant="caption" color={colors.error}>
-              Couldn’t calculate the total. Adjust your order or try again.
+              {quoteMealUnavailable ?? "Couldn't calculate the total. Adjust your order or try again."}
             </AppText>
           ) : quote?.deliversTo === false ? (
             <AppText variant="caption" color={colors.warning}>
@@ -401,10 +480,22 @@ export default function CheckoutScreen() {
 
       <Button
         label="Place order"
-        onPress={place}
+        onPress={() => place()}
         disabled={!token || !slot?.orderable || !addressId || items.length === 0 || quoteStatus !== 'ready'}
         loading={placing}
         style={{ marginTop: spacing.gutter }}
+      />
+
+      <ConfirmDialog
+        visible={priceChange !== null}
+        title="Price updated"
+        message={priceChange ? priceChangeMessage(priceChange.quotedMinor, priceChange.currentMinor, currency) : undefined}
+        confirmLabel="Confirm new price"
+        cancelLabel="Review order"
+        onConfirm={() => {
+          if (priceChange) place(priceChange.currentMinor);
+        }}
+        onCancel={() => setPriceChange(null)}
       />
 
       <Sheet visible={addressSheetOpen} onClose={() => setAddressSheetOpen(false)} title="Delivery address">

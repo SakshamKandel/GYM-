@@ -1,4 +1,5 @@
 import { ktmAddDays, ktmDateString } from '@gym/shared';
+import Link from 'next/link';
 import {
   Card,
   CardHeader,
@@ -10,8 +11,10 @@ import {
 } from '@/components/console';
 import { getDb } from '@/lib/db';
 import {
+  loadPartnerAllTime,
   loadPartnerDashboardStats,
   loadPartnerEarnings,
+  loadPartnerHeld,
   requirePartnerPage,
 } from '../_data';
 import { formatMoney } from '../_format';
@@ -44,10 +47,12 @@ export default async function PartnerEarningsPage() {
   const monthStart = ktmAddDays(today, -(RANGE_DAYS - 1));
   const weekWindowStart = ktmAddDays(today, -(WEEK_SPAN_DAYS - 1));
 
-  const [earnings, weekEarnings, stats] = await Promise.all([
+  const [earnings, weekEarnings, stats, allTime, held] = await Promise.all([
     loadPartnerEarnings(db, partnerId, monthStart, currency),
     loadPartnerEarnings(db, partnerId, weekWindowStart, currency),
     loadPartnerDashboardStats(db, partnerId, today, monthStart),
+    loadPartnerAllTime(db, partnerId),
+    loadPartnerHeld(db, partnerId, currency),
   ]);
 
   const byDateRevenue = new Map(weekEarnings.byDay.map((d) => [d.date, d.totalMinor]));
@@ -131,6 +136,58 @@ export default async function PartnerEarningsPage() {
           />
         ) : null}
       </div>
+
+      {/*
+        Lifetime money truth (B28 — the old route capped at 90 days, so a
+        partner could never see lifetime figures). `heldMinor` is the ledger-
+        derived WITHDRAWABLE balance (B27 — decrements as payouts post, unlike
+        the old permanently-inflated live sum) and doubles as the payout floor
+        on the Wallet page.
+      */}
+      <Card padded={false}>
+        <CardHeader
+          title="Lifetime"
+          action={
+            <Link
+              href="/partner/wallet"
+              style={{ fontSize: 13, fontWeight: 600, color: 'var(--gt-accent-strong)', textDecoration: 'none' }}
+            >
+              Wallet & payouts →
+            </Link>
+          }
+        />
+        <div
+          style={{
+            padding: 18,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+            gap: 14,
+          }}
+        >
+          <StatTile
+            label="Lifetime collected at door"
+            value={formatMoney(allTime.codMinor, currency)}
+            hint={`${allTime.deliveredCount} delivered order${allTime.deliveredCount === 1 ? '' : 's'}`}
+          />
+          <StatTile
+            label="Lifetime digital revenue"
+            value={formatMoney(allTime.digitalMinor, currency)}
+            hint="eSewa / Khalti, all time"
+          />
+          <StatTile
+            label="Held by platform now"
+            value={formatMoney(held.heldMinor, currency)}
+            hint="Withdrawable — decrements as payouts post"
+          />
+          {allTime.refundedMinor > 0 ? (
+            <StatTile
+              label="Lifetime refunded"
+              value={formatMoney(allTime.refundedMinor, currency)}
+              hint="Not counted above"
+            />
+          ) : null}
+        </div>
+      </Card>
 
       <ChartCard
         title="Weekly revenue"

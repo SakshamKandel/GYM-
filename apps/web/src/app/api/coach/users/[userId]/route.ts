@@ -3,6 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -15,6 +16,13 @@ export const runtime = 'nodejs';
  *
  * Guards (both, fail closed): requirePermission('coach.message.user') +
  * requireCoachOwnsUser(principal, userId) → 403 if not owned.
+ *
+ * B21: the mobile flows push the member on accept/decline but the unassign was
+ * SILENT — the member's coach vanished with no notice. On a real end (≥1 active
+ * row flipped), fire a best-effort `coach_unassigned` notification (WP-2 / Pack
+ * L) so the app can surface an unassign banner + inbox row. Fire-and-forget:
+ * never blocks or fails the release. Title/body are server-templated — no
+ * member-authored text is echoed, so no maskPii step is needed here.
  */
 
 export function OPTIONS() {
@@ -33,7 +41,7 @@ export async function DELETE(
     return json({ error: 'forbidden' }, 403);
   }
 
-  await getDb()
+  const ended = await getDb()
     .update(coachAssignments)
     .set({ status: 'ended' })
     .where(
@@ -42,9 +50,25 @@ export async function DELETE(
         eq(coachAssignments.userId, userId),
         eq(coachAssignments.status, 'active'),
       ),
-    );
+    )
+    .returning({ id: coachAssignments.id });
 
   await logAudit(principal, 'coach.unassign', 'account', userId, {});
+
+  // Only notify when an assignment was actually live — a no-op DELETE (already
+  // ended, or admin acting without a row) must not tell the member their coach
+  // left. WP-13 consumes `coach_unassigned` for the member-side banner.
+  if (ended.length > 0) {
+    void notify(
+      'coach_unassigned',
+      { accountId: userId },
+      {
+        title: 'Coaching update',
+        body: 'Your coaching assignment has ended. You can request a new coach whenever you are ready.',
+        data: { type: 'coach' },
+      },
+    );
+  }
 
   return json({ ok: true }, 200);
 }

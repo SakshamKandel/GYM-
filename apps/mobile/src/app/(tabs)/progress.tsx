@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
+import { router } from 'expo-router';
 import Animated from 'react-native-reanimated';
 import { hasEntitlement, minTierFor } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
@@ -23,6 +24,7 @@ import { Big4Card } from '../../features/analytics/components/Big4Card';
 import { MuscleBalanceSection } from '../../features/analytics/components/MuscleBalanceSection';
 import { NutritionSection } from '../../features/analytics/components/NutritionSection';
 import { OverviewSection } from '../../features/analytics/components/OverviewSection';
+import { StreaksBadgesRow } from '../../features/analytics/components/StreaksBadgesRow';
 import { useAnalytics } from '../../features/analytics/hooks';
 import { MeasurementsSection } from '../../features/body/components/MeasurementsSection';
 import { ProgressPhotosCard } from '../../features/body/progressPhotos/ProgressPhotosCard';
@@ -82,6 +84,7 @@ const styles = StyleSheet.create({
   error: { marginTop: spacing.lg },
   retryBtn: { marginTop: spacing.md, alignSelf: 'flex-start' },
   skeletons: { marginTop: spacing.xl, gap: spacing.md },
+  reportCardRow: { marginTop: spacing.xl },
 });
 
 /** Outlined meta pill under the title (brief §6 — chips may carry borders). */
@@ -150,6 +153,8 @@ export default function ProgressScreen() {
           </>
         }
       />
+
+      <StreaksBadgesRow />
 
       <Animated.View entering={enterDown(1)} style={styles.hero}>
         <FractionStat
@@ -269,6 +274,15 @@ export default function ProgressScreen() {
           or the member's coach hasn't logged any yet. */}
       <Animated.View entering={enterUp(1)}>
         <MilestonesSection />
+      </Animated.View>
+
+      {/* Pack O: share/export entry point — the monthly recap + native share. */}
+      <Animated.View entering={enterUp(2)} style={styles.reportCardRow}>
+        <Button
+          label="View my report card"
+          variant="secondary"
+          onPress={() => router.push('/report-card')}
+        />
       </Animated.View>
     </Screen>
   );

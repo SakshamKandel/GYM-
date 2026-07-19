@@ -1,17 +1,11 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useReducedMotion,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
-import { compareTiers, formatMoney, type Tier } from '@gym/shared';
-import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
+import { useCallback, useState } from 'react';
+import { Alert, Image, StyleSheet, View } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { formatMoney, type Tier } from '@gym/shared';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
   AppTextInput,
@@ -51,10 +45,16 @@ import {
   type Trial,
   type TrialTier,
 } from '../../lib/api/client';
-import { GM_TIERS, RECOMMENDED_TIER, regionHint, tierPriceDisplay, type GmTier } from './logic';
+import {
+  GM_TIERS,
+  RECOMMENDED_TIER,
+  regionHint,
+  tierExpiryInfo,
+  tierPriceDisplay,
+  type GmTier,
+} from './logic';
+import { TierCard } from './components/TierCard';
 import { TierDetailSheet, type TierDetail } from './TierDetailSheet';
-
-const EASE_OUT = Easing.bezier(0.25, 0.8, 0.4, 1);
 
 /**
  * The GM Method paywall in the color-block language (REVAMP-BRIEF): huge
@@ -90,9 +90,14 @@ export function SubscribeScreen() {
   const [trialError, setTrialError] = useState<string | null>(null);
   const [trialSuccess, setTrialSuccess] = useState<string | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [cancelNote, setCancelNote] = useState<string | null>(null);
   const [detail, setDetail] = useState<TierDetail | null>(null);
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
+  // The server-authoritative user carries the RAW tierExpiresAt (Pack J) — drives
+  // the expiry/renew banner. Effective tier collapses to starter once past, so
+  // this is the only signal that a paid window is ending or has ended.
+  const authUser = useAuth((s) => s.user);
 
   const [catalog, setCatalog] = useState<SubscriptionCatalog | null>(null);
   const [paymentRequests, setPaymentRequests] = useState<PaymentRequestRow[]>([]);
@@ -151,37 +156,101 @@ export function SubscribeScreen() {
   }
 
   function choose(tier: Tier): void {
-    // Store purchase flow (RevenueCat) is pending store accounts. Until then
-    // the pick applies locally as a preview so the whole app can be exercised
-    // on any tier. When the server runs BILLING_MODE=live it answers paid
-    // picks with 'billing_required' — handled below with a specific message —
-    // so a live backend can never be talked into a free paid tier.
-    const previousTier = useProfile.getState().tier;
-    // Optimistic local apply for instant UI; the profile blob backup keeps
-    // preferences in sync (the server ignores its tier field — the account
-    // tier is only ever written through POST /api/subscription/tier below).
-    update({ tier });
-    syncProfileNow();
-    setPreviewActive(true);
+    if (tier === currentTier) return;
     setPlanError(null);
-    successHaptic();
+    setCancelNote(null);
 
-    // Signed out → local-only preview, exactly as before.
-    if (status !== 'signedIn' || !token) return;
+    // Downgrade to free = cancel. Confirm explicitly, and honor period-end
+    // semantics: a paid window already paid for keeps access until it lapses
+    // (the server decides and reports the date). No optimistic local change —
+    // the confirm dialog is the deliberate pause, so there's nothing to flicker.
+    if (tier === 'starter') {
+      const info = tierExpiryInfo(authUser?.tierExpiresAt);
+      const keepsAccess =
+        !info.expired && info.dateLabel !== null && (info.daysLeft ?? 0) > 0;
+      Alert.alert(
+        'Cancel your plan?',
+        keepsAccess
+          ? `You'll keep your current benefits until ${info.dateLabel}, then move to the free plan. You won't be charged again.`
+          : "You'll move to the free plan. You can re-subscribe any time.",
+        [
+          { text: 'Keep plan', style: 'cancel' },
+          {
+            text: 'Cancel plan',
+            style: 'destructive',
+            onPress: () => applyTierChange('starter'),
+          },
+        ],
+      );
+      return;
+    }
 
-    // Signed in → the server is the tier authority. Persist the choice and
-    // adopt the returned user so everything reading useAuth's tier (home
-    // tier ring, server-gated screens) updates now — not on the next app
-    // foreground, and never "until reload" on web.
+    // Paid pick while the server runs LIVE billing → the self-serve endpoint
+    // 402s every paid tier. Pre-detect it (B23): show the honest affordance
+    // instead of optimistically applying then reverting on the rejection.
+    if (status === 'signedIn' && catalog?.billingMode === 'live') {
+      warnHaptic();
+      setPlanError(
+        catalog.region === 'NP'
+          ? 'Pay for this plan with eSewa or Khalti below, then upload your receipt for review.'
+          : 'This plan is available through the app store — in-app purchase arrives with the store release.',
+      );
+      return;
+    }
+
+    applyTierChange(tier);
+  }
+
+  /**
+   * Apply a tier change against the server (or local preview when signed out).
+   * Paid picks apply optimistically for instant UI and roll back on failure; a
+   * cancel waits for the server so the period-end date is authoritative.
+   */
+  function applyTierChange(tier: Tier): void {
+    const previousTier = useProfile.getState().tier;
+    const optimistic = tier !== 'starter';
+    if (optimistic) {
+      // Optimistic local apply for instant UI; the profile blob backup keeps
+      // preferences in sync (the server ignores its tier field — the account
+      // tier is only ever written through POST /api/subscription/tier below).
+      update({ tier });
+      syncProfileNow();
+      setPreviewActive(true);
+      successHaptic();
+    }
+
+    // Signed out → local-only preview. A signed-out "cancel" just drops the
+    // local preview tier to starter; there's no server window to honor.
+    if (status !== 'signedIn' || !token) {
+      if (!optimistic) {
+        update({ tier: 'starter' });
+        syncProfileNow();
+        setPreviewActive(false);
+      }
+      return;
+    }
+
+    // Signed in → the server is the tier authority. Persist the choice and adopt
+    // the returned user so everything reading useAuth's tier (home tier ring,
+    // server-gated screens) updates now — not on the next app foreground.
     void (async () => {
       try {
-        const user = await setSubscriptionTier(token, tier);
+        const { user, effectiveAt } = await setSubscriptionTier(token, tier);
         applyServerUser(user, token);
+        if (tier === 'starter') {
+          const info = tierExpiryInfo(effectiveAt);
+          setCancelNote(
+            !info.expired && info.dateLabel !== null && (info.daysLeft ?? 0) > 0
+              ? `Plan cancelled — you keep access until ${info.dateLabel}.`
+              : 'Your plan has been cancelled.',
+          );
+          successHaptic();
+        }
       } catch (err) {
         // Roll back the optimistic write — but never clobber a NEWER pick
         // (rapid re-taps) or another account's state (signed out mid-flight).
         if (useAuth.getState().token !== token) return;
-        if (useProfile.getState().tier === tier) {
+        if (optimistic && useProfile.getState().tier === tier) {
           update({ tier: previousTier });
           syncProfileNow();
         }
@@ -238,7 +307,19 @@ export function SubscribeScreen() {
     });
   }
 
-  const latestPaymentRequest = paymentRequests[0] ?? null;
+  // Expiry / renewal banner (Pack J). The raw tierExpiresAt is present even
+  // after it lapses (effective tier is already 'starter' then), so this catches
+  // both "ends in N days" and "ended — renew".
+  const expiry = tierExpiryInfo(authUser?.tierExpiresAt);
+  const showExpiryBanner =
+    status === 'signedIn' &&
+    expiry.dateLabel !== null &&
+    (expiry.expired || (expiry.daysLeft !== null && expiry.daysLeft <= 14));
+  const expiryBannerText = expiry.expired
+    ? `Your membership ended on ${expiry.dateLabel}. Choose a plan below to renew.`
+    : `Your ${gmTierName(currentTier)} plan ends in ${expiry.daysLeft} ${
+        expiry.daysLeft === 1 ? 'day' : 'days'
+      } (${expiry.dateLabel}). Renew to keep your benefits.`;
 
   return (
     <Screen scroll keyboardAware>
@@ -306,6 +387,29 @@ export function SubscribeScreen() {
             {planError}
           </AppText>
         ) : null}
+        {cancelNote ? (
+          <Animated.View entering={enterFade()}>
+            <AppText variant="caption" style={styles.previewNote}>
+              {cancelNote}
+            </AppText>
+          </Animated.View>
+        ) : null}
+        {showExpiryBanner ? (
+          <View style={[styles.expiryBanner, expiry.expired && styles.expiryBannerExpired]}>
+            <Ionicons
+              name={expiry.expired ? 'alert-circle' : 'time-outline'}
+              size={16}
+              color={expiry.expired ? colors.error : colors.warning}
+            />
+            <AppText
+              variant="caption"
+              color={expiry.expired ? colors.error : colors.warning}
+              style={styles.expiryText}
+            >
+              {expiryBannerText}
+            </AppText>
+          </View>
+        ) : null}
         {activeTrial ? (
           <View style={styles.activeTrialBanner}>
             <Ionicons name="time" size={16} color={colors.success} />
@@ -348,9 +452,10 @@ export function SubscribeScreen() {
           <SectionLabel>Pay via eSewa / Khalti</SectionLabel>
           <AppText variant="caption" color={colors.textDim}>
             Pick a plan, pay outside the app, then upload your receipt for review.
+            Reviews are usually completed within 24 hours.
           </AppText>
-          {latestPaymentRequest ? (
-            <PendingPaymentRow request={latestPaymentRequest} />
+          {paymentRequests.length > 0 ? (
+            <PaymentHistory requests={paymentRequests} />
           ) : null}
           <NepalPaymentSection
             token={token}
@@ -362,43 +467,6 @@ export function SubscribeScreen() {
 
       <TierDetailSheet detail={detail} onClose={() => setDetail(null)} />
     </Screen>
-  );
-}
-
-/** Text-only trial affordance for INSIDE the red hero block — mirrors
- * `Button variant="ghost"` (metrics, a11y, loading/disabled states) but with
- * black ink, because white-on-red is banned by the block language. */
-function OnRedGhostButton({
-  label,
-  disabled,
-  loading,
-  onPress,
-}: {
-  label: string;
-  disabled?: boolean;
-  loading?: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ disabled: disabled || loading }}
-      disabled={disabled || loading}
-      onPress={onPress}
-      style={[styles.onRedGhost, (disabled || loading) && styles.onRedGhostDisabled]}
-    >
-      {loading ? <ActivityIndicator color={colors.onBlock} /> : null}
-      <AppText
-        style={styles.onRedGhostLabel}
-        tabular={false}
-        numberOfLines={1}
-        adjustsFontSizeToFit
-        minimumFontScale={0.85}
-      >
-        {label}
-      </AppText>
-    </PressableScale>
   );
 }
 
@@ -552,8 +620,21 @@ function paymentStatusLabel(status: PaymentRequestRow['status']): string {
   return 'Pending review';
 }
 
-/** Quiet status card for the most recent manual payment request. */
-function PendingPaymentRow({ request }: { request: PaymentRequestRow }) {
+/** Short localized date for a payment-request row. */
+function formatRequestDate(iso: string): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return '';
+  return new Date(ms).toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+/** Quiet status card for one manual payment request (tier · duration · money ·
+ * status · date · any admin review note). */
+function PaymentRequestCard({ request }: { request: PaymentRequestRow }) {
+  const date = formatRequestDate(request.createdAt);
   return (
     <View style={styles.pendingCard}>
       <View style={styles.pendingHeader}>
@@ -568,12 +649,30 @@ function PendingPaymentRow({ request }: { request: PaymentRequestRow }) {
       </View>
       <AppText variant="caption" color={colors.textDim}>
         {formatMoney(request.amountMinor, request.currency)} via {paymentMethodLabel(request.method)}
+        {date ? ` · ${date}` : ''}
       </AppText>
       {request.reviewNote ? (
         <AppText variant="caption" color={colors.textDim}>
           {request.reviewNote}
         </AppText>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * Manual-payment history/receipts list (Pack J) — the account's submitted
+ * eSewa/Khalti/bank requests, newest first (the server already orders them),
+ * each with its amount, review status, date and any admin note. The latest
+ * pending request doubles as the "under review" status card.
+ */
+function PaymentHistory({ requests }: { requests: PaymentRequestRow[] }) {
+  return (
+    <View style={styles.historyWrap}>
+      <AppText variant="label">Payment history</AppText>
+      {requests.map((request) => (
+        <PaymentRequestCard key={request.id} request={request} />
+      ))}
     </View>
   );
 }
@@ -647,7 +746,7 @@ function NepalPaymentSection({
         setAsset(null);
         setNote('');
         setLine({
-          text: 'Payment submitted — an admin will review your receipt shortly.',
+          text: 'Payment submitted — an admin will review your receipt within 24 hours. We’ll notify you once it’s approved.',
           tone: 'success',
         });
         successHaptic();
@@ -716,11 +815,24 @@ function NepalPaymentSection({
       />
 
       {asset ? (
-        <View style={styles.fileRow}>
-          <Ionicons name="receipt-outline" size={18} color={colors.textDim} />
-          <AppText variant="caption" color={colors.textDim} numberOfLines={1} style={styles.fileName}>
-            {receiptFileName(asset)}
-          </AppText>
+        <View style={styles.receiptPreview}>
+          <Image
+            source={{ uri: asset.uri }}
+            style={styles.receiptThumb}
+            resizeMode="cover"
+            accessibilityLabel="Selected receipt photo preview"
+          />
+          <View style={styles.fileRow}>
+            <Ionicons name="receipt-outline" size={18} color={colors.textDim} />
+            <AppText
+              variant="caption"
+              color={colors.textDim}
+              numberOfLines={1}
+              style={styles.fileName}
+            >
+              {receiptFileName(asset)}
+            </AppText>
+          </View>
         </View>
       ) : null}
 
@@ -756,213 +868,6 @@ function NepalPaymentSection({
   );
 }
 
-// ── Tier card ──────────────────────────────────────────────────────
-
-function TierCard({
-  gmTier,
-  index,
-  currentTier,
-  catalog,
-  onChoose,
-  trialDays,
-  trialed,
-  isTrialActive,
-  trialing,
-  onTrial,
-  onOpenDetail,
-  signedIn,
-}: {
-  gmTier: GmTier;
-  index: number;
-  currentTier: Tier;
-  catalog: SubscriptionCatalog | null;
-  onChoose: (tier: Tier) => void;
-  trialDays: number;
-  trialed: boolean;
-  isTrialActive: boolean;
-  trialing: string | null;
-  onTrial: (tier: TrialTier) => Promise<void>;
-  onOpenDetail: (tier: GmTier) => void;
-  signedIn: boolean;
-}) {
-  const isCurrent = gmTier.tier === currentTier;
-  const isRecommended = gmTier.tier === RECOMMENDED_TIER;
-  const price = tierPriceDisplay(gmTier.tier, catalog);
-  const previous = index > 0 ? GM_TIERS[index - 1] : undefined;
-  const canTrial = TRIAL_TIERS.includes(gmTier.tier as TrialTier);
-
-  // Block ink: the recommended card is the screen's ONE red hero block —
-  // everything on it is black (`onBlock`); dim text dims via opacity, which
-  // keeps ≥4.5:1 on the red fill at 0.8.
-  const onRed = isRecommended;
-  const ink = onRed ? colors.onBlock : colors.text;
-  const inkDim = onRed ? colors.onBlock : colors.textDim;
-  const dim = onRed ? styles.redDim : undefined;
-
-  // Selection wash: a quiet accent tint fades in when this becomes the current
-  // plan (a user-driven state change — motion is allowed). Reduced-motion snaps.
-  const reduceMotion = useReducedMotion();
-  const selected = useSharedValue(isCurrent ? 1 : 0);
-  useEffect(() => {
-    selected.value = reduceMotion
-      ? isCurrent
-        ? 1
-        : 0
-      : withTiming(isCurrent ? 1 : 0, { duration: 260, easing: EASE_OUT });
-  }, [isCurrent, reduceMotion, selected]);
-  const washStyle = useAnimatedStyle(() => ({ opacity: selected.value * 0.7 }));
-
-  const trialLabel = isTrialActive
-    ? 'Trial active'
-    : trialed
-      ? 'Trial used'
-      : `Try free for ${trialDays} days`;
-
-  const discountLabel =
-    price.discountPct !== null
-      ? price.discountSource === 'referral'
-        ? `Referral −${price.discountPct}%`
-        : `Promo −${price.discountPct}%`
-      : null;
-
-  return (
-    <Animated.View
-      entering={enterUp(index + 1)}
-      style={[styles.card, onRed && styles.cardRed]}
-    >
-      {/* The accent wash only reads on charcoal — the red hero marks "current"
-          with its Current tag + hidden CTA instead. */}
-      {onRed ? null : (
-        <Animated.View pointerEvents="none" style={[styles.cardWash, washStyle]} />
-      )}
-      <View style={styles.nameRow}>
-        <AppText variant="title" color={ink} style={styles.name} numberOfLines={1}>
-          {gmTier.name}
-        </AppText>
-        <View style={styles.tags}>
-          {isRecommended ? <Tag label="Most popular" variant="onBlock" /> : null}
-          {isCurrent ? <Tag label="Current" variant={onRed ? 'onBlock' : 'dim'} /> : null}
-        </View>
-      </View>
-
-      <View style={styles.priceRow}>
-        {price.isFree ? (
-          <AppText style={styles.priceNumber} color={ink} numberOfLines={1}>
-            Free
-          </AppText>
-        ) : (
-          <>
-            {price.discountedMinor !== null ? (
-              <AppText
-                variant="caption"
-                color={inkDim}
-                style={[dim, styles.strike]}
-                numberOfLines={1}
-              >
-                {formatMoney(price.baseMinor, price.currency)}
-              </AppText>
-            ) : null}
-            <AppText
-              style={styles.priceNumber}
-              color={ink}
-              tabular
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.6}
-            >
-              {formatMoney(price.discountedMinor ?? price.baseMinor, price.currency)}
-            </AppText>
-            <AppText variant="caption" color={inkDim} style={dim}>
-              /mo
-            </AppText>
-          </>
-        )}
-      </View>
-      {discountLabel ? (
-        <View style={styles.discountTagRow}>
-          <Tag label={discountLabel} variant={onRed ? 'onBlock' : 'dim'} />
-        </View>
-      ) : null}
-      <AppText variant="caption" color={inkDim} style={dim}>
-        {gmTier.tagline}
-      </AppText>
-
-      <View style={styles.features}>
-        {previous ? (
-          <AppText
-            variant="caption"
-            color={onRed ? colors.onBlock : colors.textFaint}
-            style={dim}
-          >
-            Everything in {previous.name}, plus
-          </AppText>
-        ) : null}
-        {gmTier.features.map((feature) => (
-          <View key={feature} style={styles.featureRow}>
-            <Ionicons
-              name="checkmark-circle"
-              size={18}
-              color={onRed ? colors.onBlock : colors.textDim}
-              style={styles.featureIcon}
-            />
-            <AppText color={ink} style={styles.featureText}>
-              {feature}
-            </AppText>
-          </View>
-        ))}
-      </View>
-
-      <PressableScale
-        accessibilityRole="button"
-        accessibilityLabel={`See everything included in ${gmTier.name}`}
-        onPress={() => onOpenDetail(gmTier)}
-        style={styles.detailLink}
-      >
-        <AppText variant="caption" color={inkDim} style={dim}>
-          See everything included
-        </AppText>
-        <Ionicons
-          name="chevron-forward"
-          size={16}
-          color={inkDim}
-          style={dim}
-        />
-      </PressableScale>
-
-      {isCurrent ? null : (
-        <View style={styles.btnStack}>
-          <Button
-            label={`Choose ${gmTier.name}`}
-            variant={onRed ? 'onBlock' : 'secondary'}
-            onPress={() => onChoose(gmTier.tier)}
-          />
-          {/* Trials only make sense on tiers ABOVE the current one — the
-              server refuses the rest with 'not_an_upgrade'. */}
-          {canTrial && signedIn && compareTiers(gmTier.tier, currentTier) > 0 ? (
-            onRed ? (
-              <OnRedGhostButton
-                label={trialLabel}
-                disabled={trialed || trialing !== null}
-                loading={trialing === gmTier.tier}
-                onPress={() => onTrial(gmTier.tier as TrialTier)}
-              />
-            ) : (
-              <Button
-                label={trialLabel}
-                variant="ghost"
-                disabled={trialed || trialing !== null}
-                loading={trialing === gmTier.tier}
-                onPress={() => onTrial(gmTier.tier as TrialTier)}
-                style={styles.trialBtn}
-              />
-            )
-          ) : null}
-        </View>
-      )}
-    </Animated.View>
-  );
-}
-
 const styles = StyleSheet.create({
   // Screen already supplies 16px of top air — no extra paddingTop here.
   backBtn: {
@@ -992,91 +897,8 @@ const styles = StyleSheet.create({
   promoInput: { flex: 1 },
   promoBtn: { paddingHorizontal: spacing.lg },
 
-  // Tier blocks — borderless color blocks; the recommended tier is the
-  // screen's single red hero, the rest stay charcoal.
+  // Premium metal tier cards (components/TierCard) — stacked with block gaps.
   cards: { gap: spacing.md, marginTop: spacing.xl },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.block,
-    padding: spacing.gutter,
-    gap: spacing.xs,
-  },
-  cardRed: { backgroundColor: colors.blockRed },
-  // Quiet accent wash marking the current plan; sits behind the card content.
-  // (absoluteFillObject spelled out — RN 0.86 types no longer export it.)
-  cardWash: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderRadius: radius.block,
-    backgroundColor: colors.accentFaint,
-  },
-  // Dim ink on the red block: black at 0.8 keeps ≥4.5:1 over blockRed.
-  redDim: { opacity: 0.8 },
-  nameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-  },
-  name: { flexShrink: 1, minWidth: 0 },
-  tags: { flexShrink: 0, flexDirection: 'row', gap: spacing.sm },
-
-  // Price: big Oswald number + tiny dim currency/period captions.
-  priceRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: spacing.xs,
-    marginTop: spacing.sm,
-    minWidth: 0,
-  },
-  priceNumber: {
-    fontFamily: type.display,
-    fontSize: type.size.display,
-    lineHeight: 46,
-    letterSpacing: 0.5,
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  strike: { textDecorationLine: 'line-through' },
-  discountTagRow: { flexDirection: 'row', marginTop: spacing.xs },
-
-  features: { marginTop: spacing.lg, gap: spacing.md },
-  featureRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-  featureIcon: { marginTop: 3 },
-  featureText: { flex: 1, lineHeight: 24 },
-
-  // "See everything included" reveal affordance — gap instead of a hairline.
-  detailLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    minHeight: touch.min,
-    marginTop: spacing.sm,
-  },
-
-  btnStack: { marginTop: spacing.sm, gap: spacing.xs },
-  trialBtn: { minHeight: touch.min },
-
-  // Ghost trial affordance inside the red hero (black ink, Button metrics).
-  onRedGhost: {
-    minHeight: touch.min,
-    borderRadius: radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 28,
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  onRedGhostDisabled: { opacity: 0.4 },
-  onRedGhostLabel: {
-    fontFamily: type.bodySemiBold,
-    fontSize: 16,
-    letterSpacing: 0.3,
-    color: colors.onBlock,
-  },
 
   activeTrialBanner: {
     flexDirection: 'row',
@@ -1084,6 +906,19 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginTop: spacing.sm,
   },
+
+  // Expiry / renew banner — quiet warning block; error-toned once lapsed.
+  expiryBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+  },
+  expiryBannerExpired: { backgroundColor: colors.surface },
+  expiryText: { flex: 1 },
 
   // Nepal manual-payment section — borderless charcoal block.
   paymentWrap: { marginTop: spacing.md },
@@ -1106,6 +941,14 @@ const styles = StyleSheet.create({
   },
   fileRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   fileName: { flex: 1 },
+  receiptPreview: { gap: spacing.sm },
+  receiptThumb: {
+    width: '100%',
+    height: 160,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+  },
+  historyWrap: { gap: spacing.sm, marginTop: spacing.md },
   pendingCard: {
     backgroundColor: colors.surfaceRaised,
     borderRadius: radius.md,

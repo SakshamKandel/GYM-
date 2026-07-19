@@ -1,7 +1,7 @@
 import { mealOrders, type Db } from '@gym/db';
-import type { OrderActor, OrderStatus } from '@gym/shared';
+import { orderNumber, type OrderActor, type OrderStatus } from '@gym/shared';
 import { after } from 'next/server';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import { atomicAdvanceOrderSql } from './advanceSql';
 
 /**
@@ -63,14 +63,43 @@ type AtomicAdvanceOrderRow = Omit<MealOrder, MealOrderTimestamp> & {
   updatedAt: Date | string;
 };
 
-/** Member-facing push copy for transitions worth notifying. */
-const PUSH_COPY: Partial<Record<OrderStatus, { title: string; body: string }>> = {
-  confirmed: { title: 'Order confirmed', body: 'Your meal order has been confirmed.' },
-  out_for_delivery: { title: 'Out for delivery', body: 'Your meal is on the way.' },
-  delivered: { title: 'Delivered', body: 'Your meal has been delivered. Enjoy!' },
-  cancelled: { title: 'Order cancelled', body: 'Your meal order was cancelled.' },
-  refused: { title: 'Delivery refused', body: 'Your meal order was marked refused.' },
-};
+/** Human window label for the ETA phrase in a status push. */
+function windowLabel(window: 'lunch' | 'dinner'): string {
+  return window === 'lunch' ? 'lunch' : 'dinner';
+}
+
+/**
+ * Member-facing push copy for a transition, enriched with the slot ETA (Pack A:
+ * "enrich status pushes with ETA + deep-link"). `null` for transitions not worth
+ * notifying (e.g. `preparing`). Server-templated — no member free text.
+ */
+function pushCopyFor(
+  order: MealOrder,
+  toStatus: OrderStatus,
+): { title: string; body: string } | null {
+  const code = orderNumber(order.id);
+  const slot = windowLabel(order.window);
+  switch (toStatus) {
+    case 'confirmed':
+      return {
+        title: 'Order confirmed',
+        body: `Order ${code} is confirmed for your ${slot} slot on ${order.deliveryDate}.`,
+      };
+    case 'out_for_delivery':
+      return {
+        title: 'Out for delivery',
+        body: `Order ${code} is on the way — arriving in your ${slot} window.`,
+      };
+    case 'delivered':
+      return { title: 'Delivered', body: `Order ${code} has been delivered. Enjoy!` };
+    case 'cancelled':
+      return { title: 'Order cancelled', body: `Order ${code} was cancelled.` };
+    case 'refused':
+      return { title: 'Delivery refused', body: `Order ${code} was marked refused.` };
+    default:
+      return null;
+  }
+}
 
 function requiredDate(value: Date | string): Date {
   return value instanceof Date ? value : new Date(value);
@@ -115,16 +144,20 @@ export async function advanceOrderStatus(
   if (!mutationRow) return { ok: false, reason: 'conflict' };
   const order = mapAtomicOrderRow(mutationRow);
 
-  // Push remains best-effort after the atomic database statement commits.
-  const copy = PUSH_COPY[toStatus];
+  // Member status notification — best-effort after the atomic commit. Routed
+  // through `notify` so it also lands in the member's notification center and
+  // respects prefs/quiet-hours (Pack B). Fire-and-forget: never awaited, never
+  // throws. `data.type:'order'` is the mobile deep-link key (WP-14 switch).
+  const copy = pushCopyFor(order, toStatus);
   if (copy) {
     const accountId = order.accountId;
+    const orderId = order.id;
     after(() =>
-      sendPushToAccount(accountId, {
-        title: copy.title,
-        body: copy.body,
-        data: { type: 'meal_order', orderId: order.id, status: toStatus },
-      }),
+      notify(
+        'order_status',
+        { accountId },
+        { title: copy.title, body: copy.body, data: { type: 'order', id: orderId } },
+      ),
     );
   }
 

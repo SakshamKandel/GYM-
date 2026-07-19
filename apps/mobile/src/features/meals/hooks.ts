@@ -3,6 +3,7 @@ import { useFocusEffect } from 'expo-router';
 import {
   fetchMealMenu,
   fetchMealPartners,
+  fetchMealQuote,
   fetchMealSubscriptions,
   fetchMyMealOrders,
   listAddresses,
@@ -12,12 +13,13 @@ import {
   type MealMenuFilters,
   type MealOrder,
   type MealPartner,
+  type MealQuote,
+  type MealQuoteInput,
   type MealSubscription,
   type MealSubscriptionEditInput,
   type MealSubscriptionPlanQuote,
   type MenuMeal,
 } from './api';
-import { quoteMealOrder, type MealQuote, type MealQuoteInput } from '../staff/api';
 
 /**
  * Load-on-focus hooks for the meals feature, same shape as
@@ -131,9 +133,21 @@ const QUOTE_DEBOUNCE_MS = 400;
 export function useMealQuote(
   token: string | null,
   input: MealQuoteInput | null,
-): { quote: MealQuote | null; status: MealQuoteStatus } {
+): {
+  quote: MealQuote | null;
+  status: MealQuoteStatus;
+  /** The failed quote's error code (e.g. `meal_unavailable`), when `status`
+   * is `'error'` — lets the checkout surface B11's per-line copy instead of a
+   * generic message. */
+  errorCode: string | null;
+  /** The failed quote's error body, minus `error` (e.g. `{mealId,mealName}`
+   * on `meal_unavailable`). */
+  errorDetails: Record<string, unknown> | null;
+} {
   const [quote, setQuote] = useState<MealQuote | null>(null);
   const [status, setStatus] = useState<MealQuoteStatus>('idle');
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<Record<string, unknown> | null>(null);
   // Stringified inputs — a stable dependency that only changes when the cart,
   // address, or slot actually change (the object identity changes every render).
   const key = token && input ? JSON.stringify(input) : null;
@@ -145,6 +159,8 @@ export function useMealQuote(
       seqRef.current += 1;
       setStatus('idle');
       setQuote(null);
+      setErrorCode(null);
+      setErrorDetails(null);
       return;
     }
     const seq = ++seqRef.current;
@@ -152,13 +168,18 @@ export function useMealQuote(
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const next = await quoteMealOrder(input, token);
+          const next = await fetchMealQuote(token, input);
           if (seqRef.current !== seq) return;
           setQuote(next);
           setStatus('ready');
-        } catch {
+          setErrorCode(null);
+          setErrorDetails(null);
+        } catch (err) {
           if (seqRef.current !== seq) return;
+          const apiErr = toMealsError(err);
           setStatus('error');
+          setErrorCode(apiErr.code);
+          setErrorDetails(apiErr.details ?? null);
         }
       })();
     }, QUOTE_DEBOUNCE_MS);
@@ -166,7 +187,7 @@ export function useMealQuote(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, key]);
 
-  return { quote, status };
+  return { quote, status, errorCode, errorDetails };
 }
 
 /** Debounced, server-authoritative preview for the recurring-plan edit form. */

@@ -6,6 +6,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { adminRoleOf } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { notify } from '@/lib/notify';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { isOwnImageDeliveryUrl } from '@/lib/uploads';
 
@@ -146,6 +147,20 @@ export async function POST(req: Request) {
   // pending application already exists for this account (C4).
   const application = inserted[0];
   if (!application) return json({ error: 'already_open' }, 409);
+
+  // Fan out an inbound-work notification to every staff account that can review
+  // coach applications (WP-2 / Pack B). Fire-and-forget: never blocks or fails
+  // the create. §7.2-S2 — the applicant's display name is member-authored, so
+  // it is maskPii'd before it reaches a privileged (staff) recipient.
+  void notify(
+    'coach_application_staff',
+    { role: 'staff', permission: 'coach.application.review' },
+    {
+      title: 'New coach application',
+      body: `${maskPii(data.displayName)} applied to become a coach.`,
+      data: { type: 'coach_application', id: application.id },
+    },
+  );
 
   return json({ id: application.id, status: application.status }, 201);
 }

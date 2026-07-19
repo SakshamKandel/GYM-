@@ -1,7 +1,14 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, ScrollView, StyleSheet, View } from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Linking,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import Animated from 'react-native-reanimated';
 import { canActorAdvance, formatMoney, ORDER_STATUSES, type OrderStatus } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -29,6 +36,7 @@ import {
   type StaffErrorCode,
 } from '../../../features/staff/api';
 import { canReviewOrders, replaceStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { ReauthSheet, useReauth } from '../../../features/staff/ReauthGate';
 import { useAuth } from '../../../state/auth';
 
 /**
@@ -142,6 +150,10 @@ export default function AdminOrdersScreen() {
   const token = useAuth((s) => s.token);
   const staffPermissions = useAuth((s) => s.staffPermissions);
   const allowed = canReviewOrders(staffPermissions);
+  // B26: force-status is an unaudited-feeling bypass of the partner's own
+  // console (cancel is irreversible) — same step-up class as the meal
+  // payments/refund actions, which already require a fresh password.
+  const reauth = useReauth();
 
   const [scope, setScope] = useState<AdminOrderScope>('active');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'all'>('all');
@@ -154,6 +166,9 @@ export default function AdminOrdersScreen() {
   const [pendingTarget, setPendingTarget] = useState<OrderStatus | null>(null);
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // B31: pull-to-refresh — a manual override on any of the 24 partner-facing
+  // orders would otherwise sit stale until the whole app remounted.
+  const [refreshing, setRefreshing] = useState(false);
 
   // G8: a slow response for one tab must not clobber a faster tab-switch.
   const listSeq = useRef(0);
@@ -181,9 +196,20 @@ export default function AdminOrdersScreen() {
     [token],
   );
 
-  useEffect(() => {
-    if (allowed) void load(scope, statusFilter);
-  }, [allowed, scope, statusFilter, load]);
+  // B31: refetch on every focus (not just mount) — a partner or the member
+  // may have advanced/cancelled an order while the admin was elsewhere in
+  // the console, and the queue used to sit stale until a full remount.
+  useFocusEffect(
+    useCallback(() => {
+      if (allowed) void load(scope, statusFilter);
+    }, [allowed, scope, statusFilter, load]),
+  );
+
+  async function onRefresh(): Promise<void> {
+    setRefreshing(true);
+    await load(scope, statusFilter);
+    setRefreshing(false);
+  }
 
   function openDetail(row: AdminOrderRow): void {
     setSelected(row);
@@ -241,7 +267,16 @@ export default function AdminOrdersScreen() {
   }
 
   return (
-    <Screen scroll>
+    <Screen
+      scroll
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => void onRefresh()}
+          tintColor={colors.accent}
+        />
+      }
+    >
       <BackRow onBack={goBack} />
 
       <Animated.View entering={enterDown()} style={styles.tabsRow}>
@@ -449,10 +484,14 @@ export default function AdminOrdersScreen() {
         cancelLabel="Cancel"
         danger={pendingTarget === 'cancelled' || pendingTarget === 'refused'}
         onConfirm={() => {
-          if (pendingTarget) void applyOverride(pendingTarget);
+          const target = pendingTarget;
+          if (target) reauth.guard(() => void applyOverride(target));
         }}
         onCancel={() => setPendingTarget(null)}
       />
+
+      {/* Step-up password prompt (B26). */}
+      <ReauthSheet controller={reauth} />
     </Screen>
   );
 }

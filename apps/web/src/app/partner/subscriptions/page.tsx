@@ -1,4 +1,4 @@
-import { ktmDateString } from '@gym/shared';
+import { ktmAddDays, ktmDateString } from '@gym/shared';
 import {
   Badge,
   Card,
@@ -15,6 +15,7 @@ import { materializeDueOrders } from '@/lib/meals';
 import { OrdersQueue } from '../_components/OrdersQueue';
 import {
   loadActiveOrders,
+  loadPartnerSubscriptionHeldMinor,
   loadSubscriptionForecast,
   loadSubscriptionRoster,
   requirePartnerPage,
@@ -73,15 +74,17 @@ const CYCLE_LABEL: Record<string, string> = {
  *     subscription orders), unchanged.
  */
 export default async function PartnerSubscriptionsPage() {
-  const { partnerId } = await requirePartnerPage();
+  const { partnerId, currency } = await requirePartnerPage();
   const db = getDb();
   await materializeDueOrders(db, { kind: 'partner', partnerId });
 
   const today = ktmDateString(new Date());
-  const [orders, roster, forecast] = await Promise.all([
+  const tomorrow = ktmAddDays(today, 1);
+  const [orders, roster, forecast, subscriptionHeldMinor] = await Promise.all([
     loadActiveOrders(db, partnerId, { source: 'subscription' }),
     loadSubscriptionRoster(db, partnerId, today),
     loadSubscriptionForecast(db, partnerId, today, FORECAST_WEEKS),
+    loadPartnerSubscriptionHeldMinor(db, partnerId),
   ]);
 
   const forecastSeries: ChartPoint[] = forecast.weeks.map((w) => ({
@@ -89,6 +92,15 @@ export default async function PartnerSubscriptionsPage() {
     value: w.slots,
   }));
   const nextWeekSlots = forecast.weeks[0]?.slots ?? 0;
+
+  // Explicit TOMORROW slot count (Pack H) — unlike the weekly forecast (a
+  // schedule projection), this counts already-MATERIALIZED subscription orders
+  // for tomorrow (`orders` includes them: the materializer above spawns
+  // today+tomorrow), so it reflects real post-skip, post-cutoff deliveries —
+  // exactly what the kitchen needs for tomorrow's prep planning.
+  const tomorrowOrders = orders.filter((o) => o.deliveryDate === tomorrow);
+  const tomorrowLunch = tomorrowOrders.filter((o) => o.window === 'lunch').length;
+  const tomorrowDinner = tomorrowOrders.filter((o) => o.window === 'dinner').length;
 
   const columns: Column<PartnerSubscriptionRow>[] = [
     {
@@ -161,8 +173,17 @@ export default async function PartnerSubscriptionsPage() {
       >
         <StatTile label="Active subscriptions" value={forecast.activeCount} />
         <StatTile label="Paused" value={forecast.pausedCount} />
+        <StatTile
+          label="Tomorrow"
+          value={tomorrowOrders.length}
+          hint={`${tomorrowLunch} lunch · ${tomorrowDinner} dinner`}
+        />
         <StatTile label="Scheduled next 7 days" value={nextWeekSlots} hint="meals" />
-        <StatTile label="Upcoming deliveries" value={orders.length} hint="materialized" />
+        <StatTile
+          label="Subscription revenue held"
+          value={formatMoney(subscriptionHeldMinor, currency)}
+          hint="Prepaid digital cycles — platform-held"
+        />
       </div>
 
       {forecastSeries.length > 0 && (

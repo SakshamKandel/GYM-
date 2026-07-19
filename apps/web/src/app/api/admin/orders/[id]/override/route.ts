@@ -2,6 +2,8 @@ import { mealOrders } from '@gym/db';
 import {
   ORDER_STATUSES,
   canActorAdvance,
+  maskPii,
+  orderNumber,
   orderPaymentMutationBlock,
   type OrderStatus,
 } from '@gym/shared';
@@ -11,6 +13,7 @@ import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { advanceOrderStatus } from '@/lib/meals';
+import { notify } from '@/lib/notify';
 import { clientIp } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -101,6 +104,37 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       if (currentBlock) return json({ error: currentBlock }, 409);
     }
     return json({ error: 'conflict' }, 409);
+  }
+
+  // B13: the shared CAS write (advanceOrderStatus/advanceSql) only persists
+  // `cancel_reason` for toStatus==='cancelled' — a refuse reason typed into the
+  // SAME drawer textarea was silently discarded (admins believed they'd logged
+  // it). Best-effort supplemental write scoped to this route only; the primary
+  // status transition already committed atomically above, so this can never
+  // strand the order in a half-updated state — worst case the reason is
+  // missing, not the transition.
+  if (toStatus === 'refused' && reason) {
+    try {
+      await db.update(mealOrders).set({ cancelReason: reason }).where(eq(mealOrders.id, id));
+    } catch (err) {
+      console.error('[admin] refuse-reason persist failed', { orderId: id, err });
+    }
+  }
+
+  // B13: dispatch the reason to the MEMBER (was persist-only). The shared engine
+  // already sent the generic status push; this supplemental notify carries the
+  // WHY, mirroring the partner advance route (§7.2-S2: server-templated title,
+  // admin free text maskPii'd + attributed, never presented as platform copy).
+  // Fire-and-forget — `void`, never awaited (§7.1): a notify failure must never
+  // fail the already-committed override.
+  if ((toStatus === 'cancelled' || toStatus === 'refused') && reason) {
+    const code = orderNumber(id);
+    const title = toStatus === 'refused' ? 'Why delivery was refused' : 'Why your order was cancelled';
+    void notify(
+      'order_status',
+      { accountId: result.order.accountId },
+      { title, body: `Order ${code}: ${maskPii(reason)}`, data: { type: 'order', id } },
+    );
   }
 
   await logAudit(

@@ -1,12 +1,12 @@
 import { mealBillingCycles, mealOrderEvents, mealOrders, mealPaymentRequests } from '@gym/db';
-import { ktmDateString, TERMINAL_ORDER_STATUSES } from '@gym/shared';
+import { formatMoney, ktmDateString, TERMINAL_ORDER_STATUSES } from '@gym/shared';
 import { and, eq, gt, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import { clientIp } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -60,6 +60,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       orderId: mealPaymentRequests.orderId,
       cycleId: mealPaymentRequests.cycleId,
       amountMinor: mealPaymentRequests.amountMinor,
+      currency: mealPaymentRequests.currency,
       status: mealPaymentRequests.status,
     })
     .from(mealPaymentRequests)
@@ -226,12 +227,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     reason,
   }, ip);
 
+  // WP-8: surface the amount (and reason, when given) in the refund push —
+  // was a bare "was refunded" with no figure or why.
   after(() =>
-    sendPushToAccount(row.accountId, {
-      title: 'Meal payment refunded',
-      body: 'Your meal payment was refunded.',
-      data: { type: 'meal_payment_decided' },
-    }),
+    notify(
+      'payment_reviewed_member',
+      { accountId: row.accountId },
+      {
+        title: 'Meal payment refunded',
+        body: reason
+          ? `Your ${formatMoney(row.amountMinor, row.currency)} meal payment was refunded: ${reason}`
+          : `Your ${formatMoney(row.amountMinor, row.currency)} meal payment was refunded.`,
+        data: { type: 'meal_payment_decided', id: row.orderId ?? row.cycleId ?? undefined },
+      },
+    ),
   );
 
   return json({ ok: true }, 200);

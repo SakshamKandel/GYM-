@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Linking, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Linking, Share, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import { distanceKm, GYM_DAY_KEYS, type GymDayKey } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
+  Button,
   Card,
   Divider,
   EmptyState,
@@ -20,12 +21,17 @@ import {
 } from '../../components/ui';
 import { useAuth } from '../../state/auth';
 import { GymActionBar } from '../../features/gyms/components/GymActionBar';
+import { GymDetailTopActions } from '../../features/gyms/components/GymDetailTopActions';
 import { GymGallery } from '../../features/gyms/components/GymGallery';
+import { GymReviewsSection } from '../../features/gyms/components/GymReviewsSection';
 import { MapPreview } from '../../features/gyms/components/MapPreview';
+import { EnquireSheet } from '../../features/gyms/components/EnquireSheet';
+import { ReportGymSheet } from '../../features/gyms/components/ReportGymSheet';
 import { amenityIcon, amenityLabel } from '../../features/gyms/amenities';
+import { favoriteGym, unfavoriteGym } from '../../features/gyms/api';
 import { describeOpenState, formatShift } from '../../features/gyms/hours';
 import { useGymDetail } from '../../features/gyms/hooks';
-import { replacePath } from '../../features/gyms/nav';
+import { pushPath, replacePath } from '../../features/gyms/nav';
 import { useMealAddresses } from '../../features/meals/hooks';
 
 /**
@@ -73,6 +79,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  topActionsFloat: { position: 'absolute', top: spacing.md, right: spacing.md },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
   verifiedPill: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   metaRow: {
@@ -138,6 +145,15 @@ const styles = StyleSheet.create({
   distanceLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.sm },
   mapPreview: { marginTop: spacing.md },
   skeletons: { gap: spacing.md },
+  priceNote: { marginBottom: spacing.md },
+  reportRow: { alignItems: 'center', marginTop: spacing.sm },
+  reportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minHeight: touch.min,
+    paddingHorizontal: spacing.md,
+  },
 });
 
 export default function GymDetailScreen() {
@@ -164,6 +180,60 @@ export default function GymDetailScreen() {
 
   const openState = useMemo(() => (gym ? describeOpenState(gym.hours, now) : null), [gym, now]);
   const todayIdx = useMemo(() => new Date(now.getTime() + 345 * 60_000).getUTCDay(), [now]);
+
+  // ── Favorite / share / enquire / report (Pack M — fixes B15/B17) ──
+  const isSignedIn = status === 'signedIn';
+  const [favorited, setFavorited] = useState(false);
+  const [favoriteBusy, setFavoriteBusy] = useState(false);
+  const [enquireOpen, setEnquireOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+
+  // Seed local favorite state from the detail payload once per gym (not on
+  // every focus refetch, so an optimistic toggle here never gets clobbered by
+  // the screen's own reload — see useGymDetail's useFocusEffect).
+  useEffect(() => {
+    if (gym) setFavorited(gym.isFavorited);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gym?.id]);
+
+  function requireSignIn(): boolean {
+    if (isSignedIn && token) return true;
+    pushPath('/auth/sign-in');
+    return false;
+  }
+
+  async function toggleFavorite(): Promise<void> {
+    if (!gym || !requireSignIn() || !token) return;
+    const next = !favorited;
+    setFavorited(next); // optimistic — confirms in <100ms (hard-rule 5 spirit)
+    setFavoriteBusy(true);
+    try {
+      if (next) await favoriteGym(gym.slug, token);
+      else await unfavoriteGym(gym.slug, token);
+    } catch {
+      setFavorited(!next); // roll back on a real failure (no dedicated error
+      // surface for a background toggle — the icon reverting IS the signal)
+    } finally {
+      setFavoriteBusy(false);
+    }
+  }
+
+  function shareGym(): void {
+    if (!gym) return;
+    const locationBit = [gym.addressText, gym.city].filter(Boolean).join(', ');
+    void Share.share({
+      message: `${gym.name}${locationBit ? ` — ${locationBit}` : ''}\ngymtracker://gyms/${gym.slug}`,
+      title: gym.name,
+    });
+  }
+
+  function openEnquire(): void {
+    if (requireSignIn()) setEnquireOpen(true);
+  }
+
+  function openReport(): void {
+    if (requireSignIn()) setReportOpen(true);
+  }
 
   function goBack(): void {
     if (router.canGoBack()) router.back();
@@ -242,6 +312,12 @@ export default function GymDetailScreen() {
               >
                 <Ionicons name="chevron-back" size={24} color={colors.text} />
               </PressableScale>
+              <View style={styles.topActionsFloat}>
+                <GymDetailTopActions
+                  onShare={shareGym}
+                  favorite={{ active: favorited, busy: favoriteBusy, onToggle: () => void toggleFavorite(), gymName: gym.name }}
+                />
+              </View>
             </Animated.View>
 
             {/* ── Identity ── */}
@@ -388,14 +464,15 @@ export default function GymDetailScreen() {
             ) : null}
 
             {/* ── Membership ── */}
-            {gym.priceNote ? (
-              <Animated.View entering={enterUp(5)}>
-                <SectionLabel>Membership</SectionLabel>
-                <AppText variant="body" color={colors.textDim}>
+            <Animated.View entering={enterUp(5)}>
+              <SectionLabel>Membership</SectionLabel>
+              {gym.priceNote ? (
+                <AppText variant="body" color={colors.textDim} style={styles.priceNote}>
                   {gym.priceNote}
                 </AppText>
-              </Animated.View>
-            ) : null}
+              ) : null}
+              <Button label="Ask about membership" variant="secondary" onPress={openEnquire} />
+            </Animated.View>
 
             {/* ── About ── */}
             {gym.description ? (
@@ -406,6 +483,31 @@ export default function GymDetailScreen() {
                 </AppText>
               </Animated.View>
             ) : null}
+
+            {/* ── Reviews (Pack C write path) ── */}
+            <Animated.View entering={enterUp(7)}>
+              <GymReviewsSection
+                gymSlug={gym.slug}
+                gymName={gym.name}
+                isSignedIn={isSignedIn}
+                token={isSignedIn ? token : null}
+              />
+            </Animated.View>
+
+            {/* ── Report incorrect info ── */}
+            <Animated.View entering={enterUp(8)} style={styles.reportRow}>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="Report incorrect information about this gym"
+                onPress={openReport}
+                style={styles.reportBtn}
+              >
+                <Ionicons name="flag-outline" size={14} color={colors.textDim} />
+                <AppText variant="caption" color={colors.textDim}>
+                  Report incorrect info
+                </AppText>
+              </PressableScale>
+            </Animated.View>
           </>
         )}
       </Screen>
@@ -417,6 +519,25 @@ export default function GymDetailScreen() {
           onCall={gym.phone ? call : undefined}
           onWebsite={gym.website ? openWebsite : undefined}
         />
+      ) : null}
+
+      {gym && isSignedIn && token ? (
+        <>
+          <EnquireSheet
+            visible={enquireOpen}
+            onClose={() => setEnquireOpen(false)}
+            gymSlug={gym.slug}
+            gymName={gym.name}
+            token={token}
+          />
+          <ReportGymSheet
+            visible={reportOpen}
+            onClose={() => setReportOpen(false)}
+            gymSlug={gym.slug}
+            gymName={gym.name}
+            token={token}
+          />
+        </>
       ) : null}
     </View>
   );

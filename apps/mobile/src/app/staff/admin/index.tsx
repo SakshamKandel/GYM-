@@ -53,6 +53,19 @@ interface NavRow {
    * matching permission straight into a dead-end 403 (defect G14).
    */
   perm: Permission;
+  /**
+   * B25: the `overview.ops` key whose count renders as a badge on this row —
+   * `getAdminOverview()` was already fetching these four counters
+   * (pendingApplications/pendingTierRequests/pendingPayments/unreadSupport)
+   * but nothing ever rendered them, so every queue looked empty until opened.
+   * Omitted for rows with no matching ops counter.
+   */
+  opsKey?:
+    | 'pendingApplications'
+    | 'pendingTierRequests'
+    | 'pendingPayments'
+    | 'pendingMealPayments'
+    | 'unreadSupport';
 }
 
 // Three of these routes (pricing/wallets/tier-requests) are NEW parity
@@ -92,6 +105,7 @@ const NAV_ROWS: NavRow[] = [
     blurb: 'Review self-serve coach applications.',
     route: STAFF_ROUTES.adminApplications,
     perm: 'coach.application.review',
+    opsKey: 'pendingApplications',
   },
   {
     icon: 'trending-up',
@@ -99,6 +113,7 @@ const NAV_ROWS: NavRow[] = [
     blurb: 'Coach seniority upgrade requests awaiting review.',
     route: STAFF_ROUTES.adminTierRequests,
     perm: 'coach.application.review',
+    opsKey: 'pendingTierRequests',
   },
   {
     icon: 'wallet',
@@ -106,6 +121,7 @@ const NAV_ROWS: NavRow[] = [
     blurb: 'Nepal manual payment receipts awaiting review.',
     route: STAFF_ROUTES.adminPayments,
     perm: 'payments.review',
+    opsKey: 'pendingPayments',
   },
   {
     icon: 'restaurant',
@@ -120,6 +136,7 @@ const NAV_ROWS: NavRow[] = [
     blurb: 'eSewa/Khalti receipts for meal orders and weekly plans.',
     route: STAFF_ROUTES.adminMealPayments,
     perm: 'payments.review',
+    opsKey: 'pendingMealPayments',
   },
   {
     icon: 'pricetag',
@@ -155,6 +172,7 @@ const NAV_ROWS: NavRow[] = [
     blurb: 'Reply to support tickets from any member.',
     route: STAFF_ROUTES.adminSupport,
     perm: 'support.thread.read',
+    opsKey: 'unreadSupport',
   },
   {
     icon: 'bar-chart',
@@ -249,6 +267,19 @@ function HeroStat({ label, value }: { label: string; value: number }) {
   );
 }
 
+/** B25: a small count pill on a nav row — hidden entirely at 0/undefined so
+ * an empty queue reads as empty, not as a badge showing "0". */
+function RowBadge({ count }: { count: number | undefined }) {
+  if (!count || count <= 0) return null;
+  return (
+    <View style={styles.rowBadge}>
+      <AppText variant="label" color={colors.onBlock}>
+        {count > 99 ? '99+' : count}
+      </AppText>
+    </View>
+  );
+}
+
 export default function AdminHomeScreen() {
   const token = useAuth((s) => s.token);
   const staffPermissions = useAuth((s) => s.staffPermissions);
@@ -258,6 +289,15 @@ export default function AdminHomeScreen() {
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+
+  // B25: sum of every ops counter the server actually returned (each one is
+  // independently permission-gated — undefined fields simply don't add).
+  const totalOpsCount =
+    (overview?.ops?.pendingApplications ?? 0) +
+    (overview?.ops?.pendingTierRequests ?? 0) +
+    (overview?.ops?.pendingPayments ?? 0) +
+    (overview?.ops?.pendingMealPayments ?? 0) +
+    (overview?.ops?.unreadSupport ?? 0);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -350,6 +390,15 @@ export default function AdminHomeScreen() {
             No platform-wide stats for your role.
           </AppText>
         ) : null}
+        {/* B25/Pack Q: a one-line "today's work" teaser so a busy queue is
+            visible before drilling into any single row. Only counts the
+            caller can actually see (server already permission-gates each
+            ops field), and disappears entirely once everything is clear. */}
+        {totalOpsCount > 0 ? (
+          <AppText variant="caption" color={colors.onBlock} style={styles.heroOpsLine}>
+            {totalOpsCount} item{totalOpsCount === 1 ? '' : 's'} need attention
+          </AppText>
+        ) : null}
       </Animated.View>
 
       <SectionLabel>Manage</SectionLabel>
@@ -357,15 +406,22 @@ export default function AdminHomeScreen() {
         <Animated.View key={row.title} entering={enterUp(i + 1)}>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel={row.title}
+            accessibilityLabel={
+              row.opsKey && overview?.ops?.[row.opsKey]
+                ? `${row.title}, ${overview.ops[row.opsKey]} pending`
+                : row.title
+            }
             onPress={() => pushStaff(row.route)}
             style={styles.card}
           >
             <IconChip icon={row.icon} iconColor={colors.accent} />
             <View style={styles.cardText}>
-              <AppText variant="bodyBold" numberOfLines={1}>
-                {row.title}
-              </AppText>
+              <View style={styles.cardTitleRow}>
+                <AppText variant="bodyBold" numberOfLines={1} style={styles.cardTitleGrow}>
+                  {row.title}
+                </AppText>
+                <RowBadge count={row.opsKey ? overview?.ops?.[row.opsKey] : undefined} />
+              </View>
               <AppText variant="caption" numberOfLines={2}>
                 {row.blurb}
               </AppText>
@@ -412,6 +468,7 @@ const styles = StyleSheet.create({
   },
   heroLoading: { paddingVertical: spacing.lg, alignItems: 'flex-start' },
   heroRetry: { paddingVertical: spacing.sm },
+  heroOpsLine: { opacity: 0.85 },
   statGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -430,4 +487,16 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   cardText: { flex: 1, gap: 2 },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  cardTitleGrow: { flexShrink: 1 },
+  // B25: count pill — same shape language as the support inbox's unread dot.
+  rowBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: radius.full,
+    paddingHorizontal: 6,
+    backgroundColor: colors.blockRed,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

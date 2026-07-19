@@ -29,6 +29,7 @@ import {
   type Tier,
 } from '../../../features/staff/api';
 import { replaceStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
+import { ReauthSheet, useReauth } from '../../../features/staff/ReauthGate';
 import { useAuth } from '../../../state/auth';
 
 /**
@@ -131,6 +132,10 @@ export default function AdminBroadcastScreen() {
   const token = useAuth((s) => s.token);
   const staffPermissions = useAuth((s) => s.staffPermissions);
   const allowed = staffCan(staffPermissions, 'broadcast.send');
+  // B26: an irreversible mass push to real devices is the same class of
+  // action as a refund/role-revoke elsewhere in the console — it now gets
+  // the same fresh-password step-up instead of firing on a bare confirm tap.
+  const reauth = useReauth();
 
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -376,9 +381,13 @@ export default function AdminBroadcastScreen() {
         }. This sends a push notification immediately and cannot be undone.`}
         confirmLabel={sending ? 'Sending…' : 'Confirm & send'}
         cancelLabel="Cancel"
-        onConfirm={() => void send()}
+        onConfirm={() => reauth.guard(() => void send())}
         onCancel={() => setConfirmOpen(false)}
       />
+
+      {/* Step-up password prompt (B26) — same fresh-password gate as the
+          money-moving refund actions elsewhere in the console. */}
+      <ReauthSheet controller={reauth} />
     </Screen>
   );
 }

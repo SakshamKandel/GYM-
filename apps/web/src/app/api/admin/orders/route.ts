@@ -19,6 +19,10 @@ export const runtime = 'nodejs';
  *  - partnerId  optional exact-partner filter
  *  - status     optional exact-status filter
  *  - scope      active (default, non-terminal) | history (terminal) | all
+ *  - q          optional free-text search (partner name / member email / member
+ *               display name), matched server-side against the FULL filtered
+ *               set (B14 — was previously a client-only filter over just the
+ *               already-fetched page, so matches outside it were invisible).
  */
 
 const querySchema = z.object({
@@ -29,6 +33,7 @@ const querySchema = z.object({
   partnerId: z.string().trim().min(1).optional(),
   status: z.enum(ORDER_STATUSES as unknown as [OrderStatus, ...OrderStatus[]]).optional(),
   scope: z.enum(['active', 'history', 'all']).default('active'),
+  q: z.string().trim().max(200).optional(),
 });
 
 export function OPTIONS() {
@@ -45,6 +50,7 @@ export async function GET(req: Request) {
     partnerId: url.searchParams.get('partnerId') ?? undefined,
     status: url.searchParams.get('status') ?? undefined,
     scope: url.searchParams.get('scope') ?? undefined,
+    q: url.searchParams.get('q') ?? undefined,
   });
   if (!parsed.success) return json({ error: 'invalid' }, 400);
 

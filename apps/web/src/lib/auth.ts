@@ -3,6 +3,7 @@ import { accounts, admins, sessions } from '@gym/db';
 import { type StaffRole, effectiveTier } from '@gym/shared';
 import { and, eq, gt, lt } from 'drizzle-orm';
 import { getDb } from './db';
+import type { TierSource } from './tier';
 
 const SESSION_DAYS = 30;
 
@@ -44,6 +45,20 @@ export interface PublicUser {
   email: string;
   displayName: string;
   tier: 'starter' | 'silver' | 'gold' | 'elite';
+  /**
+   * ISO timestamp when the CURRENT (stored) paid tier lapses, or null for no
+   * expiry (free/permanent). This is the RAW stored value — it is returned even
+   * when it is already in the past, so the client can render an "expired, renew"
+   * affordance while `tier` above has already collapsed to 'starter'
+   * (effectiveTier). WP-9 / Pack J.
+   */
+  tierExpiresAt: string | null;
+  /**
+   * Provenance of the stored grant (drives the client's renew/manage copy):
+   * 'manual_payment' → resubmit a receipt; 'revenuecat' → the store; null = none.
+   */
+  tierSource: TierSource | null;
+  tierSourceId: string | null;
 }
 
 // The role union now lives in @gym/shared (logic/staffRoles.ts) so the rank
@@ -92,6 +107,8 @@ export async function userForToken(token: string): Promise<PublicUser | null> {
       displayName: accounts.displayName,
       tier: accounts.tier,
       tierExpiresAt: accounts.tierExpiresAt,
+      tierSource: accounts.tierSource,
+      tierSourceId: accounts.tierSourceId,
     })
     .from(sessions)
     .innerJoin(accounts, eq(sessions.accountId, accounts.id))
@@ -105,8 +122,14 @@ export async function userForToken(token: string): Promise<PublicUser | null> {
     .limit(1);
   const row = rows[0];
   if (!row) return null;
-  const { tierExpiresAt, ...user } = row;
-  return { ...user, tier: effectiveTier(user.tier, tierExpiresAt, new Date()) };
+  const { tierExpiresAt, tierSource, tierSourceId, ...user } = row;
+  return {
+    ...user,
+    tier: effectiveTier(user.tier, tierExpiresAt, new Date()),
+    tierExpiresAt: tierExpiresAt ? tierExpiresAt.toISOString() : null,
+    tierSource: (tierSource as TierSource | null) ?? null,
+    tierSourceId: tierSourceId ?? null,
+  };
 }
 
 /**
@@ -124,6 +147,8 @@ export async function staffForToken(token: string): Promise<StaffPrincipal | nul
       displayName: accounts.displayName,
       tier: accounts.tier,
       tierExpiresAt: accounts.tierExpiresAt,
+      tierSource: accounts.tierSource,
+      tierSourceId: accounts.tierSourceId,
       role: admins.role,
     })
     .from(sessions)
@@ -146,6 +171,9 @@ export async function staffForToken(token: string): Promise<StaffPrincipal | nul
       displayName: row.displayName,
       // Effective tier so a lapsed Elite staff/member sees the collapsed value.
       tier: effectiveTier(row.tier, row.tierExpiresAt, new Date()),
+      tierExpiresAt: row.tierExpiresAt ? row.tierExpiresAt.toISOString() : null,
+      tierSource: (row.tierSource as TierSource | null) ?? null,
+      tierSourceId: row.tierSourceId ?? null,
     },
     role: row.role,
   };

@@ -1,10 +1,11 @@
-import { gymPhotos, gyms } from '@gym/db';
+import { gyms } from '@gym/db';
 import { distanceKm } from '@gym/shared';
-import { and, asc, eq, ilike, inArray, or } from 'drizzle-orm';
+import { and, asc, count, eq, ilike, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { loadPhotosByGym, loadRatingAggregates, ratingFor } from './_lib';
 
 export const runtime = 'nodejs';
 
@@ -19,12 +20,24 @@ export const runtime = 'nodejs';
  * `?lat&lng` (both required together) adds a `distanceKm` field per gym and
  * sorts nearest-first; omit either and the list falls back to name order.
  * `?q` does a simple ILIKE match against name/city.
+ *
+ * B16 fix: `?limit&offset` bound the query — previously this endpoint
+ * returned the ENTIRE published+verified table on every load with no cap.
+ * Response now also carries `total` so a client can render "N of M" / decide
+ * whether to page further. Defaults are generous (50) so existing callers
+ * that never pass `limit` keep seeing a full-feeling list while staying
+ * bounded against unbounded table growth.
+ *
+ * B17 fix: `rating`/`reviewCount` are the REAL aggregate from visible
+ * `gym_reviews` (see `_lib.ts`) — never the admin-authored columns.
  */
 
 const querySchema = z.object({
   lat: z.coerce.number().min(-90).max(90).optional(),
   lng: z.coerce.number().min(-180).max(180).optional(),
   q: z.string().trim().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
 });
 
 export function OPTIONS() {
@@ -45,9 +58,11 @@ export async function GET(req: Request) {
     lat: url.searchParams.get('lat') ?? undefined,
     lng: url.searchParams.get('lng') ?? undefined,
     q: url.searchParams.get('q') ?? undefined,
+    limit: url.searchParams.get('limit') ?? undefined,
+    offset: url.searchParams.get('offset') ?? undefined,
   });
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { lat, lng, q } = parsed.data;
+  const { lat, lng, q, limit, offset } = parsed.data;
 
   const db = getDb();
 
@@ -62,45 +77,48 @@ export async function GET(req: Request) {
       : undefined,
   );
 
-  const rows = await db
-    .select({
-      id: gyms.id,
-      slug: gyms.slug,
-      name: gyms.name,
-      category: gyms.category,
-      city: gyms.city,
-      lat: gyms.lat,
-      lng: gyms.lng,
-      rating: gyms.rating,
-      reviewCount: gyms.reviewCount,
-    })
-    .from(gyms)
-    .where(where)
-    .orderBy(asc(gyms.name));
+  const [{ n: total }] = await db.select({ n: count() }).from(gyms).where(where);
 
-  const ids = rows.map((r) => r.id);
-  const photosByGym = new Map<string, { deliveryUrl: string }[]>();
-  if (ids.length > 0) {
-    const photoRows = await db
-      .select({ gymId: gymPhotos.gymId, deliveryUrl: gymPhotos.deliveryUrl, sortOrder: gymPhotos.sortOrder })
-      .from(gymPhotos)
-      .where(inArray(gymPhotos.gymId, ids))
-      .orderBy(asc(gymPhotos.sortOrder));
-    for (const p of photoRows) {
-      const list = photosByGym.get(p.gymId) ?? [];
-      list.push({ deliveryUrl: p.deliveryUrl });
-      photosByGym.set(p.gymId, list);
-    }
-  }
-
+  // Distance sort needs every matching row's coordinates to sort correctly
+  // BEFORE paging — with lat/lng present we page in memory after sorting;
+  // without an origin, sort/limit/offset all push down to SQL (cheap, no
+  // full-table materialisation).
   const hasOrigin = lat !== undefined && lng !== undefined;
+
+  const rows = hasOrigin
+    ? await db
+        .select({
+          id: gyms.id,
+          slug: gyms.slug,
+          name: gyms.name,
+          category: gyms.category,
+          city: gyms.city,
+          lat: gyms.lat,
+          lng: gyms.lng,
+        })
+        .from(gyms)
+        .where(where)
+        .orderBy(asc(gyms.name))
+    : await db
+        .select({
+          id: gyms.id,
+          slug: gyms.slug,
+          name: gyms.name,
+          category: gyms.category,
+          city: gyms.city,
+          lat: gyms.lat,
+          lng: gyms.lng,
+        })
+        .from(gyms)
+        .where(where)
+        .orderBy(asc(gyms.name))
+        .limit(limit)
+        .offset(offset);
+
   const withDistance = rows.map((r) => ({
     ...r,
-    photos: photosByGym.get(r.id) ?? [],
     distanceKm:
-      hasOrigin && r.lat !== null && r.lng !== null
-        ? distanceKm({ lat, lng }, { lat: r.lat, lng: r.lng })
-        : null,
+      hasOrigin && r.lat !== null && r.lng !== null ? distanceKm({ lat, lng }, { lat: r.lat, lng: r.lng }) : null,
   }));
 
   if (hasOrigin) {
@@ -112,5 +130,20 @@ export async function GET(req: Request) {
     });
   }
 
-  return json({ gyms: withDistance }, 200);
+  // Origin sort happened over the FULL matching set — page it now.
+  const paged = hasOrigin ? withDistance.slice(offset, offset + limit) : withDistance;
+
+  const ids = paged.map((r) => r.id);
+  const [photosByGym, ratingByGym] = await Promise.all([
+    loadPhotosByGym(ids),
+    loadRatingAggregates(ids),
+  ]);
+
+  const gymCards = paged.map((r) => ({
+    ...r,
+    photos: photosByGym.get(r.id) ?? [],
+    ...ratingFor(ratingByGym, r.id),
+  }));
+
+  return json({ gyms: gymCards, total, limit, offset }, 200);
 }

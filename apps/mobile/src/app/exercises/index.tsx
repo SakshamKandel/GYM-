@@ -262,8 +262,15 @@ function ExerciseRow({
 
 export default function ExerciseLibraryScreen() {
   const insets = useSafeAreaInsets();
-  const { select, muscle: muscleQuery } = useLocalSearchParams<{ select?: string; muscle?: string }>();
+  const { select, muscle: muscleQuery, swapIndex } = useLocalSearchParams<{
+    select?: string;
+    muscle?: string;
+    swapIndex?: string;
+  }>();
   const selectMode = select === '1';
+  // Present when the picker was opened from a "swap exercise" tap — replaces
+  // the slot in place instead of appending a new one.
+  const swapAt = swapIndex !== undefined && /^\d+$/.test(swapIndex) ? Number(swapIndex) : null;
   const [query, setQuery] = useState('');
   const requestedMuscle =
     typeof muscleQuery === 'string' && MUSCLE_GROUPS.some((group) => group === muscleQuery)
@@ -285,11 +292,16 @@ export default function ExerciseLibraryScreen() {
   );
 
   const handlePick = (exercise: Exercise): void => {
-    // Picker taps only "add and pop back" while a session is live — addExercise
-    // no-ops when idle (e.g. the session ended behind this screen), and popping
-    // back then would fake success. Fall through to the detail screen instead.
+    // Picker taps only "add/swap and pop back" while a session is live —
+    // addExercise/swapExercise no-op when idle (e.g. the session ended behind
+    // this screen), and popping back then would fake success. Fall through to
+    // the detail screen instead.
     if (selectMode && useSession.getState().status === 'active') {
-      useSession.getState().addExercise(exercise.id);
+      if (swapAt !== null) {
+        useSession.getState().swapExercise(swapAt, exercise.id);
+      } else {
+        useSession.getState().addExercise(exercise.id);
+      }
       router.back();
     } else {
       pushPath(`/exercises/${exercise.id}`);
@@ -315,10 +327,14 @@ export default function ExerciseLibraryScreen() {
             </PressableScale>
           </View>
           <AppText variant="label">
-            {selectMode ? 'Tap to add to your workout' : `Library · ${totalCount} exercises`}
+            {selectMode
+              ? swapAt !== null
+                ? 'Tap to swap this exercise'
+                : 'Tap to add to your workout'
+              : `Library · ${totalCount} exercises`}
           </AppText>
           <AppText variant="display" style={styles.title}>
-            {selectMode ? 'Add exercise' : 'Exercises'}
+            {selectMode ? (swapAt !== null ? 'Swap exercise' : 'Add exercise') : 'Exercises'}
           </AppText>
         </Animated.View>
         <Animated.View

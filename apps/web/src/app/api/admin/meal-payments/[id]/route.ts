@@ -1,11 +1,12 @@
 import { mealBillingCycles, mealOrders, mealPaymentRequests } from '@gym/db';
+import { formatMoney } from '@gym/shared';
 import { and, eq, inArray, notInArray } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import { clientIp } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -103,12 +104,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       amountMinor: row.amountMinor,
       note,
     }, ip);
+    // Reason surfaced to the member (was a bare "not approved" with no why —
+    // WP-8 "reject/refund reason surfaced"). `note` is staff-authored (an admin
+    // reviewing a receipt), not member free text, so no maskPii/attribution
+    // step is needed for this direction (§7.2-S2 only gates the reverse).
     after(() =>
-      sendPushToAccount(row.accountId, {
-        title: 'Meal payment update',
-        body: 'Your meal payment was not approved this time.',
-        data: { type: 'meal_payment_decided' },
-      }),
+      notify(
+        'payment_reviewed_member',
+        { accountId: row.accountId },
+        {
+          title: 'Meal payment update',
+          body: note
+            ? `Your meal payment was not approved this time: ${note}`
+            : 'Your meal payment was not approved this time. Please resubmit a clear receipt.',
+          data: { type: 'meal_payment_decided', id: row.orderId ?? row.cycleId ?? undefined },
+        },
+      ),
     );
     return json({ ok: true }, 200);
   }
@@ -242,11 +253,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       note,
     }, ip);
     after(() =>
-      sendPushToAccount(row.accountId, {
-        title: 'Meal payment approved',
-        body: 'Your meal payment was approved.',
-        data: { type: 'meal_payment_decided' },
-      }),
+      notify(
+        'payment_reviewed_member',
+        { accountId: row.accountId },
+        {
+          title: 'Meal payment approved',
+          body: `Your meal payment of ${formatMoney(row.amountMinor, row.currency)} was approved.`,
+          data: { type: 'meal_payment_decided', id: row.orderId ?? row.cycleId ?? undefined },
+        },
+      ),
     );
   }
 

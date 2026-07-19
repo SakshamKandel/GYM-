@@ -10,6 +10,8 @@ import {
   meals,
   mealSubSkips,
   mealSubscriptions,
+  partnerPayoutRequests,
+  partnerWalletLedger,
   savedAddresses,
   type Db,
 } from '@gym/db';
@@ -17,6 +19,7 @@ import {
   TERMINAL_ORDER_STATUSES,
   ktmAddDays,
   ktmDayOfWeek,
+  partnerBalance,
   weekBoundsFor,
   type CycleStatus,
   type MealCurrency,
@@ -25,6 +28,8 @@ import {
   type MealPaymentMethod,
   type MealWindow,
   type OrderStatus,
+  type PartnerLedgerRow,
+  type PartnerLedgerType,
 } from '@gym/shared';
 import { and, asc, desc, eq, gte, inArray, lte, notInArray, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
@@ -806,4 +811,238 @@ export async function loadSubscriptionForecast(
     });
 
   return { weeks: weekRows, activeCount: activeSubs.length, pausedCount };
+}
+
+// ── Money truth & payout rail (WP-5 / Pack I) ───────────────────────────────
+//
+// B27: the old `digitalHeldMinor` was a LIVE SQL sum over delivered-paid orders
+// with nothing to subtract — after a real off-platform payout it stayed inflated
+// forever and read as permanently-owed. The fix mirrors the coach rail: a
+// `partner_wallet_ledger` records `payout` rows so the withdrawable balance
+// (`heldMinor`) actually DECREMENTS when money leaves.
+//
+// Earned base: the EARNED figure is ALWAYS the live delivered-digital-paid sum.
+// It is authoritative, always current (captures post-cutover revenue in real
+// time), and auto-excludes refunded orders. Crucially, NO runtime path writes a
+// ledger `earning` row — the only writers of `partner_wallet_ledger` are the
+// payout route (payout rows) and the deferred one-time historical backfill. A
+// ledger-derived earned base would therefore FREEZE at the backfill snapshot and
+// never accrue new revenue, permanently underpaying the partner. So earned is the
+// live sum, and the ledger supplies only `payout`/`adjustment` movements — a
+// disbursement decrements `heldMinor` exactly once, and a partner can never be
+// paid the same held balance twice.
+//
+// The `PARTNER_LEDGER_ENABLED` flag is retained for observability of the cutover
+// state ONLY; it must not gate the money math (that gating was the B27-in-flag-ON
+// accrual bug — earned froze at the backfill and never saw post-cutover orders).
+
+/** Cutover-flag state for observability only — MUST NOT gate money math. §9.1/§9.4. */
+export function partnerLedgerEnabled(): boolean {
+  return process.env.PARTNER_LEDGER_ENABLED === 'true';
+}
+
+/** All-time delivered-order money split (no window) — mirrors loadPartnerEarnings filters. */
+export interface PartnerAllTime {
+  /** Cash the restaurant collected at the door (delivered COD, non-refunded). */
+  codMinor: number;
+  /** eSewa/Khalti money the PLATFORM holds (delivered, `paid` only). */
+  digitalMinor: number;
+  deliveredCount: number;
+  refundedMinor: number;
+}
+
+/**
+ * All-time delivered-order money for the partner (no date window). Only
+ * `delivered`, non-refunded orders count toward earned figures; only `paid`
+ * digital counts as platform-held. Integer minor units.
+ */
+export async function loadPartnerAllTime(db: Db, partnerId: string): Promise<PartnerAllTime> {
+  const [row] = await db
+    .select({
+      cod: sql<string>`coalesce(sum(${mealOrders.totalMinor}) filter (where ${mealOrders.paymentMethod} = 'cod' and ${mealOrders.paymentStatus} <> 'refunded'), 0)::text`,
+      digital: sql<string>`coalesce(sum(${mealOrders.totalMinor}) filter (where ${mealOrders.paymentMethod} in ('esewa','khalti') and ${mealOrders.paymentStatus} = 'paid'), 0)::text`,
+      delivered: sql<string>`count(*) filter (where ${mealOrders.paymentStatus} <> 'refunded')::text`,
+      refunded: sql<string>`coalesce(sum(${mealOrders.totalMinor}) filter (where ${mealOrders.paymentStatus} = 'refunded'), 0)::text`,
+    })
+    .from(mealOrders)
+    .where(and(eq(mealOrders.partnerId, partnerId), eq(mealOrders.status, 'delivered')));
+  return {
+    codMinor: Number(row?.cod ?? '0'),
+    digitalMinor: Number(row?.digital ?? '0'),
+    deliveredCount: Number(row?.delivered ?? '0'),
+    refundedMinor: Number(row?.refunded ?? '0'),
+  };
+}
+
+/** One serialized `partner_wallet_ledger` entry for the wallet history/statement. */
+export interface PartnerLedgerEntry {
+  id: string;
+  type: PartnerLedgerType;
+  amountMinor: number;
+  currency: string;
+  sourceType: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
+/** Recent wallet-ledger rows for the partner, newest first (payout/adjustment history). */
+export async function loadPartnerLedger(
+  db: Db,
+  partnerId: string,
+  limit = 50,
+): Promise<PartnerLedgerEntry[]> {
+  const rows = await db
+    .select({
+      id: partnerWalletLedger.id,
+      type: partnerWalletLedger.type,
+      amountMinor: partnerWalletLedger.amountMinor,
+      currency: partnerWalletLedger.currency,
+      sourceType: partnerWalletLedger.sourceType,
+      note: partnerWalletLedger.note,
+      createdAt: partnerWalletLedger.createdAt,
+    })
+    .from(partnerWalletLedger)
+    .where(eq(partnerWalletLedger.partnerId, partnerId))
+    .orderBy(desc(partnerWalletLedger.createdAt))
+    .limit(limit);
+  return rows.map((r) => ({
+    id: r.id,
+    type: r.type,
+    amountMinor: r.amountMinor,
+    currency: r.currency,
+    sourceType: r.sourceType,
+    note: r.note,
+    createdAt: r.createdAt.toISOString(),
+  }));
+}
+
+/** The withdrawable held balance for one partner — the payout floor + display figure. */
+export interface PartnerHeld {
+  currency: string;
+  /** Lifetime earned base — the live delivered-digital-paid sum (always current). */
+  earnedMinor: number;
+  adjustmentMinor: number;
+  /** Σ of disbursed payout rows (always ledger-derived). */
+  paidOutMinor: number;
+  /** earnedMinor + adjustmentMinor − paidOutMinor. Decrements as payouts post (fixes B27). */
+  heldMinor: number;
+  /** Retained for API compatibility; always false — earned is the live sum, not the ledger. */
+  ledgerDerived: boolean;
+}
+
+/**
+ * The partner's withdrawable balance in its own `currency`. Payouts/adjustments
+ * always come from the ledger (so held decrements on disbursement); the earned
+ * base follows `PARTNER_LEDGER_ENABLED`. Empty ledger + no orders → held 0
+ * (never null/NaN). This is BOTH the payout-floor check and the display figure,
+ * so a partner can never request or be shown money already paid out.
+ */
+export async function loadPartnerHeld(
+  db: Db,
+  partnerId: string,
+  currency: string,
+): Promise<PartnerHeld> {
+  const ledgerRows = await db
+    .select({ type: partnerWalletLedger.type, amountMinor: partnerWalletLedger.amountMinor })
+    .from(partnerWalletLedger)
+    .where(
+      and(eq(partnerWalletLedger.partnerId, partnerId), eq(partnerWalletLedger.currency, currency)),
+    );
+  const bal = partnerBalance(ledgerRows as PartnerLedgerRow[]);
+
+  // Earned base is ALWAYS the live delivered-digital-paid sum — never the ledger
+  // `earning` fold (`bal.earnedMinor`). Nothing writes `earning` rows at runtime,
+  // so a ledger-derived base would freeze at the one-time backfill snapshot and
+  // never accrue post-cutover revenue. The live sum is authoritative and current;
+  // payouts/adjustments still come from the ledger so `heldMinor` decrements on
+  // disbursement (B27), and refunded orders drop out of the live sum automatically.
+  const all = await loadPartnerAllTime(db, partnerId);
+  const earnedMinor = all.digitalMinor;
+  return {
+    currency,
+    earnedMinor,
+    adjustmentMinor: bal.adjustmentMinor,
+    paidOutMinor: bal.paidMinor,
+    heldMinor: earnedMinor + bal.adjustmentMinor - bal.paidMinor,
+    ledgerDerived: false,
+  };
+}
+
+/**
+ * Subscription-revenue the platform holds for the partner: Σ `amountMinor` of
+ * PAID (prepaid digital) billing cycles across the partner's subscriptions. A
+ * transparency figure surfaced on the Subscriptions page (WP-7 imports this);
+ * it is informational — one-time order held drives the payout balance.
+ */
+export async function loadPartnerSubscriptionHeldMinor(
+  db: Db,
+  partnerId: string,
+): Promise<number> {
+  const [row] = await db
+    .select({
+      held: sql<string>`coalesce(sum(${mealBillingCycles.amountMinor}) filter (where ${mealBillingCycles.status} = 'paid'), 0)::text`,
+    })
+    .from(mealBillingCycles)
+    .innerJoin(mealSubscriptions, eq(mealSubscriptions.id, mealBillingCycles.subscriptionId))
+    .where(eq(mealSubscriptions.partnerId, partnerId));
+  return Number(row?.held ?? '0');
+}
+
+/** The partner's current PENDING payout request, or null. One-pending is DB-enforced. */
+export interface PartnerPayoutRequestView {
+  id: string;
+  currency: string;
+  amountMinor: number;
+  status: 'pending' | 'approved' | 'rejected' | 'paid';
+  note: string | null;
+  disbursementRef: string | null;
+  requestedAt: string;
+  decidedAt: string | null;
+}
+
+/** Serialize one payout-request row. */
+function serializePayoutRequest(r: {
+  id: string;
+  currency: string;
+  amountMinor: number;
+  status: 'pending' | 'approved' | 'rejected' | 'paid';
+  note: string | null;
+  disbursementRef: string | null;
+  requestedAt: Date;
+  decidedAt: Date | null;
+}): PartnerPayoutRequestView {
+  return {
+    id: r.id,
+    currency: r.currency,
+    amountMinor: r.amountMinor,
+    status: r.status,
+    note: r.note,
+    disbursementRef: r.disbursementRef,
+    requestedAt: r.requestedAt.toISOString(),
+    decidedAt: r.decidedAt ? r.decidedAt.toISOString() : null,
+  };
+}
+
+/** The partner's own payout-request history, newest first. */
+export async function loadPartnerPayoutRequests(
+  db: Db,
+  partnerId: string,
+  limit = 50,
+): Promise<PartnerPayoutRequestView[]> {
+  const rows = await db
+    .select({
+      id: partnerPayoutRequests.id,
+      currency: partnerPayoutRequests.currency,
+      amountMinor: partnerPayoutRequests.amountMinor,
+      status: partnerPayoutRequests.status,
+      note: partnerPayoutRequests.note,
+      disbursementRef: partnerPayoutRequests.disbursementRef,
+      requestedAt: partnerPayoutRequests.requestedAt,
+      decidedAt: partnerPayoutRequests.decidedAt,
+    })
+    .from(partnerPayoutRequests)
+    .where(eq(partnerPayoutRequests.partnerId, partnerId))
+    .orderBy(desc(partnerPayoutRequests.requestedAt))
+    .limit(limit);
+  return rows.map(serializePayoutRequest);
 }

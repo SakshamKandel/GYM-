@@ -1,8 +1,9 @@
 'use client';
 
+import { orderNumber } from '@gym/shared';
 import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { Badge, Drawer } from '@/components/console';
+import { Badge, Button, Drawer } from '@/components/console';
 import type { PartnerOrderDetail } from '../_data';
 
 // Client-only: Leaflet touches `window` at import, so it must never SSR. Shown
@@ -29,7 +30,71 @@ import {
  * server-side to the caller's own restaurant), and shows the delivery-window
  * countdown, a tappable phone link, the line items, and the append-only event
  * history. No member identity is ever requested or shown.
+ *
+ * Also offers a per-order thermal-style docket print (Pack H), alongside the
+ * existing AGGREGATE kitchen prep sheet at /partner/prep — this one is the
+ * single ticket a rider/packer hands to a delivery. Opens a standalone popup
+ * window (its own document, not this app's DOM/CSS) so print output is never
+ * polluted by the drawer chrome; every interpolated field is HTML-escaped
+ * since delivery name/address/notes are member free text.
  */
+
+/** Escape untrusted text before it lands in a `document.write`-built docket. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Build and print a single-order kitchen/rider docket in a popup window. */
+function printOrderDocket(detail: PartnerOrderDetail, currency: string) {
+  const win = window.open('', '_blank', 'width=380,height=640');
+  if (!win) return; // popup blocked — the aggregate prep sheet remains available
+  const code = orderNumber(detail.orderId);
+  const itemsHtml = detail.items
+    .map(
+      (it) =>
+        `<tr><td>${it.qty}×</td><td>${escapeHtml(it.name)}</td><td class="r">${formatMoney(
+          it.priceMinorSnapshot * it.qty,
+          currency,
+        )}</td></tr>`,
+    )
+    .join('');
+  win.document.write(`<!doctype html><html><head><title>Order ${escapeHtml(code)}</title>
+<meta charset="utf-8" />
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; margin: 16px; color: #111; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .meta { font-size: 13px; color: #444; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 12px; }
+  td { padding: 4px 2px; border-bottom: 1px dashed #ccc; }
+  td.r { text-align: right; }
+  .total { display: flex; justify-content: space-between; font-size: 16px; font-weight: 700; margin-bottom: 14px; }
+  .block { margin-bottom: 10px; }
+  .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #666; }
+  .note { font-size: 13px; font-style: italic; }
+</style></head><body>
+  <h1>Order ${escapeHtml(code)}</h1>
+  <div class="meta">${escapeHtml(formatDateLabel(detail.deliveryDate))} · ${escapeHtml(windowLabel(detail.window))}</div>
+  <div class="block">
+    <div class="label">Deliver to</div>
+    <div><strong>${escapeHtml(detail.deliveryName)}</strong></div>
+    <div>${escapeHtml(detail.deliveryPhone)}</div>
+    <div>${escapeHtml(detail.deliveryAddressText)}</div>
+    ${detail.deliveryNotes ? `<div class="note">Note: ${escapeHtml(detail.deliveryNotes)}</div>` : ''}
+  </div>
+  <table>${itemsHtml}</table>
+  <div class="total"><span>Total</span><span>${formatMoney(detail.totalMinor, currency)}</span></div>
+  <div class="meta">${escapeHtml(PAYMENT_LABEL[detail.paymentMethod] ?? detail.paymentMethod)} · ${escapeHtml(
+    PAYMENT_STATUS_LABEL[detail.paymentStatus] ?? detail.paymentStatus,
+  )}</div>
+  <script>window.onload = () => { window.print(); };</script>
+</body></html>`);
+  win.document.close();
+}
 export function OrderDetailDrawer({
   orderId,
   currency,
@@ -89,6 +154,10 @@ export function OrderDetailDrawer({
             </div>
             <Badge tone={ORDER_STATUS_TONE[detail.status]}>{ORDER_STATUS_LABEL[detail.status]}</Badge>
           </div>
+
+          <Button variant="dark" size="sm" onClick={() => printOrderDocket(detail, detail.currency)}>
+            🖨 Print docket
+          </Button>
 
           <div
             style={{

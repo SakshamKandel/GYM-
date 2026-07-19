@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
+import { router, type Href } from 'expo-router';
 import { colors } from '@gym/ui-tokens';
 import { registerPushToken, unregisterPushToken } from './api/client';
 import { useAuth } from '../state/auth';
@@ -123,6 +124,86 @@ export async function cancelFirstWorkoutsReminder(): Promise<void> {
 }
 
 // ════════════════════════════════════════════════════════════════
+// WP-2 deep-link switch — a tapped push's `data.type`/`data.id` → a route.
+// (Pack B/P contract: "Mobile deep-link switch is owned by WP-14
+// (`lib/notifications.ts`)".) Distinct from features/realtime/pushRefresh.ts,
+// which maps a DIFFERENT, older set of foreground data-refresh event types
+// (badge_verified, suggestion_reviewed, …) to store refreshes, not routes.
+// ════════════════════════════════════════════════════════════════
+
+/** A `data.id` field, tolerant of whatever primitive shape the payload used. */
+function stringField(data: Record<string, unknown> | null | undefined, key: string): string | null {
+  const value = data?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/**
+ * Resolve a notification's `data` payload to an in-app route, or null when
+ * there's nowhere sensible to go (an unrecognised/absent `type` — the caller
+ * still marks the notification read, it just doesn't navigate).
+ */
+export function deepLinkForNotification(data: Record<string, unknown> | null | undefined): string | null {
+  const type = stringField(data, 'type');
+  if (!type) return null;
+  const id = stringField(data, 'id');
+  switch (type) {
+    case 'order':
+      return '/meals/orders';
+    case 'cycle':
+      return '/meals/subscriptions';
+    case 'tier':
+      return '/subscribe';
+    case 'coach_chat':
+    case 'coach':
+      // 'coach' = WP-10's coach_unassigned push (a coach released this
+      // member). Coach Chat is the only screen with the unassign banner +
+      // "Rate coach"/"Browse coaches" follow-up actions (Pack L), so route
+      // there the same as an actual chat message.
+      return '/coach-chat';
+    case 'support':
+      return '/support';
+    case 'gym':
+      // Best-effort: `id` is the gym's slug when the server sent one: falls
+      // back to the saved-gyms list rather than a dead route when absent.
+      return id ? `/gyms/${encodeURIComponent(id)}` : '/gyms/saved';
+    default:
+      return null;
+  }
+}
+
+let deepLinksRegistered = false;
+
+/**
+ * Install the tap→route listener exactly once. Called from
+ * `setupNotifications()` (already invoked once at app start) so no other
+ * file needs to change to pick this up. Foreground taps navigate
+ * immediately; a cold-start tap (app was fully closed) is handled the same
+ * way since expo-router mounts before this runs and `router.push` queues
+ * against the not-yet-ready navigator.
+ */
+function registerNotificationDeepLinks(): void {
+  if (deepLinksRegistered) return;
+  deepLinksRegistered = true;
+  try {
+    Notifications.addNotificationResponseReceivedListener((response) => {
+      try {
+        const data = response.notification.request.content.data as
+          | Record<string, unknown>
+          | null
+          | undefined;
+        const target = deepLinkForNotification(data);
+        if (target) router.push(target as Href);
+      } catch {
+        // Malformed payload — nothing to navigate to.
+      }
+    });
+  } catch {
+    // Notifications module unavailable — the in-app notification center's
+    // own tap handling still works.
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
 // Notification foundation — call once at app start.
 // ════════════════════════════════════════════════════════════════
 
@@ -134,6 +215,7 @@ export async function cancelFirstWorkoutsReminder(): Promise<void> {
  */
 export async function setupNotifications(): Promise<void> {
   if (!isSupported()) return;
+  registerNotificationDeepLinks();
   try {
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
@@ -461,8 +543,17 @@ export async function cancelStreakSaverReminder(): Promise<void> {
 /**
  * Weekly Sunday-morning GM check-in reminder (09:00). When `enabled`,
  * (re)schedules it; when disabled, cancels it. Idempotent, crash-safe.
+ *
+ * `coachName` is the member's currently-assigned coach's display name (or
+ * null/undefined if they have none assigned, or it's not known at call
+ * time). The body is data-driven from it rather than a hardcoded name — a
+ * member with no coach, or a coach other than a hardcoded default, must
+ * never see the wrong (or nonexistent) identity in this reminder.
  */
-export async function scheduleCheckInReminder(enabled: boolean): Promise<boolean> {
+export async function scheduleCheckInReminder(
+  enabled: boolean,
+  coachName?: string | null,
+): Promise<boolean> {
   if (!isSupported()) return false;
   try {
     await Notifications.cancelScheduledNotificationAsync(CHECK_IN_REMINDER_ID);
@@ -475,7 +566,7 @@ export async function scheduleCheckInReminder(enabled: boolean): Promise<boolean
       identifier: CHECK_IN_REMINDER_ID,
       content: {
         title: 'Sunday check-in',
-        body: 'Your check-in with Greece is ready',
+        body: coachName ? `Your check-in with ${coachName} is ready` : 'Your weekly check-in is ready',
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.WEEKLY,

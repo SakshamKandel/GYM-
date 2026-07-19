@@ -16,6 +16,15 @@ import type {
 export interface ProfileState {
   onboarded: boolean;
   displayName: string;
+  /**
+   * The member's own profile photo (Pack P profile editor) — a Cloudinary
+   * https URL from `POST /api/uploads/image {kind:'application_avatar'}`'s
+   * `deliveryUrl`, or null. Synced to the server like every other field via
+   * profileSync.ts's whole-blob PUT /api/profile, so it survives a reinstall
+   * or a second device. Additive — a pre-existing persisted blob simply
+   * merges in `null` (see DEFAULT_PROFILE_FIELDS below).
+   */
+  avatarUrl: string | null;
   sex: Sex | null;
   birthYear: number | null;
   heightCm: number | null;
@@ -96,6 +105,7 @@ export const DEFAULT_TARGETS: Targets = {
 export const DEFAULT_PROFILE_FIELDS: ProfileData = {
   onboarded: false,
   displayName: '',
+  avatarUrl: null,
   sex: null,
   birthYear: null,
   heightCm: null,
@@ -123,7 +133,7 @@ export const useProfile = create<ProfileState>()(
       update: (patch) => set(patch),
       completeOnboarding: ({ targets, planId }) =>
         set({ targets, planId, onboarded: true }),
-      resetAccountFields: () => set({ displayName: '', tier: 'starter' }),
+      resetAccountFields: () => set({ displayName: '', tier: 'starter', avatarUrl: null }),
       resetForAccount: (accountId) =>
         set({ ...DEFAULT_PROFILE_FIELDS, syncAccountId: accountId }),
     }),

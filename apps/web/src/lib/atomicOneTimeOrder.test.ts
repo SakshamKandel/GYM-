@@ -25,6 +25,7 @@ describe('atomicOneTimeOrderSql', () => {
         subtotalMinor: 10000,
         deliveryFeeMinor: 500,
         smallOrderFeeMinor: 0,
+        tipMinor: 0,
         totalMinor: 10500,
         currency: 'NPR',
         paymentMethod: 'cod',
@@ -44,6 +45,7 @@ describe('atomicOneTimeOrderSql', () => {
 
     assert.match(query.sql, /is_active = true and accepting_orders = true/);
     assert.match(query.sql, /insert into meal_orders/);
+    assert.match(query.sql, /tip_minor/);
     assert.match(query.sql, /insert into meal_order_items/);
     assert.match(query.sql, /insert into meal_order_events/);
     assert.match(query.sql, /from jsonb_to_recordset\(\$\d+::jsonb\)/);

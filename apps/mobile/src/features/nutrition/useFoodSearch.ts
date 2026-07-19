@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FoodItem } from '@gym/shared';
 import { searchFoods } from '../../lib/api/openFoodFacts';
 import { getRepo } from '../../lib/repo';
@@ -102,4 +102,48 @@ export function useRecentFoods(limit: number): { recent: FoodItem[]; loaded: boo
   }, [limit]);
 
   return { recent, loaded };
+}
+
+/**
+ * Favorited foods (local-only star, not synced) plus the id set every row
+ * needs to render its own star state, and a toggle that keeps both in sync.
+ */
+export function useFavoriteFoods(limit: number): {
+  favorites: FoodItem[];
+  favoriteIds: Set<string>;
+  loaded: boolean;
+  toggle: (item: FoodItem) => Promise<void>;
+} {
+  const [favorites, setFavorites] = useState<FoodItem[]>([]);
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [loaded, setLoaded] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const repo = await getRepo();
+    const items = await repo.getFavoriteFoods(limit);
+    setFavorites(items);
+    setFavoriteIds(new Set(items.map((f) => f.id)));
+    setLoaded(true);
+  }, [limit]);
+
+  useEffect(() => {
+    let active = true;
+    void refresh().catch(() => {
+      if (active) setLoaded(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [refresh]);
+
+  const toggle = useCallback(
+    async (item: FoodItem) => {
+      const repo = await getRepo();
+      await repo.toggleFavoriteFood(item.id);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  return { favorites, favoriteIds, loaded, toggle };
 }

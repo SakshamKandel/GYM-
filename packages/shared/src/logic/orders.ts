@@ -80,7 +80,11 @@ export function cyclePaymentMutationBlock(
   if (cycleStatus === 'paid' || requestStatuses.includes('approved')) {
     return 'refund_required';
   }
-  if (requestStatuses.includes('pending')) return 'payment_review_required';
+  // A submitted-but-unreviewed cycle receipt is money-in-review: block ordinary
+  // mutations until staff decide it (mirrors an order's receipt_submitted).
+  if (cycleStatus === 'receipt_submitted' || requestStatuses.includes('pending')) {
+    return 'payment_review_required';
+  }
   return null;
 }
 
@@ -172,6 +176,96 @@ export function canActorAdvance(from: OrderStatus, to: OrderStatus, actor: Order
   return false;
 }
 
+// --- Member cancelability (payment-aware) ------------------------------------
+
+/** Why a member's cancel is blocked (drives the pre-flight copy + support link). */
+export type MemberCancelBlock = 'past_cutoff' | PaymentMutationBlock;
+
+/** The minimal order shape {@link memberCancelability} needs. */
+export interface MemberCancelableOrder {
+  status: OrderStatus;
+  paymentStatus: OrderPaymentStatus;
+  cutoffAt: Date;
+}
+
+/**
+ * The single source of truth WP-6 uses to gate the member cancel button (B1).
+ * The structural machine only lets a member cancel a `pending` order; on top of
+ * that this is payment-AWARE — a receipt-in-review or captured payment blocks the
+ * plain cancel (the server would 409), so the button hides and the screen shows
+ * the reason + a support/refund path instead of a guaranteed dead-end tap.
+ *
+ * Precedence: money-in-flight first (needs support/refund regardless of cutoff),
+ * then cutoff. A non-member-cancelable status returns `{allowed:false}` with no
+ * `blocked` reason (the affordance simply does not apply).
+ */
+export function memberCancelability(
+  order: MemberCancelableOrder,
+  now: Date,
+): { allowed: boolean; blocked?: MemberCancelBlock } {
+  if (!canActorAdvance(order.status, 'cancelled', 'member')) {
+    return { allowed: false };
+  }
+  const paymentBlock = orderPaymentMutationBlock(order.paymentStatus);
+  if (paymentBlock) return { allowed: false, blocked: paymentBlock };
+  if (now.getTime() >= order.cutoffAt.getTime()) {
+    return { allowed: false, blocked: 'past_cutoff' };
+  }
+  return { allowed: true };
+}
+
+// --- Partner refuse (any pre-delivery stage) ---------------------------------
+
+/**
+ * The statuses from which a partner may REFUSE/reject an order (B6/B7) — every
+ * pre-delivery stage, wider than the normal cancel matrix. WP-7's advance route
+ * gates the refuse action on this and persists the reason + member notify.
+ */
+export const partnerRefusableFrom: ReadonlySet<OrderStatus> = new Set<OrderStatus>([
+  'pending',
+  'confirmed',
+  'preparing',
+  'out_for_delivery',
+]);
+
+/** May a partner refuse an order currently in `from`? */
+export function partnerCanRefuse(from: OrderStatus): boolean {
+  return partnerRefusableFrom.has(from);
+}
+
+/**
+ * The terminal status a partner refusal lands on: an at-the-door refusal of an
+ * out_for_delivery order → `refused`; refusing/rejecting any earlier stage →
+ * `cancelled`. Returns null if the stage is not refusable.
+ */
+export function partnerRefuseTarget(from: OrderStatus): OrderStatus | null {
+  if (!partnerCanRefuse(from)) return null;
+  return from === 'out_for_delivery' ? 'refused' : 'cancelled';
+}
+
+// --- Human-readable order number ---------------------------------------------
+
+/** Crockford base32 alphabet (no I/L/O/U — unambiguous for reading aloud). */
+const ORDER_CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/**
+ * A short, human-readable order code derived deterministically from the order id
+ * (a UUID). Used on the confirmation screen, receipt, and tracking so a member
+ * (and support) can reference an order without the raw UUID. Not a key — the id
+ * remains authoritative; this is display only. Stable for a given id.
+ */
+export function orderNumber(id: string): string {
+  const hex = id.replace(/[^0-9a-fA-F]/g, '');
+  // Trailing 40 bits → exactly 8 base32 chars (32^8 === 2^40).
+  let n = BigInt(`0x${hex.slice(-10) || '0'}`);
+  let code = '';
+  for (let i = 0; i < 8; i += 1) {
+    code = ORDER_CODE_ALPHABET[Number(n % 32n)] + code;
+    n /= 32n;
+  }
+  return `GM-${code}`;
+}
+
 // --- Subscription machine ----------------------------------------------------
 
 export type SubscriptionStatus = 'active' | 'paused' | 'cancelled';
@@ -205,11 +299,20 @@ export function subscriptionActionTarget(
 
 // --- Billing cycle machine ---------------------------------------------------
 
-export type CycleStatus = 'open' | 'awaiting_payment' | 'paid' | 'void';
+export type CycleStatus =
+  | 'open'
+  | 'awaiting_payment'
+  | 'receipt_submitted'
+  | 'paid'
+  | 'void';
 
 export const CYCLE_TRANSITIONS: Record<CycleStatus, readonly CycleStatus[]> = {
   open: ['awaiting_payment', 'void'],
-  awaiting_payment: ['paid', 'void'],
+  // A member may submit a receipt (→receipt_submitted) or an admin may mark paid
+  // directly; either may still be voided.
+  awaiting_payment: ['receipt_submitted', 'paid', 'void'],
+  // Staff review: approve→paid, reject→back to awaiting_payment, or void.
+  receipt_submitted: ['awaiting_payment', 'paid', 'void'],
   paid: [],
   void: [],
 };

@@ -20,6 +20,7 @@ import {
 import { useAuth } from '../../state/auth';
 import { GymCard } from '../../features/gyms/components/GymCard';
 import { useGymDirectory } from '../../features/gyms/hooks';
+import { pushPath } from '../../features/gyms/nav';
 import { useMealAddresses } from '../../features/meals/hooks';
 
 /**
@@ -47,6 +48,14 @@ const styles = StyleSheet.create({
   retryText: { flex: 1 },
   list: { gap: spacing.md },
   skeletons: { gap: spacing.md },
+  savedBtn: {
+    width: touch.min,
+    height: touch.min,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
 
 export default function GymsTabScreen() {
@@ -75,7 +84,21 @@ export default function GymsTabScreen() {
 
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
-      <ScreenHeader eyebrow="Train anywhere" title="Nearby gyms" style={styles.header} />
+      <ScreenHeader
+        eyebrow="Train anywhere"
+        title="Nearby gyms"
+        style={styles.header}
+        action={
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="View your saved gyms"
+            onPress={() => pushPath('/gyms/saved')}
+            style={styles.savedBtn}
+          >
+            <Ionicons name="heart-outline" size={20} color={colors.text} />
+          </PressableScale>
+        }
+      />
 
       <Animated.View entering={enterUp(0)}>
         <PhotoHero
