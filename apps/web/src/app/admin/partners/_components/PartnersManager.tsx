@@ -17,6 +17,7 @@ import {
   Toolbar,
 } from '@/components/console';
 import type { LocationValue } from '@/components/console/LocationPicker';
+import { PartnerRevenuePanel } from './PartnerRevenuePanel';
 import type { PartnerRow } from './types';
 
 // Client-only: Leaflet touches `window` at import, so never SSR this.
@@ -614,6 +615,8 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
                 {saving ? 'Saving…' : 'Save changes'}
               </Button>
             </div>
+
+            <PartnerRevenuePanel partnerId={selected.id} />
 
             <div style={{ paddingTop: 16, borderTop: '1px solid var(--gt-border)' }}>
               {selected.isActive ? (

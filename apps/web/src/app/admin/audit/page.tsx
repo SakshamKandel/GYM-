@@ -5,7 +5,6 @@ import { PageHeader } from '@/components/console';
 import { getDb } from '@/lib/db';
 import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
-import { DownloadCsv } from '../_components/DownloadCsv';
 import { AuditTable, type AuditEntry } from './_components/AuditTable';
 
 export const runtime = 'nodejs';
@@ -94,7 +93,6 @@ export default async function AdminAuditPage() {
       <PageHeader
         title="Audit log"
         subtitle="Every staff action, newest first. Filter by action or actor email."
-        action={<DownloadCsv href="/api/admin/exports/audit" />}
       />
       <AuditTable initialEntries={entries} initialCursor={cursor} actions={actions} />
     </div>

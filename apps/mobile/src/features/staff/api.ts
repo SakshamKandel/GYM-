@@ -3139,3 +3139,1363 @@ export async function refundMealPayment(
   });
   parse(okSchema, data);
 }
+
+// ════════════════════════════════════════════════════════════════
+// Shared numeric coercion — geo columns (lat/lng/radius) can arrive as a
+// number OR a driver-stringified numeric; coerce, tolerating null. A parse
+// failure defaults to null rather than nuking the whole row.
+// ════════════════════════════════════════════════════════════════
+
+const numericNullable = z.coerce.number().nullable().catch(null);
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — platform analytics (GET /api/admin/analytics, analytics.read)
+// ════════════════════════════════════════════════════════════════
+
+const currencyAmountSchema = z.object({ currency: z.string(), amountMinor: z.number() });
+export type CurrencyAmount = z.infer<typeof currencyAmountSchema>;
+
+const revenueMonthSchema = z.object({
+  month: z.string(),
+  totals: z.array(currencyAmountSchema).catch([]),
+});
+export type RevenueMonth = z.infer<typeof revenueMonthSchema>;
+
+const promoPerformanceSchema = z.object({
+  codeId: z.string(),
+  code: z.string(),
+  ownerName: z.string().nullable().catch(null),
+  active: z.boolean().catch(true),
+  commissionPct: z.number().catch(0),
+  redemptions: z.number().catch(0),
+  settlements: z.number().catch(0),
+  commission: z.array(currencyAmountSchema).catch([]),
+});
+export type PromoPerformance = z.infer<typeof promoPerformanceSchema>;
+
+const coachPerformanceSchema = z.object({
+  coachId: z.string(),
+  displayName: z.string(),
+  coachTier: coachTierSchema.catch('silver'),
+  activeClients: z.number().catch(0),
+  totalMilestones: z.number().catch(0),
+  walletEarned: z.array(currencyAmountSchema).catch([]),
+});
+export type CoachPerformance = z.infer<typeof coachPerformanceSchema>;
+
+const tierCountSchema = z.object({ tier: tierSchema, count: z.number() });
+const countryCountSchema = z.object({ country: z.string().nullable(), count: z.number() });
+
+const periodDeltasSchema = z.object({
+  windowDays: z.number().catch(30),
+  revenue: z
+    .array(z.object({ currency: z.string(), current: z.number(), prior: z.number() }))
+    .catch([]),
+  newMembers: z.object({ current: z.number(), prior: z.number() }).catch({ current: 0, prior: 0 }),
+  approvedPayments: z
+    .object({ current: z.number(), prior: z.number() })
+    .catch({ current: 0, prior: 0 }),
+});
+export type PeriodDeltas = z.infer<typeof periodDeltasSchema>;
+
+/** Drop unparseable rows rather than blanking a whole breakdown section. */
+function resilientRows<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>) {
+  return z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): T[] => {
+      const parsed = schema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  );
+}
+
+const analyticsSchema = z.object({
+  revenueByMonth: resilientRows(revenueMonthSchema),
+  currencies: z.array(z.string()).catch([]),
+  promoPerformance: resilientRows(promoPerformanceSchema),
+  coachPerformance: resilientRows(coachPerformanceSchema),
+  tierBreakdown: resilientRows(tierCountSchema),
+  countryBreakdown: resilientRows(countryCountSchema),
+  deltas: periodDeltasSchema,
+  generatedAt: z.string(),
+});
+export type AdminAnalytics = z.infer<typeof analyticsSchema>;
+
+/**
+ * GET /api/admin/analytics → the platform analytics snapshot (revenue by
+ * month × currency incl. the meal-delivery vertical, promo + coach
+ * performance, effective-tier + country breakdowns, trailing-30-day deltas).
+ * Every figure is a server-side aggregate; no member PII. Requires
+ * `analytics.read` (super/main, or a per-account override).
+ */
+export async function getAdminAnalytics(token: string): Promise<AdminAnalytics> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/analytics', token });
+  return parse(analyticsSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — broadcast history + audience preview
+// ════════════════════════════════════════════════════════════════
+
+/**
+ * One past broadcast, reconstructed from the audit trail. No dedicated
+ * broadcast-history route exists — every send writes ONE `broadcast.send`
+ * audit row carrying the recipient/device/delivery counts in its `meta`, so
+ * the history view reads the audit log filtered to that action and unpacks
+ * `meta`. Fields default defensively (a legacy row may omit newer keys).
+ */
+export interface BroadcastHistoryEntry {
+  id: string;
+  title: string;
+  tier: string | null;
+  country: string | null;
+  recipients: number;
+  devices: number;
+  delivered: number;
+  failed: number;
+  truncated: boolean;
+  actorEmail: string | null;
+  createdAt: string;
+}
+
+const broadcastMetaSchema = z
+  .object({
+    title: z.string().catch(''),
+    tier: z.string().nullable().catch(null),
+    country: z.string().nullable().catch(null),
+    recipients: z.number().catch(0),
+    devices: z.number().catch(0),
+    delivered: z.number().catch(0),
+    failed: z.number().catch(0),
+    truncated: z.boolean().catch(false),
+  })
+  .catch({
+    title: '',
+    tier: null,
+    country: null,
+    recipients: 0,
+    devices: 0,
+    delivered: 0,
+    failed: 0,
+    truncated: false,
+  });
+
+/**
+ * GET /api/admin/audit?action=broadcast.send → the broadcast send history,
+ * newest first (reuses the audit route + its keyset paging; `broadcast.send`
+ * is audited with the full delivery counts in `meta`). Requires the audit
+ * route's `audit.read`. Returns only the entries page (the caller can page via
+ * getAudit directly if it needs the cursor).
+ */
+export async function getBroadcastHistory(token: string): Promise<BroadcastHistoryEntry[]> {
+  const page = await getAudit(token, { action: 'broadcast.send' });
+  return page.entries.map((e) => {
+    const meta = broadcastMetaSchema.parse(e.meta);
+    return {
+      id: e.id,
+      title: meta.title,
+      tier: meta.tier,
+      country: meta.country,
+      recipients: meta.recipients,
+      devices: meta.devices,
+      delivered: meta.delivered,
+      failed: meta.failed,
+      truncated: meta.truncated,
+      actorEmail: e.actorEmail,
+      createdAt: e.createdAt,
+    };
+  });
+}
+
+export interface BroadcastAudienceFilter {
+  /** Restrict to accounts at this effective billing tier. */
+  tier?: Tier;
+  /** ISO-3166 alpha-2 country code (e.g. 'NP'). */
+  country?: string;
+}
+
+const broadcastPreviewSchema = z.object({ recipients: z.number() });
+
+/**
+ * POST /api/admin/broadcast/preview {tier?, country?} → { recipients } — the
+ * size of the audience a send with the same filters would reach, WITHOUT
+ * sending anything (frozen contract; the route is added by the broadcast-route
+ * package). Lets the composer show "this reaches N members" before the
+ * irreversible fan-out. Requires `broadcast.send`.
+ */
+export async function previewBroadcastAudience(
+  filter: BroadcastAudienceFilter,
+  token: string,
+): Promise<number> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/broadcast/preview',
+    token,
+    body: {
+      ...(filter.tier !== undefined ? { tier: filter.tier } : {}),
+      ...(filter.country !== undefined ? { country: filter.country } : {}),
+    },
+  });
+  return parse(broadcastPreviewSchema, data).recipients;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — gamification oversight (gamification.manage)
+// ════════════════════════════════════════════════════════════════
+
+const xpCorrectionRowSchema = z.object({
+  id: z.string(),
+  accountId: z.string(),
+  accountEmail: z.string().nullable().catch(null),
+  accountName: z.string().nullable().catch(null),
+  amount: z.number(),
+  createdAt: z.string(),
+});
+export type XpCorrectionRow = z.infer<typeof xpCorrectionRowSchema>;
+
+const awardedBadgeRowSchema = z.object({
+  id: z.string(),
+  accountId: z.string(),
+  accountEmail: z.string().catch(''),
+  accountName: z.string().catch(''),
+  badgeId: z.string(),
+  badgeName: z.string().catch(''),
+  status: z.string(),
+  earnedAt: z.string(),
+});
+export type AwardedBadgeRow = z.infer<typeof awardedBadgeRowSchema>;
+
+const gamificationCorrectionsSchema = z.object({
+  corrections: resilientRows(xpCorrectionRowSchema),
+});
+const gamificationBadgesSchema = z.object({ badges: resilientRows(awardedBadgeRowSchema) });
+
+export interface GamificationOverview {
+  recentCorrections: XpCorrectionRow[];
+  recentBadges: AwardedBadgeRow[];
+}
+
+/**
+ * The gamification console has no single "overview" route — it renders three
+ * DB-backed lists. This composes the two browsable ones:
+ *   GET /api/admin/gamification/xp-corrections?accountId=  (recent corrections)
+ *   GET /api/admin/gamification/badges?accountId=          (recent awarded badges)
+ * Pass `accountId` to narrow both to one member (the moderator's search flow);
+ * omit it for the platform-wide recent feed. Challenges are a separate list
+ * (listChallengesAdmin). Requires `gamification.manage`.
+ */
+export async function getGamificationOverview(
+  token: string,
+  accountId?: string,
+): Promise<GamificationOverview> {
+  const query = accountId?.trim() ? `?accountId=${encodeURIComponent(accountId.trim())}` : '';
+  const [corrections, badges] = await Promise.all([
+    staffRequest({ method: 'GET', path: `/api/admin/gamification/xp-corrections${query}`, token }),
+    staffRequest({ method: 'GET', path: `/api/admin/gamification/badges${query}`, token }),
+  ]);
+  return {
+    recentCorrections: parse(gamificationCorrectionsSchema, corrections).corrections,
+    recentBadges: parse(gamificationBadgesSchema, badges).badges,
+  };
+}
+
+const xpAdjustSchema = z.object({
+  accountId: z.string(),
+  delta: z.number(),
+  xpTotal: z.number().nullable().catch(null),
+});
+export type XpAdjustResult = z.infer<typeof xpAdjustSchema>;
+
+/**
+ * POST /api/admin/gamification/xp-corrections {accountId, delta, reason} →
+ * insert one `admin_correction` XP event (delta may be negative) and re-run
+ * the award engine; returns the fresh cached total (or null if the refresh
+ * couldn't run). `reason` is audit-logged verbatim. 'not_found' for an unknown
+ * account, 'invalid' when delta is zero. Requires `gamification.manage`.
+ */
+export async function adjustMemberXp(
+  accountId: string,
+  delta: number,
+  reason: string,
+  token: string,
+): Promise<XpAdjustResult> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/gamification/xp-corrections',
+    token,
+    body: { accountId, delta, reason },
+  });
+  return parse(xpAdjustSchema, data);
+}
+
+/**
+ * DELETE /api/admin/gamification/badges/[id] → remove ONE awarded-badge row by
+ * its own id (the underlying XP award is left intact — claw it back separately
+ * with a negative adjustMemberXp). The award engine may re-award on the
+ * member's next sync if they still meet the threshold — this corrects a
+ * wrongly-awarded badge, not a legitimately-earned one. 'not_found' for a
+ * gone id. Requires `gamification.manage`.
+ */
+export async function revokeBadge(awardedBadgeId: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/admin/gamification/badges/${encodeURIComponent(awardedBadgeId)}`,
+    token,
+  });
+  parse(z.object({ id: z.string() }), data);
+}
+
+const adminChallengeRowSchema = z.object({
+  id: z.string(),
+  coachId: z.string(),
+  coachEmail: z.string().nullable().catch(null),
+  coachName: z.string().nullable().catch(null),
+  title: z.string(),
+  monthKey: z.string(),
+  targetDays: z.number(),
+  memberCount: z.number().catch(0),
+  createdAt: z.string(),
+});
+export type AdminChallengeRow = z.infer<typeof adminChallengeRowSchema>;
+
+const adminChallengesSchema = z.object({ challenges: resilientRows(adminChallengeRowSchema) });
+
+/**
+ * GET /api/admin/gamification/challenges → every coach challenge across every
+ * coach (newest month first) with the owning coach's identity and a live
+ * member count — the moderation list. Requires `gamification.manage`.
+ */
+export async function listChallengesAdmin(token: string): Promise<AdminChallengeRow[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: '/api/admin/gamification/challenges',
+    token,
+  });
+  return parse(adminChallengesSchema, data).challenges;
+}
+
+/**
+ * DELETE /api/admin/gamification/challenges/[id] → remove an abusive/
+ * miscalibrated coach challenge (members cascade; already-earned completion
+ * badges are kept as permanent history). 'not_found' for a gone id. Requires
+ * `gamification.manage`.
+ */
+export async function moderateChallenge(id: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/admin/gamification/challenges/${encodeURIComponent(id)}`,
+    token,
+  });
+  parse(z.object({ id: z.string() }), data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — catalog authoring (catalog.manage)
+//
+// NOTE: this table is NOT read by the shipped app yet (mobile sources its
+// exercise/plan library from bundled JSON) — it's a staging/authoring tool
+// for a future catalog sync. Screens must say so plainly; edits here don't
+// change what members see today.
+// ════════════════════════════════════════════════════════════════
+
+const catalogExerciseRowSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  muscleGroup: z.string().catch(''),
+  secondaryMuscles: z.array(z.string()).catch([]),
+  equipment: z.string().nullable().catch(null),
+  level: z.string().nullable().catch(null),
+  category: z.string().nullable().catch(null),
+  instructions: z.array(z.string()).catch([]),
+  imageUrls: z.array(z.string()).catch([]),
+  usedByPlanCount: z.number().catch(0),
+});
+export type CatalogExerciseRow = z.infer<typeof catalogExerciseRowSchema>;
+
+const catalogExercisesSchema = z.object({ exercises: resilientRows(catalogExerciseRowSchema) });
+
+/**
+ * GET /api/admin/catalog/exercises?q=&limit= → the exercise catalog, name
+ * ILIKE `q`, alphabetical, capped at `limit` (default 50, max 200). Each row
+ * carries `usedByPlanCount` so the UI can warn before a delete that would
+ * 409. Requires `catalog.manage`.
+ */
+export async function listCatalogExercises(
+  token: string,
+  opts: { q?: string; limit?: number } = {},
+): Promise<CatalogExerciseRow[]> {
+  const params = new URLSearchParams();
+  if (opts.q?.trim()) params.set('q', opts.q.trim());
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/catalog/exercises${query}`,
+    token,
+  });
+  return parse(catalogExercisesSchema, data).exercises;
+}
+
+export interface CatalogExerciseInput {
+  /** Present → PATCH that existing row. Absent → POST a new one (the server
+   * slugifies `name`, or accepts an explicit `slug` for a new row). */
+  id?: string;
+  /** Only honoured on CREATE — the bundled free-exercise-db slug space
+   * (`^[A-Za-z0-9_-]+$`); omit to let the server slugify `name`. */
+  slug?: string;
+  name?: string;
+  muscleGroup?: string;
+  secondaryMuscles?: string[];
+  /** null clears the column. */
+  equipment?: string | null;
+  level?: string | null;
+  category?: string | null;
+  instructions?: string[];
+  imageUrls?: string[];
+}
+
+/**
+ * Upsert one catalog exercise. With `id` → PATCH /api/admin/catalog/exercises/
+ * [id] (partial update; a null field clears it). Without `id` → POST
+ * /api/admin/catalog/exercises (create; `name`/`muscleGroup` required
+ * server-side). Returns the row id. 'invalid' on a bad body, 'conflict' when
+ * an explicit create slug is taken. Requires `catalog.manage`.
+ */
+export async function upsertCatalogExercise(
+  input: CatalogExerciseInput,
+  token: string,
+): Promise<string> {
+  const { id, slug, ...fields } = input;
+  if (id) {
+    const data = await staffRequest({
+      method: 'PATCH',
+      path: `/api/admin/catalog/exercises/${encodeURIComponent(id)}`,
+      token,
+      body: { ...fields },
+    });
+    return parse(z.object({ id: z.string() }), data).id;
+  }
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/catalog/exercises',
+    token,
+    body: { ...(slug !== undefined ? { id: slug } : {}), ...fields },
+  });
+  return parse(z.object({ id: z.string() }), data).id;
+}
+
+const catalogPlanRowSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  tierRequired: tierSchema.catch('starter'),
+  goalType: z.string(),
+  weeks: z.number(),
+  daysPerWeek: z.number(),
+  description: z.string().nullable().catch(null),
+  isBranded: z.boolean().catch(false),
+  workoutCount: z.number().catch(0),
+});
+export type CatalogPlanRow = z.infer<typeof catalogPlanRowSchema>;
+
+const catalogPlansSchema = z.object({ plans: resilientRows(catalogPlanRowSchema) });
+
+/**
+ * GET /api/admin/catalog/plans → every training plan with its workout count
+ * (not exercise-level detail — use getCatalogPlan for the full structure).
+ * Requires `catalog.manage`.
+ */
+export async function listCatalogPlans(token: string): Promise<CatalogPlanRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/catalog/plans', token });
+  return parse(catalogPlansSchema, data).plans;
+}
+
+const catalogPlanExerciseSchema = z.object({
+  id: z.string(),
+  exerciseId: z.string(),
+  exerciseName: z.string().nullable().catch(null),
+  position: z.number(),
+  sets: z.number(),
+  repRange: z.string(),
+  restSec: z.number(),
+});
+const catalogPlanWorkoutSchema = z.object({
+  id: z.string(),
+  week: z.number(),
+  day: z.number(),
+  name: z.string(),
+  exercises: z.array(catalogPlanExerciseSchema).catch([]),
+});
+export type CatalogPlanWorkout = z.infer<typeof catalogPlanWorkoutSchema>;
+
+const catalogPlanDetailSchema = z.object({
+  plan: z.object({
+    id: z.string(),
+    name: z.string(),
+    tierRequired: tierSchema.catch('starter'),
+    goalType: z.string(),
+    weeks: z.number(),
+    daysPerWeek: z.number(),
+    description: z.string().nullable().catch(null),
+    isBranded: z.boolean().catch(false),
+  }),
+  workouts: z.array(catalogPlanWorkoutSchema).catch([]),
+});
+export type CatalogPlanDetail = z.infer<typeof catalogPlanDetailSchema>;
+
+/**
+ * GET /api/admin/catalog/plans/[id] → one plan's top-level fields plus its
+ * full nested workout/exercise structure (the builder read-model that
+ * upsertCatalogPlan's `workouts` replace-set is built from). 'not_found' for
+ * an unknown id. Requires `catalog.manage`.
+ */
+export async function getCatalogPlan(id: string, token: string): Promise<CatalogPlanDetail> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/catalog/plans/${encodeURIComponent(id)}`,
+    token,
+  });
+  return parse(catalogPlanDetailSchema, data);
+}
+
+export interface CatalogPlanWorkoutInput {
+  week: number;
+  day: number;
+  name: string;
+  exercises: {
+    /** Must already exist in the exercise catalog (else 400 unknown_exercise). */
+    exerciseId: string;
+    position?: number;
+    sets: number;
+    repRange: string;
+    restSec?: number;
+  }[];
+}
+
+export interface CatalogPlanInput {
+  /** Present → PATCH that plan. Absent → POST a new plan shell. */
+  id?: string;
+  name?: string;
+  tierRequired?: Tier;
+  goalType?: 'fat_loss' | 'muscle' | 'strength';
+  weeks?: number;
+  daysPerWeek?: number;
+  description?: string;
+  isBranded?: boolean;
+  /** Update-only: replaces the ENTIRE workout/exercise structure (whole-set
+   * replace, not a diff). Every `exerciseId` must exist in the catalog. */
+  workouts?: CatalogPlanWorkoutInput[];
+}
+
+/**
+ * Upsert a catalog plan. With `id` → PATCH /api/admin/catalog/plans/[id]
+ * (partial top-level fields; if `workouts` is present the whole structure is
+ * replaced). Without `id` → POST /api/admin/catalog/plans (create a shell;
+ * `name`/`goalType`/`weeks`/`daysPerWeek` required server-side — add workouts
+ * via a follow-up update). Returns the plan id. 'invalid' on a bad body (incl.
+ * `unknown_exercise` for a workout referencing a missing exercise). Requires
+ * `catalog.manage`.
+ */
+export async function upsertCatalogPlan(input: CatalogPlanInput, token: string): Promise<string> {
+  const { id, ...fields } = input;
+  if (id) {
+    const data = await staffRequest({
+      method: 'PATCH',
+      path: `/api/admin/catalog/plans/${encodeURIComponent(id)}`,
+      token,
+      body: { ...fields },
+    });
+    return parse(z.object({ id: z.string() }), data).id;
+  }
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/catalog/plans',
+    token,
+    body: { ...fields },
+  });
+  return parse(z.object({ id: z.string() }), data).id;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — meal-partner roster (partners.manage)
+// ════════════════════════════════════════════════════════════════
+
+// The core meal_partners columns — exactly what the PATCH route echoes back.
+const partnerCoreSchema = z.object({
+  id: z.string(),
+  accountId: z.string(),
+  name: z.string(),
+  contact: z.string().catch(''),
+  phone: z.string().catch(''),
+  addressText: z.string().catch(''),
+  serviceAreas: z.array(z.string()).catch([]),
+  serviceLat: numericNullable,
+  serviceLng: numericNullable,
+  serviceRadiusKm: numericNullable,
+  acceptsCod: z.boolean().catch(true),
+  currency: mealCurrencySchema.catch('NPR'),
+  isActive: z.boolean(),
+  createdAt: z.string(),
+});
+export type PartnerCore = z.infer<typeof partnerCoreSchema>;
+
+// The roster list projection = the core row PLUS the login/aggregate columns
+// the GET route joins on (never echoed by the single-row PATCH).
+const partnerRowSchema = partnerCoreSchema.extend({
+  email: z.string().catch(''),
+  accountStatus: memberStatusSchema.catch('active'),
+  menuCount: z.number().catch(0),
+  activeOrders: z.number().catch(0),
+});
+export type PartnerRow = z.infer<typeof partnerRowSchema>;
+
+const partnersSchema = z.object({ partners: resilientRows(partnerRowSchema) });
+
+/**
+ * GET /api/admin/partners → every meal partner with its login email/status,
+ * live menu-item count and active-order count. Requires `partners.manage`
+ * (super/main bypass only — not in any sub-role preset).
+ */
+export async function listPartnersAdmin(token: string): Promise<PartnerRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/partners', token });
+  return parse(partnersSchema, data).partners;
+}
+
+export interface PartnerCreateInput {
+  email: string;
+  /** 8..200 chars — mints the partner's login. Handled in-request only; never
+   * stored client-side. */
+  password: string;
+  name: string;
+  contact?: string;
+  phone?: string;
+  addressText?: string;
+  serviceAreas?: string[];
+  serviceLat?: number | null;
+  serviceLng?: number | null;
+  serviceRadiusKm?: number | null;
+  acceptsCod?: boolean;
+  currency?: 'NPR' | 'USD';
+}
+
+const partnerCreateSchema = z.object({ id: z.string(), accountId: z.string() });
+
+/**
+ * POST /api/admin/partners → mint a partner login + restaurant row (the ONLY
+ * way a `partner`-role account is created). 'conflict' (409 `email_taken`)
+ * when the email is in use. Returns the new partner + account ids. Requires
+ * `partners.manage`.
+ */
+export async function createPartner(
+  input: PartnerCreateInput,
+  token: string,
+): Promise<{ id: string; accountId: string }> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/partners',
+    token,
+    body: {
+      email: input.email,
+      password: input.password,
+      name: input.name,
+      ...(input.contact !== undefined ? { contact: input.contact } : {}),
+      ...(input.phone !== undefined ? { phone: input.phone } : {}),
+      ...(input.addressText !== undefined ? { addressText: input.addressText } : {}),
+      ...(input.serviceAreas !== undefined ? { serviceAreas: input.serviceAreas } : {}),
+      ...(input.serviceLat !== undefined ? { serviceLat: input.serviceLat } : {}),
+      ...(input.serviceLng !== undefined ? { serviceLng: input.serviceLng } : {}),
+      ...(input.serviceRadiusKm !== undefined ? { serviceRadiusKm: input.serviceRadiusKm } : {}),
+      ...(input.acceptsCod !== undefined ? { acceptsCod: input.acceptsCod } : {}),
+      ...(input.currency !== undefined ? { currency: input.currency } : {}),
+    },
+  });
+  return parse(partnerCreateSchema, data);
+}
+
+export interface PartnerPatch {
+  name?: string;
+  contact?: string;
+  phone?: string;
+  addressText?: string;
+  serviceAreas?: string[];
+  serviceLat?: number | null;
+  serviceLng?: number | null;
+  serviceRadiusKm?: number | null;
+  acceptsCod?: boolean;
+  currency?: 'NPR' | 'USD';
+  isActive?: boolean;
+}
+
+/**
+ * PATCH /api/admin/partners/[id] → edit fields and/or flip `isActive`. Setting
+ * `isActive:false` on an active partner ALSO kills every live session for that
+ * login (a second kill-switch). 'not_found' for an unknown id. Returns the
+ * updated partner row. Requires `partners.manage`.
+ */
+export async function updatePartner(
+  id: string,
+  patch: PartnerPatch,
+  token: string,
+): Promise<PartnerCore> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/partners/${encodeURIComponent(id)}`,
+    token,
+    body: { ...patch },
+  });
+  return parse(z.object({ partner: partnerCoreSchema }), data).partner;
+}
+
+/**
+ * Deactivate a partner — a `updatePartner(id, { isActive: false })` shorthand
+ * that also kills the partner's live sessions (see updatePartner). Requires
+ * `partners.manage`.
+ */
+export async function deactivatePartner(id: string, token: string): Promise<void> {
+  await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/partners/${encodeURIComponent(id)}`,
+    token,
+    body: { isActive: false },
+  });
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — nearby-gyms directory (gyms.manage)
+// ════════════════════════════════════════════════════════════════
+
+const gymStatusSchema = z.enum(['draft', 'published', 'archived']);
+export type GymStatus = z.infer<typeof gymStatusSchema>;
+
+const gymSocialLinkSchema = z.object({ platform: z.string(), url: z.string() });
+
+const gymRowSchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  name: z.string(),
+  category: z.string().catch('gym'),
+  addressText: z.string().catch(''),
+  city: z.string().catch(''),
+  district: z.string().catch(''),
+  lat: numericNullable,
+  lng: numericNullable,
+  phone: z.string().catch(''),
+  website: z.string().nullable().catch(null),
+  socialLinks: z.array(gymSocialLinkSchema).catch([]),
+  // hours is an opaque per-day shift map — kept as-is for the editor to render.
+  hours: z.record(z.string(), z.unknown()).catch({}),
+  amenities: z.array(z.string()).catch([]),
+  externalImageUrl: z.string().nullable().catch(null),
+  priceNote: z.string().catch(''),
+  description: z.string().catch(''),
+  status: gymStatusSchema.catch('draft'),
+  verifiedByAdmin: z.boolean().catch(false),
+  photoCount: z.number().catch(0),
+  createdAt: z.string().catch(''),
+  updatedAt: z.string().catch(''),
+});
+export type GymRow = z.infer<typeof gymRowSchema>;
+
+const gymsSchema = z.object({ gyms: resilientRows(gymRowSchema) });
+
+/**
+ * GET /api/admin/gyms → every gym regardless of status (draft/published/
+ * archived) with a photo count, so the console can see what's not live yet.
+ * Requires `gyms.manage` (super/main bypass only).
+ */
+export async function listGymsAdmin(token: string): Promise<GymRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/gyms', token });
+  return parse(gymsSchema, data).gyms;
+}
+
+export interface GymInput {
+  /** Present → PATCH that gym. Absent → POST a new draft. */
+  id?: string;
+  /** Create-only: explicit slug (`^[a-z0-9-]+$`); omit to slugify `name`. */
+  slug?: string;
+  name?: string;
+  category?: string;
+  addressText?: string;
+  city?: string;
+  district?: string;
+  lat?: number | null;
+  lng?: number | null;
+  phone?: string;
+  website?: string | null;
+  socialLinks?: { platform: string; url: string }[];
+  hours?: Record<string, unknown>;
+  amenities?: string[];
+  externalImageUrl?: string | null;
+  priceNote?: string;
+  description?: string;
+}
+
+/**
+ * Upsert a gym listing. With `id` → PATCH /api/admin/gyms/[id]. Without `id` →
+ * POST /api/admin/gyms (always created `draft` + unverified regardless of
+ * input — go live via setGymStatus once reviewed). Returns `{ id, slug? }`
+ * ('invalid' on a bad body, 'conflict' on a taken slug). Requires
+ * `gyms.manage`. Status/verified changes go through setGymStatus, not here.
+ */
+export async function upsertGymAdmin(
+  input: GymInput,
+  token: string,
+): Promise<{ id: string; slug?: string }> {
+  const { id, ...fields } = input;
+  if (id) {
+    const data = await staffRequest({
+      method: 'PATCH',
+      path: `/api/admin/gyms/${encodeURIComponent(id)}`,
+      token,
+      body: { ...fields },
+    });
+    return parse(z.object({ id: z.string(), slug: z.string().optional() }), data);
+  }
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/gyms',
+    token,
+    body: { ...fields },
+  });
+  return parse(z.object({ id: z.string(), slug: z.string().optional() }), data);
+}
+
+/**
+ * PATCH /api/admin/gyms/[id] {status, verifiedByAdmin?} → publish/archive/
+ * unpublish a gym (and/or flip its verified flag). Publishing requires the
+ * gym to be verified (already, or set `verifiedByAdmin:true` in the same
+ * call) — otherwise the server returns 400 (surfaced as 'invalid'). Requires
+ * `gyms.manage`.
+ */
+export async function setGymStatus(
+  id: string,
+  status: GymStatus,
+  token: string,
+  verifiedByAdmin?: boolean,
+): Promise<void> {
+  await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/gyms/${encodeURIComponent(id)}`,
+    token,
+    body: { status, ...(verifiedByAdmin !== undefined ? { verifiedByAdmin } : {}) },
+  });
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — referral/trial abuse dashboard (subscription.override)
+// ════════════════════════════════════════════════════════════════
+
+const topReferrerSchema = z.object({
+  referrerId: z.string(),
+  email: z.string().catch(''),
+  displayName: z.string().catch(''),
+  totalCount: z.number(),
+  rewardedCount: z.number().catch(0),
+});
+
+const multiTrialAccountSchema = z.object({
+  accountId: z.string(),
+  email: z.string().catch(''),
+  displayName: z.string().catch(''),
+  tiersTrialed: z.array(z.string()).catch([]),
+});
+
+const recentTrialSchema = z.object({
+  accountId: z.string(),
+  email: z.string().catch(''),
+  displayName: z.string().catch(''),
+  tier: z.string(),
+  startedAt: z.string(),
+  expiresAt: z.string(),
+});
+
+const abuseDashboardSchema = z.object({
+  referrals: z.object({
+    total: z.number().catch(0),
+    pending: z.number().catch(0),
+    joined: z.number().catch(0),
+    rewarded: z.number().catch(0),
+    topReferrers: resilientRows(topReferrerSchema),
+  }),
+  trials: z.object({
+    total: z.number().catch(0),
+    byTier: z
+      .object({ silver: z.number(), gold: z.number(), elite: z.number() })
+      .catch({ silver: 0, gold: 0, elite: 0 }),
+    multiTrialAccounts: resilientRows(multiTrialAccountSchema),
+    recentTrials: resilientRows(recentTrialSchema),
+  }),
+  limitations: z.array(z.string()).catch([]),
+});
+export type AbuseDashboard = z.infer<typeof abuseDashboardSchema>;
+
+/**
+ * GET /api/admin/abuse → referral + trial-usage aggregates (top referrers,
+ * multi-trial accounts, recent trials) plus a `limitations` note (no
+ * device/IP fingerprint is captured, so same-device detection isn't
+ * available). Gated on `subscription.override` (member_admin preset + super/
+ * main) — not a new key.
+ */
+export async function getAbuseDashboard(token: string): Promise<AbuseDashboard> {
+  const data = await staffRequest({ method: 'GET', path: '/api/admin/abuse', token });
+  return parse(abuseDashboardSchema, data);
+}
+
+const trialResetSchema = z.object({
+  accountId: z.string(),
+  reset: z.array(z.string()).catch([]),
+});
+
+/**
+ * POST /api/admin/abuse {accountId, tier?} → clear the account's trial_usage
+ * row(s) so it can start a fresh trial (one tier when `tier` is given, every
+ * tier otherwise). Returns the tiers actually removed (empty = the account was
+ * already clean — still a 200, not a 404). 'not_found' for an unknown account.
+ * Requires `subscription.override`.
+ */
+export async function resetTrial(
+  accountId: string,
+  tier: 'silver' | 'gold' | 'elite' | undefined,
+  token: string,
+): Promise<string[]> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/admin/abuse',
+    token,
+    body: { accountId, ...(tier !== undefined ? { tier } : {}) },
+  });
+  return parse(trialResetSchema, data).reset;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — per-account permission overrides (permissions.override)
+// ════════════════════════════════════════════════════════════════
+
+const permissionRowSchema = z.object({
+  key: z.string(),
+  preset: z.boolean(),
+  override: z.enum(['allow', 'deny']).nullable(),
+  effective: z.boolean(),
+});
+export type StaffPermissionRow = z.infer<typeof permissionRowSchema>;
+
+const staffPermissionsSchema = z.object({
+  accountId: z.string(),
+  role: staffRoleSchema,
+  // super_admin/main_admin are safety floors — overrides are ignored and the
+  // editor locks (C-A). The screen disables all toggles when `locked`.
+  locked: z.boolean().catch(false),
+  permissions: resilientRows(permissionRowSchema),
+});
+export type StaffPermissions = z.infer<typeof staffPermissionsSchema>;
+
+/**
+ * GET /api/admin/staff/[accountId]/permissions → the target staff account's
+ * effective permission set with provenance per key ({preset, override:
+ * 'allow'|'deny'|null, effective}), plus a `locked` flag for the super/main
+ * safety floor. 'not_found' (404 `not_staff`) for a non-staff account,
+ * 'insufficient_rank' when the caller can't manage the target. Requires
+ * `permissions.override`.
+ */
+export async function getStaffPermissions(
+  accountId: string,
+  token: string,
+): Promise<StaffPermissions> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/staff/${encodeURIComponent(accountId)}/permissions`,
+    token,
+  });
+  return parse(staffPermissionsSchema, data);
+}
+
+/**
+ * PUT /api/admin/staff/[accountId]/permissions {perm, allow} → set ONE
+ * override: `allow:true` grants an extra permission beyond the role preset,
+ * `allow:false` strips a preset one. Returns the fresh provenance payload.
+ * 'invalid' for an unknown permission key; 'forbidden' (403
+ * `cannot_modify_super_admin`) against a super/main target; 'cannot_target_self'
+ * for the caller's own row; 'insufficient_rank' when out-ranked. Requires
+ * `permissions.override`.
+ */
+export async function setPermissionOverride(
+  accountId: string,
+  perm: Permission,
+  allow: boolean,
+  token: string,
+): Promise<StaffPermissions> {
+  const data = await staffRequest({
+    method: 'PUT',
+    path: `/api/admin/staff/${encodeURIComponent(accountId)}/permissions`,
+    token,
+    body: { perm, allow },
+  });
+  return parse(staffPermissionsSchema, data);
+}
+
+/**
+ * PUT /api/admin/staff/[accountId]/permissions {perm, allow:null} → clear one
+ * override, reverting that key to the role preset. Returns the fresh
+ * provenance payload. Same guards as setPermissionOverride. Requires
+ * `permissions.override`.
+ */
+export async function clearPermissionOverride(
+  accountId: string,
+  perm: Permission,
+  token: string,
+): Promise<StaffPermissions> {
+  const data = await staffRequest({
+    method: 'PUT',
+    path: `/api/admin/staff/${encodeURIComponent(accountId)}/permissions`,
+    token,
+    body: { perm, allow: null },
+  });
+  return parse(staffPermissionsSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — attention queue (coach.user.read)
+// ════════════════════════════════════════════════════════════════
+
+const attentionCheckInSchema = z
+  .object({
+    id: z.string(),
+    date: z.string().catch(''),
+    note: z.string().nullable().catch(null),
+    summary: z.string().nullable().catch(null),
+  })
+  .nullable()
+  .catch(null);
+
+const coachAttentionRowSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  email: z.string().catch(''),
+  tier: tierSchema.catch('starter'),
+  lastWorkoutAt: z.string().nullable().catch(null),
+  lastCheckInAt: z.string().nullable().catch(null),
+  daysSinceWorkout: z.number().nullable().catch(null),
+  daysSinceCheckIn: z.number().nullable().catch(null),
+  latestCheckIn: attentionCheckInSchema,
+  pendingSuggestions: z.number().catch(0),
+});
+export type CoachAttentionRow = z.infer<typeof coachAttentionRowSchema>;
+
+const coachAttentionSchema = z.object({ clients: resilientRows(coachAttentionRowSchema) });
+
+/**
+ * GET /api/coach/attention → the caller's active clients sorted stalest-first
+ * (max of days-since-workout / days-since-check-in; clients with no data at
+ * all sort to the top). super/main see every actively-assigned client.
+ * Requires `coach.user.read`.
+ */
+export async function getCoachAttention(token: string): Promise<CoachAttentionRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/attention', token });
+  return parse(coachAttentionSchema, data).clients;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — progression review queue (coach.user.read / coach.message.user)
+// ════════════════════════════════════════════════════════════════
+
+export type SuggestionStatus = 'pending' | 'approved' | 'adjusted';
+const suggestionStatusSchema = z.enum(['pending', 'approved', 'adjusted']);
+
+const reviewUserSchema = z.object({
+  id: z.string(),
+  displayName: z.string().catch(''),
+  email: z.string().catch(''),
+});
+
+const reviewSuggestionSchema = z.object({
+  id: z.string(),
+  accountId: z.string(),
+  exerciseId: z.string().nullable().catch(null),
+  exerciseName: z.string().catch(''),
+  sourceWorkoutId: z.string().nullable().catch(null),
+  action: z.string().catch(''),
+  targetWeightKg: z.number().nullable().catch(null),
+  targetRepsMin: z.number().nullable().catch(null),
+  targetRepsMax: z.number().nullable().catch(null),
+  reason: z.string().nullable().catch(null),
+  status: suggestionStatusSchema,
+  coachId: z.string().nullable().catch(null),
+  adjustedWeightKg: z.number().nullable().catch(null),
+  coachNote: z.string().nullable().catch(null),
+  reviewedAt: z.string().nullable().catch(null),
+  createdAt: z.string(),
+  user: reviewUserSchema,
+});
+export type ReviewSuggestion = z.infer<typeof reviewSuggestionSchema>;
+
+const reviewQueueSchema = z.object({ suggestions: resilientRows(reviewSuggestionSchema) });
+
+/**
+ * GET /api/coach/suggestions?status= → the progression-review queue for the
+ * caller's assigned clients (default 'pending'; also 'approved'|'adjusted'),
+ * oldest first. super/main see every client. Requires `coach.user.read`.
+ */
+export async function getCoachReviewQueue(
+  token: string,
+  status: SuggestionStatus = 'pending',
+): Promise<ReviewSuggestion[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/suggestions?status=${encodeURIComponent(status)}`,
+    token,
+  });
+  return parse(reviewQueueSchema, data).suggestions;
+}
+
+export type ReviewDecision =
+  | { action: 'approve' }
+  | { action: 'adjust'; weightKg: number; note?: string };
+
+/**
+ * POST /api/coach/suggestions/[id] → review one suggestion: `{action:'approve'}`
+ * accepts it as-is; `{action:'adjust', weightKg, note?}` overrides the target
+ * weight (canonical kg). Ownership comes from the row (the caller must have an
+ * active assignment over the suggestion's member) — 'forbidden' otherwise,
+ * 'not_found' for a gone id. Requires `coach.message.user`.
+ */
+export async function decideCoachReview(
+  id: string,
+  decision: ReviewDecision,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/coach/suggestions/${encodeURIComponent(id)}`,
+    token,
+    body:
+      decision.action === 'approve'
+        ? { action: 'approve' }
+        : {
+            action: 'adjust',
+            weightKg: decision.weightKg,
+            ...(decision.note !== undefined ? { note: decision.note } : {}),
+          },
+  });
+  parse(z.object({ suggestion: z.unknown() }), data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — strength-badge verification queue (coach.user.read)
+// ════════════════════════════════════════════════════════════════
+
+const verifyItemSchema = z.object({
+  awardId: z.string(),
+  userId: z.string(),
+  badgeId: z.string(),
+  earnedAt: z.string(),
+  displayName: z.string().catch(''),
+});
+export type VerifyItem = z.infer<typeof verifyItemSchema>;
+
+const verifyQueueSchema = z.object({ items: resilientRows(verifyItemSchema) });
+
+/**
+ * GET /api/coach/verifications → the caller's assigned clients' `logged`
+ * strength-club badges awaiting a coach checkmark, oldest first. super/main
+ * see every client. Requires `coach.user.read`.
+ */
+export async function getCoachVerifyQueue(token: string): Promise<VerifyItem[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/verifications', token });
+  return parse(verifyQueueSchema, data).items;
+}
+
+/**
+ * POST /api/coach/verifications/[awardId] {action:'verify'} → stamp a logged
+ * strength badge verified (idempotent). 'invalid' (400 `not_verifiable`) for a
+ * non-strength badge; 'forbidden' with no active assignment over the member;
+ * 'not_found' for a gone award. Requires `coach.message.user`.
+ */
+export async function decideCoachVerify(awardId: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/coach/verifications/${encodeURIComponent(awardId)}`,
+    token,
+    body: { action: 'verify' },
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — flagged (unranked) workouts (coach.user.read)
+// ════════════════════════════════════════════════════════════════
+
+const flagTopSetSchema = z
+  .object({ exerciseName: z.string(), weightKg: z.number(), reps: z.number() })
+  .nullable()
+  .catch(null);
+
+const coachFlagRowSchema = z.object({
+  workoutId: z.string(),
+  userId: z.string(),
+  displayName: z.string().catch(''),
+  date: z.string().catch(''),
+  name: z.string().catch(''),
+  reason: z.string().nullable().catch(null),
+  topSet: flagTopSetSchema,
+  acked: z.boolean().catch(false),
+});
+export type CoachFlagRow = z.infer<typeof coachFlagRowSchema>;
+
+const coachFlagsSchema = z.object({ items: resilientRows(coachFlagRowSchema) });
+
+/**
+ * GET /api/coach/flags → the caller's assigned clients' flagged (unranked)
+ * workouts, unacknowledged first, each with its heaviest set as `topSet`
+ * context. super/main see every client. Requires `coach.user.read`.
+ */
+export async function getCoachFlags(token: string): Promise<CoachFlagRow[]> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/flags', token });
+  return parse(coachFlagsSchema, data).items;
+}
+
+export type CoachFlagAction = 'acknowledge' | 'restore';
+
+/**
+ * POST /api/coach/flags/[workoutId] {action:'restore'} → clear a false-positive
+ * flag: ranked=true + flagReason cleared, re-running the member's award engine
+ * so the session counts again (the ONLY path that can un-flag a workout).
+ * `{action:'acknowledge'}` instead just marks the flag seen without un-flagging.
+ * Ownership comes from the row — 'forbidden' with no active assignment,
+ * 'not_found' for a gone id. Requires `coach.message.user`.
+ */
+export async function restoreCoachFlag(
+  workoutId: string,
+  token: string,
+  action: CoachFlagAction = 'restore',
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/coach/flags/${encodeURIComponent(workoutId)}`,
+    token,
+    body: { action },
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — monthly challenge (coach.user.read / coach.message.user)
+// ════════════════════════════════════════════════════════════════
+
+const coachChallengeMemberSchema = z.object({
+  userId: z.string(),
+  displayName: z.string().catch(''),
+  joined: z.boolean(),
+  days: z.number().catch(0),
+  complete: z.boolean().catch(false),
+});
+export type CoachChallengeMember = z.infer<typeof coachChallengeMemberSchema>;
+
+const coachChallengeSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  monthKey: z.string(),
+  targetDays: z.number(),
+  members: z.array(coachChallengeMemberSchema).catch([]),
+});
+export type CoachChallenge = z.infer<typeof coachChallengeSchema>;
+
+const coachChallengeEnvelope = z.object({ challenge: coachChallengeSchema.nullable() });
+
+/**
+ * GET /api/coach/challenges → the caller's CURRENT-month challenge (or null if
+ * none), with a per-assigned-client progress list (joined?, ranked
+ * session-days this month, complete?). One active challenge per coach per
+ * month. Requires `coach.user.read`.
+ */
+export async function listCoachChallenges(token: string): Promise<CoachChallenge | null> {
+  const data = await staffRequest({ method: 'GET', path: '/api/coach/challenges', token });
+  return parse(coachChallengeEnvelope, data).challenge;
+}
+
+export interface CoachChallengeInput {
+  /** 1..80 chars. */
+  title: string;
+  /** 4..31 — days of ranked training needed to complete. */
+  targetDays: number;
+  /** 'YYYY-MM'; must be the current month. Defaults to the current UTC month. */
+  monthKey?: string;
+}
+
+/** Current UTC month key ('YYYY-MM') — the only month the server will accept. */
+function currentChallengeMonthKey(): string {
+  return new Date().toISOString().slice(0, 7);
+}
+
+const coachChallengeCreateEnvelope = z.object({ challenge: z.object({ id: z.string() }).passthrough() });
+
+/**
+ * POST /api/coach/challenges {title, targetDays, monthKey} → create the
+ * caller's monthly challenge (create-only; there is no edit route — a coach
+ * runs ONE per month). Returns the new challenge id. 'conflict' (409) when one
+ * already exists this month (`exists`) or the month isn't current
+ * (`wrong_month`); 'invalid' on a bad body. Requires `coach.message.user`.
+ */
+export async function upsertCoachChallenge(
+  input: CoachChallengeInput,
+  token: string,
+): Promise<string> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/coach/challenges',
+    token,
+    body: {
+      title: input.title,
+      targetDays: input.targetDays,
+      monthKey: input.monthKey ?? currentChallengeMonthKey(),
+    },
+  });
+  return parse(coachChallengeCreateEnvelope, data).challenge.id;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Member meals — checkout quote (POST /api/meals/quote)
+// ════════════════════════════════════════════════════════════════
+
+const mealQuoteSchema = z.object({
+  subtotalMinor: z.number(),
+  deliveryFeeMinor: z.number(),
+  smallOrderFeeMinor: z.number(),
+  totalMinor: z.number(),
+  currency: mealCurrencySchema,
+  // true = the partner delivers to the chosen address, false = out of range,
+  // null = undeterminable (no geocoded pin / text-only address).
+  deliversTo: z.boolean().nullable(),
+});
+export type MealQuote = z.infer<typeof mealQuoteSchema>;
+
+export interface MealQuoteInput {
+  partnerId: string;
+  items: { mealId: string; qty: number }[];
+  /** A saved delivery address id, when quoting against one. */
+  addressId?: string;
+  window: 'lunch' | 'dinner';
+  /** 'YYYY-MM-DD' delivery date. */
+  date: string;
+}
+
+/**
+ * POST /api/meals/quote {partnerId, items, addressId?, window, date} → the
+ * priced order preview (subtotal + delivery fee + small-order fee + grand
+ * total, in the partner's currency) plus `deliversTo` coverage, WITHOUT
+ * placing anything — so the member sees every fee before committing (frozen
+ * contract; the route is built by the meals-route package). A member (bearer)
+ * call, not a staff one, but it reuses this module's fetch/error plumbing.
+ */
+export async function quoteMealOrder(input: MealQuoteInput, token: string): Promise<MealQuote> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/meals/quote',
+    token,
+    body: {
+      partnerId: input.partnerId,
+      items: input.items,
+      ...(input.addressId !== undefined ? { addressId: input.addressId } : {}),
+      window: input.window,
+      date: input.date,
+    },
+  });
+  return parse(mealQuoteSchema, data);
+}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -9,6 +9,7 @@ import {
   Toolbar,
   type Column,
 } from '@/components/console';
+import { DownloadCsv } from '../../_components/DownloadCsv';
 
 /** One audit_log row as returned by GET /api/admin/audit. */
 export interface AuditEntry {
@@ -187,6 +188,18 @@ export function AuditTable({
     void fetchPage({ action, actor, cursor, append: true });
   }, [action, actor, cursor, fetchPage]);
 
+  // CSV export honors the currently-applied filters (P2 fix — it previously
+  // always exported the full unfiltered trail regardless of what the table
+  // showed). Recomputed whenever a filter changes so the link is always in
+  // sync with what's on screen.
+  const exportHref = useMemo(() => {
+    const qs = new URLSearchParams();
+    if (action) qs.set('action', action);
+    if (actor) qs.set('actor', actor);
+    const s = qs.toString();
+    return `/api/admin/exports/audit${s ? `?${s}` : ''}`;
+  }, [action, actor]);
+
   const columns: Column<AuditEntry>[] = [
     {
       key: 'time',
@@ -282,33 +295,36 @@ export function AuditTable({
           />
         }
         right={
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span
-              style={{
-                fontSize: 12,
-                letterSpacing: '0.03em',
-                textTransform: 'uppercase',
-                color: 'var(--gt-text-dim)',
-                fontFamily: 'var(--font-heading)',
-              }}
-            >
-              Action
-            </span>
-            <select
-              className="gt-input"
-              value={action}
-              onChange={(e) => setAction(e.target.value)}
-              style={{ minWidth: 200 }}
-              aria-label="Filter by action"
-            >
-              <option value="">All actions</option>
-              {actions.map((a) => (
-                <option key={a} value={a}>
-                  {a}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                style={{
+                  fontSize: 12,
+                  letterSpacing: '0.03em',
+                  textTransform: 'uppercase',
+                  color: 'var(--gt-text-dim)',
+                  fontFamily: 'var(--font-heading)',
+                }}
+              >
+                Action
+              </span>
+              <select
+                className="gt-input"
+                value={action}
+                onChange={(e) => setAction(e.target.value)}
+                style={{ minWidth: 200 }}
+                aria-label="Filter by action"
+              >
+                <option value="">All actions</option>
+                {actions.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <DownloadCsv href={exportHref} />
+          </div>
         }
       />
 

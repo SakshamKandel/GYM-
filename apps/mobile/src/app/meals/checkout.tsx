@@ -22,7 +22,8 @@ import {
 import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { useAuth } from '../../state/auth';
 import { cartSubtotalMinor, useMealCart } from '../../features/meals/cartStore';
-import { useMealAddresses, useMealPartners } from '../../features/meals/hooks';
+import { useMealAddresses, useMealPartners, useMealQuote } from '../../features/meals/hooks';
+import type { MealQuoteInput } from '../../features/staff/api';
 import {
   createMealOrder,
   toMealsError,
@@ -130,6 +131,22 @@ export default function CheckoutScreen() {
   const subtotal = cartSubtotalMinor(lines);
   const currency = partner?.currency ?? items[0]?.meal.currency ?? 'NPR';
 
+  // Live server-priced fee breakdown (subtotal + delivery + small-order + total),
+  // refreshed on any cart / address / slot change. `quoteStatus` gates the
+  // Place order button so the member never commits against a stale total.
+  const quoteInput: MealQuoteInput | null = useMemo(() => {
+    if (!partnerId || items.length === 0 || !slot?.orderable) return null;
+    return {
+      partnerId,
+      items: items.map((l) => ({ mealId: l.meal.id, qty: l.qty })),
+      ...(addressId ? { addressId } : {}),
+      window: slot.window,
+      date: slot.date,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partnerId, lines, addressId, slot?.date, slot?.window, slot?.orderable]);
+  const { quote, status: quoteStatus } = useMealQuote(token, quoteInput);
+
   function goBack(): void {
     if (router.canGoBack()) router.back();
     else replacePath('/meals');
@@ -137,6 +154,8 @@ export default function CheckoutScreen() {
 
   function place(): void {
     if (placing || !token || !partnerId || !slot || !addressId || items.length === 0) return;
+    // The shown total must be a fresh server quote before we let money move.
+    if (quoteStatus !== 'ready') return;
     setPlacing(true);
     setError(null);
     void (async () => {
@@ -305,14 +324,55 @@ export default function CheckoutScreen() {
             </View>
           ))}
           <View style={styles.summaryLine}>
-            <AppText variant="bodyBold">Subtotal</AppText>
-            <AppText variant="bodyBold" tabular>
-              {formatMoney(subtotal, currency)}
+            <AppText variant="body" color={colors.textDim}>
+              Subtotal
+            </AppText>
+            <AppText variant="body" tabular>
+              {formatMoney(quote?.subtotalMinor ?? subtotal, currency)}
             </AppText>
           </View>
-          <AppText variant="caption" color={colors.textDim}>
-            Delivery + small-order fees are calculated at checkout.
-          </AppText>
+          <View style={styles.summaryLine}>
+            <AppText variant="body" color={colors.textDim}>
+              Delivery fee
+            </AppText>
+            <AppText variant="body" tabular>
+              {quote
+                ? quote.deliveryFeeMinor === 0
+                  ? 'Free'
+                  : formatMoney(quote.deliveryFeeMinor, currency)
+                : '—'}
+            </AppText>
+          </View>
+          {quote && quote.smallOrderFeeMinor > 0 ? (
+            <View style={styles.summaryLine}>
+              <AppText variant="body" color={colors.textDim}>
+                Small-order fee
+              </AppText>
+              <AppText variant="body" tabular>
+                {formatMoney(quote.smallOrderFeeMinor, currency)}
+              </AppText>
+            </View>
+          ) : null}
+          <View style={styles.summaryLine}>
+            <AppText variant="bodyBold">Total</AppText>
+            <AppText variant="bodyBold" tabular>
+              {quote ? formatMoney(quote.totalMinor, currency) : '—'}
+            </AppText>
+          </View>
+          {quoteStatus === 'loading' ? (
+            <AppText variant="caption" color={colors.textDim}>
+              Updating totals…
+            </AppText>
+          ) : quoteStatus === 'error' ? (
+            <AppText variant="caption" color={colors.error}>
+              Couldn't calculate the total. Adjust your order or try again.
+            </AppText>
+          ) : quote?.deliversTo === false ? (
+            <AppText variant="caption" color={colors.warning}>
+              This address is outside {partner?.name ?? "this partner's"} delivery area — the order may be
+              refused.
+            </AppText>
+          ) : null}
         </Card>
       </Animated.View>
 
@@ -325,7 +385,7 @@ export default function CheckoutScreen() {
       <Button
         label="Place order"
         onPress={place}
-        disabled={!token || !slot?.orderable || !addressId || items.length === 0}
+        disabled={!token || !slot?.orderable || !addressId || items.length === 0 || quoteStatus !== 'ready'}
         loading={placing}
         style={{ marginTop: spacing.gutter }}
       />

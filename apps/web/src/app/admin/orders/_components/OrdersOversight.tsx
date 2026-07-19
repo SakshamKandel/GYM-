@@ -14,6 +14,7 @@ import {
   StatusChip,
   Toolbar,
 } from '@/components/console';
+import { DownloadCsv } from '../../_components/DownloadCsv';
 import type { AdminOrderRow } from '../_data';
 
 // Client-only: Leaflet touches `window` at import, so never SSR this.
@@ -139,6 +140,20 @@ export function OrdersOversight({
     })();
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date, partnerId, status, scope]);
+
+  // CSV export mirrors the ACTIVE server-side filters (date/partnerId/status/
+  // scope) so "download" always matches what the board is currently showing —
+  // the client-only free-text search box is NOT sent (the export route has no
+  // notion of it; it filters the full matching set, not just the fetched page).
+  const exportHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (date) params.set('date', date);
+    if (partnerId) params.set('partnerId', partnerId);
+    if (status) params.set('status', status);
+    params.set('scope', scope);
+    const qs = params.toString();
+    return `/api/admin/exports/meal-orders${qs ? `?${qs}` : ''}`;
   }, [date, partnerId, status, scope]);
 
   const filtered = useMemo(() => {
@@ -315,6 +330,7 @@ export function OrdersOversight({
               <option value="history">History</option>
               <option value="all">All</option>
             </select>
+            <DownloadCsv href={exportHref} />
           </>
         }
       />

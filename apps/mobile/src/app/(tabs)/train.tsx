@@ -428,6 +428,26 @@ export default function TrainScreen() {
         </PressableScale>
       </Animated.View>
 
+      {/* Coach video library — a standalone browse of published form-check
+          videos, tier-gated server-side. */}
+      <Animated.View entering={enterUp(Math.min(tail + 2, 8))}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Coach videos library"
+          onPress={() => pushPath('/videos')}
+          style={styles.libraryRow}
+        >
+          <IconChip icon="videocam" />
+          <View style={styles.libraryText}>
+            <AppText variant="bodyBold">Coach videos</AppText>
+            <AppText variant="caption" color={colors.textDim}>
+              Form-check demos from your coach
+            </AppText>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+        </PressableScale>
+      </Animated.View>
+
       {/* Coach-assigned workouts (SCALE-UP-PLAN §4.3) — sits above the plan
           switcher; hidden entirely when there's nothing to show yet. */}
       <Animated.View entering={enterUp(Math.min(tail + 3, 8))}>

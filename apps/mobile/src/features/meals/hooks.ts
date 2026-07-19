@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import {
   fetchMealMenu,
@@ -13,6 +13,7 @@ import {
   type MealSubscription,
   type MenuMeal,
 } from './api';
+import { quoteMealOrder, type MealQuote, type MealQuoteInput } from '../staff/api';
 
 /**
  * Load-on-focus hooks for the meals feature, same shape as
@@ -103,4 +104,63 @@ export function useMyMealSubscriptions(token: string | null): ListState<MealSubs
 
 export function useMealAddresses(token: string | null): ListState<MealAddress> {
   return useLoadOnFocus(token, listAddresses);
+}
+
+/**
+ * Live checkout quote (POST /api/meals/quote). Re-fetches on any cart / address
+ * / slot change with a short debounce, and reports a `status` the checkout uses
+ * to block "Place order" until the shown total is fresh:
+ *
+ *  - idle    : nothing to quote yet (no token / no partner / empty cart)
+ *  - loading : inputs changed, a fresh quote is in flight (the last good quote
+ *              may still be shown, but it's stale — placing must be blocked)
+ *  - ready   : `quote` matches the current inputs (safe to place)
+ *  - error   : the last fetch failed (blocked — the member retries by editing)
+ *
+ * The server re-prices again at create, so a stale quote can never dictate an
+ * amount; this is purely the fee-breakdown preview.
+ */
+export type MealQuoteStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+const QUOTE_DEBOUNCE_MS = 400;
+
+export function useMealQuote(
+  token: string | null,
+  input: MealQuoteInput | null,
+): { quote: MealQuote | null; status: MealQuoteStatus } {
+  const [quote, setQuote] = useState<MealQuote | null>(null);
+  const [status, setStatus] = useState<MealQuoteStatus>('idle');
+  // Stringified inputs — a stable dependency that only changes when the cart,
+  // address, or slot actually change (the object identity changes every render).
+  const key = token && input ? JSON.stringify(input) : null;
+  // Monotonic request id so a slow in-flight quote can't overwrite a newer one.
+  const seqRef = useRef(0);
+
+  useEffect(() => {
+    if (!token || !input || !key) {
+      seqRef.current += 1;
+      setStatus('idle');
+      setQuote(null);
+      return;
+    }
+    const seq = ++seqRef.current;
+    setStatus('loading');
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const next = await quoteMealOrder(input, token);
+          if (seqRef.current !== seq) return;
+          setQuote(next);
+          setStatus('ready');
+        } catch {
+          if (seqRef.current !== seq) return;
+          setStatus('error');
+        }
+      })();
+    }, QUOTE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, key]);
+
+  return { quote, status };
 }

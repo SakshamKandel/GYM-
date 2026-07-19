@@ -6,6 +6,7 @@ import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { getVideoProvider, NotConfiguredError } from '@/lib/video';
 import { verifyCloudinaryAsset } from '@/lib/video/cloudinaryProvider';
+import { reverifyProcessingVideo } from '@/lib/video/requeue';
 
 export const runtime = 'nodejs';
 
@@ -31,6 +32,16 @@ export const runtime = 'nodejs';
  * retier/delete. super_admin/main_admin bypass (content.manage). A retier to a
  * lower tier is an entitlement change and a DELETE destroys host bytes, so this
  * scoping is load-bearing, not cosmetic.
+ *
+ * Ready-flip requeue (v1.0.3, deferred P1): Cloudinary's asset-existence check
+ * is read-after-write — a browser upload that JUST finished can 404 for a few
+ * seconds before the host's index catches up. The PATCH path below still fails
+ * closed on that 404 (never flips a never-uploaded video ready), but it no
+ * longer stops there: `reverifyProcessingVideo` is a second, idempotent chance
+ * to flip a row that failed once, and any GET that lists processing rows
+ * (list route + this file's own GET) calls it so a stranded 'processing' row
+ * self-heals the next time an admin console reloads the library — no manual
+ * retry action needed.
  */
 
 const patchSchema = z
@@ -75,6 +86,51 @@ async function resolveScope(
 
 export function OPTIONS() {
   return preflight();
+}
+
+/**
+ * GET → single-row read that doubles as a requeue check: a processing
+ * cloudinary row is re-verified and auto-flipped to 'ready' before the
+ * (possibly updated) row is returned. Same scope rules as PATCH/DELETE.
+ */
+export async function GET(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+
+  const resolved = await resolveScope(req, id);
+  if (resolved instanceof Response) return resolved;
+  const { scope } = resolved;
+
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: planVideos.id,
+      title: planVideos.title,
+      description: planVideos.description,
+      exerciseId: planVideos.exerciseId,
+      planId: planVideos.planId,
+      tierRequired: planVideos.tierRequired,
+      provider: planVideos.provider,
+      providerVideoId: planVideos.providerVideoId,
+      status: planVideos.status,
+      position: planVideos.position,
+      thumbnailUrl: planVideos.thumbnailUrl,
+      durationSec: planVideos.durationSec,
+      createdAt: planVideos.createdAt,
+    })
+    .from(planVideos)
+    .where(scope)
+    .limit(1);
+  const row = rows[0];
+  if (!row) return json({ error: 'not_found' }, 404);
+
+  const healed = await reverifyProcessingVideo(row);
+  const video = healed === 'ready' ? { ...row, status: 'ready' as const } : row;
+  const { provider: _provider, providerVideoId: _providerVideoId, ...safe } = video;
+
+  return json({ video: safe }, 200);
 }
 
 export async function PATCH(

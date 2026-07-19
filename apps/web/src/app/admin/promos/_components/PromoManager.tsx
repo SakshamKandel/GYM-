@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Badge,
@@ -9,6 +9,7 @@ import {
   DataTable,
   EmptyState,
   Modal,
+  SearchField,
   TextField,
   Toolbar,
 } from '@/components/console';
@@ -38,6 +39,13 @@ const DATE_FMT = new Intl.DateTimeFormat('en-US', {
   year: 'numeric',
 });
 
+/** How many rows are shown before "Load more" reveals another page. The full
+ * roster is already server-loaded (page.tsx has no cap today), so this is a
+ * client-side slice rather than a network round-trip — it just keeps the
+ * initial table short as the coach roster (and its auto-generated codes)
+ * grows into the hundreds. */
+const PAGE_SIZE = 25;
+
 /** Turns a `date` input value ('' or 'YYYY-MM-DD') into an end-of-day ISO string, or null. */
 function fromDateInput(value: string): string | null {
   if (!value) return null;
@@ -63,6 +71,8 @@ export function PromoManager({
   coaches: CoachOption[];
 }) {
   const router = useRouter();
+  const [query, setQuery] = useState('');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [createOpen, setCreateOpen] = useState(false);
   const [ownerMode, setOwnerMode] = useState<'house' | 'coach'>('house');
   const [coachId, setCoachId] = useState('');
@@ -78,6 +88,26 @@ export function PromoManager({
   const [rowError, setRowError] = useState<{ id: string; msg: string } | null>(
     null,
   );
+
+  // Search matches the code itself or the owning coach's display label
+  // ("House" for house codes never matches unless typed literally). Purely
+  // client-side over the already-loaded roster.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return codes;
+    return codes.filter(
+      (c) =>
+        c.code.toLowerCase().includes(q) ||
+        (c.ownerLabel ?? '').toLowerCase().includes(q),
+    );
+  }, [codes, query]);
+
+  const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount]);
+
+  function onSearchChange(value: string) {
+    setQuery(value);
+    setVisibleCount(PAGE_SIZE); // a new search always starts from page 1
+  }
 
   function openCreate() {
     setOwnerMode('house');
@@ -296,6 +326,14 @@ export function PromoManager({
   return (
     <>
       <Toolbar
+        left={
+          <SearchField
+            placeholder="Search by code or owner…"
+            value={query}
+            onChange={(e) => onSearchChange(e.target.value)}
+            aria-label="Search promo codes"
+          />
+        }
         right={
           <Button variant="primary" onClick={openCreate}>
             New code
@@ -314,7 +352,24 @@ export function PromoManager({
           }
         />
       ) : (
-        <DataTable columns={columns} rows={codes} rowKey={(r) => r.id} />
+        <>
+          <DataTable
+            columns={columns}
+            rows={visible}
+            rowKey={(r) => r.id}
+            empty="No promo codes match your search."
+          />
+          {filtered.length > visible.length ? (
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+              <Button
+                variant="ghost"
+                onClick={() => setVisibleCount((n) => n + PAGE_SIZE)}
+              >
+                Load more
+              </Button>
+            </div>
+          ) : null}
+        </>
       )}
 
       <Modal

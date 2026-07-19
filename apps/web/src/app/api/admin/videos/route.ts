@@ -5,6 +5,7 @@ import { logAudit, requireAnyPermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { getVideoProvider, NotConfiguredError } from '@/lib/video';
+import { reverifyProcessingVideo } from '@/lib/video/requeue';
 
 export const runtime = 'nodejs';
 
@@ -188,6 +189,8 @@ export async function GET(req: Request) {
       id: planVideos.id,
       title: planVideos.title,
       tierRequired: planVideos.tierRequired,
+      provider: planVideos.provider,
+      providerVideoId: planVideos.providerVideoId,
       status: planVideos.status,
       position: planVideos.position,
       thumbnailUrl: planVideos.thumbnailUrl,
@@ -197,5 +200,18 @@ export async function GET(req: Request) {
     .from(planVideos)
     .orderBy(desc(planVideos.createdAt));
 
-  return json({ videos: rows }, 200);
+  // Ready-flip requeue (v1.0.3): a row can be stuck in 'processing' because a
+  // prior PATCH confirm hit Cloudinary's read-after-write 404 window. Rather
+  // than strand it forever, re-verify every processing cloudinary row on each
+  // library load — a self-heal that needs no manual retry action. Best-effort
+  // and cheap in practice (processing rows are the rare, transient minority).
+  const videos = await Promise.all(
+    rows.map(async (r) => {
+      const healed = await reverifyProcessingVideo(r);
+      const { provider: _provider, providerVideoId: _providerVideoId, ...safe } = r;
+      return healed === 'ready' ? { ...safe, status: 'ready' as const } : safe;
+    }),
+  );
+
+  return json({ videos }, 200);
 }

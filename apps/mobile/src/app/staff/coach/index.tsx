@@ -40,7 +40,7 @@ import {
   type StaffErrorCode,
   type Tier,
 } from '../../../features/staff/api';
-import { pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
+import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import {
   StaffHeaderAction,
   StaffSignOutDialog,
@@ -117,6 +117,40 @@ function MetaChip({ label }: { label: string }) {
         {label}
       </AppText>
     </View>
+  );
+}
+
+/** One coach-tools nav row — the entry point into a coach queue screen. Server
+ * gates each destination on `coach.user.read`; the queue screen renders its own
+ * forbidden state, so no client-side permission gate is needed here. Reuses the
+ * `videosLink` card shape for visual parity with the Video library row. */
+function CoachToolLink({
+  icon,
+  title,
+  subtitle,
+  route,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle: string;
+  route: string;
+}) {
+  return (
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      onPress={() => pushStaff(route)}
+      style={styles.videosLink}
+    >
+      <IconChip icon={icon} color={colors.accentFaint} iconColor={colors.accent} />
+      <View style={styles.videosText}>
+        <AppText variant="bodyBold">{title}</AppText>
+        <AppText variant="caption" color={colors.textDim}>
+          {subtitle}
+        </AppText>
+      </View>
+      <Ionicons name="chevron-forward" size={20} color={colors.textFaint} />
+    </PressableScale>
   );
 }
 
@@ -374,7 +408,16 @@ function WalletPromoCard({
 
 export default function CoachInboxScreen() {
   const token = useAuth((s) => s.token);
+  const staffPermissions = useAuth((s) => s.staffPermissions);
   const signOut = useStaffSignOut();
+  // The five coach-tool queues are all server-gated on `coach.user.read`
+  // (/api/coach/{attention,review,verify,flags,challenges}). A coach who
+  // reaches this console on a different retained coach key (e.g.
+  // coach.message.user) but whose coach.user.read was revoked via the admin
+  // override editor would dead-end on every one of them with a 403 — the same
+  // ungated-card trap the admin hub filters against (defect G14). Gate the
+  // rows on the shared read key so they never render when they can't be opened.
+  const canReadClients = staffCan(staffPermissions, 'coach.user.read');
 
   const [rows, setRows] = useState<CoachInboxRow[]>([]);
   const [requests, setRequests] = useState<CoachRequest[]>([]);
@@ -551,6 +594,45 @@ export default function CoachInboxScreen() {
           <Ionicons name="chevron-forward" size={20} color={colors.textFaint} />
         </PressableScale>
       </Animated.View>
+
+      {/* ── Coach tools: the queue screens (attention / review / verify / flags /
+          challenges). Registered in STAFF_ROUTES and server-gated on
+          coach.user.read; surfaced here so the console is the single entry
+          point into each queue. ── */}
+      {canReadClients ? (
+        <Animated.View entering={enterUp(1)}>
+          <CoachToolLink
+            icon="pulse-outline"
+            title="Attention queue"
+            subtitle="Clients sorted stalest-first — work the list top-down"
+            route={STAFF_ROUTES.coachAttention}
+          />
+          <CoachToolLink
+            icon="git-pull-request-outline"
+            title="Progression review"
+            subtitle="Approve or adjust pending training suggestions"
+            route={STAFF_ROUTES.coachReview}
+          />
+          <CoachToolLink
+            icon="ribbon-outline"
+            title="Strength verification"
+            subtitle="Verify client strength-badge claims"
+            route={STAFF_ROUTES.coachVerify}
+          />
+          <CoachToolLink
+            icon="flag-outline"
+            title="Flagged workouts"
+            subtitle="Acknowledge or restore unranked sessions"
+            route={STAFF_ROUTES.coachFlags}
+          />
+          <CoachToolLink
+            icon="trophy-outline"
+            title="Monthly challenge"
+            subtitle="Set your challenge and track client progress"
+            route={STAFF_ROUTES.coachChallenges}
+          />
+        </Animated.View>
+      ) : null}
 
       {/* promo-economy: commission wallet + own promo code. */}
       <WalletPromoCard token={token} refreshSignal={walletRefreshSignal} />

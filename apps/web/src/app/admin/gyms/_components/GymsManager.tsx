@@ -491,44 +491,61 @@ export function GymsManager({ gyms }: { gyms: GymRow[] }) {
             disabled={saving}
           />
 
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
-              <FieldLabel>Status</FieldLabel>
-              <select
-                className="gt-input"
-                value={form.status}
-                onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as GymStatus }))}
-                disabled={saving}
-              >
-                <option value="draft">Draft</option>
-                <option value="published">Published</option>
-                <option value="archived">Archived</option>
-              </select>
-            </label>
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                minHeight: 40,
-                fontSize: 13,
-                color: 'var(--gt-text-dim)',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={form.verifiedByAdmin}
-                onChange={(e) => setForm((f) => ({ ...f, verifiedByAdmin: e.target.checked }))}
-                disabled={saving}
-              />
-              Verified by admin
-            </label>
-          </div>
-          {form.status === 'published' && !form.verifiedByAdmin ? (
-            <div style={{ fontSize: 12, color: 'var(--gt-warning)' }}>
-              This listing can&apos;t go live as Published until it&apos;s marked verified.
+          {editing ? (
+            <>
+              {/* Status/Verified are edit-only: POST /api/admin/gyms always
+                  creates draft+unverified server-side (a listing only goes
+                  live via this PATCH path, once an editor has reviewed it) —
+                  showing these controls during create let an admin "set"
+                  Published/Verified on a new listing with no indication the
+                  choice was never sent and silently discarded. Gating the
+                  controls behind `editing` matches what the server actually
+                  does and removes the silent drop. */}
+              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+                  <FieldLabel>Status</FieldLabel>
+                  <select
+                    className="gt-input"
+                    value={form.status}
+                    onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as GymStatus }))}
+                    disabled={saving}
+                  >
+                    <option value="draft">Draft</option>
+                    <option value="published">Published</option>
+                    <option value="archived">Archived</option>
+                  </select>
+                </label>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    minHeight: 40,
+                    fontSize: 13,
+                    color: 'var(--gt-text-dim)',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={form.verifiedByAdmin}
+                    onChange={(e) => setForm((f) => ({ ...f, verifiedByAdmin: e.target.checked }))}
+                    disabled={saving}
+                  />
+                  Verified by admin
+                </label>
+              </div>
+              {form.status === 'published' && !form.verifiedByAdmin ? (
+                <div style={{ fontSize: 12, color: 'var(--gt-warning)' }}>
+                  This listing can&apos;t go live as Published until it&apos;s marked verified.
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+              New listings start as Draft and unverified. Save this one, then reopen it to
+              mark it verified and publish it.
             </div>
-          ) : null}
+          )}
 
           {editing ? <PhotosEditor gymId={editing.id} photos={editing.photos} /> : null}
 

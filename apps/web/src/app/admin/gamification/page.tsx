@@ -14,6 +14,14 @@ export const dynamic = 'force-dynamic';
 
 const CATALOG_NAME_BY_ID = new Map(BADGE_CATALOG.map((b) => [b.id, b.name]));
 
+/** 'yyyy-mm' for the current month — matches coachChallenges.monthKey's format
+ * (mirrors the `currentMonthKey()` helper duplicated across the coach/member
+ * challenge routes; UTC is fine here since monthKey itself is a plain UTC
+ * calendar-month string, not a KTM-cutoff boundary). */
+function currentMonthKey(): string {
+  return new Date().toISOString().slice(0, 7);
+}
+
 /**
  * Admin gamification oversight (gap build P2-17): XP corrections, badge
  * revoke, challenge moderation. Gated on `gamification.manage`, which sits
@@ -130,7 +138,11 @@ export default async function AdminGamificationPage() {
       >
         <StatTile label="Corrections (50 most recent)" value={corrections.length} />
         <StatTile label="Badges (50 most recent)" value={badges.length} />
-        <StatTile label="Active challenges" value={challenges.length} />
+        <StatTile
+          label="Active challenges"
+          value={challenges.filter((c) => c.monthKey === currentMonthKey()).length}
+          hint={`of ${challenges.length} total`}
+        />
       </div>
 
       <GamificationManager corrections={corrections} badges={badges} challenges={challenges} />

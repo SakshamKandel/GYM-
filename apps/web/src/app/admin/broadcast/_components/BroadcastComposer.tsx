@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Badge,
@@ -26,6 +26,17 @@ export interface BroadcastHistoryRow {
   delivered: number | null;
   sentBy: string | null;
   createdAt: string;
+}
+
+/**
+ * Result of GET-before-send audience preview (POST /api/admin/broadcast/preview).
+ * `recipients` counts members that would actually receive a push (an account
+ * with at least one registered device); `devices` is the push-token count.
+ */
+interface PreviewResult {
+  recipients: number;
+  devices: number;
+  truncated: boolean;
 }
 
 interface SendResult {
@@ -77,11 +88,55 @@ export function BroadcastComposer({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<SendResult | null>(null);
 
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
   const titleTrimmed = title.trim();
   const bodyTrimmed = body.trim();
   const canCompose = titleTrimmed.length > 0 && bodyTrimmed.length > 0;
 
   const audienceLabel = describeAudience(tier || null, country.trim() || null);
+
+  // A change to either filter invalidates any prior estimate — never show a
+  // count that belongs to a different audience than the one about to be sent.
+  useEffect(() => {
+    setPreview(null);
+    setPreviewError(null);
+  }, [tier, country]);
+
+  /** Count the audience without sending (advisory — never blocks the send). */
+  async function loadPreview() {
+    setPreviewing(true);
+    setPreviewError(null);
+    try {
+      const res = await fetch('/api/admin/broadcast/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          tier: tier || undefined,
+          country: country.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        setPreview(null);
+        setPreviewError('Could not estimate the audience right now.');
+        return;
+      }
+      const data = (await res.json()) as Partial<PreviewResult>;
+      setPreview({
+        recipients: numberOr(data.recipients),
+        devices: numberOr(data.devices),
+        truncated: data.truncated === true,
+      });
+    } catch {
+      setPreview(null);
+      setPreviewError('Network error while estimating the audience.');
+    } finally {
+      setPreviewing(false);
+    }
+  }
 
   function openConfirm() {
     if (!canCompose) {
@@ -90,6 +145,8 @@ export function BroadcastComposer({
     }
     setError(null);
     setConfirmOpen(true);
+    // Refresh the estimate so the confirmation shows the live audience size.
+    void loadPreview();
   }
 
   async function send() {
@@ -134,6 +191,8 @@ export function BroadcastComposer({
       setBody('');
       setTier('');
       setCountry('');
+      setPreview(null);
+      setPreviewError(null);
       router.refresh();
     } catch {
       setError('Network error — the broadcast may not have been sent. Check the history below before retrying.');
@@ -279,10 +338,31 @@ export function BroadcastComposer({
           <Button variant="primary" disabled={sending || !canCompose} onClick={openConfirm}>
             Send broadcast
           </Button>
+          <Button
+            variant="ghost"
+            disabled={sending || previewing}
+            onClick={() => void loadPreview()}
+          >
+            {previewing ? 'Estimating…' : 'Estimate audience'}
+          </Button>
           <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
             Audience: {audienceLabel}
           </span>
         </div>
+
+        {preview ? (
+          <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+            Reaches ~<strong>{preview.recipients.toLocaleString()}</strong> member
+            {preview.recipients === 1 ? '' : 's'} ({preview.devices.toLocaleString()} device
+            {preview.devices === 1 ? '' : 's'}).
+            {preview.truncated
+              ? ' Larger than a single broadcast can reach — only the first 20,000 devices would get it.'
+              : ''}
+          </div>
+        ) : null}
+        {previewError ? (
+          <div style={{ fontSize: 12, color: 'var(--gt-warning)' }}>{previewError}</div>
+        ) : null}
 
         {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div> : null}
         {result ? (
@@ -371,6 +451,23 @@ export function BroadcastComposer({
             </div>
             <div style={{ marginTop: 4 }}>
               <Badge tone="neutral">{audienceLabel}</Badge>
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 4 }}>
+              {previewing
+                ? 'Estimating audience…'
+                : preview
+                  ? `Reaches ~${preview.recipients.toLocaleString()} member${
+                      preview.recipients === 1 ? '' : 's'
+                    } (${preview.devices.toLocaleString()} device${
+                      preview.devices === 1 ? '' : 's'
+                    })${
+                      preview.truncated
+                        ? ' — only the first 20,000 devices will get it'
+                        : ''
+                    }.`
+                  : previewError
+                    ? previewError
+                    : 'Audience size unavailable — the send will still reach the filtered members.'}
             </div>
           </div>
         </div>

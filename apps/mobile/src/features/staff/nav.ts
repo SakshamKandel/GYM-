@@ -37,6 +37,16 @@ export const STAFF_ROUTES = {
   coachWallet: '/staff/coach/wallet',
   /** One client's detail — set/extend their tier + expiry. Pass the user id. */
   coachClient: (userId: string): string => `/staff/coach/client/${userId}`,
+  /** The attention queue — assigned clients sorted stalest-first (coach.user.read). */
+  coachAttention: '/staff/coach/attention',
+  /** Progression review queue — approve/adjust suggestions (coach.user.read). */
+  coachReview: '/staff/coach/review',
+  /** Strength-badge verification queue (coach.user.read). */
+  coachVerify: '/staff/coach/verify',
+  /** Flagged (unranked) workouts — acknowledge/restore (coach.user.read). */
+  coachFlags: '/staff/coach/flags',
+  /** The coach's own monthly challenge + client progress (coach.user.read). */
+  coachChallenges: '/staff/coach/challenges',
 
   // ── Admin area ──────────────────────────────────────────────
   /** Admin console home — the overview dashboard. */
@@ -73,6 +83,24 @@ export const STAFF_ROUTES = {
   adminOrders: '/staff/admin/orders',
   /** Meal-delivery manual-payment review queue (payments.review). */
   adminMealPayments: '/staff/admin/meal-payments',
+  /** Platform analytics dashboard (analytics.read — super/main). */
+  adminAnalytics: '/staff/admin/analytics',
+  /** Push broadcast composer + send history (broadcast.send — super/main). */
+  adminBroadcast: '/staff/admin/broadcast',
+  /** Gamification oversight — XP corrections, badge revoke, challenge moderation (gamification.manage). */
+  adminGamification: '/staff/admin/gamification',
+  /** Exercise + training-plan catalog authoring (catalog.manage). */
+  adminCatalog: '/staff/admin/catalog',
+  /** Member-content moderation queues — milestones + progress photos (moderation.manage). */
+  adminModeration: '/staff/admin/moderation',
+  /** Meal-partner (restaurant) roster CRUD (partners.manage — super/main). */
+  adminPartners: '/staff/admin/partners',
+  /** Nearby-gyms directory CRUD (gyms.manage — super/main). */
+  adminGyms: '/staff/admin/gyms',
+  /** Referral/trial abuse dashboard + trial reset (subscription.override). */
+  adminAbuse: '/staff/admin/abuse',
+  /** Per-account permission override editor (permissions.override — super/main). */
+  adminPermissions: '/staff/admin/permissions',
 } as const;
 
 /** router.push through the typed-routes escape hatch. */

@@ -362,8 +362,26 @@ export interface EarningsDay {
 }
 
 export interface PartnerEarnings {
+  /** Gross earned revenue = delivered, non-refunded orders (COD + digital). */
   totalMinor: number;
+  /** Count of delivered, non-refunded orders. */
   deliveredCount: number;
+  /**
+   * Cash the restaurant collected at the door — delivered COD orders (non-
+   * refunded). This money is already in the partner's hands; the platform holds
+   * none of it.
+   */
+  codCollectedMinor: number;
+  /**
+   * Digital (eSewa/Khalti) money the PLATFORM currently holds for delivered,
+   * paid orders — the payout precursor. Only `paid` digital orders count (an
+   * unpaid digital order isn't money in hand for anyone); refunds are excluded.
+   */
+  digitalHeldMinor: number;
+  /** Total value of delivered orders later refunded (excluded from `totalMinor`). */
+  refundedMinor: number;
+  /** Count of delivered orders later refunded. */
+  refundedCount: number;
   currency: string;
   byDay: EarningsDay[];
 }
@@ -389,8 +407,14 @@ export interface PartnerDashboardStats {
 
 /**
  * Delivered-order revenue for the partner over the trailing `sinceDate..` window
- * (inclusive), bucketed by delivery date. Only `delivered` orders count toward
- * earnings; cancelled/refused never do.
+ * (inclusive), bucketed by delivery date, with the COD-vs-digital payment split.
+ * Only `delivered` orders count toward earnings; cancelled/refused never do, and
+ * an order later **refunded** is excluded from every earned figure (its value is
+ * reported separately via `refundedMinor`). The split follows the money:
+ *  - `codCollectedMinor` — cash the partner took at the door (COD, non-refunded);
+ *  - `digitalHeldMinor` — eSewa/Khalti money the PLATFORM holds (paid only) and
+ *    owes the partner (the payout precursor).
+ * All figures are integer minor units.
  */
 export async function loadPartnerEarnings(
   db: Db,
@@ -401,8 +425,14 @@ export async function loadPartnerEarnings(
   const rows = await db
     .select({
       date: mealOrders.deliveryDate,
-      total: sql<string>`sum(${mealOrders.totalMinor})::text`,
-      n: sql<string>`count(*)::text`,
+      // Earned = delivered AND not refunded. A refunded delivered order returns
+      // to zero for the partner, so it never counts toward total/cod/digital.
+      total: sql<string>`coalesce(sum(${mealOrders.totalMinor}) filter (where ${mealOrders.paymentStatus} <> 'refunded'), 0)::text`,
+      n: sql<string>`count(*) filter (where ${mealOrders.paymentStatus} <> 'refunded')::text`,
+      cod: sql<string>`coalesce(sum(${mealOrders.totalMinor}) filter (where ${mealOrders.paymentMethod} = 'cod' and ${mealOrders.paymentStatus} <> 'refunded'), 0)::text`,
+      digital: sql<string>`coalesce(sum(${mealOrders.totalMinor}) filter (where ${mealOrders.paymentMethod} in ('esewa','khalti') and ${mealOrders.paymentStatus} = 'paid'), 0)::text`,
+      refunded: sql<string>`coalesce(sum(${mealOrders.totalMinor}) filter (where ${mealOrders.paymentStatus} = 'refunded'), 0)::text`,
+      refundedN: sql<string>`count(*) filter (where ${mealOrders.paymentStatus} = 'refunded')::text`,
     })
     .from(mealOrders)
     .where(
@@ -422,7 +452,20 @@ export async function loadPartnerEarnings(
   }));
   const totalMinor = byDay.reduce((sum, d) => sum + d.totalMinor, 0);
   const deliveredCount = byDay.reduce((sum, d) => sum + d.orders, 0);
-  return { totalMinor, deliveredCount, currency, byDay };
+  const codCollectedMinor = rows.reduce((sum, r) => sum + Number(r.cod), 0);
+  const digitalHeldMinor = rows.reduce((sum, r) => sum + Number(r.digital), 0);
+  const refundedMinor = rows.reduce((sum, r) => sum + Number(r.refunded), 0);
+  const refundedCount = rows.reduce((sum, r) => sum + Number(r.refundedN), 0);
+  return {
+    totalMinor,
+    deliveredCount,
+    codCollectedMinor,
+    digitalHeldMinor,
+    refundedMinor,
+    refundedCount,
+    currency,
+    byDay,
+  };
 }
 
 /**

@@ -185,12 +185,23 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
     }
     setSaving(true);
     setError(null);
+    // PATCH (edit) and POST (create) disagree on what an empty field means:
+    // the PATCH route treats an omitted key as "leave untouched" and an
+    // explicit `null` as "clear it" (its zod schema is `.nullable().optional()`),
+    // while the POST route's schema has no `.nullable()` — sending `null` there
+    // fails validation, so a blank optional field must be omitted (`undefined`)
+    // on create. Using `|| undefined` unconditionally for both meant clearing
+    // an existing value while editing silently dropped the key instead of
+    // clearing it, so the stale value survived the "save".
+    const trimmedEquipment = form.equipment.trim();
+    const trimmedLevel = form.level.trim();
+    const trimmedCategory = form.category.trim();
     const body = {
       name: form.name.trim(),
       muscleGroup: form.muscleGroup.trim(),
-      equipment: form.equipment.trim() || undefined,
-      level: form.level.trim() || undefined,
-      category: form.category.trim() || undefined,
+      equipment: trimmedEquipment || (editingId ? null : undefined),
+      level: trimmedLevel || (editingId ? null : undefined),
+      category: trimmedCategory || (editingId ? null : undefined),
       secondaryMuscles: linesToArray(form.secondaryMuscles),
       instructions: linesToArray(form.instructions),
       imageUrls: linesToArray(form.imageUrls),

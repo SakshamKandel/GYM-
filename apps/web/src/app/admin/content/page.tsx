@@ -6,6 +6,7 @@ import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
 import { isVideoConfigured } from '@/lib/video';
+import { reverifyProcessingVideo } from '@/lib/video/requeue';
 import { ContentTabs } from './_components/ContentTabs';
 import type { Tier, VideoListItem, VideoStatus } from './_components/types';
 
@@ -19,7 +20,8 @@ export const dynamic = 'force-dynamic';
  * directly, matching the other admin pages.
  *
  * This page does the initial library READ server-side via getDb (mirroring the
- * projection GET /api/admin/videos returns), computes the summary tiles, and
+ * projection GET /api/admin/videos returns, incl. the ready-flip requeue
+ * self-heal — see loadVideos() below), computes the summary tiles, and
  * hands the rows to the client <VideoLibrary>. All mutations — uploading,
  * changing a tier, removing — go through the guarded /api/admin/videos routes
  * (the httpOnly gt_staff cookie rides along) and patch the local list, so the
@@ -28,13 +30,23 @@ export const dynamic = 'force-dynamic';
  * upload attempt.
  */
 
-/** Reads the full library (minus soft-removed rows), newest first. */
+/**
+ * Reads the full library (minus soft-removed rows), newest first.
+ *
+ * Ready-flip requeue (v1.0.3 fix): this server-rendered read is a distinct
+ * query path from GET /api/admin/videos, so it must re-run the same
+ * self-heal — otherwise a row stranded in 'processing' by the Cloudinary
+ * read-after-write 404 window (see lib/video/requeue.ts) never recovers via
+ * a page reload, only via a direct call to the API route (mobile only).
+ */
 async function loadVideos(): Promise<VideoListItem[]> {
   const rows = await getDb()
     .select({
       id: planVideos.id,
       title: planVideos.title,
       tierRequired: planVideos.tierRequired,
+      provider: planVideos.provider,
+      providerVideoId: planVideos.providerVideoId,
       status: planVideos.status,
       position: planVideos.position,
       thumbnailUrl: planVideos.thumbnailUrl,
@@ -45,17 +57,22 @@ async function loadVideos(): Promise<VideoListItem[]> {
     .where(ne(planVideos.status, 'removed'))
     .orderBy(desc(planVideos.createdAt));
 
-  return rows.map((r) => ({
-    id: r.id,
-    title: r.title,
-    tierRequired: r.tierRequired as Tier,
-    status: r.status as VideoStatus,
-    position: r.position,
-    thumbnailUrl: r.thumbnailUrl,
-    durationSec: r.durationSec,
-    createdAt:
-      r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
-  }));
+  return Promise.all(
+    rows.map(async (r) => {
+      const healed = await reverifyProcessingVideo(r);
+      return {
+        id: r.id,
+        title: r.title,
+        tierRequired: r.tierRequired as Tier,
+        status: (healed === 'ready' ? 'ready' : r.status) as VideoStatus,
+        position: r.position,
+        thumbnailUrl: r.thumbnailUrl,
+        durationSec: r.durationSec,
+        createdAt:
+          r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
+      };
+    }),
+  );
 }
 
 export default async function AdminContentPage() {

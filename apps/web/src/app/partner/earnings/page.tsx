@@ -99,6 +99,39 @@ export default async function PartnerEarningsPage() {
         <StatTile label="Weekly average" value={formatMoney(weeklyAvg, currency)} hint={`over ${WEEKS} weeks`} />
       </div>
 
+      {/*
+        Payment split (last 30d). The gross earnings above are NOT all money in
+        the restaurant's hands: COD is cash it already collected at the door,
+        while digital (eSewa/Khalti) is held by the platform and paid out later.
+        Refunds are already netted out of every earned figure and shown here only
+        for transparency.
+      */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+          gap: 14,
+        }}
+      >
+        <StatTile
+          label={`Collected at door (${RANGE_DAYS}d)`}
+          value={formatMoney(earnings.codCollectedMinor, currency)}
+          hint="Cash on delivery"
+        />
+        <StatTile
+          label={`Held by platform (${RANGE_DAYS}d)`}
+          value={formatMoney(earnings.digitalHeldMinor, currency)}
+          hint="Digital — paid out later"
+        />
+        {earnings.refundedCount > 0 ? (
+          <StatTile
+            label={`Refunded (${RANGE_DAYS}d)`}
+            value={formatMoney(earnings.refundedMinor, currency)}
+            hint={`${earnings.refundedCount} order${earnings.refundedCount === 1 ? '' : 's'} — not counted`}
+          />
+        ) : null}
+      </div>
+
       <ChartCard
         title="Weekly revenue"
         caption={`Delivered-order revenue per week · last ${WEEKS} weeks`}

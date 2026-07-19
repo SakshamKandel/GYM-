@@ -3,6 +3,7 @@ import { desc, eq } from 'drizzle-orm';
 import { requireAnyPermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
+import { reverifyProcessingVideo } from '@/lib/video/requeue';
 
 export const runtime = 'nodejs';
 
@@ -35,6 +36,8 @@ export async function GET(req: Request) {
       id: planVideos.id,
       title: planVideos.title,
       tierRequired: planVideos.tierRequired,
+      provider: planVideos.provider,
+      providerVideoId: planVideos.providerVideoId,
       status: planVideos.status,
       position: planVideos.position,
       thumbnailUrl: planVideos.thumbnailUrl,
@@ -47,19 +50,28 @@ export async function GET(req: Request) {
     .leftJoin(exercises, eq(exercises.id, planVideos.exerciseId))
     .orderBy(desc(planVideos.createdAt));
 
-  const videos = rows.map((r) => ({
-    id: r.id,
-    title: r.title,
-    tierRequired: r.tierRequired,
-    status: r.status,
-    position: r.position,
-    thumbnailUrl: r.thumbnailUrl,
-    views: r.views,
-    exercise: r.exerciseId
-      ? { id: r.exerciseId, name: r.exerciseName ?? null }
-      : null,
-    createdAt: r.createdAt,
-  }));
+  // Ready-flip requeue (v1.0.3 fix): this is a third, independent query over
+  // plan_videos (alongside GET /api/admin/videos and /[id]) and needs the same
+  // self-heal, or a row stranded in 'processing' by the Cloudinary
+  // read-after-write 404 window never recovers for a coach viewing this list.
+  const videos = await Promise.all(
+    rows.map(async (r) => {
+      const healed = await reverifyProcessingVideo(r);
+      return {
+        id: r.id,
+        title: r.title,
+        tierRequired: r.tierRequired,
+        status: healed === 'ready' ? 'ready' : r.status,
+        position: r.position,
+        thumbnailUrl: r.thumbnailUrl,
+        views: r.views,
+        exercise: r.exerciseId
+          ? { id: r.exerciseId, name: r.exerciseName ?? null }
+          : null,
+        createdAt: r.createdAt,
+      };
+    }),
+  );
 
   return json({ videos }, 200);
 }
