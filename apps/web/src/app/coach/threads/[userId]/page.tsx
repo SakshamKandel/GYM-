@@ -1,11 +1,11 @@
 import { accounts, coachMessages } from '@gym/db';
 import { and, desc, eq } from 'drizzle-orm';
 import Link from 'next/link';
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import { TierChip } from '@/components/console';
 import { requireCoachOwnsUser } from '@/lib/authz';
+import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
-import { staffFromCookie } from '@/lib/staffSession';
 import { MessageList, type ThreadMessage } from '../../_components/MessageList';
 import { ReplyBox } from '../../_components/ReplyBox';
 
@@ -36,8 +36,7 @@ interface PageProps {
 export default async function CoachThreadPage({ params }: PageProps) {
   const { userId } = await params;
 
-  const coach = await staffFromCookie();
-  if (!coach) redirect('/coach/login');
+  const { principal: coach } = await requireCoachPage('coach.user.read');
 
   const owns = await requireCoachOwnsUser(coach, userId);
   if (!owns) notFound();

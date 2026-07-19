@@ -15,6 +15,21 @@
  * next/font in layout.tsx.
  */
 :root {
+  /* Customer marketing surfaces mirror @gym/ui-tokens' Iron Dark palette. */
+  --gm-bg: #0b0c0d;
+  --gm-surface: #1d1f22;
+  --gm-surface-raised: #26282c;
+  --gm-border: #3b3e44;
+  --gm-text: #f5f6f7;
+  --gm-text-dim: #b5bac2;
+  --gm-accent: #ff3b30;
+  --gm-cream: #f4f2ed;
+  --gm-ink: #0b0c0d;
+  --gm-error-surface: #3d1b18;
+  --gm-error-text: #ffd4cf;
+  --gm-success-surface: #123521;
+  --gm-success-text: #b8f6cd;
+
   /* Surfaces */
   --gt-bg: #f5f5f2; /* page background — warm off-white */
   --gt-surface: #ffffff; /* raised surface (inputs, top bar) */
@@ -78,9 +93,9 @@
   --gt-fs-display: 34px;
   --gt-fs-h1: 22px;
   --gt-fs-h2: 16px;
-  --gt-fs-body: 14px;
-  --gt-fs-meta: 12px;
-  --gt-fs-micro: 11px;
+  --gt-fs-body: 16px;
+  --gt-fs-meta: 14px;
+  --gt-fs-micro: 12px;
 
   /* Fonts */
   --font-heading: var(--font-poppins), system-ui, sans-serif;
@@ -125,6 +140,7 @@ h4 {
 
 /* Primary action — the one accent button. */
 .gt-btn-primary {
+  min-height: 48px;
   background: var(--gt-accent-strong);
   color: var(--gt-accent-ink);
   border: none;
@@ -132,7 +148,7 @@ h4 {
   padding: 10px 16px;
   font-family: var(--font-heading);
   font-weight: 600;
-  font-size: 15px;
+  font-size: 16px;
   cursor: pointer;
 }
 .gt-btn-primary:disabled {
@@ -141,13 +157,14 @@ h4 {
 }
 
 .gt-input {
+  min-height: 48px;
   width: 100%;
   background: var(--gt-surface);
   border: 1px solid var(--gt-border-input);
   border-radius: var(--gt-radius-sm);
   color: var(--gt-text);
   padding: 10px 12px;
-  font-size: 15px;
+  font-size: 16px;
   font-family: var(--font-heading);
 }
 .gt-input::placeholder {
@@ -218,13 +235,13 @@ h4 {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 40px;
+  min-height: 48px;
   padding: 9px 12px;
   border-radius: var(--gt-radius-sm);
   color: var(--gt-text-dim);
   text-decoration: none;
   font-family: var(--font-heading);
-  font-size: 14px;
+  font-size: 16px;
   transition: background 120ms, color 120ms;
 }
 .gt-nav-item:hover {

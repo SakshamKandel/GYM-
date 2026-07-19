@@ -3,6 +3,12 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { type Permission, type Targets, type Tier } from '@gym/shared';
 import { mmkvStorage } from '../lib/mmkvStorage';
 import {
+  deleteRepoAccountData,
+  setRepoAccount,
+  startFreshAnonymousRepoContext,
+  useStoredAnonymousRepoContext,
+} from '../lib/repo';
+import {
   ApiError,
   confirmGymTrackerServer,
   getProfileData,
@@ -61,7 +67,7 @@ export interface AuthState {
   /** Throws ApiError ('email_taken' | 'invalid' | 'network'). */
   signUp: (email: string, password: string, displayName: string) => Promise<void>;
   /** Best-effort server logout; local state always clears. Never throws. */
-  signOut: () => Promise<void>;
+  signOut: (options?: { purgeLocalAccountData?: boolean }) => Promise<void>;
   /** Re-validate the session (call on focus). Silently signs out on 401. */
   refresh: () => Promise<void>;
 }
@@ -136,6 +142,7 @@ function retryStaffRoleOnce(token: string): void {
  */
 export function applyServerUser(user: AuthUser, token: string): void {
   if (useAuth.getState().token !== token) return;
+  setRepoAccount(user.id);
   useAuth.setState({ status: 'signedIn', user });
   adoptServerUser(user);
 }
@@ -174,6 +181,9 @@ async function establishSession(
       }
     })();
   }
+  // Switch the local repository before publishing the new auth state. Any
+  // screen that reacts to `signedIn` therefore reads only this account's rows.
+  setRepoAccount(session.user.id);
   set({
     status: 'signedIn',
     token: session.token,
@@ -299,6 +309,28 @@ function clearAccountState(): void {
   clearServerSuggestions();
 }
 
+async function leaveAccountRepository(
+  accountId: string | null,
+  purgeLocalAccountData: boolean,
+): Promise<void> {
+  // This changes the active owner synchronously before its durable metadata
+  // write awaits, so signed-out renders cannot briefly see an older guest.
+  try {
+    await startFreshAnonymousRepoContext();
+  } catch {
+    // The new in-memory namespace remains active. A storage failure must never
+    // make sign-out fail or reactivate the account that was just left.
+  }
+  if (purgeLocalAccountData && accountId !== null) {
+    try {
+      await deleteRepoAccountData(accountId);
+    } catch {
+      // The account namespace remains unreachable even if physical cleanup
+      // fails; a later maintenance pass can safely retry the purge.
+    }
+  }
+}
+
 export const useAuth = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -329,8 +361,13 @@ export const useAuth = create<AuthState>()(
         await establishSession(session, set, get);
       },
 
-      signOut: async () => {
+      signOut: async (options) => {
         const token = get().token;
+        const accountId = get().user?.id ?? null;
+        const repoCleanup = leaveAccountRepository(
+          accountId,
+          options?.purgeLocalAccountData === true,
+        );
         // Local state clears FIRST so sign-out is instant even offline; the
         // server-side cleanup below is best-effort in the background. (The
         // old order — await the network, then clear — could hang the UI on
@@ -362,17 +399,20 @@ export const useAuth = create<AuthState>()(
         }
         // Drop the native Google session so the next "Continue with Google"
         // asks which account instead of silently reusing the last one.
-        await signOutGoogle();
+        await Promise.allSettled([signOutGoogle(), repoCleanup]);
       },
 
       refresh: async () => {
         const token = get().token;
         if (!token) return;
+        const residentUser = get().user;
+        if (residentUser !== null) setRepoAccount(residentUser.id);
         try {
           const user = await me(token);
           // The session changed while me() was in flight (sign-out or account
           // switch) — a late response must not resurrect the old session.
           if (get().token !== token) return;
+          setRepoAccount(user.id);
           set({ status: 'signedIn', user });
           adoptServerUser(user);
           // Sign-in's restore attempt failed (offline blip)? Retry until one
@@ -410,6 +450,8 @@ export const useAuth = create<AuthState>()(
               // Session expired or revoked server-side — quietly sign out and
               // clear account-derived state so no stale identity lingers.
               clearAccountState();
+              const accountId = get().user?.id ?? null;
+              const repoCleanup = leaveAccountRepository(accountId, false);
               set({
                 status: 'signedOut',
                 token: null,
@@ -417,6 +459,7 @@ export const useAuth = create<AuthState>()(
                 staffRole: null,
                 staffPermissions: [],
               });
+              void repoCleanup;
             }
           }
           // Network errors keep the signed-in state — the app is offline-first.
@@ -426,6 +469,13 @@ export const useAuth = create<AuthState>()(
     {
       name: 'gym-tracker-auth-v1',
       storage: createJSONStorage(() => mmkvStorage),
+      onRehydrateStorage: () => (state) => {
+        if (state?.status === 'signedIn' && state.token !== null && state.user !== null) {
+          setRepoAccount(state.user.id);
+        } else {
+          useStoredAnonymousRepoContext();
+        }
+      },
     },
   ),
 );

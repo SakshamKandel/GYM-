@@ -405,36 +405,33 @@ export default function AdminMembersScreen() {
   // can never silently apply to a different coach.
   const [assignOverrideFor, setAssignOverrideFor] = useState<string | null>(null);
 
-  const assignCoach = useCallback(
-    async (coach: CoachRow) => {
-      if (!token || !detail) return;
-      const force = assignOverrideFor === coach.id;
-      setCoachPickerOpen(false);
-      setSaving(true);
-      try {
-        await assignClient(coach.id, detail.member.id, token, force);
+  async function assignCoach(coach: CoachRow): Promise<void> {
+    if (!token || !detail) return;
+    const force = assignOverrideFor === coach.id;
+    setCoachPickerOpen(false);
+    setSaving(true);
+    try {
+      await assignClient(coach.id, detail.member.id, token, force);
+      setAssignOverrideFor(null);
+      await refresh(detail.member.id);
+    } catch (err) {
+      const code = toStaffError(err).code;
+      if (code === 'full' && !force) {
+        // Leave the picker reachable so the admin can tap the same coach
+        // again to force it — re-fetching isn't needed, `coaches` is fresh.
+        setAssignOverrideFor(coach.id);
+        setCoachPickerOpen(true);
+        setMutationError(
+          'That coach is at their client capacity. Tap them again to assign anyway.',
+        );
+      } else {
         setAssignOverrideFor(null);
-        await refresh(detail.member.id);
-      } catch (err) {
-        const code = toStaffError(err).code;
-        if (code === 'full' && !force) {
-          // Leave the picker reachable so the admin can tap the same coach
-          // again to force it — re-fetching isn't needed, `coaches` is fresh.
-          setAssignOverrideFor(coach.id);
-          setCoachPickerOpen(true);
-          setMutationError(
-            'That coach is at their client capacity. Tap them again to assign anyway.',
-          );
-        } else {
-          setAssignOverrideFor(null);
-          setMutationError(errorLine(code));
-        }
-      } finally {
-        setSaving(false);
+        setMutationError(errorLine(code));
       }
-    },
-    [token, detail, refresh, assignOverrideFor],
-  );
+    } finally {
+      setSaving(false);
+    }
+  }
 
   // ── P1-7 handlers ─────────────────────────────────────────────
   function openResetLink(): void {
@@ -1198,7 +1195,7 @@ export default function AdminMembersScreen() {
         <View style={styles.sheetBody}>
           {gdprDone ? (
             <AppText variant="body" color={colors.success}>
-              This member's personal data has been anonymized.
+              This member’s personal data has been anonymized.
             </AppText>
           ) : (
             <>

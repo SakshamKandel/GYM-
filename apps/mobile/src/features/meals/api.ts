@@ -342,6 +342,7 @@ export async function fetchMealMenu(
 }
 
 export interface CreateMealOrderInput {
+  requestId: string;
   partnerId: string;
   deliveryDate: string;
   window: MealWindow;
@@ -352,7 +353,7 @@ export interface CreateMealOrderInput {
 }
 
 /** POST /api/meals/orders → place a one-time order. The server freezes price,
- * fees and cutoff — this client only submits the member's picks. */
+ * fees and cutoff. `requestId` must be reused for retries of the same intent. */
 export async function createMealOrder(token: string, input: CreateMealOrderInput): Promise<MealOrder> {
   const data = await mealsRequest({ method: 'POST', path: '/api/meals/orders', token, body: { ...input } });
   return parse(orderEnvelope, data).order;

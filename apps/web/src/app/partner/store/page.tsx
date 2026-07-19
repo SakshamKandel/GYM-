@@ -8,14 +8,13 @@ export const dynamic = 'force-dynamic';
 
 /**
  * Store controls — the accepting-orders switch and per-item out-of-stock grid.
- * Both operate on `meals.isActive`, the flag the member order-create route
- * already requires for every line, so pausing blocks new orders server-side
- * with no schema change and no member-route edit (see /api/partner/store).
+ * Store pause is partner-level; individual item availability remains intact.
+ * Member create routes enforce both flags server-side.
  */
 export default async function PartnerStorePage() {
-  const { partnerId, currency } = await requirePartnerPage();
+  const { partnerId, currency, acceptingOrders } = await requirePartnerPage();
   const menu = await loadPartnerMenu(getDb(), partnerId);
-  const store = deriveStoreState(menu);
+  const store = deriveStoreState(menu, acceptingOrders);
 
   return (
     <div>

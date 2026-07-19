@@ -1,10 +1,10 @@
-import { accounts, meals, mealOrders, mealPartners } from '@gym/db';
-import { TERMINAL_ORDER_STATUSES } from '@gym/shared';
-import { and, asc, count, eq, inArray, notInArray } from 'drizzle-orm';
+import { accounts, meals, mealPartners } from '@gym/db';
+import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
+import { loadPartnerAdminSafeguards } from '@/lib/partnerAdminSafeguardsDb';
 import { staffFromCookie } from '@/lib/staffSession';
 import { PartnersManager } from './_components/PartnersManager';
 import type { PartnerRow } from './_components/types';
@@ -44,7 +44,7 @@ async function loadPartners(): Promise<PartnerRow[]> {
 
   const partnerIds = rows.map((r) => r.id);
   const menuCounts = new Map<string, number>();
-  const activeOrderCounts = new Map<string, number>();
+  const safeguards = await loadPartnerAdminSafeguards(db, partnerIds);
 
   if (partnerIds.length > 0) {
     const menuRows = await db
@@ -53,26 +53,30 @@ async function loadPartners(): Promise<PartnerRow[]> {
       .where(and(inArray(meals.partnerId, partnerIds), eq(meals.isDeleted, false)))
       .groupBy(meals.partnerId);
     for (const r of menuRows) menuCounts.set(r.partnerId, Number(r.n));
-
-    const orderRows = await db
-      .select({ partnerId: mealOrders.partnerId, n: count() })
-      .from(mealOrders)
-      .where(
-        and(
-          inArray(mealOrders.partnerId, partnerIds),
-          notInArray(mealOrders.status, [...TERMINAL_ORDER_STATUSES]),
-        ),
-      )
-      .groupBy(mealOrders.partnerId);
-    for (const r of orderRows) activeOrderCounts.set(r.partnerId, Number(r.n));
   }
 
-  return rows.map((r) => ({
-    ...r,
-    createdAt: r.createdAt.toISOString(),
-    menuCount: menuCounts.get(r.id) ?? 0,
-    activeOrders: activeOrderCounts.get(r.id) ?? 0,
-  }));
+  return rows.map((r) => {
+    const partnerSafeguards = safeguards.get(r.id);
+    return {
+      ...r,
+      createdAt: r.createdAt.toISOString(),
+      menuCount: menuCounts.get(r.id) ?? 0,
+      activeOrders: partnerSafeguards?.liveOrders.total ?? 0,
+      safeguards: partnerSafeguards ?? {
+        currencyHistory: {
+          menuItems: 0,
+          subscriptions: 0,
+          billingCycles: 0,
+          orders: 0,
+          paymentRequests: 0,
+        },
+        liveOrders: {
+          total: 0,
+          byStatus: { pending: 0, confirmed: 0, preparing: 0, out_for_delivery: 0 },
+        },
+      },
+    };
+  });
 }
 
 export default async function AdminPartnersPage() {

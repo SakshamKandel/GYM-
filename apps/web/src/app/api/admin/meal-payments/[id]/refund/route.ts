@@ -1,6 +1,6 @@
-import { mealBillingCycles, mealOrders, mealPaymentRequests } from '@gym/db';
+import { mealBillingCycles, mealOrderEvents, mealOrders, mealPaymentRequests } from '@gym/db';
 import { ktmDateString, TERMINAL_ORDER_STATUSES } from '@gym/shared';
-import { and, eq, notInArray } from 'drizzle-orm';
+import { and, eq, gt, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
@@ -74,42 +74,109 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Production guard (§3): refuse once the food is committed.
   if (row.orderId) {
     const [order] = await db
-      .select({ status: mealOrders.status, cutoffAt: mealOrders.cutoffAt })
+      .select({
+        status: mealOrders.status,
+        paymentStatus: mealOrders.paymentStatus,
+        cutoffAt: mealOrders.cutoffAt,
+      })
       .from(mealOrders)
       .where(eq(mealOrders.id, row.orderId))
       .limit(1);
-    if (order) {
-      const inProduction =
-        order.status === 'preparing' ||
-        order.status === 'out_for_delivery' ||
-        order.status === 'delivered' ||
-        order.status === 'refused';
-      const postCutoff = order.status !== 'cancelled' && now >= order.cutoffAt;
-      if (inProduction || postCutoff) return json({ error: 'non_refundable' }, 409);
+    if (!order) return json({ error: 'target_not_found' }, 409);
+    const inProduction =
+      order.status === 'preparing' ||
+      order.status === 'out_for_delivery' ||
+      order.status === 'delivered' ||
+      order.status === 'refused';
+    const postCutoff = order.status !== 'cancelled' && now >= order.cutoffAt;
+    if (inProduction || postCutoff) return json({ error: 'non_refundable' }, 409);
+    if (
+      order.paymentStatus !== 'paid' &&
+      order.paymentStatus !== 'receipt_submitted' &&
+      order.paymentStatus !== 'refunded'
+    ) {
+      return json({ error: 'payment_state_conflict' }, 409);
     }
   } else if (row.cycleId) {
     const [cycle] = await db
-      .select({ weekStart: mealBillingCycles.weekStart })
+      .select({ weekStart: mealBillingCycles.weekStart, status: mealBillingCycles.status })
       .from(mealBillingCycles)
       .where(eq(mealBillingCycles.id, row.cycleId))
       .limit(1);
+    if (!cycle) return json({ error: 'target_not_found' }, 409);
     // Refundable only before the billed week begins (KTM date compare).
-    if (cycle && ktmDateString(now) >= cycle.weekStart) {
+    if (ktmDateString(now) >= cycle.weekStart) {
       return json({ error: 'non_refundable' }, 409);
+    }
+    if (
+      cycle.status !== 'paid' &&
+      cycle.status !== 'awaiting_payment' &&
+      cycle.status !== 'void'
+    ) {
+      return json({ error: 'payment_state_conflict' }, 409);
     }
   }
 
   // 1. Reverse the target's paid mark (idempotent CAS — a retry matches 0 rows).
   if (row.orderId) {
-    await db
+    const [before] = await db
+      .select({ status: mealOrders.status })
+      .from(mealOrders)
+      .where(eq(mealOrders.id, row.orderId))
+      .limit(1);
+    const reversed = await db
       .update(mealOrders)
-      .set({ paymentStatus: 'refunded', updatedAt: now })
-      .where(and(eq(mealOrders.id, row.orderId), eq(mealOrders.paymentStatus, 'paid')));
+      .set({
+        paymentStatus: 'refunded',
+        status: 'cancelled',
+        statusVersion: sql`${mealOrders.statusVersion} + 1`,
+        cancelledAt: now,
+        cancelReason: 'Refunded by support',
+        decidedBy: principal.id,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(mealOrders.id, row.orderId),
+          inArray(mealOrders.paymentStatus, ['paid', 'receipt_submitted']),
+          inArray(mealOrders.status, ['pending', 'confirmed', 'cancelled']),
+          or(eq(mealOrders.status, 'cancelled'), gt(mealOrders.cutoffAt, now)),
+        ),
+      )
+      .returning({ id: mealOrders.id });
+
+    if (!reversed[0]) {
+      const [current] = await db
+        .select({ status: mealOrders.status, paymentStatus: mealOrders.paymentStatus })
+        .from(mealOrders)
+        .where(eq(mealOrders.id, row.orderId))
+        .limit(1);
+      if (!current || current.status !== 'cancelled' || current.paymentStatus !== 'refunded') {
+        return json({ error: 'non_refundable' }, 409);
+      }
+    } else if (before && before.status !== 'cancelled') {
+      try {
+        await db.insert(mealOrderEvents).values({
+          orderId: row.orderId,
+          fromStatus: before.status,
+          toStatus: 'cancelled',
+          actorId: principal.id,
+          actorRole: 'admin',
+        });
+      } catch (err) {
+        console.error('[meals] refund cancellation event append failed', err);
+      }
+    }
   } else if (row.cycleId) {
     await db
       .update(mealBillingCycles)
       .set({ status: 'void', updatedAt: now })
-      .where(and(eq(mealBillingCycles.id, row.cycleId), eq(mealBillingCycles.status, 'paid')));
+      .where(
+        and(
+          eq(mealBillingCycles.id, row.cycleId),
+          inArray(mealBillingCycles.status, ['paid', 'awaiting_payment']),
+        ),
+      );
     // The billed week may already have materialized orders (horizon = today+
     // tomorrow) spawned with paymentStatus='paid'. Voiding the cycle alone would
     // leave the partner cooking meals the member has just been refunded for —
@@ -120,9 +187,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       .update(mealOrders)
       .set({
         status: 'cancelled',
+        statusVersion: sql`${mealOrders.statusVersion} + 1`,
         cancelledAt: now,
         cancelReason: 'Cycle refunded',
         paymentStatus: 'refunded',
+        decidedBy: principal.id,
         updatedAt: now,
       })
       .where(

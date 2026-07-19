@@ -220,10 +220,10 @@ export function useReauth(): ReauthController {
 export function ReauthSheet({ controller }: { controller: ReauthController }) {
   const { visible, password, busy, error, setPassword, cancel, submit } = controller;
   return (
-    <Sheet visible={visible} onClose={cancel} title="Confirm it's you">
+    <Sheet visible={visible} onClose={cancel} title="Confirm it’s you">
       <View style={styles.body}>
         <AppText variant="body" color={colors.textDim}>
-          Re-enter your password to continue with this action. You won't be asked
+          Re-enter your password to continue with this action. You won’t be asked
           again for a few minutes.
         </AppText>
 

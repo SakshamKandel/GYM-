@@ -73,6 +73,7 @@ function selectedProviderKind(): ProviderKind {
 
 let provider: VideoProvider | null = null;
 let providerKind: ProviderKind | null = null;
+let imageProvider: VideoProvider | null = null;
 
 /** Configured video provider. Singleton; methods do the env check at call time. */
 export function getVideoProvider(): VideoProvider {
@@ -86,6 +87,16 @@ export function getVideoProvider(): VideoProvider {
     providerKind = kind;
   }
   return provider;
+}
+
+/**
+ * Image operations always use Cloudinary. They must not inherit VIDEO_PROVIDER:
+ * video can be served by Cloudflare Stream while private images stay in
+ * Cloudinary.
+ */
+export function getImageProvider(): VideoProvider {
+  imageProvider ??= new CloudinaryProvider();
+  return imageProvider;
 }
 
 /**

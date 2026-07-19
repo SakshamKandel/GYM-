@@ -1,4 +1,5 @@
 import type { Permission } from '@gym/shared';
+import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
@@ -7,6 +8,7 @@ import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { robots: { index: false, follow: false } };
 // Guard reads cookies, so this subtree is always dynamic.
 export const dynamic = 'force-dynamic';
 

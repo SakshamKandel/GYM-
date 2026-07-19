@@ -197,4 +197,8 @@ export class CloudflareStreamProvider implements VideoProvider {
   async signedImageUrl(): Promise<string> {
     throw new NotConfiguredError([IMAGE_NOT_SUPPORTED_MESSAGE]);
   }
+
+  async deleteImage(): Promise<void> {
+    throw new NotConfiguredError([IMAGE_NOT_SUPPORTED_MESSAGE]);
+  }
 }

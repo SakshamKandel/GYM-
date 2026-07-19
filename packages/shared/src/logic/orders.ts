@@ -33,6 +33,66 @@ export type OrderStatus =
 /** Who is attempting a transition (auth identity resolved by the route). */
 export type OrderActor = 'member' | 'partner' | 'admin';
 
+/** Frozen payment state carried by every meal order. */
+export type OrderPaymentStatus = 'unpaid' | 'receipt_submitted' | 'paid' | 'refunded';
+
+/** Decision state of a manual eSewa/Khalti receipt. */
+export type MealPaymentRequestStatus = 'pending' | 'approved' | 'rejected' | 'refunded';
+
+/**
+ * Stable API error codes for a fulfillment mutation that would orphan money.
+ *
+ * - `payment_review_required`: a receipt is still pending; support must reject
+ *   it before fulfilment can be cancelled.
+ * - `refund_required`: money was approved/captured; the admin refund workflow
+ *   must reverse it and cancel fulfilment together.
+ */
+export type PaymentMutationBlock = 'payment_review_required' | 'refund_required';
+
+/**
+ * May an ordinary cancel/skip/refuse mutate this order without a money-side
+ * action? Refunded orders are safe because the dedicated refund workflow has
+ * already reversed their payment; unpaid/COD orders have no captured money.
+ */
+export function orderPaymentMutationBlock(
+  paymentStatus: OrderPaymentStatus,
+): PaymentMutationBlock | null {
+  switch (paymentStatus) {
+    case 'receipt_submitted':
+      return 'payment_review_required';
+    case 'paid':
+      return 'refund_required';
+    case 'unpaid':
+    case 'refunded':
+      return null;
+  }
+}
+
+/**
+ * Resolve the money-side block for a prepaid subscription billing cycle.
+ * Approved receipts take precedence over pending ones because real money has
+ * already moved even if a prior partial write left the cycle short of `paid`.
+ */
+export function cyclePaymentMutationBlock(
+  cycleStatus: CycleStatus,
+  requestStatuses: readonly MealPaymentRequestStatus[] = [],
+): PaymentMutationBlock | null {
+  if (cycleStatus === 'paid' || requestStatuses.includes('approved')) {
+    return 'refund_required';
+  }
+  if (requestStatuses.includes('pending')) return 'payment_review_required';
+  return null;
+}
+
+/** Pick the stricter result when several future orders/cycles are affected. */
+export function mergePaymentMutationBlocks(
+  blocks: readonly (PaymentMutationBlock | null)[],
+): PaymentMutationBlock | null {
+  if (blocks.includes('refund_required')) return 'refund_required';
+  if (blocks.includes('payment_review_required')) return 'payment_review_required';
+  return null;
+}
+
 export const ORDER_STATUSES: readonly OrderStatus[] = [
   'pending',
   'confirmed',

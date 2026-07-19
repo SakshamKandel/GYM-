@@ -1,10 +1,9 @@
 import { accounts, coachAssignments, coachMessages } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
 import { and, eq, sql } from 'drizzle-orm';
-import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
+import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
-import { staffFromCookie } from '@/lib/staffSession';
 import { type Client, ClientCard } from './ClientCard';
 
 export const runtime = 'nodejs';
@@ -82,8 +81,7 @@ async function loadClients(coachId: string): Promise<Client[]> {
 }
 
 export default async function CoachClientsPage() {
-  const coach = await staffFromCookie();
-  if (!coach) redirect('/coach/login');
+  const { principal: coach } = await requireCoachPage('coach.user.read');
 
   const clients = await loadClients(coach.id);
   const totalUnread = clients.reduce((sum, c) => sum + c.unread, 0);

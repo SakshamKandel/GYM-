@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { SetLog, WorkoutLog } from '@gym/shared';
 import { nowIso } from '../../lib/dates';
-import { getRepo, type Repo } from '../../lib/repo';
+import { getRepoForAccount } from '../../lib/repo';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
 import {
@@ -104,13 +104,17 @@ function buildBatch(
 // only sees unsynced rows). Persist the ids whose suggestions haven't been
 // confirmed and fold them into the next hand-off.
 
-const SUGGESTION_RETRY_KEY = 'gym-tracker-suggestion-retry-v1';
+const SUGGESTION_RETRY_KEY_PREFIX = 'gym-tracker-suggestion-retry-v2';
 /** Bound the backlog — replays are idempotent server-side, staleness is fine. */
 const SUGGESTION_RETRY_MAX = 50;
 
-async function loadSuggestionRetry(): Promise<string[]> {
+function suggestionRetryKey(accountId: string): string {
+  return `${SUGGESTION_RETRY_KEY_PREFIX}:${encodeURIComponent(accountId)}`;
+}
+
+async function loadSuggestionRetry(accountId: string): Promise<string[]> {
   try {
-    const raw = await AsyncStorage.getItem(SUGGESTION_RETRY_KEY);
+    const raw = await AsyncStorage.getItem(suggestionRetryKey(accountId));
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
@@ -119,10 +123,10 @@ async function loadSuggestionRetry(): Promise<string[]> {
   }
 }
 
-async function saveSuggestionRetry(ids: string[]): Promise<void> {
+async function saveSuggestionRetry(accountId: string, ids: string[]): Promise<void> {
   try {
     await AsyncStorage.setItem(
-      SUGGESTION_RETRY_KEY,
+      suggestionRetryKey(accountId),
       JSON.stringify(ids.slice(-SUGGESTION_RETRY_MAX)),
     );
   } catch {
@@ -131,58 +135,23 @@ async function saveSuggestionRetry(ids: string[]): Promise<void> {
 }
 
 /** Progression hand-off (contracted export) — best-effort, never fatal. */
-async function notifyProgression(syncedIds: string[]): Promise<void> {
-  const backlog = await loadSuggestionRetry();
+async function notifyProgression(accountId: string, syncedIds: string[]): Promise<void> {
+  const backlog = await loadSuggestionRetry(accountId);
   const ids = [...new Set([...backlog, ...syncedIds])];
   if (ids.length === 0) return;
   let posted = false;
   try {
     const { submitSuggestionsForWorkouts } = await import('../progression/submit');
-    posted = await submitSuggestionsForWorkouts(ids);
+    posted = await submitSuggestionsForWorkouts(ids, accountId);
   } catch {
     // Progression is a bonus on top of sync — the backup already succeeded.
   }
-  await saveSuggestionRetry(posted ? [] : ids);
+  await saveSuggestionRetry(accountId, posted ? [] : ids);
 }
 
-// ── Account fingerprint ───────────────────────────────────────
-// Local workout rows deliberately survive account switches (state/auth.ts
-// keeps them), and they carry no owner column — so without a gate, the drain
-// would upload member A's offline backlog under member B's token after a
-// switch on a shared device. Pin the backlog to an account the same way the
-// check-in store fingerprints its due-state.
-
-const SYNC_OWNER_KEY = 'gym-tracker-sync-owner-v1';
-
-/**
- * Ensure the unsynced backlog belongs to the signed-in account before it
- * uploads. First-ever sync claims the device history (pre-sign-in workouts
- * back up to the first account — the intended backfill). On an account
- * SWITCH, whatever is still unsynced belongs to the previous account: mark it
- * ineligible (never upload it under the new id — conservative, the rows stay
- * local) and drop the previous account's suggestion retry backlog too.
- */
-async function ensureBacklogOwnership(repo: Repo, accountId: string): Promise<void> {
-  let owner: string | null = null;
-  try {
-    owner = await AsyncStorage.getItem(SYNC_OWNER_KEY);
-  } catch {
-    owner = null;
-  }
-  if (owner === accountId) return;
-  if (owner !== null) {
-    for (;;) {
-      const stale = await repo.getUnsyncedFinishedWorkouts(MAX_WORKOUTS_PER_BATCH);
-      if (stale.length === 0) break;
-      await repo.markWorkoutsSynced(
-        stale.map((p) => p.workout.id),
-        nowIso(),
-      );
-    }
-    await saveSuggestionRetry([]);
-  }
-  await AsyncStorage.setItem(SYNC_OWNER_KEY, accountId);
-}
+// Local ownership is enforced by the repository. Sync asks for an immutable
+// account-scoped view, so a later auth transition cannot retarget or discard
+// this member's pending rows.
 
 // Overlapping triggers (finish() while the app-start drain is running) must
 // not double-send a batch — the module-level guard makes the second call a
@@ -205,8 +174,7 @@ export async function syncWorkouts(): Promise<void> {
   // rows under the new member's token.
   const accountId = initialAuth.user.id;
   try {
-    const repo = await getRepo();
-    await ensureBacklogOwnership(repo, accountId);
+    const repo = await getRepoForAccount(accountId);
     for (;;) {
       // Re-read per batch so a mid-drain sign-out — or a switch to a
       // different account — stops the upload cleanly.
@@ -218,7 +186,7 @@ export async function syncWorkouts(): Promise<void> {
       if (pending.length === 0) {
         // Nothing to upload, but a previous drain may have synced workouts
         // whose suggestion POST was lost — flush that backlog on its own.
-        await notifyProgression([]);
+        await notifyProgression(accountId, []);
         return;
       }
       const batch = buildBatch(pending, unitPref);
@@ -251,7 +219,7 @@ export async function syncWorkouts(): Promise<void> {
       const confirmed = syncedIds.filter((id) => sent.has(id));
       if (confirmed.length === 0) return; // nothing landed — retry next trigger
       await repo.markWorkoutsSynced(confirmed, nowIso());
-      await notifyProgression(confirmed);
+      await notifyProgression(accountId, confirmed);
 
       // Keep draining only after a fully-confirmed batch AND when more may
       // remain (full page, or the caps trimmed this one). A partial

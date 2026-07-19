@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { subscriptionPaymentMutationBlock } from '@/lib/meals';
 
 export const runtime = 'nodejs';
 
@@ -48,6 +49,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return json({ error: 'invalid_transition' }, 409);
   }
 
+  // Pausing or cancelling can suppress prepaid slots that have not yet entered
+  // the two-day materialization horizon. Support must reject a pending receipt
+  // or use the dedicated refund route before this lifecycle mutation.
+  if (target === 'paused' || target === 'cancelled') {
+    const paymentBlock = await subscriptionPaymentMutationBlock({
+      db,
+      subscriptionId: sub.id,
+      scope: { kind: 'remaining' },
+    });
+    if (paymentBlock) return json({ error: paymentBlock }, 409);
+  }
+
   const updated = await db
     .update(mealSubscriptions)
     .set({ status: target, updatedAt: new Date() })
@@ -73,6 +86,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         and(
           eq(mealOrders.subscriptionId, sub.id),
           eq(mealOrders.status, 'pending'),
+          inArray(mealOrders.paymentStatus, ['unpaid', 'refunded']),
           gte(mealOrders.deliveryDate, today),
           gt(mealOrders.cutoffAt, new Date()),
         ),

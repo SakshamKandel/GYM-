@@ -27,3 +27,4 @@ export * from './logic/meals';
 export * from './logic/orders';
 export * from './logic/gyms';
 export * from './logic/geo';
+export * from './logic/accountDeletion';

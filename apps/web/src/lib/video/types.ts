@@ -83,6 +83,8 @@ export interface VideoProvider {
   createImageUpload(opts: CreateImageUploadOpts): Promise<CreateImageUploadResult>;
   /** Mint a short-lived (~2h) signed delivery URL for an authenticated-kind image uid. */
   signedImageUrl(uid: string): Promise<string>;
+  /** Permanently delete an image by uid (idempotent when it is already gone). */
+  deleteImage(uid: string, access: CreateImageUploadOpts['access']): Promise<void>;
 }
 
 /**

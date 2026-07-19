@@ -4,7 +4,7 @@ import { count, desc, eq, ne } from 'drizzle-orm';
 import { requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
-import { getVideoProvider, NotConfiguredError } from '@/lib/video';
+import { getImageProvider, NotConfiguredError } from '@/lib/video';
 
 export const runtime = 'nodejs';
 
@@ -99,7 +99,7 @@ export async function GET(req: Request) {
   ]);
   const pendingCount = Number(pendingCountRow[0]?.n ?? 0);
 
-  const provider = getVideoProvider();
+  const provider = getImageProvider();
   const shaped = await Promise.all(
     rows.map(async (r) => {
       let receiptUrl: string;

@@ -17,3 +17,4 @@ export {
 } from './orders';
 export { advanceOrderStatus, type AdvanceOrderParams, type AdvanceOrderResult } from './advance';
 export { materializeDueOrders, type MaterializeScope } from './materialize';
+export { subscriptionPaymentMutationBlock } from './paymentSafety';

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router } from 'expo-router';
+import { randomUUID } from 'expo-crypto';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import { formatMoney } from '@gym/shared';
@@ -126,6 +127,14 @@ export default function CheckoutScreen() {
   const [placing, setPlacing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [placedOrder, setPlacedOrder] = useState<MealOrder | null>(null);
+  const orderRequestIdRef = useRef<string | null>(null);
+
+  // A failed request may have committed even when its response was lost. Keep
+  // one key for retries of the unchanged checkout intent, but never reuse it
+  // after the member changes any field that participates in the order payload.
+  useEffect(() => {
+    orderRequestIdRef.current = null;
+  }, [partnerId, lines, addressId, slot?.date, slot?.window, method, notes]);
 
   const items = Object.values(lines);
   const subtotal = cartSubtotalMinor(lines);
@@ -160,7 +169,10 @@ export default function CheckoutScreen() {
     setError(null);
     void (async () => {
       try {
+        const requestId = orderRequestIdRef.current ?? randomUUID();
+        orderRequestIdRef.current = requestId;
         const order = await createMealOrder(token, {
+          requestId,
           partnerId,
           deliveryDate: slot.date,
           window: slot.window,
@@ -169,6 +181,7 @@ export default function CheckoutScreen() {
           paymentMethod: method,
           notes: notes.trim() || undefined,
         });
+        orderRequestIdRef.current = null;
         successHaptic();
         clearCart();
         if (isDigitalMethod(order.paymentMethod)) {
@@ -177,7 +190,11 @@ export default function CheckoutScreen() {
           pushPath('/meals/orders');
         }
       } catch (err) {
-        setError(mealErrorMessage(toMealsError(err).code));
+        const apiError = toMealsError(err);
+        // A conflict is permanent for this key; mint a fresh key if the member
+        // retries after the actionable error instead of trapping the checkout.
+        if (apiError.code === 'idempotency_conflict') orderRequestIdRef.current = null;
+        setError(mealErrorMessage(apiError.code));
         warnHaptic();
       } finally {
         setPlacing(false);
@@ -365,7 +382,7 @@ export default function CheckoutScreen() {
             </AppText>
           ) : quoteStatus === 'error' ? (
             <AppText variant="caption" color={colors.error}>
-              Couldn't calculate the total. Adjust your order or try again.
+              Couldn’t calculate the total. Adjust your order or try again.
             </AppText>
           ) : quote?.deliversTo === false ? (
             <AppText variant="caption" color={colors.warning}>

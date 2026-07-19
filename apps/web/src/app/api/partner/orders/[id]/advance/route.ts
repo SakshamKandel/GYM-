@@ -1,5 +1,10 @@
 import { mealOrderItems, mealOrders } from '@gym/db';
-import { ORDER_STATUSES, canActorAdvance, type OrderStatus } from '@gym/shared';
+import {
+  ORDER_STATUSES,
+  canActorAdvance,
+  orderPaymentMutationBlock,
+  type OrderStatus,
+} from '@gym/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requirePartner } from '@/lib/authz';
@@ -60,6 +65,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const from = order.status;
   if (!canActorAdvance(from, toStatus, 'partner')) {
     return json({ error: 'illegal_transition' }, 409);
+  }
+
+  if (toStatus === 'cancelled' || toStatus === 'refused') {
+    const paymentBlock = orderPaymentMutationBlock(order.paymentStatus);
+    if (paymentBlock) return json({ error: paymentBlock }, 409);
   }
 
   // Payment gate: never confirm a digital order until its receipt is approved.

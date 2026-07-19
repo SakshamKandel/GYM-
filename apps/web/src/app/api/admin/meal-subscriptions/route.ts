@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { subscriptionPaymentMutationBlock } from '@/lib/meals';
 import { sendPushToAccount } from '@/lib/push';
 import { clientIp } from '@/lib/rateLimit';
 
@@ -163,6 +164,15 @@ export async function POST(req: Request) {
     return json({ error: 'invalid_transition' }, 409);
   }
 
+  if (target === 'paused' || target === 'cancelled') {
+    const paymentBlock = await subscriptionPaymentMutationBlock({
+      db,
+      subscriptionId: sub.id,
+      scope: { kind: 'remaining' },
+    });
+    if (paymentBlock) return json({ error: paymentBlock }, 409);
+  }
+
   const updated = await db
     .update(mealSubscriptions)
     .set({ status: target, updatedAt: new Date() })
@@ -180,6 +190,7 @@ export async function POST(req: Request) {
         and(
           eq(mealOrders.subscriptionId, sub.id),
           eq(mealOrders.status, 'pending'),
+          inArray(mealOrders.paymentStatus, ['unpaid', 'refunded']),
           gte(mealOrders.deliveryDate, today),
           gt(mealOrders.cutoffAt, new Date()),
         ),

@@ -3,7 +3,7 @@ import { desc, eq } from 'drizzle-orm';
 import { requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
-import { getVideoProvider, NotConfiguredError } from '@/lib/video';
+import { getImageProvider, NotConfiguredError } from '@/lib/video';
 
 export const runtime = 'nodejs';
 
@@ -78,7 +78,7 @@ export async function GET(req: Request) {
     .orderBy(desc(mealPaymentRequests.createdAt))
     .limit(MAX_ROWS);
 
-  const provider = getVideoProvider();
+  const provider = getImageProvider();
   const requests = await Promise.all(
     rows.map(async (r) => {
       let receiptUrl: string;

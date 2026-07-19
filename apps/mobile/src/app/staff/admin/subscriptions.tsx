@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
@@ -181,6 +182,7 @@ function OverrideSheet({
   onClose: () => void;
   onSaved: (tier: Tier) => void;
 }) {
+  const insets = useSafeAreaInsets();
   const [picked, setPicked] = useState<Tier>(member.tier);
   // The window the operator wants. `null` (permanent) is the safe default so a
   // plain tier bump doesn't silently attach an expiry; touching a duration chip
@@ -286,7 +288,10 @@ function OverrideSheet({
             <ScrollView
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.sheetScroll}
+              contentContainerStyle={[
+                styles.sheetScroll,
+                { paddingBottom: insets.bottom + spacing.xxl },
+              ]}
             >
               <AppText variant="label">Override tier</AppText>
               <AppText variant="title" numberOfLines={1}>

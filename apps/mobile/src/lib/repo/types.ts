@@ -104,3 +104,14 @@ export interface Repo {
   getStreak(): Promise<Streak>;
   setStreak(s: Streak): Promise<void>;
 }
+
+/**
+ * Internal storage factory. Feature code receives only a scoped {@link Repo};
+ * the auth/sync boundaries choose which immutable owner namespace backs it.
+ */
+export interface RepoStore {
+  getAnonymousOwnerId(): string;
+  setAnonymousOwnerId(ownerId: string): Promise<void>;
+  forOwner(ownerId: string): Repo;
+  deleteOwnerData(ownerId: string): Promise<void>;
+}

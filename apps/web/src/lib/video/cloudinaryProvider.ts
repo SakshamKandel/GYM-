@@ -49,8 +49,8 @@ import type {
   CreateUploadMeta,
   CreateUploadResult,
   VideoProvider,
-} from './types';
-import { NotConfiguredError } from './types';
+} from './types.ts';
+import { NotConfiguredError } from './types.ts';
 
 const CLOUDINARY_API_BASE = 'https://api.cloudinary.com/v1_1';
 const CLOUDINARY_DELIVERY_BASE = 'https://res.cloudinary.com';
@@ -375,6 +375,49 @@ export class CloudinaryProvider implements VideoProvider {
         : undefined;
 
     return { uploadUrl, uid, fields, deliveryUrl };
+  }
+
+  async deleteImage(
+    uid: string,
+    access: CreateImageUploadOpts['access'],
+  ): Promise<void> {
+    const cfg = loadConfig();
+    const timestamp = Math.floor(Date.now() / 1000);
+    const type = access === 'authenticated' ? 'authenticated' : 'upload';
+
+    const signed: Record<string, string | number> = {
+      public_id: uid,
+      timestamp,
+      type,
+    };
+    const signature = signParams(signed, cfg.apiSecret);
+    const form = new URLSearchParams({
+      public_id: uid,
+      timestamp: String(timestamp),
+      type,
+      api_key: cfg.apiKey,
+      signature,
+    });
+
+    const res = await fetch(
+      `${CLOUDINARY_API_BASE}/${cfg.cloudName}/image/destroy`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form.toString(),
+      },
+    );
+    const body = (await res
+      .json()
+      .catch(() => null)) as CloudinaryDestroyResult | null;
+
+    if (body?.result === 'not found') return;
+    if (!res.ok || body?.result !== 'ok') {
+      const msg =
+        body?.error?.message ??
+        `Cloudinary image destroy failed (HTTP ${res.status})`;
+      throw new Error(msg);
+    }
   }
 
   async signedImageUrl(uid: string): Promise<string> {

@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import type { Tier } from '@gym/shared';
+import {
+  ACCOUNT_DELETION_BLOCKER_CODES,
+  type AccountDeletionImpact,
+  type Tier,
+} from '@gym/shared';
 
 /**
  * Auth API client — tiny typed fetch wrapper for the GM Method backend.
@@ -40,15 +44,25 @@ export type ApiErrorCode =
   /** POST /api/payments/requests: another request is still awaiting review. */
   | 'already_pending'
   /** POST /api/payments/requests: the uploaded receipt already funded a request. */
-  | 'receipt_already_used';
+  | 'receipt_already_used'
+  | 'account_deletion_blocked'
+  | 'confirmation_required'
+  | 'private_asset_cleanup_pending'
+  | 'account_deletion_conflict';
 
 export class ApiError extends Error {
   readonly code: ApiErrorCode;
+  readonly deletionImpact: AccountDeletionImpact | null;
 
-  constructor(code: ApiErrorCode, message?: string) {
+  constructor(
+    code: ApiErrorCode,
+    message?: string,
+    deletionImpact: AccountDeletionImpact | null = null,
+  ) {
     super(message ?? code);
     this.name = 'ApiError';
     this.code = code;
+    this.deletionImpact = deletionImpact;
   }
 }
 
@@ -76,7 +90,30 @@ export type AuthSession = z.infer<typeof sessionSchema>;
 
 const meSchema = z.object({ user: userSchema });
 const okSchema = z.object({ ok: z.literal(true) });
-const errorBodySchema = z.object({ error: z.string() });
+const deletionBlockerCodeSchema = z.enum(ACCOUNT_DELETION_BLOCKER_CODES);
+const accountDeletionImpactSchema: z.ZodType<AccountDeletionImpact> = z.object({
+  canDelete: z.boolean(),
+  blockers: z.array(
+    z.object({
+      code: deletionBlockerCodeSchema,
+      count: z.number().int().nonnegative(),
+    }),
+  ),
+  retainedHistory: z.object({
+    mealOrders: z.number().int().nonnegative(),
+    mealSubscriptions: z.number().int().nonnegative(),
+    mealPaymentRequests: z.number().int().nonnegative(),
+    membershipPaymentRequests: z.number().int().nonnegative(),
+    promoRedemptions: z.number().int().nonnegative(),
+    discountGrants: z.number().int().nonnegative(),
+    coachPayoutRequests: z.number().int().nonnegative(),
+    walletLedgerEntries: z.number().int().nonnegative(),
+  }),
+});
+const errorBodySchema = z.object({
+  error: z.string(),
+  impact: accountDeletionImpactSchema.optional(),
+});
 
 // ── Fetch plumbing ────────────────────────────────────────────
 
@@ -100,7 +137,11 @@ function serverErrorCode(raw: string): ApiErrorCode | null {
     raw === 'expired' ||
     raw === 'image_not_configured' ||
     raw === 'already_pending' ||
-    raw === 'receipt_already_used'
+    raw === 'receipt_already_used' ||
+    raw === 'account_deletion_blocked' ||
+    raw === 'confirmation_required' ||
+    raw === 'private_asset_cleanup_pending' ||
+    raw === 'account_deletion_conflict'
     ? raw
     : null;
 }
@@ -159,13 +200,17 @@ async function request(opts: RequestOptions): Promise<unknown> {
 
   // Non-2xx: prefer the contract's {error} code, fall back on the status.
   let code: ApiErrorCode = res.status === 401 ? 'unauthorized' : 'network';
+  let deletionImpact: AccountDeletionImpact | null = null;
   try {
     const parsed = errorBodySchema.safeParse(await res.json());
-    if (parsed.success) code = serverErrorCode(parsed.data.error) ?? code;
+    if (parsed.success) {
+      code = serverErrorCode(parsed.data.error) ?? code;
+      deletionImpact = parsed.data.impact ?? null;
+    }
   } catch {
     // Body wasn't JSON — keep the status-derived code.
   }
-  throw new ApiError(code);
+  throw new ApiError(code, undefined, deletionImpact);
 }
 
 /** Validate a payload; a malformed body is indistinguishable from a bad server. */
@@ -271,12 +316,17 @@ export async function setSubscriptionTier(token: string, tier: Tier): Promise<Au
 }
 
 /**
- * Permanently delete the signed-in account: the server hard-deletes the
- * account, its owned data and every session. Throws ApiError on failure —
- * deletion must never be presented as done when the server didn't confirm.
+ * Permanently delete an eligible signed-in account. The typed confirmation is
+ * enforced by the API, not just the screen. Operational/offboarding/retention
+ * blockers surface as `ApiError.deletionImpact` and nothing is deleted.
  */
-export async function deleteAccount(token: string): Promise<void> {
-  const data = await request({ method: 'DELETE', path: '/api/me', token });
+export async function deleteAccount(token: string, confirmation: string): Promise<void> {
+  const data = await request({
+    method: 'DELETE',
+    path: '/api/me',
+    token,
+    body: { confirmation },
+  });
   parseAs(okSchema, data);
 }
 

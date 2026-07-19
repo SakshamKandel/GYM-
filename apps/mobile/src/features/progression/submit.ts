@@ -2,7 +2,7 @@ import type { WorkoutLog } from '@gym/shared';
 import { suggestProgression } from '@gym/shared';
 import { addDays, todayIso } from '../../lib/dates';
 import { uid } from '../../lib/id';
-import { getRepo } from '../../lib/repo';
+import { getRepoForAccount } from '../../lib/repo';
 import { getPlanWorkout } from '../../lib/seed/plans';
 import { useAuth } from '../../state/auth';
 import {
@@ -42,12 +42,22 @@ const clamp = (value: number, min: number, max: number): number =>
  * conflicts-do-nothing on both the row id and the (account, exercise, source
  * workout) unique index.
  */
-export async function submitSuggestionsForWorkouts(workoutIds: string[]): Promise<boolean> {
+export async function submitSuggestionsForWorkouts(
+  workoutIds: string[],
+  expectedAccountId: string,
+): Promise<boolean> {
   try {
     const auth = useAuth.getState();
-    if (auth.status !== 'signedIn' || !auth.token) return false;
+    if (
+      auth.status !== 'signedIn' ||
+      !auth.token ||
+      auth.user?.id !== expectedAccountId
+    ) return false;
     if (workoutIds.length === 0) return true;
-    const repo = await getRepo();
+    // Pin the local history to the same account as the captured token. A
+    // mid-computation account switch can make this POST fail after revocation,
+    // but it can never retarget another member's history or token.
+    const repo = await getRepoForAccount(expectedAccountId);
 
     // Resolve the synced workouts, oldest first, so a backlog drain keys each
     // exercise's suggestion to the LATEST workout that trained it — a target

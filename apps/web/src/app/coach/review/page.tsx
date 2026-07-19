@@ -1,6 +1,5 @@
-import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
-import { staffFromCookie } from '@/lib/staffSession';
+import { requireCoachPage } from '@/lib/coachPage';
 import { ReviewQueue } from './_components/ReviewQueue';
 
 export const runtime = 'nodejs';
@@ -16,8 +15,7 @@ export const dynamic = 'force-dynamic';
  * same-origin fetch), so approve/adjust actions update the list in place.
  */
 export default async function CoachReviewPage() {
-  const principal = await staffFromCookie();
-  if (!principal) redirect('/coach/login');
+  await requireCoachPage('coach.user.read');
 
   return (
     <div style={{ maxWidth: 900 }}>

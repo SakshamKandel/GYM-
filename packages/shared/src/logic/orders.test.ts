@@ -29,6 +29,9 @@ const {
   canAdvanceCycle,
   canAdvanceSubscription,
   isTerminalOrderStatus,
+  cyclePaymentMutationBlock,
+  mergePaymentMutationBlocks,
+  orderPaymentMutationBlock,
   partnerRotationFor,
   subscriptionActionTarget,
   weekBoundsFor,
@@ -130,6 +133,43 @@ describe('cycle machine', () => {
     assert.equal(canAdvanceCycle('awaiting_payment', 'void'), true);
     assert.equal(canAdvanceCycle('open', 'paid'), false);
     assert.equal(canAdvanceCycle('paid', 'void'), false);
+  });
+});
+
+describe('payment-safe cancellation policy', () => {
+  it('allows ordinary fulfilment mutations only when no money is in flight', () => {
+    assert.equal(orderPaymentMutationBlock('unpaid'), null);
+    assert.equal(orderPaymentMutationBlock('refunded'), null);
+    assert.equal(orderPaymentMutationBlock('receipt_submitted'), 'payment_review_required');
+    assert.equal(orderPaymentMutationBlock('paid'), 'refund_required');
+  });
+
+  it('protects prepaid cycles with pending or approved receipts', () => {
+    assert.equal(cyclePaymentMutationBlock('open'), null);
+    assert.equal(cyclePaymentMutationBlock('awaiting_payment'), null);
+    assert.equal(
+      cyclePaymentMutationBlock('awaiting_payment', ['pending']),
+      'payment_review_required',
+    );
+    assert.equal(
+      cyclePaymentMutationBlock('awaiting_payment', ['approved']),
+      'refund_required',
+    );
+    assert.equal(cyclePaymentMutationBlock('paid'), 'refund_required');
+    assert.equal(cyclePaymentMutationBlock('void', ['rejected', 'refunded']), null);
+  });
+
+  it('gives a captured payment precedence over another pending receipt', () => {
+    assert.equal(
+      mergePaymentMutationBlocks([
+        null,
+        'payment_review_required',
+        'refund_required',
+      ]),
+      'refund_required',
+    );
+    assert.equal(mergePaymentMutationBlocks([null, 'payment_review_required']), 'payment_review_required');
+    assert.equal(mergePaymentMutationBlocks([null, null]), null);
   });
 });
 

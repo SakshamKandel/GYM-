@@ -4,7 +4,7 @@ import { requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import { rateLimit } from '@/lib/rateLimit';
-import { getVideoProvider, NotConfiguredError } from '@/lib/video';
+import { getImageProvider, NotConfiguredError } from '@/lib/video';
 
 export const runtime = 'nodejs';
 
@@ -54,7 +54,7 @@ export async function GET(req: Request) {
     .orderBy(desc(progressPhotos.takenOn), desc(progressPhotos.createdAt))
     .limit(100);
 
-  const provider = getVideoProvider();
+  const provider = getImageProvider();
   try {
     const photos = await Promise.all(
       rows.map(async (r) => ({

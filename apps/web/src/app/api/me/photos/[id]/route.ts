@@ -4,6 +4,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import { rateLimit } from '@/lib/rateLimit';
+import { getImageProvider, NotConfiguredError } from '@/lib/video';
 
 export const runtime = 'nodejs';
 
@@ -13,8 +14,8 @@ export const runtime = 'nodejs';
  * Scoped to accountId so one member can never delete another's row (404, not
  * 403, to avoid confirming the id exists for someone else's photo).
  *
- * NOTE: this removes the DB row only; the underlying Cloudinary asset is left
- * in place (out of scope for §4.5 — no deleteImage on the provider yet).
+ * The private provider asset is destroyed before its DB reference is removed,
+ * so member deletion does not leave inaccessible body imagery in storage.
  */
 
 export function OPTIONS() {
@@ -40,11 +41,30 @@ export async function DELETE(
 
   const { id } = await params;
 
-  const deleted = await getDb()
-    .delete(progressPhotos)
+  const db = getDb();
+  const [photo] = await db
+    .select({ id: progressPhotos.id, uid: progressPhotos.imageUrl })
+    .from(progressPhotos)
     .where(and(eq(progressPhotos.id, id), eq(progressPhotos.accountId, user.id)))
-    .returning({ id: progressPhotos.id });
+    .limit(1);
 
-  if (deleted.length === 0) return json({ error: 'not_found' }, 404);
+  if (!photo) return json({ error: 'not_found' }, 404);
+
+  try {
+    await getImageProvider().deleteImage(photo.uid, 'authenticated');
+  } catch (error) {
+    if (error instanceof NotConfiguredError) {
+      return json({ error: 'image_not_configured' }, 503);
+    }
+    console.error('Progress photo provider deletion failed', {
+      photoId: photo.id,
+      error: error instanceof Error ? error.message : 'unknown_error',
+    });
+    return json({ error: 'image_delete_failed' }, 502);
+  }
+
+  await db
+    .delete(progressPhotos)
+    .where(and(eq(progressPhotos.id, photo.id), eq(progressPhotos.accountId, user.id)));
   return json({ ok: true }, 200);
 }

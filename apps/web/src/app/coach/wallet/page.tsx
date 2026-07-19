@@ -1,10 +1,9 @@
 import { coachPayoutRequests, promoCodes, walletLedger } from '@gym/db';
 import { and, desc, eq } from 'drizzle-orm';
-import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
+import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
 import { coachWalletBalances } from '@/lib/promoEconomy';
-import { staffFromCookie } from '@/lib/staffSession';
 import {
   CoachWalletView,
   type LedgerEntry,
@@ -31,8 +30,7 @@ export const dynamic = 'force-dynamic';
 const ENTRY_LIMIT = 50;
 
 export default async function CoachWalletPage() {
-  const coach = await staffFromCookie();
-  if (!coach) redirect('/coach/login');
+  const { principal: coach } = await requireCoachPage('coach.wallet.read');
 
   const db = getDb();
 

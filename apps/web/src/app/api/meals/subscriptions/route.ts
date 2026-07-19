@@ -4,6 +4,7 @@ import { and, asc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
+import { deliveryEligibility, deliveryEligibilityError } from '@/lib/deliveryEligibility';
 import { json, preflight, readJson } from '@/lib/http';
 import { loadDeliveryConfig, materializeDueOrders } from '@/lib/meals';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
@@ -151,15 +152,33 @@ export async function POST(req: Request) {
   const db = getDb();
 
   const [partner] = await db
-    .select({ id: mealPartners.id, acceptsCod: mealPartners.acceptsCod })
+    .select({
+      id: mealPartners.id,
+      acceptsCod: mealPartners.acceptsCod,
+      serviceAreas: mealPartners.serviceAreas,
+      serviceLat: mealPartners.serviceLat,
+      serviceLng: mealPartners.serviceLng,
+      serviceRadiusKm: mealPartners.serviceRadiusKm,
+    })
     .from(mealPartners)
-    .where(and(eq(mealPartners.id, partnerId), eq(mealPartners.isActive, true)))
+    .where(
+      and(
+        eq(mealPartners.id, partnerId),
+        eq(mealPartners.isActive, true),
+        eq(mealPartners.acceptingOrders, true),
+      ),
+    )
     .limit(1);
   if (!partner) return json({ error: 'partner_unavailable' }, 400);
   if (paymentMethod === 'cod' && !partner.acceptsCod) return json({ error: 'cod_unavailable' }, 400);
 
   const [address] = await db
-    .select({ id: savedAddresses.id })
+    .select({
+      id: savedAddresses.id,
+      area: savedAddresses.area,
+      lat: savedAddresses.lat,
+      lng: savedAddresses.lng,
+    })
     .from(savedAddresses)
     .where(
       and(
@@ -170,6 +189,9 @@ export async function POST(req: Request) {
     )
     .limit(1);
   if (!address) return json({ error: 'address_not_found' }, 400);
+
+  const eligibilityError = deliveryEligibilityError(deliveryEligibility(partner, address));
+  if (eligibilityError) return json({ error: eligibilityError }, 400);
 
   const cfg = await loadDeliveryConfig(db);
   const fold = cfg.deliveryFeeMinor; // delivery folded into the daily price.

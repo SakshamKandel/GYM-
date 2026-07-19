@@ -87,6 +87,55 @@ const TIER_LABEL: Record<Tier, string> = {
   elite: 'Elite',
 };
 
+function accountDeletionFailureMessage(error: ReturnType<typeof toApiError>): string {
+  if (error.code === 'unauthorized') {
+    return 'Your session has expired — sign in again to delete your account.';
+  }
+  if (error.code === 'confirmation_required') {
+    return 'Type DELETE exactly to confirm.';
+  }
+  if (error.code === 'private_asset_cleanup_pending') {
+    return "We couldn't finish removing your private progress photos. Nothing else was deleted — try again.";
+  }
+  if (error.code === 'account_deletion_conflict') {
+    return 'Your account changed while deletion was starting. Nothing was deleted — review your active services and try again.';
+  }
+  if (error.code === 'account_deletion_blocked') {
+    const blockerCodes = new Set(
+      error.deletionImpact?.blockers.map((blocker) => blocker.code) ?? [],
+    );
+    if (
+      blockerCodes.has('live_meal_orders') ||
+      blockerCodes.has('open_meal_subscriptions')
+    ) {
+      return 'Finish or cancel every active meal order and recurring meal plan before deleting your account.';
+    }
+    if (
+      blockerCodes.has('pending_meal_payment_requests') ||
+      blockerCodes.has('pending_membership_payment_requests')
+    ) {
+      return 'Wait for pending meal or membership payment reviews to finish before deleting your account.';
+    }
+    if (
+      blockerCodes.has('staff_offboarding_required') ||
+      blockerCodes.has('partner_offboarding_required') ||
+      blockerCodes.has('coach_offboarding_required')
+    ) {
+      return 'An administrator must first offboard your staff, coach, or meal-partner access. Nothing was deleted.';
+    }
+    if (blockerCodes.has('legacy_identity_ambiguous')) {
+      return 'We found more than one legacy profile for this email. Contact support so we can verify and erase the right data safely.';
+    }
+    if (
+      blockerCodes.has('retained_commerce_history') ||
+      blockerCodes.has('retained_financial_history')
+    ) {
+      return 'Your account has order, payment, discount, or payout records that self-service deletion cannot erase safely. Contact support for verified anonymization; nothing was deleted.';
+    }
+  }
+  return "Couldn't reach the server. Nothing was deleted — check your connection and try again.";
+}
+
 /**
  * Day picker order, Monday-first for a natural reading order. Each entry maps a
  * single-letter chip to the expo-notifications weekday number (1=Sun … 7=Sat).
@@ -336,7 +385,7 @@ function DeleteAccountDialog({
             >
               <AppText variant="title">Last step</AppText>
               <AppText variant="body" color={colors.textDim}>
-                {`This permanently deletes ${email} and everything synced to it. Type DELETE to confirm.`}
+                {`This permanently deletes ${email} and eligible synced data. Type DELETE to confirm. The server will stop without deleting anything if active services or retained billing records need offboarding.`}
               </AppText>
               <AppTextInput
                 value={value}
@@ -745,14 +794,10 @@ export default function SettingsScreen() {
     setDeleteBusy(true);
     setDeleteError(null);
     try {
-      await deleteAccount(token);
+      await deleteAccount(token, deleteText);
     } catch (err) {
       setDeleteBusy(false);
-      setDeleteError(
-        toApiError(err).code === 'unauthorized'
-          ? 'Your session has expired — sign in again to delete your account.'
-          : "Couldn't reach the server. Nothing was deleted — check your connection and try again.",
-      );
+      setDeleteError(accountDeletionFailureMessage(toApiError(err)));
       warnHaptic();
       return;
     }
@@ -761,7 +806,7 @@ export default function SettingsScreen() {
     setDeleteBusy(false);
     setDeleteStep('idle');
     setDeleteText('');
-    await signOut(); // never throws; clears local account state
+    await signOut({ purgeLocalAccountData: true }); // server deletion also purges this account's device rows
     // Whole-stack reset: back from the front door must not reopen the
     // deleted account's dashboard sitting underneath.
     resetStackTo('/welcome');
@@ -816,7 +861,7 @@ export default function SettingsScreen() {
       <Animated.View entering={enterUp(0)} style={styles.membershipCardWrap}>
         <MembershipCard
           tier={serverTier}
-          holderName={displayName}
+          holderName={displayName || authUser?.displayName || ''}
           memberId={authUser?.id ?? null}
           signedIn={signedIn}
           onPress={() => pushPath('/subscribe')}
@@ -1505,7 +1550,7 @@ export default function SettingsScreen() {
       <ConfirmDialog
         visible={deleteStep === 'confirm'}
         title="Delete your account?"
-        message="This permanently erases your account, subscription and everything synced to our servers. It cannot be undone. Logs saved on this phone stay on the phone."
+        message="This permanently erases your sign-in, health and training data, and private progress photos. Active services must be closed first; billing and order history may require support-assisted anonymization. Logs saved on this phone stay on the phone."
         confirmLabel="Continue"
         cancelLabel="Keep my account"
         danger

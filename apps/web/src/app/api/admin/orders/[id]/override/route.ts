@@ -1,5 +1,10 @@
 import { mealOrders } from '@gym/db';
-import { ORDER_STATUSES, canActorAdvance, type OrderStatus } from '@gym/shared';
+import {
+  ORDER_STATUSES,
+  canActorAdvance,
+  orderPaymentMutationBlock,
+  type OrderStatus,
+} from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
@@ -57,6 +62,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const from = order.status;
   if (!canActorAdvance(from, toStatus, 'admin')) {
     return json({ error: 'illegal_transition' }, 409);
+  }
+
+  if (toStatus === 'cancelled' || toStatus === 'refused') {
+    const paymentBlock = orderPaymentMutationBlock(order.paymentStatus);
+    if (paymentBlock) return json({ error: paymentBlock }, 409);
   }
 
   // Payment gate (§3): the "never cook unpaid" invariant applies to the admin

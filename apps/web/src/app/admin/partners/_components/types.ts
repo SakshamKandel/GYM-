@@ -1,3 +1,5 @@
+import type { PartnerAdminSafeguards } from '@/lib/partnerAdminSafeguards';
+
 /** One meal-partner roster row, as served by the admin partners page/API. */
 export interface PartnerRow {
   id: string;
@@ -22,4 +24,5 @@ export interface PartnerRow {
   accountStatus: string;
   menuCount: number;
   activeOrders: number;
+  safeguards: PartnerAdminSafeguards;
 }

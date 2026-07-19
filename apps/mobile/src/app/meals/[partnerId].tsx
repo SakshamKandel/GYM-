@@ -3,6 +3,7 @@ import { Image, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
@@ -170,6 +171,7 @@ function MealItemCard({ meal }: { meal: MenuMeal }) {
 
 export default function PartnerMenuScreen() {
   const { partnerId } = useLocalSearchParams<{ partnerId: string }>();
+  const insets = useSafeAreaInsets();
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
   const [diet, setDiet] = useState<MealDietType | null>(null);
@@ -331,7 +333,10 @@ export default function PartnerMenuScreen() {
       )}
 
       {count > 0 ? (
-        <Animated.View entering={enterFade(0)} style={styles.cartBar}>
+        <Animated.View
+          entering={enterFade(0)}
+          style={[styles.cartBar, { bottom: insets.bottom + spacing.lg }]}
+        >
           <View style={styles.cartInfo}>
             <AppText variant="bodyBold" color={colors.onBlock}>
               {count} {count === 1 ? 'item' : 'items'} · {formatMoney(subtotal, currency)}

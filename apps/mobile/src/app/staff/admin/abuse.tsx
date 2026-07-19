@@ -139,7 +139,7 @@ function ResetTrialPanel({
     <Card style={styles.resetCard}>
       <AppText variant="bodyBold">Reset trial usage</AppText>
       <AppText variant="caption" color={colors.textDim}>
-        Clears the account's trial-usage record so it can start a fresh trial. Leave the tier
+        Clears the account’s trial-usage record so it can start a fresh trial. Leave the tier
         unset to clear every tier.
       </AppText>
 
@@ -179,7 +179,7 @@ function ResetTrialPanel({
         <View style={styles.sheetBody}>
           <AppText variant="body" color={colors.textDim}>
             This permanently erases {tier ? `the ${tier} trial record` : 'every trial record'} for
-            account {accountId.trim()}. This can't be undone.
+            account {accountId.trim()}. This can’t be undone.
           </AppText>
           <AppText variant="caption" color={colors.textDim} style={styles.typedHint}>
             Type {RESET_WORD} to confirm.

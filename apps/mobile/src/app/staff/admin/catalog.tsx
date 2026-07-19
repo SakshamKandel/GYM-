@@ -138,7 +138,7 @@ function NotSyncedBanner() {
       <Ionicons name="information-circle-outline" size={18} color={colors.textDim} />
       <AppText variant="caption" color={colors.textDim} style={styles.bannerText}>
         Staging only — the app still reads its exercise/plan library from the bundled catalog.
-        Edits here don't change what members see yet.
+        Edits here don’t change what members see yet.
       </AppText>
     </View>
   );
@@ -683,7 +683,7 @@ function PlanSheet({
 
         {editing ? (
           <AppText variant="caption" color={colors.textFaint}>
-            Workout structure isn't editable from the app yet — use the web console for that.
+            Workout structure isn’t editable from the app yet — use the web console for that.
           </AppText>
         ) : null}
 

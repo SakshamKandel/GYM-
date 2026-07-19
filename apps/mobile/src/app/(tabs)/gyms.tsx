@@ -14,7 +14,7 @@ import {
   PressableScale,
   Screen,
   ScreenHeader,
-  SkeletonRow,
+  Skeleton,
   stockImages,
 } from '../../components/ui';
 import { useAuth } from '../../state/auth';
@@ -45,13 +45,8 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   retryText: { flex: 1 },
-  list: { gap: spacing.sm },
-  skeletons: { gap: spacing.sm },
-  skeletonRow: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    padding: spacing.lg,
-  },
+  list: { gap: spacing.md },
+  skeletons: { gap: spacing.md },
 });
 
 export default function GymsTabScreen() {
@@ -123,8 +118,8 @@ export default function GymsTabScreen() {
 
       {loading ? (
         <Animated.View entering={enterFade(0)} style={styles.skeletons} accessibilityLabel="Loading gyms">
-          {Array.from({ length: 4 }, (_, i) => (
-            <SkeletonRow key={i} style={styles.skeletonRow} />
+          {Array.from({ length: 3 }, (_, i) => (
+            <Skeleton key={i} height={208} radius={radius.block} />
           ))}
         </Animated.View>
       ) : filtered !== null && filtered.length === 0 ? (

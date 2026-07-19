@@ -6,7 +6,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { rateLimit } from '@/lib/rateLimit';
-import { getVideoProvider, NotConfiguredError } from '@/lib/video';
+import { getImageProvider, NotConfiguredError } from '@/lib/video';
 
 export const runtime = 'nodejs';
 
@@ -80,7 +80,7 @@ export async function GET(req: Request) {
     .where(eq(progressPhotos.accountId, user.id))
     .orderBy(desc(progressPhotos.takenOn), desc(progressPhotos.createdAt));
 
-  const provider = getVideoProvider();
+  const provider = getImageProvider();
   try {
     const photos = await Promise.all(
       rows.map(async (r) => ({
@@ -140,7 +140,7 @@ export async function POST(req: Request) {
   // saves fine; the client just re-fetches GET later once it's configured.
   let url: string | null = null;
   try {
-    url = await getVideoProvider().signedImageUrl(uid);
+    url = await getImageProvider().signedImageUrl(uid);
   } catch (err) {
     if (!(err instanceof NotConfiguredError)) throw err;
   }

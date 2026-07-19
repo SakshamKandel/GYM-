@@ -1,9 +1,8 @@
 import { accounts, coachAssignments, coachMessages } from '@gym/db';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import { redirect } from 'next/navigation';
 import { EmptyState, PageHeader, StatTile } from '@/components/console';
+import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
-import { staffFromCookie } from '@/lib/staffSession';
 import { type InboxUser, UserRow } from './_components/UserRow';
 
 export const runtime = 'nodejs';
@@ -112,8 +111,7 @@ async function loadInbox(coachId: string): Promise<InboxUser[]> {
 }
 
 export default async function CoachInboxPage() {
-  const coach = await staffFromCookie();
-  if (!coach) redirect('/coach/login');
+  const { principal: coach } = await requireCoachPage('coach.user.read');
 
   const users = await loadInbox(coach.id);
   const totalUnread = users.reduce((sum, u) => sum + u.unreadCount, 0);

@@ -5,7 +5,11 @@ import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { advanceOrderStatus, loadDeliveryConfig } from '@/lib/meals';
+import {
+  advanceOrderStatus,
+  loadDeliveryConfig,
+  subscriptionPaymentMutationBlock,
+} from '@/lib/meals';
 
 export const runtime = 'nodejs';
 
@@ -56,6 +60,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (now.getTime() >= cutoffFor(deliveryDate, sub.window, 'Asia/Kathmandu', cfg).getTime()) {
     return json({ error: 'past_cutoff' }, 400);
   }
+
+  const paymentBlock = await subscriptionPaymentMutationBlock({
+    db,
+    subscriptionId: sub.id,
+    scope: { kind: 'slot', deliveryDate, window: sub.window },
+    now,
+  });
+  if (paymentBlock) return json({ error: paymentBlock }, 409);
 
   // Record the skip (idempotent) — suppresses any future spawn for this slot.
   await db

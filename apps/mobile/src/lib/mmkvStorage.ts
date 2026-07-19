@@ -20,7 +20,8 @@ import type { StateStorage } from 'zustand/middleware';
  * plaintext on disk, so we encrypt it with an AES-256 key kept in the OS secure
  * store (iOS Keychain / Android Keystore via expo-secure-store). The key is
  * minted once per install and read synchronously so MMKV's first-render
- * hydration is preserved.
+ * hydration is preserved. If secure storage is unavailable, native persistence
+ * fails closed to process memory; bearer tokens are never written unencrypted.
  */
 
 const STORE_ID = 'gym-tracker-store';
@@ -31,9 +32,8 @@ const ENCRYPTION_KEY_SLOT = 'gym-tracker-mmkv-key';
 /**
  * Fetch — or lazily mint — the MMKV encryption key from the OS secure store.
  * Synchronous SecureStore APIs (SDK 50+) keep the whole storage layer sync, so
- * first-render hydration is unaffected. Best-effort: if the keychain is somehow
- * unavailable we return null and the caller falls back to an unencrypted store
- * rather than crashing the offline-first app on launch.
+ * first-render hydration is unaffected. If the keychain is unavailable we
+ * return null and deliberately disable native disk persistence for this run.
  */
 function loadEncryptionKey(): string | null {
   try {
@@ -50,10 +50,10 @@ function loadEncryptionKey(): string | null {
   }
 }
 
-/** Native MMKV instance, encrypted when the secure key is available. */
-function createNativeStore(): ReturnType<typeof createMMKV> {
+/** Native encrypted MMKV, or null when secure persistence is unavailable. */
+function createNativeStore(): ReturnType<typeof createMMKV> | null {
   const encryptionKey = loadEncryptionKey();
-  if (!encryptionKey) return createMMKV({ id: STORE_ID });
+  if (!encryptionKey) return null;
   return createMMKV({
     id: STORE_ID,
     encryptionKey,
@@ -66,8 +66,15 @@ function createNativeStore(): ReturnType<typeof createMMKV> {
 }
 
 const mmkv = Platform.OS !== 'web' ? createNativeStore() : null;
+const volatileNativeStorage = new Map<string, string>();
 
-export const mmkvStorage: StateStorage = mmkv
+export const mmkvStorage: StateStorage = Platform.OS === 'web'
+  ? {
+      getItem: (name) => AsyncStorage.getItem(name),
+      setItem: (name, value) => AsyncStorage.setItem(name, value),
+      removeItem: (name) => AsyncStorage.removeItem(name),
+    }
+  : mmkv
   ? {
       getItem: (name) => mmkv.getString(name) ?? null,
       setItem: (name, value) => mmkv.set(name, value),
@@ -76,7 +83,11 @@ export const mmkvStorage: StateStorage = mmkv
       },
     }
   : {
-      getItem: (name) => AsyncStorage.getItem(name),
-      setItem: (name, value) => AsyncStorage.setItem(name, value),
-      removeItem: (name) => AsyncStorage.removeItem(name),
+      getItem: (name) => volatileNativeStorage.get(name) ?? null,
+      setItem: (name, value) => {
+        volatileNativeStorage.set(name, value);
+      },
+      removeItem: (name) => {
+        volatileNativeStorage.delete(name);
+      },
     };

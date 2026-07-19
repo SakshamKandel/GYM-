@@ -9,11 +9,8 @@ import { formatMoney } from '../_format';
 /**
  * Store controls — the accepting-orders switch + a per-item out-of-stock grid.
  *
- * Both act on `meals.isActive` (the flag the member order-create route already
- * gates every line on), so there is no schema change and blocking is enforced
- * server-side. PAUSE/RESUME sweep every item at once; the per-item toggles below
- * flip a single dish. Because resume re-activates everything, the confirm copy
- * warns that individually hidden items come back online.
+ * Pause/resume changes the partner-level accepting-orders switch. Per-item
+ * controls remain independent, so resuming never republishes a sold-out dish.
  */
 export function StoreControls({
   menu,
@@ -101,8 +98,7 @@ export function StoreControls({
         </div>
         {store.paused ? (
           <p style={{ margin: '12px 0 0', fontSize: 12, color: 'var(--gt-text-faint)' }}>
-            Resuming makes every menu item available again — re-mark any item as out of stock
-            afterwards if needed.
+            Individual item availability is preserved while the store is paused.
           </p>
         ) : null}
         {error ? (

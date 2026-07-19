@@ -1,6 +1,5 @@
-import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
-import { staffFromCookie } from '@/lib/staffSession';
+import { requireCoachPage } from '@/lib/coachPage';
 import { FlagsList } from './_components/FlagsList';
 
 export const runtime = 'nodejs';
@@ -20,8 +19,7 @@ export const dynamic = 'force-dynamic';
  * factual: what tripped, and the numbers behind it.
  */
 export default async function CoachFlagsPage() {
-  const principal = await staffFromCookie();
-  if (!principal) redirect('/coach/login');
+  await requireCoachPage('coach.user.read');
 
   return (
     <div style={{ maxWidth: 900 }}>

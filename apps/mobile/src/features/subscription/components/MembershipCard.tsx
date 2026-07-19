@@ -1,22 +1,17 @@
 import { StyleSheet, Text, View } from 'react-native';
-import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, Line, LinearGradient, Rect, Stop } from 'react-native-svg';
 import { cardMetals, radius, spacing, type, type CardMetalTier } from '@gym/ui-tokens';
 import type { Tier } from '@gym/shared';
 import { PressableScale } from '../../../components/ui';
 
 /**
- * Membership card — the member's tier as a bold GYM card (not a bank card):
- * per-tier metal finish, a WEIGHT-PLATE emblem where a chip would sit, a
- * giant ghosted plate bleeding off the right edge, two signal-red power
- * stripes cutting the top corner, the tier set as oversized Oswald poster
- * type with an accent underline, the brand motto stamped under the wordmark,
- * and the holder's name big along the bottom. Entirely local SVG — no
- * images, no network. Colors come from the `cardMetals` palette in
- * @gym/ui-tokens (rule 7: no inline hex here).
- *
- * Raw RN <Text> with per-material ink colors (the card is a self-contained
- * material surface; theme ink would fight the gold/silver faces). The card
- * carries one summary accessibilityLabel; inner fragments are hidden.
+ * Membership card v3 — true premium restraint (the reference is a metal
+ * Centurion-class card, not a gym flyer): a matte per-tier metal face with a
+ * fine BRUSHED texture (dozens of hairline strokes), a barely-there weight
+ * plate watermark, an engraved-feel FULL NAME as the hero (two lines
+ * allowed, subtle deboss shadow), a small chip, and exactly ONE thin accent
+ * line. No stripes, no loud shapes — premium is what's left out.
+ * All local SVG; colors only from cardMetals (rule 7).
  */
 
 const CARD_RATIO = 1.586; // ISO/IEC 7810 ID-1
@@ -28,19 +23,10 @@ const TIER_TITLE: Record<Tier, string> = {
   elite: 'ELITE',
 };
 
-const TIER_SUB: Record<Tier, string> = {
-  starter: 'GM METHOD ATHLETE',
-  silver: 'SILVER STANDARD',
-  gold: 'GOLD STANDARD',
-  elite: 'PLATINUM BLACK',
-};
-
 interface Props {
   tier: Tier;
   holderName: string;
-  /** Account id — only the last 4 characters are shown. */
   memberId: string | null;
-  /** Signed-out / local-only profiles get a hint instead of ACTIVE. */
   signedIn: boolean;
   onPress?: () => void;
 }
@@ -67,87 +53,60 @@ const styles = StyleSheet.create({
   topRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   brand: {
     fontFamily: type.display,
-    fontSize: 16,
+    fontSize: 14,
+    letterSpacing: 4,
+  },
+  tierWord: {
+    fontFamily: type.bodySemiBold,
+    fontSize: 13,
     letterSpacing: 3,
   },
-  motto: {
-    fontFamily: type.bodyMedium,
-    fontSize: 13,
-    letterSpacing: 2,
-    marginTop: 2,
+  centerBlock: { gap: spacing.md },
+  accentLine: {
+    width: 34,
+    height: 2,
+    borderRadius: 1,
   },
-  memberNo: {
+  holder: {
     fontFamily: type.display,
-    fontSize: 13,
-    letterSpacing: 2,
-    textAlign: 'right',
-  },
-  tierBlock: { marginTop: spacing.xs },
-  tierTitle: {
-    fontFamily: type.display,
-    fontSize: 38,
-    letterSpacing: 5,
-    lineHeight: 42,
-  },
-  tierBar: {
-    width: 44,
-    height: 5,
-    borderRadius: 3,
-    marginTop: spacing.xs,
-  },
-  tierSub: {
-    fontFamily: type.bodyMedium,
-    fontSize: 13,
-    letterSpacing: 2,
-    marginTop: spacing.sm,
+    fontSize: 26,
+    lineHeight: 32,
+    letterSpacing: 2.5,
+    textTransform: 'uppercase',
   },
   bottomRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
   },
-  holder: {
-    flex: 1,
-    fontFamily: type.display,
-    fontSize: 21,
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-    marginRight: spacing.md,
-  },
-  statusPill: {
-    borderWidth: 1.5,
-    borderRadius: radius.full,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 3,
-  },
-  statusText: {
-    fontFamily: type.bodySemiBold,
+  metaLabel: {
+    fontFamily: type.bodyMedium,
     fontSize: 13,
     letterSpacing: 1.5,
   },
+  metaValue: {
+    fontFamily: type.display,
+    fontSize: 14,
+    letterSpacing: 3,
+    marginTop: 2,
+  },
 });
 
-/** Small solid weight-plate emblem — the gym card's "chip". */
-function PlateEmblem({ metal }: { metal: (typeof cardMetals)[CardMetalTier] }) {
+/** Slim metal chip — quiet, engraved. */
+function Chip({ metal }: { metal: (typeof cardMetals)[CardMetalTier] }) {
   return (
-    <Svg width={44} height={44} viewBox="0 0 44 44">
-      <Circle cx={22} cy={22} r={21} fill={metal.sheen} opacity={0.95} />
-      <Circle cx={22} cy={22} r={17} fill={metal.top} />
-      <Circle cx={22} cy={22} r={16.5} stroke={metal.deep} strokeWidth={1} fill="none" />
-      <Circle cx={22} cy={22} r={10} stroke={metal.deep} strokeWidth={1.2} fill="none" opacity={0.7} />
-      <Circle cx={22} cy={22} r={4.5} fill={metal.deep} />
-      {/* Grip notches at the four compass points. */}
-      <Path
-        d="M 22 1.5 V 6 M 22 38 V 42.5 M 1.5 22 H 6 M 38 22 H 42.5"
-        stroke={metal.deep}
-        strokeWidth={2.4}
-        strokeLinecap="round"
-        opacity={0.8}
-      />
+    <Svg width={34} height={26} viewBox="0 0 34 26">
+      <Rect x={0.5} y={0.5} width={33} height={25} rx={5} fill={metal.mid} stroke={metal.sheen} strokeWidth={0.8} opacity={0.95} />
+      <Line x1={0} y1={9} x2={11} y2={9} stroke={metal.deep} strokeWidth={1} />
+      <Line x1={0} y1={17} x2={11} y2={17} stroke={metal.deep} strokeWidth={1} />
+      <Line x1={23} y1={9} x2={34} y2={9} stroke={metal.deep} strokeWidth={1} />
+      <Line x1={23} y1={17} x2={34} y2={17} stroke={metal.deep} strokeWidth={1} />
+      <Line x1={11} y1={2} x2={11} y2={24} stroke={metal.deep} strokeWidth={1} />
+      <Line x1={23} y1={2} x2={23} y2={24} stroke={metal.deep} strokeWidth={1} />
     </Svg>
   );
 }
@@ -155,63 +114,95 @@ function PlateEmblem({ metal }: { metal: (typeof cardMetals)[CardMetalTier] }) {
 export function MembershipCard({ tier, holderName, memberId, signedIn, onPress }: Props) {
   const metal = cardMetals[tier];
   const last4 = memberId ? memberId.replace(/-/g, '').slice(-4).toUpperCase() : '0000';
-  const label = `${TIER_TITLE[tier]} gym membership card for ${holderName || 'Athlete'}${
+  const name = (holderName || 'Athlete').trim();
+  const label = `${TIER_TITLE[tier]} gym membership card for ${name}${
     signedIn ? '' : ', local profile — sign in to sync'
   }${onPress ? '. Opens subscription options.' : ''}`;
+
+  // Brushed-metal hairlines: precomputed static rows (no randomness — the
+  // texture must be identical every render and on both platforms).
+  const hairlines: number[] = [];
+  for (let y = 6; y < 202; y += 4) hairlines.push(y);
 
   const face = (
     <View style={styles.wrap}>
       <Svg style={styles.svg} viewBox="0 0 320 202" preserveAspectRatio="none">
         <Defs>
-          <LinearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
+          <LinearGradient id="metal" x1="0" y1="0" x2="0.9" y2="1">
             <Stop offset="0" stopColor={metal.top} />
-            <Stop offset="0.55" stopColor={metal.mid} />
+            <Stop offset="0.5" stopColor={metal.mid} />
             <Stop offset="1" stopColor={metal.deep} />
           </LinearGradient>
-          <LinearGradient id="sheen" x1="0" y1="0" x2="1" y2="0.35">
+          <LinearGradient id="glint" x1="0" y1="0" x2="1" y2="0">
             <Stop offset="0" stopColor={metal.sheen} stopOpacity="0" />
-            <Stop offset="0.5" stopColor={metal.sheen} stopOpacity="0.3" />
-            <Stop offset="1" stopColor={metal.sheen} stopOpacity="0" />
+            <Stop offset="0.35" stopColor={metal.sheen} stopOpacity="0.16" />
+            <Stop offset="0.5" stopColor={metal.sheen} stopOpacity="0" />
           </LinearGradient>
         </Defs>
         <Rect x={0} y={0} width={320} height={202} fill="url(#metal)" />
-        {/* Giant ghosted weight plate bleeding off the right edge. */}
-        <Circle cx={292} cy={104} r={92} stroke={metal.sheen} strokeWidth={10} fill="none" opacity={0.10} />
-        <Circle cx={292} cy={104} r={64} stroke={metal.sheen} strokeWidth={7} fill="none" opacity={0.12} />
-        <Circle cx={292} cy={104} r={38} stroke={metal.sheen} strokeWidth={5} fill="none" opacity={0.14} />
-        <Circle cx={292} cy={104} r={13} fill={metal.deep} opacity={0.5} />
-        {/* Two power stripes cutting the top-right corner. */}
-        <Path d="M 232 -14 L 260 -14 L 176 216 L 148 216 Z" fill={metal.stripe} opacity={0.85} />
-        <Path d="M 276 -14 L 290 -14 L 206 216 L 192 216 Z" fill={metal.stripe} opacity={0.45} />
-        {/* Diagonal light sheen across the metal. */}
-        <Path d="M 70 -20 L 170 -20 L 90 222 L -10 222 Z" fill="url(#sheen)" />
-        {/* Signal-red base stripe. */}
-        <Rect x={0} y={196} width={320} height={6} fill={metal.stripe} />
+        {/* Brushed texture — fine hairlines across the whole face. */}
+        {hairlines.map((y, i) => (
+          <Line
+            key={y}
+            x1={-4}
+            y1={y}
+            x2={324}
+            y2={y}
+            stroke={i % 2 === 0 ? metal.sheen : metal.deep}
+            strokeWidth={0.5}
+            opacity={i % 2 === 0 ? 0.05 : 0.07}
+          />
+        ))}
+        {/* One soft vertical glint. */}
+        <Rect x={0} y={0} width={320} height={202} fill="url(#glint)" />
+        {/* Barely-there plate watermark, off-right. */}
+        <Circle cx={296} cy={101} r={86} stroke={metal.sheen} strokeWidth={12} fill="none" opacity={0.045} />
+        <Circle cx={296} cy={101} r={52} stroke={metal.sheen} strokeWidth={8} fill="none" opacity={0.05} />
+        <Circle cx={296} cy={101} r={20} stroke={metal.sheen} strokeWidth={5} fill="none" opacity={0.055} />
+        {/* Hairline inner frame — the machined edge. */}
+        <Rect
+          x={1.25}
+          y={1.25}
+          width={317.5}
+          height={199.5}
+          rx={14}
+          fill="none"
+          stroke={metal.sheen}
+          strokeWidth={0.8}
+          opacity={0.22}
+        />
       </Svg>
       <View style={styles.face} importantForAccessibility="no-hide-descendants" accessible={false}>
         <View style={styles.topRow}>
-          <View>
-            <Text style={[styles.brand, { color: metal.ink }]}>GM METHOD</Text>
-            <Text style={[styles.motto, { color: metal.inkDim }]}>TRAIN · EAT · GROW</Text>
-          </View>
-          <View>
-            <Text style={[styles.memberNo, { color: metal.inkDim }]}>NO. {last4}</Text>
-          </View>
+          <Text style={[styles.brand, { color: metal.ink }]}>GM METHOD</Text>
+          <Text style={[styles.tierWord, { color: metal.inkDim }]}>{TIER_TITLE[tier]}</Text>
         </View>
-        <View style={styles.tierBlock}>
-          <Text style={[styles.tierTitle, { color: metal.ink }]}>{TIER_TITLE[tier]}</Text>
-          <View style={[styles.tierBar, { backgroundColor: metal.stripe }]} />
-          <Text style={[styles.tierSub, { color: metal.inkDim }]}>{TIER_SUB[tier]}</Text>
+        <View style={styles.centerBlock}>
+          <Chip metal={metal} />
+          <View style={[styles.accentLine, { backgroundColor: metal.stripe }]} />
+          <Text
+            style={[
+              styles.holder,
+              {
+                color: metal.ink,
+                textShadowColor: metal.deep,
+                textShadowOffset: { width: 0, height: 1 },
+                textShadowRadius: 1,
+              },
+            ]}
+            numberOfLines={2}
+          >
+            {name}
+          </Text>
         </View>
         <View style={styles.bottomRow}>
-          <Text style={[styles.holder, { color: metal.ink }]} numberOfLines={1}>
-            {holderName || 'Athlete'}
-          </Text>
-          <View style={{ marginRight: spacing.md }}>
-            <PlateEmblem metal={metal} />
+          <View>
+            <Text style={[styles.metaLabel, { color: metal.inkDim }]}>MEMBER NO.</Text>
+            <Text style={[styles.metaValue, { color: metal.ink }]}>•••• {last4}</Text>
           </View>
-          <View style={[styles.statusPill, { borderColor: metal.inkDim }]}>
-            <Text style={[styles.statusText, { color: metal.ink }]}>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={[styles.metaLabel, { color: metal.inkDim }]}>STATUS</Text>
+            <Text style={[styles.metaValue, { color: metal.ink }]}>
               {signedIn ? 'ACTIVE' : 'LOCAL'}
             </Text>
           </View>

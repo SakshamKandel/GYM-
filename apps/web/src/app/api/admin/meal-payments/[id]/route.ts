@@ -180,6 +180,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Idempotent side effect: stamp the target `paid`, then stamp settledAt. A
   // retry re-runs only while settledAt is still null.
   if (!row.settledAt) {
+    let targetPaid = false;
     if (row.orderId) {
       await db
         .update(mealOrders)
@@ -193,6 +194,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             notInArray(mealOrders.status, ['cancelled', 'refused']),
           ),
         );
+      const [target] = await db
+        .select({ paymentStatus: mealOrders.paymentStatus, status: mealOrders.status })
+        .from(mealOrders)
+        .where(eq(mealOrders.id, row.orderId))
+        .limit(1);
+      targetPaid =
+        target?.paymentStatus === 'paid' &&
+        target.status !== 'cancelled' &&
+        target.status !== 'refused';
     } else if (row.cycleId) {
       await db
         .update(mealBillingCycles)
@@ -203,7 +213,19 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
             eq(mealBillingCycles.status, 'awaiting_payment'),
           ),
         );
+      const [target] = await db
+        .select({ status: mealBillingCycles.status })
+        .from(mealBillingCycles)
+        .where(eq(mealBillingCycles.id, row.cycleId))
+        .limit(1);
+      targetPaid = target?.status === 'paid';
     }
+
+    // Never declare the receipt settled if a concurrent cancellation/void won
+    // after the pre-check. The approved request remains available to the
+    // dedicated refund workflow, which performs reversal + cancellation.
+    if (!targetPaid) return json({ error: 'refund_required' }, 409);
+
     await db
       .update(mealPaymentRequests)
       .set({ settledAt: new Date() })

@@ -79,6 +79,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "test": "node --test \"src/lib/repo/*.test.mjs\"",
     "typecheck": "tsc --noEmit"
   },
   "private": true

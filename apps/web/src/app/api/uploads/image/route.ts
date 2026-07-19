@@ -8,7 +8,7 @@ import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { staffTokenFromCookie } from '@/lib/staffSession';
-import { getVideoProvider, NotConfiguredError } from '@/lib/video';
+import { getImageProvider, NotConfiguredError } from '@/lib/video';
 
 export const runtime = 'nodejs';
 
@@ -144,7 +144,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const reservation = await getVideoProvider().createImageUpload({
+    const reservation = await getImageProvider().createImageUpload({
       kind,
       access: ACCESS_BY_KIND[kind],
     });

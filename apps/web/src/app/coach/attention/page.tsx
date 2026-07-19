@@ -1,6 +1,5 @@
-import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
-import { staffFromCookie } from '@/lib/staffSession';
+import { requireCoachPage } from '@/lib/coachPage';
 import { AttentionList } from './_components/AttentionList';
 
 export const runtime = 'nodejs';
@@ -17,8 +16,7 @@ export const dynamic = 'force-dynamic';
  * check-in updates the list in place without a full server re-render.
  */
 export default async function CoachAttentionPage() {
-  const principal = await staffFromCookie();
-  if (!principal) redirect('/coach/login');
+  await requireCoachPage('coach.user.read');
 
   return (
     <div style={{ maxWidth: 900 }}>

@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
+import { z } from 'zod';
 import {
   Badge,
   Button,
@@ -17,6 +18,11 @@ import {
   Toolbar,
 } from '@/components/console';
 import type { LocationValue } from '@/components/console/LocationPicker';
+import {
+  hasPartnerCurrencyHistory,
+  type PartnerCurrencyHistory,
+  type PartnerLiveOrderImpact,
+} from '@/lib/partnerAdminSafeguards';
 import { PartnerRevenuePanel } from './PartnerRevenuePanel';
 import type { PartnerRow } from './types';
 
@@ -87,6 +93,78 @@ async function parseErrorCode(res: Response): Promise<string | null> {
   }
 }
 
+interface PartnerMutationError {
+  code: string | null;
+  history?: PartnerCurrencyHistory;
+  liveOrders?: PartnerLiveOrderImpact;
+}
+
+const currencyHistorySchema = z.object({
+  menuItems: z.number().int().nonnegative(),
+  subscriptions: z.number().int().nonnegative(),
+  billingCycles: z.number().int().nonnegative(),
+  orders: z.number().int().nonnegative(),
+  paymentRequests: z.number().int().nonnegative(),
+});
+
+const liveOrderImpactSchema = z.object({
+  total: z.number().int().nonnegative(),
+  byStatus: z.object({
+    pending: z.number().int().nonnegative(),
+    confirmed: z.number().int().nonnegative(),
+    preparing: z.number().int().nonnegative(),
+    out_for_delivery: z.number().int().nonnegative(),
+  }),
+});
+
+const partnerMutationErrorSchema = z.object({
+  error: z.string().optional(),
+  history: currencyHistorySchema.optional(),
+  liveOrders: liveOrderImpactSchema.optional(),
+});
+
+async function parseMutationError(res: Response): Promise<PartnerMutationError> {
+  try {
+    const parsed = partnerMutationErrorSchema.safeParse(await res.json());
+    if (!parsed.success) return { code: null };
+    const data = parsed.data;
+    return {
+      code: data.error ?? null,
+      history: data.history,
+      liveOrders: data.liveOrders,
+    };
+  } catch {
+    return { code: null };
+  }
+}
+
+function historySummary(history: PartnerCurrencyHistory): string {
+  const labels: [keyof PartnerCurrencyHistory, string][] = [
+    ['menuItems', 'menu item'],
+    ['subscriptions', 'subscription'],
+    ['billingCycles', 'billing cycle'],
+    ['orders', 'order'],
+    ['paymentRequests', 'payment request'],
+  ];
+  return labels
+    .filter(([key]) => history[key] > 0)
+    .map(([key, label]) => `${history[key]} ${label}${history[key] === 1 ? '' : 's'}`)
+    .join(', ');
+}
+
+function liveOrderSummary(impact: PartnerLiveOrderImpact): string {
+  const labels: [keyof PartnerLiveOrderImpact['byStatus'], string][] = [
+    ['pending', 'pending'],
+    ['confirmed', 'confirmed'],
+    ['preparing', 'preparing'],
+    ['out_for_delivery', 'out for delivery'],
+  ];
+  return labels
+    .filter(([status]) => impact.byStatus[status] > 0)
+    .map(([status, label]) => `${impact.byStatus[status]} ${label}`)
+    .join(', ');
+}
+
 function friendlyError(status: number, code: string | null): string {
   switch (code) {
     case 'email_taken':
@@ -102,6 +180,19 @@ function friendlyError(status: number, code: string | null): string {
   }
   if (status === 403) return 'You are not allowed to manage meal partners.';
   return 'Something went wrong. Try again.';
+}
+
+function friendlyMutationError(status: number, error: PartnerMutationError): string {
+  if (error.code === 'currency_history_locked' && error.history) {
+    return `Currency is locked because this partner already has ${historySummary(error.history)}. Create a new partner account for a different currency.`;
+  }
+  if (error.code === 'partner_has_live_orders' && error.liveOrders) {
+    return `Cannot deactivate while ${error.liveOrders.total} live order${error.liveOrders.total === 1 ? '' : 's'} remain (${liveOrderSummary(error.liveOrders)}). Finish or cancel them first.`;
+  }
+  if (error.code === 'partner_edit_conflict') {
+    return 'This partner changed in another session. Refresh and try again.';
+  }
+  return friendlyError(status, error.code);
 }
 
 function parseServiceAreas(raw: string): string[] {
@@ -275,8 +366,22 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
         }),
       });
       if (!res.ok) {
-        const code = await parseErrorCode(res);
-        setEditError(friendlyError(res.status, code));
+        const error = await parseMutationError(res);
+        if (error.code === 'currency_history_locked' && error.history) {
+          const history = error.history;
+          setSelected((row) =>
+            row
+              ? {
+                  ...row,
+                  safeguards: { ...row.safeguards, currencyHistory: history },
+                }
+              : row,
+          );
+          setEditForm((form) =>
+            form && selected ? { ...form, currency: selected.currency === 'USD' ? 'USD' : 'NPR' } : form,
+          );
+        }
+        setEditError(friendlyMutationError(res.status, error));
         setSaving(false);
         return;
       }
@@ -302,8 +407,20 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
         body: JSON.stringify({ isActive: next }),
       });
       if (!res.ok) {
-        const code = await parseErrorCode(res);
-        setEditError(friendlyError(res.status, code));
+        const error = await parseMutationError(res);
+        if (error.code === 'partner_has_live_orders' && error.liveOrders) {
+          const liveOrders = error.liveOrders;
+          setSelected((row) =>
+            row
+              ? {
+                  ...row,
+                  activeOrders: liveOrders.total,
+                  safeguards: { ...row.safeguards, liveOrders },
+                }
+              : row,
+          );
+        }
+        setEditError(friendlyMutationError(res.status, error));
         setSaving(false);
         return;
       }
@@ -375,6 +492,11 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
       render: (r) => <span className="gt-numeric">{r.activeOrders}</span>,
     },
   ];
+
+  const currencyLocked = selected
+    ? hasPartnerCurrencyHistory(selected.safeguards.currencyHistory)
+    : false;
+  const liveOrderImpact = selected?.safeguards.liveOrders ?? null;
 
   return (
     <>
@@ -594,11 +716,16 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
                 onChange={(e) =>
                   setEditForm((f) => (f ? { ...f, currency: e.target.value as 'NPR' | 'USD' } : f))
                 }
-                disabled={saving}
+                disabled={saving || currencyLocked}
               >
                 <option value="NPR">NPR</option>
                 <option value="USD">USD</option>
               </select>
+              <span style={{ fontSize: 12, color: currencyLocked ? 'var(--gt-warning)' : 'var(--gt-text-faint)' }}>
+                {currencyLocked && selected
+                  ? `Locked after operational history: ${historySummary(selected.safeguards.currencyHistory)}.`
+                  : 'Currency can change only before the first menu or financial record is created.'}
+              </span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--gt-text)' }}>
               <input
@@ -621,17 +748,42 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
             <div style={{ paddingTop: 16, borderTop: '1px solid var(--gt-border)' }}>
               {selected.isActive ? (
                 <>
-                  <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginBottom: 8 }}>
-                    Deactivating ends every live session for this login immediately — the partner is
-                    logged out everywhere and can no longer sign in.
-                  </div>
-                  <ConfirmButton
-                    label="Deactivate partner"
-                    confirmLabel="Confirm deactivate?"
-                    busyLabel="Deactivating…"
-                    busy={saving}
-                    onConfirm={() => void toggleActive(false)}
-                  />
+                  {liveOrderImpact && liveOrderImpact.total > 0 ? (
+                    <div
+                      style={{
+                        padding: 12,
+                        borderRadius: 10,
+                        background: 'color-mix(in srgb, var(--gt-danger) 8%, var(--gt-surface))',
+                        border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+                        color: 'var(--gt-danger)',
+                        fontSize: 13,
+                      }}
+                    >
+                      <strong>Deactivation blocked</strong>
+                      <div style={{ marginTop: 4, marginBottom: 10 }}>
+                        {liveOrderImpact.total} live order{liveOrderImpact.total === 1 ? '' : 's'} remain
+                        ({liveOrderSummary(liveOrderImpact)}). Finish or cancel them before disabling this
+                        restaurant.
+                      </div>
+                      <Button size="sm" onClick={() => router.push('/admin/orders')}>
+                        Open order oversight
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginBottom: 8 }}>
+                        Deactivating ends every live session for this login immediately — the partner is
+                        logged out everywhere and can no longer sign in.
+                      </div>
+                      <ConfirmButton
+                        label="Deactivate partner"
+                        confirmLabel="Confirm deactivate?"
+                        busyLabel="Deactivating…"
+                        busy={saving}
+                        onConfirm={() => void toggleActive(false)}
+                      />
+                    </>
+                  )}
                 </>
               ) : (
                 <Button variant="primary" disabled={saving} onClick={() => void toggleActive(true)}>

@@ -1,5 +1,5 @@
 import { mealOrderItems, mealOrders } from '@gym/db';
-import { canActorAdvance, maskPii } from '@gym/shared';
+import { canActorAdvance, maskPii, orderPaymentMutationBlock } from '@gym/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
@@ -34,7 +34,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const db = getDb();
   const [order] = await db
-    .select({ id: mealOrders.id, status: mealOrders.status, cutoffAt: mealOrders.cutoffAt })
+    .select({
+      id: mealOrders.id,
+      status: mealOrders.status,
+      paymentStatus: mealOrders.paymentStatus,
+      cutoffAt: mealOrders.cutoffAt,
+    })
     .from(mealOrders)
     .where(and(eq(mealOrders.id, id), eq(mealOrders.accountId, me.id)))
     .limit(1);
@@ -44,6 +49,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!canActorAdvance(order.status, 'cancelled', 'member')) {
     return json({ error: 'not_cancellable' }, 409);
   }
+  const paymentBlock = orderPaymentMutationBlock(order.paymentStatus);
+  if (paymentBlock) return json({ error: paymentBlock }, 409);
   // Member cancels are cutoff-bound (invariant §8c).
   if (new Date().getTime() >= order.cutoffAt.getTime()) {
     return json({ error: 'past_cutoff' }, 400);

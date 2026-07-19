@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { randomUUID } from 'expo-crypto';
 import { epley1Rm } from '@gym/shared';
 import type {
   DailyMacros,
@@ -11,7 +12,13 @@ import type {
   WeightLog,
   WorkoutLog,
 } from '@gym/shared';
-import type { AnalyticsSet, Repo } from './types';
+import {
+  assertAnonymousOwnerId,
+  assertUsableOwnerId,
+  isAnonymousOwnerId,
+  ownerIdForAnonymousSession,
+} from './ownership';
+import type { AnalyticsSet, Repo, RepoStore } from './types';
 
 /**
  * Web/QA implementation — same contract as SQLite, backed by an in-memory
@@ -19,7 +26,7 @@ import type { AnalyticsSet, Repo } from './types';
  * expo-sqlite's web support is alpha; this keeps browser QA rock-solid.
  */
 
-interface MemoryState {
+interface OwnerMemoryState {
   workouts: WorkoutLog[];
   sets: (SetLog & { date?: string })[];
   weights: WeightLog[];
@@ -33,9 +40,17 @@ interface MemoryState {
   syncedWorkoutIds: string[];
 }
 
-const KEY = 'gym-tracker-db-v1';
+interface MemoryStoreState {
+  version: 2;
+  anonymousOwnerId: string;
+  owners: Record<string, OwnerMemoryState>;
+}
 
-function emptyState(): MemoryState {
+const KEY = 'gym-tracker-db-v2';
+const LEGACY_KEY = 'gym-tracker-db-v1';
+const LEGACY_QUARANTINE_KEY = 'gym-tracker-db-legacy-quarantine-v1';
+
+function emptyOwnerState(): OwnerMemoryState {
   return {
     workouts: [],
     sets: [],
@@ -50,23 +65,8 @@ function emptyState(): MemoryState {
   };
 }
 
-export async function createMemoryRepo(): Promise<Repo> {
-  let state = emptyState();
-  try {
-    const raw = await AsyncStorage.getItem(KEY);
-    if (raw) state = { ...emptyState(), ...(JSON.parse(raw) as MemoryState) };
-  } catch {
-    // corrupted store → start fresh rather than brick the app
-  }
-
-  let persistTimer: ReturnType<typeof setTimeout> | null = null;
-  function persist(): void {
-    if (persistTimer) clearTimeout(persistTimer);
-    persistTimer = setTimeout(() => {
-      void AsyncStorage.setItem(KEY, JSON.stringify(state));
-    }, 150);
-  }
-
+function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): Repo {
+  /* Owner state and persistence are supplied by the versioned store below. */
   function workoutDate(workoutLogId: string): string {
     return state.workouts.find((w) => w.id === workoutLogId)?.date ?? '';
   }
@@ -394,6 +394,100 @@ export async function createMemoryRepo(): Promise<Repo> {
     async setStreak(s) {
       state.streak = s;
       persist();
+    },
+  };
+}
+
+function isMemoryStoreState(value: unknown): value is MemoryStoreState {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.version === 2 &&
+    typeof candidate.anonymousOwnerId === 'string' &&
+    isAnonymousOwnerId(candidate.anonymousOwnerId) &&
+    typeof candidate.owners === 'object' &&
+    candidate.owners !== null
+  );
+}
+
+async function quarantineLegacyMemoryStore(): Promise<void> {
+  const legacy = await AsyncStorage.getItem(LEGACY_KEY);
+  if (legacy === null) return;
+  // Copy-before-remove: a failed quarantine write leaves the original intact.
+  await AsyncStorage.setItem(LEGACY_QUARANTINE_KEY, legacy);
+  await AsyncStorage.removeItem(LEGACY_KEY);
+}
+
+export async function createMemoryRepo(): Promise<RepoStore> {
+  const initialAnonymousOwnerId = ownerIdForAnonymousSession(randomUUID());
+  let store: MemoryStoreState = {
+    version: 2,
+    anonymousOwnerId: initialAnonymousOwnerId,
+    owners: {},
+  };
+
+  try {
+    await quarantineLegacyMemoryStore();
+    const raw = await AsyncStorage.getItem(KEY);
+    if (raw !== null) {
+      const parsed: unknown = JSON.parse(raw);
+      if (isMemoryStoreState(parsed)) store = parsed;
+    }
+  } catch {
+    // Corrupt/unavailable storage starts isolated instead of exposing v1 data.
+  }
+
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  function persist(): void {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      void AsyncStorage.setItem(KEY, JSON.stringify(store));
+    }, 150);
+  }
+  async function persistNow(): Promise<void> {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    await AsyncStorage.setItem(KEY, JSON.stringify(store));
+  }
+
+  const repos = new Map<string, Repo>();
+  function ownerState(ownerId: string): OwnerMemoryState {
+    const existing = store.owners[ownerId];
+    if (existing) return existing;
+    const created = emptyOwnerState();
+    store.owners[ownerId] = created;
+    persist();
+    return created;
+  }
+
+  return {
+    getAnonymousOwnerId() {
+      return store.anonymousOwnerId;
+    },
+    async setAnonymousOwnerId(ownerId) {
+      assertAnonymousOwnerId(ownerId);
+      store.anonymousOwnerId = ownerId;
+      await persistNow();
+    },
+    forOwner(ownerId) {
+      assertUsableOwnerId(ownerId);
+      const cached = repos.get(ownerId);
+      if (cached) return cached;
+      const repo = createScopedMemoryRepo(ownerState(ownerId), persist);
+      repos.set(ownerId, repo);
+      return repo;
+    },
+    async deleteOwnerData(ownerId) {
+      assertUsableOwnerId(ownerId);
+      const existing = store.owners[ownerId];
+      if (existing) {
+        Object.assign(existing, emptyOwnerState());
+        delete store.owners[ownerId];
+      }
+      repos.delete(ownerId);
+      await persistNow();
     },
   };
 }

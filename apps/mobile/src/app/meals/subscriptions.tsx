@@ -4,12 +4,11 @@ import Animated from 'react-native-reanimated';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
-import { formatMoney, ktmDateString } from '@gym/shared';
+import { ktmDateString } from '@gym/shared';
 import {
   AppText,
   AppTextInput,
   Button,
-  Card,
   ConfirmDialog,
   EmptyState,
   enterDown,
@@ -20,7 +19,6 @@ import {
   ScreenHeader,
   Sheet,
   SkeletonRow,
-  Tag,
 } from '../../components/ui';
 import { EmptyArt } from '../../components/visual';
 import { warnHaptic } from '../../lib/haptics';
@@ -28,12 +26,15 @@ import { useAuth } from '../../state/auth';
 import { useMyMealSubscriptions } from '../../features/meals/hooks';
 import { skipMealDay, toMealsError, updateMealSubscription, type MealSubscription } from '../../features/meals/api';
 import { CyclePaymentPanel } from '../../features/meals/components/CyclePaymentPanel';
-import { mealErrorMessage, weekdayLabel, windowLabel } from '../../features/meals/logic';
+import { SubscriptionPlanCard } from '../../features/meals/components/SubscriptionPlanCard';
+import { mealErrorMessage } from '../../features/meals/logic';
 import { pushPath, replacePath } from '../../features/meals/nav';
 
 /**
  * /meals/subscriptions — "my subscription" (plan §6/§7 P12): pause / resume /
- * skip-a-day / cancel for the caller's recurring meal plans.
+ * skip-a-day / cancel for the caller's recurring meal plans. Visual language
+ * matches the redesigned orders screen; every mutation stays a callback the
+ * screen owns (SubscriptionPlanCard is presentation-only).
  */
 
 const styles = StyleSheet.create({
@@ -46,32 +47,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  header: { marginBottom: spacing.md },
+  header: { marginBottom: spacing.lg },
   list: { gap: spacing.md },
-  card: { gap: spacing.sm },
-  cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  actionsRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm, flexWrap: 'wrap' },
-  actionBtn: {
-    minHeight: touch.min,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surfaceRaised,
-  },
-  actionBtnDanger: { borderWidth: 1.5, borderColor: colors.error, backgroundColor: 'transparent' },
-  billRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    backgroundColor: colors.surfaceRaised,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.error,
-  },
-  billText: { flex: 1, gap: 2 },
   errorText: { marginTop: spacing.sm },
   skeletons: { gap: spacing.md },
   skeletonRow: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg, height: 96 },
@@ -89,114 +66,6 @@ const styles = StyleSheet.create({
   retryText: { flex: 1 },
   skipForm: { gap: spacing.sm },
 });
-
-function statusTone(status: MealSubscription['status']): string {
-  if (status === 'active') return colors.success;
-  if (status === 'paused') return colors.textDim;
-  return colors.error;
-}
-
-function statusLabel(status: MealSubscription['status']): string {
-  if (status === 'active') return 'Active';
-  if (status === 'paused') return 'Paused';
-  return 'Cancelled';
-}
-
-function SubscriptionCard({
-  sub,
-  onAction,
-  onSkip,
-  onPay,
-}: {
-  sub: MealSubscription;
-  onAction: (sub: MealSubscription, action: 'pause' | 'resume' | 'cancel') => void;
-  onSkip: (sub: MealSubscription) => void;
-  onPay: (sub: MealSubscription) => void;
-}) {
-  const days = sub.daysOfWeek.map(weekdayLabel).join(', ');
-  const bill = sub.pendingCycle;
-  return (
-    <Card style={styles.card}>
-      <View style={styles.cardTop}>
-        <AppText variant="bodyBold">{windowLabel(sub.window)}</AppText>
-        <Tag label={statusLabel(sub.status)} variant="outline" color={statusTone(sub.status)} />
-      </View>
-      <AppText variant="caption" color={colors.textDim}>
-        {days} · {sub.planType === 'fixed_meal' ? 'Fixed meal' : "Chef's rotation"}
-      </AppText>
-      <AppText variant="body">
-        {formatMoney(sub.pricePerDayMinor, sub.currency)}/day, billed weekly
-      </AppText>
-
-      {bill ? (
-        <View style={styles.billRow}>
-          <View style={styles.billText}>
-            <AppText variant="bodyBold" color={colors.error}>
-              {formatMoney(bill.amountMinor, bill.currency)} due
-            </AppText>
-            <AppText variant="caption" color={colors.textDim}>
-              Week of {bill.weekStart} — deliveries are paused until this is paid.
-            </AppText>
-          </View>
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel={`Pay the ${formatMoney(bill.amountMinor, bill.currency)} bill for this plan`}
-            onPress={() => onPay(sub)}
-            style={styles.actionBtn}
-          >
-            <AppText variant="bodyBold" color={colors.error}>
-              Pay bill
-            </AppText>
-          </PressableScale>
-        </View>
-      ) : null}
-
-      {sub.status !== 'cancelled' ? (
-        <View style={styles.actionsRow}>
-          {sub.status === 'active' ? (
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="Pause this plan"
-              onPress={() => onAction(sub, 'pause')}
-              style={styles.actionBtn}
-            >
-              <AppText variant="bodyBold">Pause</AppText>
-            </PressableScale>
-          ) : (
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="Resume this plan"
-              onPress={() => onAction(sub, 'resume')}
-              style={styles.actionBtn}
-            >
-              <AppText variant="bodyBold">Resume</AppText>
-            </PressableScale>
-          )}
-          {sub.status === 'active' ? (
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="Skip a delivery day"
-              onPress={() => onSkip(sub)}
-              style={styles.actionBtn}
-            >
-              <AppText variant="bodyBold">Skip a day</AppText>
-            </PressableScale>
-          ) : null}
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel="Cancel this plan"
-            onPress={() => onAction(sub, 'cancel')}
-            style={[styles.actionBtn, styles.actionBtnDanger]}
-          >
-            <AppText variant="bodyBold" color={colors.error}>
-              Cancel
-            </AppText>
-          </PressableScale>
-        </View>
-      ) : null}
-    </Card>
-  );
-}
 
 export default function MyMealSubscriptionsScreen() {
   const status = useAuth((s) => s.status);
@@ -318,7 +187,7 @@ export default function MyMealSubscriptionsScreen() {
           ) : subs !== null ? (
             <Animated.View entering={enterUp(0)} style={styles.list}>
               {subs.map((s) => (
-                <SubscriptionCard
+                <SubscriptionPlanCard
                   key={s.id}
                   sub={s}
                   onAction={(sub, action) => setPending({ sub, action })}

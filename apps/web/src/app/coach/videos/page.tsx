@@ -1,9 +1,8 @@
 import { exercises, planVideos } from '@gym/db';
 import { desc, eq } from 'drizzle-orm';
-import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
+import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
-import { staffFromCookie } from '@/lib/staffSession';
 import { isVideoConfigured } from '@/lib/video';
 import type { CoachVideoRow, Tier, VideoStatus } from './_components/types';
 import { CoachVideoLibrary } from './_components/CoachVideoLibrary';
@@ -63,8 +62,7 @@ async function loadVideos(): Promise<CoachVideoRow[]> {
 }
 
 export default async function CoachVideosPage() {
-  const principal = await staffFromCookie();
-  if (!principal) redirect('/coach/login');
+  await requireCoachPage(['content.manage', 'content.video.own']);
 
   const videos = await loadVideos();
   const configured = isVideoConfigured();

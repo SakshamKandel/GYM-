@@ -31,6 +31,10 @@ import { redirect } from 'next/navigation';
 import { effectivePermissionSet, type Permission, type Principal } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { buildPartnerOrderView } from '@/lib/meals';
+import {
+  derivePartnerStoreState,
+  type PartnerStoreState,
+} from '@/lib/partnerStoreState';
 import { staffFromCookie } from '@/lib/staffSession';
 import { mealPartners } from '@gym/db';
 import { isOrderLate } from './_format';
@@ -117,6 +121,7 @@ export interface PartnerContext {
   partnerId: string;
   partnerName: string;
   currency: string;
+  acceptingOrders: boolean;
 }
 
 /**
@@ -148,6 +153,7 @@ export async function requirePartnerPage(): Promise<PartnerContext> {
       isActive: mealPartners.isActive,
       name: mealPartners.name,
       currency: mealPartners.currency,
+      acceptingOrders: mealPartners.acceptingOrders,
     })
     .from(mealPartners)
     .where(eq(mealPartners.accountId, principal.id))
@@ -166,7 +172,13 @@ export async function requirePartnerPage(): Promise<PartnerContext> {
     redirect('/partner/login');
   }
 
-  return { principal, partnerId: row.id, partnerName: row.name, currency: row.currency };
+  return {
+    principal,
+    partnerId: row.id,
+    partnerName: row.name,
+    currency: row.currency,
+    acceptingOrders: row.acceptingOrders,
+  };
 }
 
 /** Load line items for a set of order ids, grouped by orderId. */
@@ -271,25 +283,18 @@ export async function loadOrderDetail(
 }
 
 /**
- * Store accepting-orders state, DERIVED without a schema change (the geo wave
- * owns the meal_partners columns). A partner is "paused" when it has ≥1
- * non-deleted menu item and EVERY one is inactive — the exact condition under
- * which the member order-create route already rejects every line
- * (`meals.isActive = true` is required). Pause/resume is a bulk `meals.isActive`
- * sweep (see /api/partner/store), so this predicate reads that same signal back.
+ * Store accepting-orders state. The partner-level operational switch is kept
+ * independent from individual menu-item stock, so pause/resume never changes
+ * which dishes the partner deliberately made unavailable.
  */
-export interface PartnerStoreState {
-  totalMeals: number;
-  activeMeals: number;
-  /** true = has items but all hidden → not accepting orders. */
-  paused: boolean;
+export function deriveStoreState(
+  menu: readonly PartnerMenuItem[],
+  acceptingOrders: boolean,
+): PartnerStoreState {
+  return derivePartnerStoreState(menu, acceptingOrders);
 }
 
-export function deriveStoreState(menu: readonly PartnerMenuItem[]): PartnerStoreState {
-  const totalMeals = menu.length;
-  const activeMeals = menu.filter((m) => m.isActive).length;
-  return { totalMeals, activeMeals, paused: totalMeals > 0 && activeMeals === 0 };
-}
+export type { PartnerStoreState };
 
 /** Terminal (delivered / cancelled / refused) orders, newest first — read-only history. */
 export async function loadHistoryOrders(db: Db, partnerId: string): Promise<PartnerOrderView[]> {

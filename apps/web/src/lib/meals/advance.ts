@@ -1,6 +1,6 @@
 import { mealOrderEvents, mealOrders, type Db } from '@gym/db';
 import type { OrderActor, OrderStatus } from '@gym/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { after } from 'next/server';
 import { sendPushToAccount } from '@/lib/push';
 
@@ -65,6 +65,14 @@ export async function advanceOrderStatus(
   const predicates = [eq(mealOrders.id, orderId), eq(mealOrders.status, expectedStatus)];
   if (scope?.partnerId) predicates.push(eq(mealOrders.partnerId, scope.partnerId));
   if (scope?.accountId) predicates.push(eq(mealOrders.accountId, scope.accountId));
+  // Destructive fulfilment transitions may not strand captured money or an
+  // in-review receipt. Routes preflight this for stable, actionable error
+  // codes; this predicate is the concurrency backstop if payment changes after
+  // that read. The dedicated admin refund route updates payment + fulfilment
+  // together and deliberately does not pass through this ordinary advance.
+  if (toStatus === 'cancelled' || toStatus === 'refused') {
+    predicates.push(inArray(mealOrders.paymentStatus, ['unpaid', 'refunded']));
+  }
 
   // Only the timestamp for THIS transition is stamped; the others keep their
   // frozen value (a re-advance can never happen — the CAS forbids leaving a

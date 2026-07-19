@@ -1,9 +1,9 @@
 import { mealPartners, meals, savedAddresses } from '@gym/db';
-import { withinRadiusKm } from '@gym/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
+import { deliveryEligibility, deliveryEligibilityError } from '@/lib/deliveryEligibility';
 import { json, preflight, readJson } from '@/lib/http';
 import { computeOrderFinancials, loadDeliveryConfig, type PricedLine } from '@/lib/meals';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
@@ -21,12 +21,10 @@ export const runtime = 'nodejs';
  * committing. The order-create route re-prices and re-freezes everything again
  * on submit, so a stale quote can never let a client dictate an amount.
  *
- * `deliversTo` is a coverage signal derived from the partner's geo service area
- * (serviceLat/Lng + serviceRadiusKm) against the chosen address's pin:
- *   true  = inside the delivery radius
- *   false = outside it
- *   null  = undeterminable (no addressId, no geocoded pin, or partner has no
- *           service-area geo configured) — a text-only address never resolves.
+ * Delivery eligibility is authoritative here too: bounded geo coverage wins,
+ * otherwise configured text service areas are used. Outside and indeterminate
+ * addresses fail before a total is shown, matching both create routes. A
+ * successful response therefore always carries `deliversTo: true`.
  */
 
 const postSchema = z.object({
@@ -69,14 +67,45 @@ export async function POST(req: Request) {
   const [partner] = await db
     .select({
       id: mealPartners.id,
+      serviceAreas: mealPartners.serviceAreas,
       serviceLat: mealPartners.serviceLat,
       serviceLng: mealPartners.serviceLng,
       serviceRadiusKm: mealPartners.serviceRadiusKm,
     })
     .from(mealPartners)
-    .where(and(eq(mealPartners.id, partnerId), eq(mealPartners.isActive, true)))
+    .where(
+      and(
+        eq(mealPartners.id, partnerId),
+        eq(mealPartners.isActive, true),
+        eq(mealPartners.acceptingOrders, true),
+      ),
+    )
     .limit(1);
   if (!partner) return json({ error: 'partner_unavailable' }, 400);
+
+  const address = addressId
+    ? (
+        await db
+          .select({
+            area: savedAddresses.area,
+            lat: savedAddresses.lat,
+            lng: savedAddresses.lng,
+          })
+          .from(savedAddresses)
+          .where(
+            and(
+              eq(savedAddresses.id, addressId),
+              eq(savedAddresses.accountId, me.id),
+              eq(savedAddresses.isDeleted, false),
+            ),
+          )
+          .limit(1)
+      )[0]
+    : null;
+  if (addressId && !address) return json({ error: 'address_not_found' }, 400);
+
+  const eligibilityError = deliveryEligibilityError(deliveryEligibility(partner, address));
+  if (eligibilityError) return json({ error: eligibilityError }, 400);
 
   // Re-resolve every line against THIS partner's live menu (server-authoritative
   // price + currency). A meal that isn't this partner's, is inactive, or is
@@ -104,37 +133,8 @@ export async function POST(req: Request) {
   const lines: PricedLine[] = items.map((i) => ({ priceMinor: mealById.get(i.mealId)!.priceMinor, qty: i.qty }));
   const financials = computeOrderFinancials(lines, cfg);
 
-  // Delivery coverage — geo only, and only when both the partner and the chosen
-  // address carry coordinates. Anything short of that is null (undeterminable).
-  let deliversTo: boolean | null = null;
-  if (addressId) {
-    const [address] = await db
-      .select({ lat: savedAddresses.lat, lng: savedAddresses.lng })
-      .from(savedAddresses)
-      .where(
-        and(
-          eq(savedAddresses.id, addressId),
-          eq(savedAddresses.accountId, me.id),
-          eq(savedAddresses.isDeleted, false),
-        ),
-      )
-      .limit(1);
-    if (!address) return json({ error: 'address_not_found' }, 400);
-    if (
-      address.lat != null &&
-      address.lng != null &&
-      partner.serviceLat != null &&
-      partner.serviceLng != null &&
-      partner.serviceRadiusKm != null
-    ) {
-      deliversTo = withinRadiusKm(
-        { lat: partner.serviceLat, lng: partner.serviceLng },
-        partner.serviceRadiusKm,
-        { lat: address.lat, lng: address.lng },
-      );
-    }
-  }
-
+  // A successful quote is now guaranteed deliverable by the shared eligibility
+  // rule above; create routes run that same rule again before writing.
   return json(
     {
       subtotalMinor: financials.subtotalMinor,
@@ -142,7 +142,7 @@ export async function POST(req: Request) {
       smallOrderFeeMinor: financials.smallOrderFeeMinor,
       totalMinor: financials.totalMinor,
       currency,
-      deliversTo,
+      deliversTo: true,
     },
     200,
   );

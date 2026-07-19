@@ -10,32 +10,254 @@ import {
   buddySessions,
   challengeMembers,
   checkIns,
+  coachApplications,
   coachAssignments,
   coachChallenges,
   coachMessages,
   coachMilestones,
+  coachPayoutRequests,
   coachPicks,
   coachProfiles,
   coachRequests,
+  coachTierRequests,
   devicePushTokens,
+  discountGrants,
+  foods,
   gamificationProfiles,
+  mealOrders,
+  mealPartners,
+  mealPaymentRequests,
+  mealSubscriptions,
+  paymentRequests,
+  profiles,
+  progressPhotos,
   progressionSuggestions,
+  promoRedemptions,
   referrals,
   restShieldUses,
   sessions,
   syncedSets,
   syncedWorkouts,
   trialUsage,
+  type Db,
+  walletLedger,
   workoutFlagAcks,
   xpEvents,
 } from '@gym/db';
-import { eq, inArray, or } from 'drizzle-orm';
+import {
+  ACCOUNT_DELETION_CONFIRMATION,
+  accountDeletionConfirmationMatches,
+  buildAccountDeletionImpact,
+  TERMINAL_ORDER_STATUSES,
+  type AccountDeletionCounts,
+  type AccountDeletionImpact,
+} from '@gym/shared';
+import { and, count, eq, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { logAudit } from '@/lib/authz';
 import { getDb } from '@/lib/db';
-import { json, preflight } from '@/lib/http';
+import { json, preflight, readJson } from '@/lib/http';
+import { getImageProvider, NotConfiguredError } from '@/lib/video';
 
 export const runtime = 'nodejs';
+
+const deleteBodySchema = z
+  .object({ confirmation: z.string().max(20) })
+  .strict();
+
+function firstCount(rows: readonly { value: number }[]): number {
+  return rows[0]?.value ?? 0;
+}
+
+interface DeletionContext {
+  impact: AccountDeletionImpact;
+  legacyProfileId: string | null;
+}
+
+/** Load every operational/offboarding/retention dependency in one DB batch. */
+async function loadDeletionContext(
+  db: Db,
+  uid: string,
+  email: string,
+): Promise<DeletionContext> {
+  const legacyProfiles = await db
+    .select({ id: profiles.id })
+    .from(profiles)
+    .where(sql`lower(${profiles.email}) = ${email.toLowerCase()}`)
+    .limit(2);
+
+  const [
+    liveOrders,
+    openSubscriptions,
+    pendingMealPayments,
+    pendingMembershipPayments,
+    staffRoles,
+    partnerProfiles,
+    coachProfileRows,
+    activeCoachAssignments,
+    pendingCoachRequests,
+    pendingCoachApplications,
+    pendingCoachTierRequests,
+    pendingCoachPayouts,
+    allMealOrders,
+    allMealSubscriptions,
+    allMealPayments,
+    allMembershipPayments,
+    allPromoRedemptions,
+    allDiscountGrants,
+    allCoachPayouts,
+    allWalletEntries,
+  ] = await db.batch([
+    db
+      .select({ value: count() })
+      .from(mealOrders)
+      .where(
+        and(
+          eq(mealOrders.accountId, uid),
+          notInArray(mealOrders.status, [...TERMINAL_ORDER_STATUSES]),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(mealSubscriptions)
+      .where(
+        and(
+          eq(mealSubscriptions.accountId, uid),
+          inArray(mealSubscriptions.status, ['active', 'paused']),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(mealPaymentRequests)
+      .where(
+        and(
+          eq(mealPaymentRequests.accountId, uid),
+          eq(mealPaymentRequests.status, 'pending'),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(paymentRequests)
+      .where(
+        and(eq(paymentRequests.accountId, uid), eq(paymentRequests.status, 'pending')),
+      ),
+    db.select({ value: count() }).from(admins).where(eq(admins.accountId, uid)),
+    db
+      .select({ value: count() })
+      .from(mealPartners)
+      .where(eq(mealPartners.accountId, uid)),
+    db
+      .select({ value: count() })
+      .from(coachProfiles)
+      .where(eq(coachProfiles.accountId, uid)),
+    db
+      .select({ value: count() })
+      .from(coachAssignments)
+      .where(
+        and(
+          eq(coachAssignments.status, 'active'),
+          or(eq(coachAssignments.coachId, uid), eq(coachAssignments.userId, uid)),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(coachRequests)
+      .where(
+        and(
+          eq(coachRequests.status, 'pending'),
+          or(eq(coachRequests.coachId, uid), eq(coachRequests.userId, uid)),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(coachApplications)
+      .where(
+        and(
+          eq(coachApplications.accountId, uid),
+          eq(coachApplications.status, 'pending'),
+        ),
+      ),
+    db
+      .select({ value: count() })
+      .from(coachTierRequests)
+      .where(
+        and(eq(coachTierRequests.coachId, uid), eq(coachTierRequests.status, 'pending')),
+      ),
+    db
+      .select({ value: count() })
+      .from(coachPayoutRequests)
+      .where(
+        and(eq(coachPayoutRequests.coachId, uid), eq(coachPayoutRequests.status, 'pending')),
+      ),
+    db.select({ value: count() }).from(mealOrders).where(eq(mealOrders.accountId, uid)),
+    db
+      .select({ value: count() })
+      .from(mealSubscriptions)
+      .where(eq(mealSubscriptions.accountId, uid)),
+    db
+      .select({ value: count() })
+      .from(mealPaymentRequests)
+      .where(eq(mealPaymentRequests.accountId, uid)),
+    db
+      .select({ value: count() })
+      .from(paymentRequests)
+      .where(eq(paymentRequests.accountId, uid)),
+    db
+      .select({ value: count() })
+      .from(promoRedemptions)
+      .where(eq(promoRedemptions.accountId, uid)),
+    db
+      .select({ value: count() })
+      .from(discountGrants)
+      .where(eq(discountGrants.accountId, uid)),
+    db
+      .select({ value: count() })
+      .from(coachPayoutRequests)
+      .where(eq(coachPayoutRequests.coachId, uid)),
+    db
+      .select({ value: count() })
+      .from(walletLedger)
+      .where(eq(walletLedger.coachId, uid)),
+  ]);
+
+  const counts: AccountDeletionCounts = {
+    liveMealOrders: firstCount(liveOrders),
+    openMealSubscriptions: firstCount(openSubscriptions),
+    pendingMealPaymentRequests: firstCount(pendingMealPayments),
+    pendingMembershipPaymentRequests: firstCount(pendingMembershipPayments),
+    staffRoles: firstCount(staffRoles),
+    partnerProfiles: firstCount(partnerProfiles),
+    coachProfiles: firstCount(coachProfileRows),
+    activeCoachAssignments: firstCount(activeCoachAssignments),
+    pendingCoachRequests: firstCount(pendingCoachRequests),
+    pendingCoachApplications: firstCount(pendingCoachApplications),
+    pendingCoachTierRequests: firstCount(pendingCoachTierRequests),
+    pendingCoachPayoutRequests: firstCount(pendingCoachPayouts),
+    matchingLegacyProfiles: legacyProfiles.length,
+    mealOrders: firstCount(allMealOrders),
+    mealSubscriptions: firstCount(allMealSubscriptions),
+    mealPaymentRequests: firstCount(allMealPayments),
+    membershipPaymentRequests: firstCount(allMembershipPayments),
+    promoRedemptions: firstCount(allPromoRedemptions),
+    discountGrants: firstCount(allDiscountGrants),
+    coachPayoutRequests: firstCount(allCoachPayouts),
+    walletLedgerEntries: firstCount(allWalletEntries),
+  };
+
+  return {
+    impact: buildAccountDeletionImpact(counts),
+    legacyProfileId: legacyProfiles.length === 1 ? legacyProfiles[0]?.id ?? null : null,
+  };
+}
+
+function pgErrorCode(error: unknown): string | null {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const value = (error as { code?: unknown }).code;
+    return typeof value === 'string' ? value : null;
+  }
+  return null;
+}
 
 export function OPTIONS() {
   return preflight();
@@ -52,24 +274,19 @@ export async function GET(req: Request) {
 }
 
 /**
- * DELETE /api/me — hard-delete the signed-in account and every row it owns
- * (App Store account-deletion requirement).
+ * DELETE /api/me — confirmed, fail-closed self-service account erasure.
  *
- * The deletion is one atomic db.batch() (neon-http runs a batch inside a
- * single transaction — the driver has no interactive transactions), with
- * children deleted before parents so it holds even if an FK were missing its
- * ON DELETE action. Rows that merely REFERENCE this account on someone else's
- * data (audit_log.actor_id, plan_videos.created_by, coach_messages.sender_
- * account_id, awarded_badges.verified_by, progression_suggestions.coach_id)
- * are FK'd SET NULL and fire on the final accounts delete — history survives,
- * anonymized.
+ * Hard deletion is allowed only when it cannot cascade operational or retained
+ * commerce/financial records. Those records currently have non-null account
+ * FKs; deleting them would corrupt the audit trail, while retaining an ad-hoc
+ * account tombstone would leave unrelated PII reachable. Until a dedicated
+ * deleted-subject/tombstone migration ships, affected accounts receive a
+ * stable 409 impact object for support-assisted offboarding/anonymization.
  *
- * Audited BEFORE deletion (actor = self); the audit row outlives the account
- * via audit_log's ON DELETE SET NULL.
- *
- * NOTE: the LEGACY profiles-keyed tables (workout_logs, set_logs, weight_logs,
- * food_logs, …, keyed on profiles.id — the pre-auth identity) have no linkage
- * to accounts.id and are not touched here.
+ * Eligible accounts are erased atomically. One exact legacy-profile email
+ * match is erased in that batch; multiple matches fail closed as ambiguous.
+ * Private progress-image destruction happens first and is idempotent, while DB
+ * references remain on provider failure, making the entire request retry-safe.
  */
 export async function DELETE(req: Request) {
   const token = bearerToken(req);
@@ -77,15 +294,67 @@ export async function DELETE(req: Request) {
   const user = await userForToken(token);
   if (!user) return json({ error: 'unauthorized' }, 401);
 
+  const parsedBody = deleteBodySchema.safeParse(await readJson(req));
+  if (
+    !parsedBody.success ||
+    !accountDeletionConfirmationMatches(parsedBody.data.confirmation)
+  ) {
+    return json(
+      {
+        error: 'confirmation_required',
+        expected: ACCOUNT_DELETION_CONFIRMATION,
+      },
+      400,
+    );
+  }
+
   const uid = user.id;
-
-  // Audit FIRST — if the batch below fails, the attempt is still on record.
-  await logAudit({ id: uid }, 'account.delete', 'account', uid, {
-    email: user.email,
-    self: true,
-  });
-
   const db = getDb();
+  const context = await loadDeletionContext(db, uid, user.email);
+  if (!context.impact.canDelete) {
+    return json({ error: 'account_deletion_blocked', impact: context.impact }, 409);
+  }
+
+  const privatePhotos = await db
+    .select({ id: progressPhotos.id, uid: progressPhotos.imageUrl })
+    .from(progressPhotos)
+    .where(eq(progressPhotos.accountId, uid));
+
+  if (privatePhotos.length > 0) {
+    const provider = getImageProvider();
+    const results = await Promise.allSettled(
+      privatePhotos.map((photo) => provider.deleteImage(photo.uid, 'authenticated')),
+    );
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length > 0) {
+      const notConfigured = failures.some(
+        (result) =>
+          result.status === 'rejected' && result.reason instanceof NotConfiguredError,
+      );
+      console.error('Account deletion progress-photo cleanup incomplete', {
+        accountId: uid,
+        attempted: privatePhotos.length,
+        failed: failures.length,
+      });
+      return json(
+        {
+          error: 'private_asset_cleanup_pending',
+          cleanup: {
+            kind: 'progress_photos',
+            remaining: failures.length,
+            retrySafe: true,
+          },
+        },
+        notConfigured ? 503 : 502,
+      );
+    }
+  }
+
+  // Do not copy email/PII into the retained audit row.
+  await logAudit({ id: uid }, 'account.delete', 'account', uid, {
+    self: true,
+    confirmation: 'typed',
+  });
 
   // Subqueries for grandchildren rows keyed to my parents (not to my account).
   const myWorkoutIds = db
@@ -101,8 +370,14 @@ export async function DELETE(req: Request) {
     .from(buddySessions)
     .where(eq(buddySessions.hostId, uid));
 
+  // A legacy custom food can reference profiles.created_by without a cascade;
+  // detach that attribution before deleting the one verified legacy profile.
+  const legacyProfileId =
+    context.legacyProfileId ?? `__no_matching_legacy_profile__:${uid}`;
+
   // FK-safe order: leaves → parents → the account row. Executed atomically.
-  await db.batch([
+  try {
+    await db.batch([
     db
       .delete(workoutFlagAcks)
       .where(
@@ -166,9 +441,36 @@ export async function DELETE(req: Request) {
     db.delete(coachProfiles).where(eq(coachProfiles.accountId, uid)),
     db.delete(admins).where(eq(admins.accountId, uid)),
     db.delete(accountProfiles).where(eq(accountProfiles.accountId, uid)),
+    db.delete(progressPhotos).where(eq(progressPhotos.accountId, uid)),
+    db.update(foods).set({ createdBy: null }).where(eq(foods.createdBy, legacyProfileId)),
+    db
+      .delete(profiles)
+      .where(
+        and(
+          eq(profiles.id, legacyProfileId),
+          sql`lower(${profiles.email}) = ${user.email.toLowerCase()}`,
+        ),
+      ),
     db.delete(sessions).where(eq(sessions.accountId, uid)),
     db.delete(accounts).where(eq(accounts.id, uid)),
-  ]);
+    ]);
+  } catch (error) {
+    // A retained-history dependency can appear after the impact read. Reload
+    // and return the same stable response instead of leaking a raw FK error.
+    // Cloudinary deletion is idempotent, so already-removed images are safe on
+    // the next attempt while this atomic DB batch has rolled back.
+    if (pgErrorCode(error) === '23503') {
+      const racedContext = await loadDeletionContext(db, uid, user.email);
+      if (!racedContext.impact.canDelete) {
+        return json(
+          { error: 'account_deletion_blocked', impact: racedContext.impact },
+          409,
+        );
+      }
+      return json({ error: 'account_deletion_conflict', retryable: true }, 409);
+    }
+    throw error;
+  }
 
   return json({ ok: true }, 200);
 }

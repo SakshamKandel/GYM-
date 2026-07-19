@@ -1,9 +1,8 @@
 import { coachProfiles } from '@gym/db';
 import { eq } from 'drizzle-orm';
-import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
+import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
-import { staffFromCookie } from '@/lib/staffSession';
 import { ProfileForm, type CoachProfile } from './ProfileForm';
 
 export const runtime = 'nodejs';
@@ -72,8 +71,7 @@ async function loadProfile(accountId: string): Promise<CoachProfile> {
 }
 
 export default async function CoachProfilePage() {
-  const coach = await staffFromCookie();
-  if (!coach) redirect('/coach/login');
+  const { principal: coach } = await requireCoachPage('coach.user.read');
 
   const profile = await loadProfile(coach.id);
 

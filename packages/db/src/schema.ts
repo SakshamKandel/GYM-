@@ -1749,6 +1749,8 @@ export const mealPartners = pgTable(
     timezone: text('timezone').notNull().default('Asia/Kathmandu'),
     currency: text('currency').notNull().default('NPR'),
     isActive: boolean('is_active').notNull().default(true),
+    // Operational pause independent of admin deactivation and menu stock.
+    acceptingOrders: boolean('accepting_orders').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1968,6 +1970,10 @@ export const mealOrders = pgTable(
       onDelete: 'set null',
     }),
     cycleId: text('cycle_id').references(() => mealBillingCycles.id, { onDelete: 'set null' }),
+    // Nullable for subscription + legacy rows. New one-time checkouts always
+    // set both fields; the partial index below scopes request ids per account.
+    clientRequestId: text('client_request_id'),
+    requestFingerprint: text('request_fingerprint'),
     deliveryDate: date('delivery_date').notNull(),
     window: text('window', { enum: ['lunch', 'dinner'] }).notNull(),
     addressId: text('address_id').references(() => savedAddresses.id, { onDelete: 'set null' }),
@@ -2021,6 +2027,9 @@ export const mealOrders = pgTable(
     uniqueIndex('meal_orders_sub_slot')
       .on(t.subscriptionId, t.deliveryDate, t.window)
       .where(sql`${t.source} = 'subscription'`),
+    uniqueIndex('meal_orders_account_client_request')
+      .on(t.accountId, t.clientRequestId)
+      .where(sql`${t.source} = 'one_time' AND ${t.clientRequestId} IS NOT NULL`),
     index('meal_orders_partner_status').on(t.partnerId, t.status),
     index('meal_orders_account').on(t.accountId),
     index('meal_orders_partner_date').on(t.partnerId, t.deliveryDate),

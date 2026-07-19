@@ -1,11 +1,11 @@
 import {
   mealAvailability,
-  mealOrderEvents,
   mealOrderItems,
   mealOrders,
   mealPartners,
   meals,
   savedAddresses,
+  type Db,
   type MealMacrosSnapshot,
 } from '@gym/db';
 import {
@@ -18,11 +18,18 @@ import {
   TERMINAL_ORDER_STATUSES,
   type MealAvailabilitySlot,
 } from '@gym/shared';
-import { and, asc, desc, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, notInArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
+import { deliveryEligibility, deliveryEligibilityError } from '@/lib/deliveryEligibility';
 import { json, preflight, readJson } from '@/lib/http';
+import {
+  mealOrderRequestFingerprint,
+  mealOrderRequestIdSchema,
+  resolveMealOrderIdempotency,
+} from '@/lib/mealOrderIdempotency';
+import { partnerOperationLockSql } from '@/lib/partnerOperationLock';
 import {
   buildMemberOrderView,
   computeOrderFinancials,
@@ -37,12 +44,14 @@ export const runtime = 'nodejs';
 /**
  * Member one-time meal orders (§3 / §8).
  *
- *  - POST {partnerId,deliveryDate,window,addressId,items,paymentMethod,notes?}
+ *  - POST {requestId,partnerId,deliveryDate,window,addressId,items,paymentMethod,notes?}
  *    The server is authoritative for EVERYTHING that touches money or time: it
  *    re-resolves each meal's price, recomputes fees from meal_delivery_config,
  *    freezes `cutoffAt` from the slot, and snapshots the delivery fields — the
  *    client cannot set any of them (invariant §8a). The slot must still be
- *    orderable (now < cutoff) and COD only when the partner accepts it.
+ *    orderable (now < cutoff) and COD only when the partner accepts it. The
+ *    account-scoped requestId makes retries replay-safe; order, lines, and the
+ *    initial pending event are one atomic Neon transaction.
  *  - GET ?scope=upcoming|history — materializes due subscription orders first,
  *    then returns the caller's own orders with line items.
  */
@@ -50,6 +59,7 @@ export const runtime = 'nodejs';
 const MAX_HORIZON_DAYS = 30;
 
 const postSchema = z.object({
+  requestId: mealOrderRequestIdSchema,
   partnerId: z.string().min(1),
   deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   window: z.enum(['lunch', 'dinner']),
@@ -63,6 +73,43 @@ const postSchema = z.object({
 });
 
 const getSchema = z.object({ scope: z.enum(['upcoming', 'history']).default('upcoming') });
+
+interface ExistingOneTimeOrder {
+  order: typeof mealOrders.$inferSelect;
+  items: (typeof mealOrderItems.$inferSelect)[];
+}
+
+async function loadExistingOneTimeOrder(
+  db: Db,
+  accountId: string,
+  requestId: string,
+): Promise<ExistingOneTimeOrder | null> {
+  const [order] = await db
+    .select()
+    .from(mealOrders)
+    .where(
+      and(
+        eq(mealOrders.accountId, accountId),
+        eq(mealOrders.source, 'one_time'),
+        eq(mealOrders.clientRequestId, requestId),
+      ),
+    )
+    .limit(1);
+  if (!order) return null;
+
+  const items = await db
+    .select()
+    .from(mealOrderItems)
+    .where(eq(mealOrderItems.orderId, order.id));
+  return { order, items };
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  if ((error as { code?: unknown }).code === '23505') return true;
+  const cause = (error as { cause?: unknown }).cause;
+  return cause !== error && isUniqueViolation(cause);
+}
 
 export function OPTIONS() {
   return preflight();
@@ -83,15 +130,26 @@ export async function POST(req: Request) {
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { partnerId, deliveryDate, window, addressId, items, paymentMethod, notes } = parsed.data;
+  const { requestId, partnerId, deliveryDate, window, addressId, items, paymentMethod, notes } = parsed.data;
+
+  const db = getDb();
+  const requestFingerprint = mealOrderRequestFingerprint(parsed.data);
+
+  // Replay before re-validating mutable partner/menu/cutoff state. If the first
+  // request committed but its HTTP response was lost, the same logical request
+  // must return that original order even if the slot has since crossed cutoff.
+  const existing = await loadExistingOneTimeOrder(db, me.id, requestId);
+  const existingResolution = resolveMealOrderIdempotency(existing?.order ?? null, requestFingerprint);
+  if (existingResolution === 'conflict') return json({ error: 'idempotency_conflict' }, 409);
+  if (existingResolution === 'replay' && existing) {
+    return json({ order: buildMemberOrderView(existing.order, existing.items) }, 200);
+  }
 
   const now = new Date();
   const today = ktmDateString(now);
   if (deliveryDate < today || deliveryDate > ktmAddDays(today, MAX_HORIZON_DAYS)) {
     return json({ error: 'out_of_range' }, 400);
   }
-
-  const db = getDb();
   // Server-authoritative fee + cutoff config (admin-editable). Cutoff hours flow
   // into both the orderability check and the frozen `cutoffAt` below.
   const cfg = await loadDeliveryConfig(db);
@@ -99,9 +157,22 @@ export async function POST(req: Request) {
   if (!isSlotOrderable(deliveryDate, window, now, cfg)) return json({ error: 'past_cutoff' }, 400);
 
   const [partner] = await db
-    .select({ id: mealPartners.id, acceptsCod: mealPartners.acceptsCod })
+    .select({
+      id: mealPartners.id,
+      acceptsCod: mealPartners.acceptsCod,
+      serviceAreas: mealPartners.serviceAreas,
+      serviceLat: mealPartners.serviceLat,
+      serviceLng: mealPartners.serviceLng,
+      serviceRadiusKm: mealPartners.serviceRadiusKm,
+    })
     .from(mealPartners)
-    .where(and(eq(mealPartners.id, partnerId), eq(mealPartners.isActive, true)))
+    .where(
+      and(
+        eq(mealPartners.id, partnerId),
+        eq(mealPartners.isActive, true),
+        eq(mealPartners.acceptingOrders, true),
+      ),
+    )
     .limit(1);
   if (!partner) return json({ error: 'partner_unavailable' }, 400);
   if (paymentMethod === 'cod' && !partner.acceptsCod) return json({ error: 'cod_unavailable' }, 400);
@@ -125,6 +196,9 @@ export async function POST(req: Request) {
     )
     .limit(1);
   if (!address) return json({ error: 'address_not_found' }, 400);
+
+  const eligibilityError = deliveryEligibilityError(deliveryEligibility(partner, address));
+  if (eligibilityError) return json({ error: eligibilityError }, 400);
 
   // Resolve every meal against THIS partner's live menu (server-authoritative
   // price + currency + macros). A meal that isn't this partner's, is inactive,
@@ -171,37 +245,7 @@ export async function POST(req: Request) {
   const cutoffAt = cutoffFor(deliveryDate, window, 'Asia/Kathmandu', cfg);
   const deliveryAddressText = [address.line, address.area].filter((p) => p && p.length > 0).join(', ');
 
-  const [order] = await db
-    .insert(mealOrders)
-    .values({
-      accountId: me.id,
-      partnerId,
-      source: 'one_time',
-      subscriptionId: null,
-      cycleId: null,
-      deliveryDate,
-      window,
-      addressId,
-      deliveryName: me.displayName || 'Customer',
-      deliveryPhone: address.phone,
-      deliveryAddressText,
-      // Freeze the geocoded pin from the chosen address (null when unpinned).
-      deliveryLat: address.lat,
-      deliveryLng: address.lng,
-      deliveryNotes: notes ? maskPii(notes) : '',
-      subtotalMinor: financials.subtotalMinor,
-      deliveryFeeMinor: financials.deliveryFeeMinor,
-      smallOrderFeeMinor: financials.smallOrderFeeMinor,
-      totalMinor: financials.totalMinor,
-      currency,
-      paymentMethod,
-      paymentStatus: 'unpaid',
-      status: 'pending',
-      statusVersion: 0,
-      cutoffAt,
-    })
-    .returning();
-
+  const orderId = crypto.randomUUID();
   const itemValues = items.map((i) => {
     const meal = mealById.get(i.mealId)!;
     const macros: MealMacrosSnapshot = {
@@ -213,7 +257,8 @@ export async function POST(req: Request) {
       ...(meal.sugarG != null ? { sugarG: meal.sugarG } : {}),
     };
     return {
-      orderId: order.id,
+      id: crypto.randomUUID(),
+      orderId,
       mealId: meal.id,
       nameSnapshot: meal.name,
       priceMinorSnapshot: meal.priceMinor,
@@ -221,22 +266,109 @@ export async function POST(req: Request) {
       qty: i.qty,
     };
   });
-  const insertedItems = await db.insert(mealOrderItems).values(itemValues).returning();
+  const itemPayload = JSON.stringify(
+    itemValues.map((item) => ({
+      id: item.id,
+      meal_id: item.mealId,
+      name_snapshot: item.nameSnapshot,
+      price_minor_snapshot: item.priceMinorSnapshot,
+      macros_snapshot: item.macrosSnapshot,
+      qty: item.qty,
+    })),
+  );
+  const eventId = crypto.randomUUID();
+  const deliveryNotes = notes ? maskPii(notes) : '';
 
-  // Creation audit (best-effort — never undoes the committed order).
+  // One statement conditionally inserts the order from the partner's CURRENT
+  // active row and fans its RETURNING id into every item + initial event. The
+  // preceding advisory-lock statement is deliberately separate: READ COMMITTED
+  // takes a new snapshot per statement after a waiter acquires the lock.
+  const createOrder = db.execute<{ id: string }>(sql`
+    with active_partner as materialized (
+      select id
+      from meal_partners
+      where id = ${partnerId} and is_active = true and accepting_orders = true
+    ),
+    inserted_order as (
+      insert into meal_orders (
+        id, account_id, partner_id, source, subscription_id, cycle_id,
+        client_request_id, request_fingerprint, delivery_date, window,
+        address_id, delivery_name, delivery_phone, delivery_address_text,
+        delivery_lat, delivery_lng, delivery_notes, subtotal_minor,
+        delivery_fee_minor, small_order_fee_minor, total_minor, currency,
+        payment_method, payment_status, status, status_version, cutoff_at
+      )
+      select
+        ${orderId}, ${me.id}, ${partnerId}, 'one_time', null, null,
+        ${requestId}, ${requestFingerprint}, ${deliveryDate}, ${window},
+        ${addressId}, ${me.displayName || 'Customer'}, ${address.phone},
+        ${deliveryAddressText}, ${address.lat}, ${address.lng}, ${deliveryNotes},
+        ${financials.subtotalMinor}, ${financials.deliveryFeeMinor},
+        ${financials.smallOrderFeeMinor}, ${financials.totalMinor}, ${currency},
+        ${paymentMethod}, 'unpaid', 'pending', 0, ${cutoffAt}
+      from active_partner
+      returning id
+    ),
+    inserted_items as (
+      insert into meal_order_items (
+        id, order_id, meal_id, name_snapshot, price_minor_snapshot,
+        macros_snapshot, qty
+      )
+      select
+        item.id, inserted_order.id, item.meal_id, item.name_snapshot,
+        item.price_minor_snapshot, item.macros_snapshot, item.qty
+      from jsonb_to_recordset(${itemPayload}::jsonb) as item(
+        id text,
+        meal_id text,
+        name_snapshot text,
+        price_minor_snapshot integer,
+        macros_snapshot jsonb,
+        qty integer
+      )
+      cross join inserted_order
+      returning id
+    ),
+    inserted_event as (
+      insert into meal_order_events (
+        id, order_id, from_status, to_status, actor_id, actor_role
+      )
+      select ${eventId}, inserted_order.id, null, 'pending', ${me.id}, 'member'
+      from inserted_order
+      returning id
+    )
+    select inserted_order.id
+    from inserted_order
+    cross join (select count(*) from inserted_items) item_count
+    cross join (select count(*) from inserted_event) event_count
+  `);
+
+  // Installed neon-http implements db.batch() through Neon's transaction()
+  // API. The lock and all three writes therefore release/commit together.
   try {
-    await db.insert(mealOrderEvents).values({
-      orderId: order.id,
-      fromStatus: null,
-      toStatus: 'pending',
-      actorId: me.id,
-      actorRole: 'member',
-    });
-  } catch (err) {
-    console.error('[meals] order creation event append failed', err);
-  }
+    const [, created] = await db.batch([
+      db.execute(partnerOperationLockSql(partnerId)),
+      createOrder,
+    ]);
+    if (created.rows.length === 0) return json({ error: 'partner_unavailable' }, 400);
 
-  return json({ order: buildMemberOrderView(order, insertedItems) }, 201);
+    const persisted = await loadExistingOneTimeOrder(db, me.id, requestId);
+    if (!persisted) throw new Error('Atomic meal order insert returned no order');
+    return json({ order: buildMemberOrderView(persisted.order, persisted.items) }, 201);
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+
+    // Two identical requests can pass the optimistic read together. The
+    // account-scoped unique index lets one batch commit and aborts the loser;
+    // resolve the winner exactly as an ordinary replay. A reused key with a
+    // different payload is a stable conflict, never a second order.
+    const raced = await loadExistingOneTimeOrder(db, me.id, requestId);
+    const raceResolution = resolveMealOrderIdempotency(raced?.order ?? null, requestFingerprint);
+    if (raceResolution === 'conflict') return json({ error: 'idempotency_conflict' }, 409);
+    if (raceResolution === 'replay' && raced) {
+      return json({ order: buildMemberOrderView(raced.order, raced.items) }, 200);
+    }
+    throw error;
+  }
 }
 
 export async function GET(req: Request) {

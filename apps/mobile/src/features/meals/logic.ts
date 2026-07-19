@@ -214,6 +214,8 @@ export function mealErrorMessage(code: string): string {
     case 'invalid_transition':
     case 'conflict':
       return 'That action no longer applies — refresh and try again.';
+    case 'idempotency_conflict':
+      return 'This checkout changed while it was being submitted. Review it and try again.';
     case 'not_active':
       return 'This subscription is no longer active.';
     case 'past_date':

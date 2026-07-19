@@ -1,6 +1,5 @@
-import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
-import { staffFromCookie } from '@/lib/staffSession';
+import { requireCoachPage } from '@/lib/coachPage';
 import { VerifyQueue } from './_components/VerifyQueue';
 
 export const runtime = 'nodejs';
@@ -16,8 +15,7 @@ export const dynamic = 'force-dynamic';
  * same-origin fetch), so a verify click updates the list in place.
  */
 export default async function CoachVerifyPage() {
-  const principal = await staffFromCookie();
-  if (!principal) redirect('/coach/login');
+  await requireCoachPage('coach.user.read');
 
   return (
     <div style={{ maxWidth: 900 }}>
