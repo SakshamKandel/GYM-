@@ -129,5 +129,54 @@ export const touch = {
   primary: 56,
 } as const;
 
+/**
+ * Membership-card metal palettes — the "premium card" faces rendered in
+ * Settings (SVG gradients, one per member tier). Deliberately outside
+ * `colors`: these are material finishes for ONE component, not general
+ * surface/ink tokens, and screens must keep importing them from here rather
+ * than inlining hex (rule 7). `ink`/`inkDim` are chosen for ≥4.5:1 on the
+ * card's mid-gradient stop.
+ */
+export const cardMetals = {
+  starter: {
+    top: '#33363C',
+    mid: '#23262B',
+    deep: '#15171A',
+    sheen: '#5A5E66',
+    ink: '#F2F3F5',
+    inkDim: '#B9BDC4',
+    stripe: '#FF3B30',
+  },
+  silver: {
+    top: '#D9DCE1',
+    mid: '#AEB3BB',
+    deep: '#7E848E',
+    sheen: '#F4F6F8',
+    ink: '#1C1E22',
+    inkDim: '#3A3E45',
+    stripe: '#FF3B30',
+  },
+  gold: {
+    top: '#E8C878',
+    mid: '#C9A24D',
+    deep: '#8F6B24',
+    sheen: '#F7E3AE',
+    ink: '#241A05',
+    inkDim: '#4A3A12',
+    stripe: '#FF3B30',
+  },
+  elite: {
+    top: '#1B1D22',
+    mid: '#101114',
+    deep: '#050506',
+    sheen: '#3C4048',
+    ink: '#F5F0E6',
+    inkDim: '#B9AF97',
+    stripe: '#FF3B30',
+  },
+} as const;
+
+export type CardMetalTier = keyof typeof cardMetals;
+
 export type ColorToken = keyof typeof colors;
 export type SpacingToken = keyof typeof spacing;

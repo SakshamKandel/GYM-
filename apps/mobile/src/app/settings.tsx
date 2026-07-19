@@ -45,6 +45,7 @@ import { patchWeeklyTarget, toGamificationError } from '../lib/api/gamification'
 import { getPublicLeaderboard, setPublicBoardHidden } from '../lib/api/social';
 import { getRepo } from '../lib/repo';
 import { SEED_PLANS } from '../lib/seed/plans';
+import { MembershipCard } from '../features/subscription/components/MembershipCard';
 import { useEffectiveTier } from '../lib/tier';
 import { useAuth } from '../state/auth';
 import { publicBoardHiddenFor, useGamificationDisplay } from '../state/gamification';
@@ -809,6 +810,18 @@ export default function SettingsScreen() {
         </PressableScale>
       </Animated.View>
       <ScreenHeader title="Settings" eyebrow="Profile & preferences" />
+
+      {/* ── Membership card — the tier as a premium metal card face. Tapping
+          opens the subscription screen (upgrade / manage). ── */}
+      <Animated.View entering={enterUp(0)} style={styles.membershipCardWrap}>
+        <MembershipCard
+          tier={serverTier}
+          holderName={displayName}
+          memberId={authUser?.id ?? null}
+          signedIn={signedIn}
+          onPress={() => pushPath('/subscribe')}
+        />
+      </Animated.View>
 
       {/* ── Account card — charcoal block: avatar, editable name, tier chip ── */}
       <Animated.View entering={enterUp(0)} style={styles.accountSection}>
@@ -1581,7 +1594,8 @@ const styles = StyleSheet.create({
   },
 
   // Account card — charcoal block: avatar + editable name + tier chip
-  accountSection: { marginTop: spacing.xl },
+  membershipCardWrap: { marginTop: spacing.xl },
+  accountSection: { marginTop: spacing.md },
   accountCard: {
     backgroundColor: colors.surface,
     borderRadius: radius.block,
