@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react';
 import { useEffect } from 'react';
-import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   interpolate,
@@ -253,9 +253,19 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
     Math.min(ITEM_W_MAX, Math.floor(usable / Math.max(state.routes.length, 1))),
   );
 
+  // Clearance above the SYSTEM navigation area. insets.bottom is the truth
+  // (gesture bar ~24, 3-button bar ~48) now that the root SafeAreaProvider
+  // ships initial metrics — the Math.max floor only guards odd devices that
+  // still report 0 under edge-to-edge, so the dock can never sit on the
+  // system buttons again.
+  const systemClearance = Math.max(
+    insets.bottom,
+    Platform.OS === 'android' ? spacing.lg : 0,
+  );
+
   return (
     <View
-      style={[styles.wrap, { bottom: insets.bottom + FLOAT_GAP }]}
+      style={[styles.wrap, { bottom: systemClearance + FLOAT_GAP }]}
       pointerEvents="box-none"
     >
       <View style={styles.bar}>

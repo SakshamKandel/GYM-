@@ -12,6 +12,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-context';
 import { colors } from '@gym/ui-tokens';
 import { hydrateCheckIns } from '../features/checkin/store';
 import { registerPushRefresh } from '../features/realtime/pushRefresh';
@@ -104,6 +105,11 @@ export default function RootLayout() {
   return (
     // Required for GestureDetector-based gestures (Stepper drag) app-wide.
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
+      {/* Explicit provider + synchronous initial metrics: without this,
+          useSafeAreaInsets can report 0 on Android edge-to-edge devices
+          (Android 15 forces drawing under the system bar), which sat the
+          floating tab dock ON TOP of the 3-button navigation bar. */}
+      <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <StatusBar style="light" />
       <AppLock>
       <Stack
@@ -121,6 +127,7 @@ export default function RootLayout() {
         <Stack.Screen name="staff" />
       </Stack>
       </AppLock>
+      </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
