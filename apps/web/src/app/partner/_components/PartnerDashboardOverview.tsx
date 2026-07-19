@@ -71,14 +71,21 @@ export function PartnerDashboardOverview({
   stats,
   today,
 }: PartnerDashboardOverviewProps) {
-  const pending = activeOrders.filter((order) => order.status === 'pending').length;
-  const confirmed = activeOrders.filter((order) => order.status === 'confirmed').length;
-  const preparing = activeOrders.filter((order) => order.status === 'preparing').length;
-  const enRoute = activeOrders.filter((order) => order.status === 'out_for_delivery').length;
+  // "Live fulfillment" mirrors the Today board, which only lanes orders whose
+  // delivery date is today; orders that slipped past their date are counted
+  // separately as overdue so the tile total matches the board (dashboard-count
+  // consistency). COD exposure still spans every open order — the cash is owed
+  // regardless of date.
+  const todaysOrders = activeOrders.filter((order) => order.deliveryDate === today);
+  const overdueCount = activeOrders.length - todaysOrders.length;
+  const pending = todaysOrders.filter((order) => order.status === 'pending').length;
+  const confirmed = todaysOrders.filter((order) => order.status === 'confirmed').length;
+  const preparing = todaysOrders.filter((order) => order.status === 'preparing').length;
+  const enRoute = todaysOrders.filter((order) => order.status === 'out_for_delivery').length;
   const inKitchen = confirmed + preparing;
-  const totalLive = activeOrders.length;
-  const lunchQueue = activeOrders.filter((order) => order.window === 'lunch').length;
-  const dinnerQueue = activeOrders.filter((order) => order.window === 'dinner').length;
+  const totalLive = todaysOrders.length;
+  const lunchQueue = todaysOrders.filter((order) => order.window === 'lunch').length;
+  const dinnerQueue = todaysOrders.filter((order) => order.window === 'dinner').length;
   const activeMenu = menu.filter((item) => item.isActive).length;
   const codOrders = activeOrders.filter(
     (order) => order.paymentMethod === 'cod' && order.paymentStatus !== 'paid',
@@ -253,6 +260,15 @@ export function PartnerDashboardOverview({
                 {codOrders.length} cash {codOrders.length === 1 ? 'order' : 'orders'} to collect
               </div>
             </div>
+            {overdueCount > 0 ? (
+              <div className={styles.insightItem}>
+                <div className={styles.insightLabel}>Needs attention</div>
+                <div className={styles.insightValue}>{overdueCount.toLocaleString()}</div>
+                <div className={styles.insightHint}>
+                  overdue {overdueCount === 1 ? 'order' : 'orders'} on the board
+                </div>
+              </div>
+            ) : null}
           </div>
         </Card>
       </div>

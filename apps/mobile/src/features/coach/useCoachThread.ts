@@ -25,6 +25,14 @@ import { useAuth } from '../../state/auth';
  * reply — a transient "typing" coach bubble shows so the member sees Greece is
  * thinking; it's swapped for the real reply when the server responds.
  *
+ * The typing bubble is ONLY honest when an instant reply is actually coming.
+ * A member with an assigned HUMAN coach (and a non-Elite support ticket) gets
+ * NO auto-reply — the server returns just the user's message and a person
+ * answers later. Showing "typing" there implies an instant answer that never
+ * comes. We learn this from the send response (`sender:'coach'` present ⇒ an
+ * instant reply exists) and suppress the bubble on every subsequent send once
+ * a thread is proven human-answered.
+ *
  * Poll-driven thread: fetch on open, refresh on an interval, optimistic send.
  */
 
@@ -84,6 +92,12 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
   const [sending, setSending] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [sendError, setSendError] = useState<'forbidden' | 'network' | null>(null);
+  // Whether a send yields an instant coach reply. Starts true so the classic
+  // AI (Greece / Elite concierge) case shows the typing bubble; a send that
+  // comes back with no coach row (human coach owns the reply, or non-Elite
+  // support) flips this off so we stop faking an instant answer. Reset per
+  // account below alongside the thread.
+  const [instantReply, setInstantReply] = useState(true);
 
   const mounted = useRef(true);
   useEffect(() => {
@@ -98,6 +112,7 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
   useEffect(() => {
     if (status === 'signedOut') {
       setMessages([]);
+      setInstantReply(true);
       loadedFor.current = null;
     }
   }, [status]);
@@ -116,6 +131,16 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
           const pending = prev.filter((m) => isOptimistic(m) && !isTyping(m));
           return [...next, ...pending];
         });
+        // Seed the typing-bubble honesty from history — without a server flag,
+        // this is the only local signal. An AI/Elite thread answers every send
+        // instantly, so it never ends on an unanswered user message; if the
+        // newest persisted row is the member's own message, a human coach owns
+        // this thread and no instant reply is coming, so don't fake a "typing"
+        // bubble on the first send. Only ever flips OFF (a proven-instant thread
+        // stays truthful); the empty first-message-ever case still needs a
+        // server-provided assigned-coach flag to fully close.
+        const newest = next[next.length - 1];
+        if (newest !== undefined && newest.sender === 'user') setInstantReply(false);
         loadedFor.current = token;
         setStale(false);
       } catch (err) {
@@ -181,7 +206,10 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         readByUser: true,
       };
       // Transient coach bubble shown while Greece "thinks" — swapped for the
-      // real reply on completion, and stripped on any failure/reload.
+      // real reply on completion, and stripped on any failure/reload. Only
+      // shown when this thread is known to produce an instant reply; a
+      // human-coach (or non-Elite support) thread would never fill it, so we
+      // don't fake one there.
       const typing: CoachMessage = {
         id: `${TYPING_PREFIX}${now}`,
         kind,
@@ -190,9 +218,12 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         createdAt: new Date(now + 1).toISOString(),
         readByUser: true,
       };
-      setMessages((prev) => [...prev, optimistic, typing]);
+      const showTyping = instantReply;
+      setMessages((prev) =>
+        showTyping ? [...prev, optimistic, typing] : [...prev, optimistic],
+      );
       setSending(true);
-      setGenerating(true);
+      setGenerating(showTyping);
       setSendError(null);
 
       try {
@@ -201,6 +232,9 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         // responds with the real [user, coachReply] pair.
         const inserted = await sendCoachMessage(kind, body, token);
         if (mounted.current) {
+          // Learn whether this thread actually returns an instant coach reply,
+          // so the next send suppresses (or keeps) the typing bubble honestly.
+          setInstantReply(inserted.some((m) => m.sender === 'coach'));
           // Swap the optimistic user + typing bubbles for the server's real
           // [user, coachReply] pair. A focus reload landing mid-round-trip can
           // have already merged in the persisted real user row, so also drop any
@@ -233,7 +267,7 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         }
       }
     },
-    [kind, status, token],
+    [instantReply, kind, status, token],
   );
 
   return { messages, loading, stale, sending, generating, reload, send, sendError };

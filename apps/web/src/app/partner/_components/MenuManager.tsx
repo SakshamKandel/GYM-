@@ -137,6 +137,7 @@ export function MenuManager({
         <MealFormDrawer
           key={editing.id ?? 'new'}
           mealId={editing.id}
+          accountCurrency={defaultCurrency}
           initial={editing.form}
           onClose={() => setEditing(null)}
         />
@@ -217,15 +218,21 @@ function MenuCard({ item, onEdit }: { item: PartnerMenuItem; onEdit: () => void 
 
 function MealFormDrawer({
   mealId,
+  accountCurrency,
   initial,
   onClose,
 }: {
   mealId: string | null;
+  accountCurrency: MealCurrency;
   initial: FormState;
   onClose: () => void;
 }) {
   const router = useRouter();
   const [form, setForm] = useState<FormState>(initial);
+  // Once a create succeeds we adopt the new id here so a retry (e.g. after the
+  // availability sub-write fails) PATCHes the same row instead of inserting a
+  // duplicate (P0-15).
+  const [currentId, setCurrentId] = useState<string | null>(mealId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -314,8 +321,11 @@ function MealFormDrawer({
     const sugarG = form.sugarG.trim() === '' ? null : toInt(form.sugarG);
     if (form.fiberG.trim() !== '' && fiberG == null) return setError('Fiber must be a whole number.');
     if (form.sugarG.trim() !== '' && sugarG == null) return setError('Sugar must be a whole number.');
+    if (form.priceMajor.trim() === '') return setError('Price is required.');
     const priceValue = Number(form.priceMajor);
-    if (!Number.isFinite(priceValue) || priceValue < 0) return setError('Enter a valid price.');
+    if (!Number.isFinite(priceValue) || priceValue <= 0) {
+      return setError('Enter a price greater than 0.');
+    }
     const priceMinor = Math.round(priceValue * 100);
     const sortOrder = toInt(form.sortOrder) ?? 0;
 
@@ -332,31 +342,39 @@ function MealFormDrawer({
       dietType: form.dietType,
       goalTags: form.goalTags,
       priceMinor,
-      currency: form.currency,
+      // Currency is fixed to the restaurant's account currency — a mismatch is
+      // rejected server-side and corrupts revenue rollups (P0-15).
+      currency: accountCurrency,
       isActive: form.isActive,
       sortOrder,
     };
 
     setBusy(true);
     try {
-      let id = mealId;
+      let id = currentId;
       const res = await fetch(
-        mealId ? `/api/partner/meals/${encodeURIComponent(mealId)}` : '/api/partner/meals',
+        currentId ? `/api/partner/meals/${encodeURIComponent(currentId)}` : '/api/partner/meals',
         {
-          method: mealId ? 'PATCH' : 'POST',
+          method: currentId ? 'PATCH' : 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify(payload),
         },
       );
       if (!res.ok) {
-        setError('Could not save this item. Check the fields and try again.');
+        const body = (await res.json().catch(() => ({}))) as { error?: string; expected?: string };
+        setError(
+          body.error === 'currency_mismatch'
+            ? `This item's currency must match your restaurant (${body.expected ?? accountCurrency}).`
+            : 'Could not save this item. Check the fields and try again.',
+        );
         setBusy(false);
         return;
       }
       if (!id) {
         const body = (await res.json()) as { meal: { id: string } };
         id = body.meal.id;
+        setCurrentId(id);
       }
 
       // Availability is a separate replace endpoint.
@@ -385,11 +403,11 @@ function MealFormDrawer({
   }
 
   async function softDelete() {
-    if (!mealId) return;
+    if (!currentId) return;
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/partner/meals/${encodeURIComponent(mealId)}`, {
+      const res = await fetch(`/api/partner/meals/${encodeURIComponent(currentId)}`, {
         method: 'DELETE',
         credentials: 'include',
       });
@@ -410,11 +428,11 @@ function MealFormDrawer({
     <Drawer
       open
       onClose={onClose}
-      title={mealId ? 'Edit menu item' : 'New menu item'}
+      title={currentId ? 'Edit menu item' : 'New menu item'}
       width={480}
       footer={
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-          {mealId ? (
+          {currentId ? (
             <ConfirmButton
               label="Remove"
               confirmLabel="Confirm remove"
@@ -508,7 +526,7 @@ function MealFormDrawer({
         </Field>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <Field label={`Price (${form.currency === 'NPR' ? 'Rs' : '$'})`}>
+          <Field label={`Price (${accountCurrency === 'NPR' ? 'Rs' : '$'})`}>
             <input
               className="gt-input"
               type="number"
@@ -519,14 +537,15 @@ function MealFormDrawer({
             />
           </Field>
           <Field label="Currency">
-            <select
+            {/* Fixed to the restaurant's account currency — mixing currencies
+                corrupts revenue rollups, so it isn't editable per item. */}
+            <input
               className="gt-input"
-              value={form.currency}
-              onChange={(e) => set('currency', e.target.value as MealCurrency)}
-            >
-              <option value="NPR">NPR (Rs)</option>
-              <option value="USD">USD ($)</option>
-            </select>
+              value={accountCurrency === 'NPR' ? 'NPR (Rs)' : 'USD ($)'}
+              readOnly
+              disabled
+              aria-label="Currency (fixed to your restaurant)"
+            />
           </Field>
         </div>
 

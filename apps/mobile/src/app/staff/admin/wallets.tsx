@@ -264,11 +264,17 @@ function EntryForm({
 function WalletDrawer({
   coachId,
   token,
+  revoked,
   onClose,
   onChanged,
 }: {
   coachId: string;
   token: string;
+  /** P1-16: the roster's `coach.revoked` flag (E10/C2 offboarding cascade) —
+   * passed down from the row the drawer was opened from since the per-coach
+   * detail route doesn't carry it itself. Disables recording new entries
+   * against an account that no longer holds the coach role. */
+  revoked: boolean;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -305,7 +311,16 @@ function WalletDrawer({
           </View>
         ) : detail ? (
           <>
-            <Tag label={detail.coach.coachTier.toUpperCase()} variant="dim" />
+            <View style={styles.detailTags}>
+              <Tag label={detail.coach.coachTier.toUpperCase()} variant="dim" />
+              {revoked ? <Tag label="Revoked" variant="outline" color={colors.warning} /> : null}
+            </View>
+            {revoked ? (
+              <AppText variant="caption" color={colors.textFaint}>
+                This account no longer holds the coach role. The ledger stays visible to
+                reconcile any outstanding balance, but new entries are disabled.
+              </AppText>
+            ) : null}
 
             <SectionLabel>Balances</SectionLabel>
             {detail.balances.length === 0 ? (
@@ -359,14 +374,16 @@ function WalletDrawer({
               </View>
             )}
 
-            <EntryForm
-              coachId={coachId}
-              token={token}
-              onSaved={() => {
-                void load();
-                onChanged();
-              }}
-            />
+            {revoked ? null : (
+              <EntryForm
+                coachId={coachId}
+                token={token}
+                onSaved={() => {
+                  void load();
+                  onChanged();
+                }}
+              />
+            )}
           </>
         ) : null}
       </ScrollView>
@@ -508,9 +525,14 @@ export default function AdminWalletsScreen() {
                 style={styles.row}
               >
                 <View style={styles.rowText}>
-                  <AppText variant="bodyBold" numberOfLines={1}>
-                    {w.coach.displayName}
-                  </AppText>
+                  <View style={styles.rowNameLine}>
+                    <AppText variant="bodyBold" numberOfLines={1} style={styles.rowNameGrow}>
+                      {w.coach.displayName}
+                    </AppText>
+                    {w.coach.revoked ? (
+                      <Tag label="Revoked" variant="outline" color={colors.warning} />
+                    ) : null}
+                  </View>
                   <AppText variant="caption" numberOfLines={1}>
                     {w.coach.coachTier} · {balanceSummary(w.balances)}
                   </AppText>
@@ -526,6 +548,7 @@ export default function AdminWalletsScreen() {
         <WalletDrawer
           coachId={openCoachId}
           token={token}
+          revoked={wallets.find((w) => w.coach.id === openCoachId)?.coach.revoked ?? false}
           onClose={() => setOpenCoachId(null)}
           onChanged={() => void load()}
         />
@@ -618,8 +641,11 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     minHeight: 64,
   },
-  rowText: { flex: 1, gap: 2 },
+  rowText: { flex: 1, gap: 2, minWidth: 0 },
+  rowNameLine: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  rowNameGrow: { flexShrink: 1 },
   sheetScroll: { paddingBottom: spacing.xxl, gap: spacing.sm },
+  detailTags: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   balanceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   entryList: { gap: spacing.sm },
   entryRow: {

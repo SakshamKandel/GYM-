@@ -1,5 +1,5 @@
 import { coachMessages } from '@gym/db';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { requireCoachOwnsUser, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
@@ -22,6 +22,14 @@ export const runtime = 'nodejs';
  *   requireCoachOwnsUser(principal, userId)   — active assignment (super_admin
  *                                               bypasses); 403 otherwise.
  */
+
+/**
+ * Newest N rows returned for the polled thread. MessageList polls this route
+ * every 10s and replaces its whole message array, so an unbounded SELECT would
+ * re-fetch the entire history every tick and hold it all in client state
+ * (P1-12). Matches the RSC page's first-paint HISTORY_LIMIT.
+ */
+const HISTORY_LIMIT = 100;
 
 export function OPTIONS() {
   return preflight();
@@ -54,7 +62,11 @@ export async function GET(
     })
     .from(coachMessages)
     .where(and(eq(coachMessages.accountId, userId), eq(coachMessages.kind, 'coach_chat')))
-    .orderBy(asc(coachMessages.createdAt));
+    .orderBy(desc(coachMessages.createdAt))
+    .limit(HISTORY_LIMIT);
+  // Fetched newest-first for the cap; flip back to chronological for the client,
+  // which renders oldest → newest.
+  rows.reverse();
 
   return json({ messages: rows }, 200);
 }

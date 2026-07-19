@@ -54,13 +54,21 @@ export function CoachDetail({
   coach,
   clients,
   tierRequests,
-  canEdit,
+  canAssign,
+  canReview,
   onChanged,
 }: {
   coach: CoachSummary;
   clients: ClientAssignment[];
   tierRequests: TierRequest[];
-  canEdit: boolean;
+  /** Effective `coach.assign` — gates the "Assign client" control. */
+  canAssign: boolean;
+  /**
+   * Effective `coach.application.review` — gates the Edit-coach panel and the
+   * tier-request Approve/Reject buttons. Both back onto routes guarded by that
+   * permission, so surfacing them to a caller who lacks it is the P1-1 403-trap.
+   */
+  canReview: boolean;
   onChanged: () => void;
 }) {
   // Track the assignment id currently being ended so we can disable just its row.
@@ -254,7 +262,7 @@ export function CoachDetail({
           {coach.email}
         </div>
 
-        {canEdit ? (
+        {canReview ? (
           <div
             style={{
               marginBottom: 20,
@@ -443,7 +451,7 @@ export function CoachDetail({
                         {REQUEST_DATE_FMT.format(new Date(r.createdAt))}
                       </div>
                     </div>
-                    {canEdit ? (
+                    {canReview ? (
                       <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                         <Button
                           variant="ghost"
@@ -475,12 +483,14 @@ export function CoachDetail({
           </div>
         ) : null}
 
-        <AssignClient
-          coachId={coach.id}
-          excludeUserIds={assignedUserIds}
-          notAccepting={notAccepting}
-          onAssigned={onChanged}
-        />
+        {canAssign ? (
+          <AssignClient
+            coachId={coach.id}
+            excludeUserIds={assignedUserIds}
+            notAccepting={notAccepting}
+            onAssigned={onChanged}
+          />
+        ) : null}
 
         {error ? (
           <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 12 }}>

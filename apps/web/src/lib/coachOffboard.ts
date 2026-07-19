@@ -5,6 +5,7 @@ import {
   coachProfiles,
   coachRequests,
   coachTierRequests,
+  promoCodes,
   walletLedger,
 } from '@gym/db';
 import { and, eq, sql } from 'drizzle-orm';
@@ -136,6 +137,17 @@ export async function offboardCoach(
     .update(coachProfiles)
     .set({ isActive: false })
     .where(eq(coachProfiles.accountId, coachId));
+
+  // Deactivate every promo code this coach owns (P0-8). A live code keeps
+  // granting its discount to members AND accruing commission into the coach's
+  // wallet forever — long after the coach has been offboarded. Scoped by
+  // active=true so a re-run is a no-op; ownership/redemption history is left
+  // intact (ownerCoachId is set-null on account deletion, never here) so the
+  // financial record survives and any earned commission is still payable.
+  await db
+    .update(promoCodes)
+    .set({ active: false })
+    .where(and(eq(promoCodes.ownerCoachId, coachId), eq(promoCodes.active, true)));
 
   const archivedWorkouts = await db
     .update(coachAssignedWorkouts)

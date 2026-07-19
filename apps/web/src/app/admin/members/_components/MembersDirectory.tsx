@@ -1,6 +1,6 @@
 'use client';
 
-import { effectiveTier } from '@gym/shared';
+import { effectiveTier, type Permission } from '@gym/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -44,17 +44,15 @@ export function MembersDirectory({
   initialCursor,
   coaches,
   callerRole,
-  canSuspend,
-  canTier,
-  canAssign,
+  callerPermissions,
 }: {
   initialMembers: MemberRow[];
   initialCursor: string | null;
   coaches: CoachOption[];
   callerRole: StaffRole;
-  canSuspend: boolean;
-  canTier: boolean;
-  canAssign: boolean;
+  /** Caller's effective permission set (override-aware). Forwarded verbatim to
+   * MemberDrawer, which gates every control on it (P1-7). */
+  callerPermissions: ReadonlySet<Permission>;
 }) {
   const router = useRouter();
   const [members, setMembers] = useState<MemberRow[]>(initialMembers);
@@ -319,9 +317,7 @@ export function MembersDirectory({
         fallback={selected}
         coaches={coaches}
         callerRole={callerRole}
-        canSuspend={canSuspend}
-        canTier={canTier}
-        canAssign={canAssign}
+        callerPermissions={callerPermissions}
         onClose={() => setOpenId(null)}
         onMutated={onMutated}
       />

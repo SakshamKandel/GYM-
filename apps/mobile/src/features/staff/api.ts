@@ -41,6 +41,9 @@ import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
  *                    against an already-refunded request)
  *   'not_approved' → 409 {error:'not_approved'} (refund attempted on a request
  *                    that was never approved, or already rejected)
+ *   'non_refundable' → 409 {error:'non_refundable'} (meal-payment refund only:
+ *                    the target order is already in production/past cutoff,
+ *                    or the cycle's billed week has already begun)
  *   'insufficient_balance' → 409 {error:'insufficient_balance', balanceMinor,
  *                    currency} (a wallet payout would drive the coach's
  *                    tracked balance negative — resend with override:true to
@@ -66,6 +69,7 @@ export type StaffErrorCode =
   | 'confirm_required'
   | 'already_refunded'
   | 'not_approved'
+  | 'non_refundable'
   | 'insufficient_balance'
   | 'conflict'
   | 'already_pending'
@@ -167,6 +171,7 @@ const BODY_ERROR_CODES: Partial<Record<string, StaffErrorCode>> = {
   confirm_required: 'confirm_required',
   already_refunded: 'already_refunded',
   not_approved: 'not_approved',
+  non_refundable: 'non_refundable',
   insufficient_balance: 'insufficient_balance',
 };
 
@@ -992,14 +997,62 @@ const recentActivitySchema = z.object({
 });
 export type RecentActivity = z.infer<typeof recentActivitySchema>;
 
-const adminOverviewSchema = z.object({
+/**
+ * P0-2: the server response is NESTED and every top-level section is
+ * PERMISSION-GATED (`apps/web/src/app/api/admin/overview/route.ts` — `{
+ * membership?: {...}, recentActivity?: [...], ops: {...} }`). A role that
+ * lacks `members.read` (most sub-roles — e.g. support_admin, content_admin)
+ * gets a 200 with NO `membership` key at all, and one lacking `audit.read`
+ * gets no `recentActivity`. The previous FLAT, all-required schema here threw
+ * on every such response, so every admin-home load failed for every role
+ * except one holding both permissions — the mobile admin console's home
+ * screen was effectively dead. Every section below is optional/resilient to
+ * match.
+ */
+const adminOverviewMembershipSchema = z.object({
   totalMembers: z.number(),
   activeCoaches: z.number(),
   activeAssignments: z.number(),
   readyVideos: z.number(),
-  tierBreakdown: z.array(tierBreakdownSchema),
-  recentSignups: z.array(recentSignupSchema),
-  recentActivity: z.array(recentActivitySchema),
+  tierBreakdown: z.array(tierBreakdownSchema).catch([]),
+  // Resilient: drop unparseable rows rather than failing the whole section.
+  recentSignups: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): RecentSignup[] => {
+      const parsed = recentSignupSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
+export type AdminOverviewMembership = z.infer<typeof adminOverviewMembershipSchema>;
+
+const revenueByCurrencySchema = z.object({ currency: z.string(), amountMinor: z.number() });
+
+/** Every ops tile is independently permission-gated server-side — each field
+ * may simply be absent rather than zero, so callers must branch on
+ * `undefined`, not treat a missing tile as "0". */
+const adminOverviewOpsSchema = z
+  .object({
+    pendingApplications: z.number().optional(),
+    pendingTierRequests: z.number().optional(),
+    pendingPayments: z.number().optional(),
+    revenueThisMonth: z.array(revenueByCurrencySchema).catch([]).optional(),
+    unreadSupport: z.number().optional(),
+  })
+  .catch({});
+export type AdminOverviewOps = z.infer<typeof adminOverviewOpsSchema>;
+
+const adminOverviewSchema = z.object({
+  membership: adminOverviewMembershipSchema.optional(),
+  recentActivity: z
+    .array(z.unknown())
+    .transform((arr) =>
+      arr.flatMap((raw): RecentActivity[] => {
+        const parsed = recentActivitySchema.safeParse(raw);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    )
+    .optional(),
+  ops: adminOverviewOpsSchema,
 });
 export type AdminOverview = z.infer<typeof adminOverviewSchema>;
 
@@ -1175,20 +1228,25 @@ export type Assignment = z.infer<typeof assignmentSchema>;
 const assignmentEnvelope = z.object({ assignment: assignmentSchema });
 
 /**
- * POST /api/admin/assignments {coachId, userId} → assign a coach to a member
- * (upsert reactivates an ended pair). Returns the assignment row.
- * 'invalid' when coachId isn't a coach; 'not_found' when userId is unknown.
+ * POST /api/admin/assignments {coachId, userId, force?} → assign a coach to a
+ * member (upsert reactivates an ended pair). Returns the assignment row.
+ * 'invalid' when coachId isn't a coach; 'not_found' when userId is unknown;
+ * 'full' (409 {error:'full', activeClients, capacity}) when the coach is at
+ * their roster capacity — pass `force: true` on a retry to knowingly assign
+ * over the limit (never speculatively on the first attempt, mirroring the
+ * wallet payout `override` escape hatch).
  */
 export async function assignClient(
   coachId: string,
   userId: string,
   token: string,
+  force?: boolean,
 ): Promise<Assignment> {
   const data = await staffRequest({
     method: 'POST',
     path: '/api/admin/assignments',
     token,
-    body: { coachId, userId },
+    body: { coachId, userId, ...(force ? { force: true } : {}) },
   });
   return parse(assignmentEnvelope, data).assignment;
 }
@@ -1970,14 +2028,23 @@ const paymentRequestRowSchema = z.object({
 export type PaymentRequestRow = z.infer<typeof paymentRequestRowSchema>;
 
 /** Resilient: drop unparseable rows rather than blanking the whole queue. */
-const paymentRequestsSchema = z.object({
-  requests: z.array(z.unknown()).transform((arr) =>
-    arr.flatMap((raw): PaymentRequestRow[] => {
+// C-D (WP-4): GET /api/admin/payment-requests now returns
+// `{ rows, counts: { pending } }` (pending unbounded ++ decided capped).
+// Read `rows`, tolerating the legacy `requests` key so a lagging deploy on
+// either side degrades gracefully instead of blanking the whole queue.
+const paymentRequestsSchema = z
+  .object({
+    rows: z.array(z.unknown()).optional(),
+    requests: z.array(z.unknown()).optional(),
+    counts: z.object({ pending: z.number() }).partial().optional(),
+  })
+  .transform((data) => ({
+    requests: (data.rows ?? data.requests ?? []).flatMap((raw): PaymentRequestRow[] => {
       const parsed = paymentRequestRowSchema.safeParse(raw);
       return parsed.success ? [parsed.data] : [];
     }),
-  ),
-});
+    pendingCount: data.counts?.pending ?? null,
+  }));
 
 /** GET /api/admin/payment-requests?status= → the manual-payment queue. */
 export async function getAdminPaymentRequests(

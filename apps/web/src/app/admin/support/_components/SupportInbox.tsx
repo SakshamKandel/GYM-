@@ -69,9 +69,17 @@ function clockTime(iso: string): string {
 export function SupportInbox({
   threads,
   viewerId,
+  canReply,
 }: {
   threads: SupportThreadRow[];
   viewerId: string;
+  /**
+   * Effective `support.thread.reply`. When false the composer and all three
+   * lifecycle actions (assign/resolve/reopen) are disabled — every one of them
+   * backs onto a route guarded by that permission, so surfacing them enabled to
+   * a read-only viewer is the P1-3 403-trap.
+   */
+  canReply: boolean;
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
@@ -222,6 +230,7 @@ export function SupportInbox({
         accountId={openId}
         fallback={selected}
         viewerId={viewerId}
+        canReply={canReply}
         onClose={onClose}
         onReplied={() => router.refresh()}
       />
@@ -233,12 +242,14 @@ function SupportThreadDrawer({
   accountId,
   fallback,
   viewerId,
+  canReply,
   onClose,
   onReplied,
 }: {
   accountId: string | null;
   fallback: SupportThreadRow | null;
   viewerId: string;
+  canReply: boolean;
   onClose: () => void;
   onReplied: () => void;
 }) {
@@ -308,7 +319,8 @@ function SupportThreadDrawer({
   }, [messages.length]);
 
   const trimmed = body.trim();
-  const canSend = accountId !== null && trimmed.length > 0 && trimmed.length <= MAX_LEN && !sending;
+  const canSend =
+    canReply && accountId !== null && trimmed.length > 0 && trimmed.length <= MAX_LEN && !sending;
 
   async function send() {
     if (!canSend || !accountId) return;
@@ -359,7 +371,7 @@ function SupportThreadDrawer({
    * server-rendered page, which is where status/assignedTo actually live.
    */
   async function runLifecycleAction(path: string, body?: unknown): Promise<void> {
-    if (!accountId || lifecycleBusy) return;
+    if (!accountId || lifecycleBusy || !canReply) return;
     setLifecycleBusy(true);
     setLifecycleError(null);
     try {
@@ -393,13 +405,24 @@ function SupportThreadDrawer({
       width={520}
       footer={
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+          {!canReply ? (
+            <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+              You have read-only access to support — replying, assigning and
+              resolving are disabled.
+            </div>
+          ) : null}
           <textarea
             className="gt-input"
             value={body}
             onChange={(e) => setBody(e.target.value)}
             rows={2}
             maxLength={MAX_LEN}
-            placeholder="Reply as support…  (⌘/Ctrl + Enter to send)"
+            disabled={!canReply}
+            placeholder={
+              canReply
+                ? 'Reply as support…  (⌘/Ctrl + Enter to send)'
+                : 'Read-only — you cannot reply.'
+            }
             aria-label="Reply"
             style={{ resize: 'vertical', minHeight: 56, fontFamily: 'var(--font-heading)' }}
             onKeyDown={(e) => {
@@ -459,7 +482,7 @@ function SupportThreadDrawer({
             {fallback.assignedTo === viewerId ? (
               <Button
                 size="sm"
-                disabled={lifecycleBusy}
+                disabled={lifecycleBusy || !canReply}
                 onClick={() => void runLifecycleAction('assign', { assigneeId: null })}
               >
                 Unassign
@@ -467,21 +490,25 @@ function SupportThreadDrawer({
             ) : (
               <Button
                 size="sm"
-                disabled={lifecycleBusy}
+                disabled={lifecycleBusy || !canReply}
                 onClick={() => void runLifecycleAction('assign', { assigneeId: viewerId })}
               >
                 Assign to me
               </Button>
             )}
             {fallback.status === 'resolved' ? (
-              <Button size="sm" disabled={lifecycleBusy} onClick={() => void runLifecycleAction('reopen')}>
+              <Button
+                size="sm"
+                disabled={lifecycleBusy || !canReply}
+                onClick={() => void runLifecycleAction('reopen')}
+              >
                 Reopen
               </Button>
             ) : (
               <Button
                 variant="primary"
                 size="sm"
-                disabled={lifecycleBusy}
+                disabled={lifecycleBusy || !canReply}
                 onClick={() => void runLifecycleAction('resolve')}
               >
                 Resolve

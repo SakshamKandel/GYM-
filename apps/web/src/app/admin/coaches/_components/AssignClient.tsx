@@ -8,6 +8,12 @@ interface MemberHit {
   email: string;
   displayName: string;
   tier: string;
+  // ADDITIVE field already returned by GET /api/admin/members: the account's
+  // staff role, or null for a true member. Used to keep STAFF accounts out of
+  // the assign picker — a coach may only ever be assigned over a real member,
+  // and the assignments route rejects a staff target with a generic 400 that
+  // used to surface as the misleading "not a coach" (P1-2).
+  staffRole: string | null;
 }
 
 type Tier = 'starter' | 'silver' | 'gold' | 'elite';
@@ -120,7 +126,15 @@ export function AssignClient({
         let msg = 'Could not assign this member. Try again.';
         if (res.status === 403) msg = 'You are not allowed to assign clients.';
         else if (res.status === 404) msg = 'That member no longer exists.';
-        else if (res.status === 400) msg = 'That account is not a coach.';
+        else if (res.status === 400) {
+          // A 400 is NOT always "not a coach": the route also returns `invalid`
+          // for a staff/self target or a malformed body. Map by the response
+          // code so a staff hit no longer reads as a coach-config error (P1-2).
+          msg =
+            code === 'not_a_coach'
+              ? 'That account is not a coach.'
+              : 'That member can’t be assigned.';
+        }
         setError(msg);
         setAssigningId(null);
         return;
@@ -138,7 +152,9 @@ export function AssignClient({
     }
   }
 
-  const visible = results.filter((m) => !excludeUserIds.has(m.id));
+  // Exclude members already on this coach AND any staff account (a coach can
+  // only be assigned over a true member — see MemberHit.staffRole, P1-2).
+  const visible = results.filter((m) => !excludeUserIds.has(m.id) && m.staffRole == null);
 
   return (
     <div>
@@ -217,7 +233,7 @@ export function AssignClient({
               }}
             >
               {results.length > 0
-                ? 'All matches are already assigned to this coach.'
+                ? 'No assignable members match — matches are staff or already assigned.'
                 : 'No members match.'}
             </div>
           ) : (

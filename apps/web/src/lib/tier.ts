@@ -16,10 +16,27 @@ export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
  */
 export type TierSource = 'console' | 'manual_payment' | 'revenuecat' | 'preview' | 'coach';
 
+/**
+ * Explicit sentinel for `TierDates.startsAt` (P1-9). Pass this to deliberately
+ * NULL out `tierStartedAt`. A plain `null` (or `undefined`) now LEAVES the
+ * column untouched, so a console/coach save that doesn't know the member's
+ * stored start date — e.g. the Subscriptions search path, whose list endpoint
+ * omits `tierStartedAt` and therefore submits a blank start field — can no
+ * longer silently wipe a real start timestamp. `expiresAt` keeps its original
+ * `null = permanent` meaning; only `startsAt`'s null semantics changed.
+ */
+export const CLEAR_TIER_START: unique symbol = Symbol('clearTierStart');
+
 /** Optional dated-subscription window for a tier change. */
 export interface TierDates {
-  /** When the tier takes effect. `null` clears it; `undefined` leaves it as-is. */
-  startsAt?: Date | null;
+  /**
+   * When the tier takes effect.
+   *  - a `Date` sets `tierStartedAt`
+   *  - `undefined` OR `null` leaves the column untouched (a blank start field
+   *    can no longer wipe a stored start — P1-9)
+   *  - `CLEAR_TIER_START` explicitly nulls the column
+   */
+  startsAt?: Date | null | typeof CLEAR_TIER_START;
   /** When it lapses. `null` = no expiry (permanent). `undefined` leaves as-is. */
   expiresAt?: Date | null;
 }
@@ -38,8 +55,10 @@ export interface TierSourceExpectation {
  *
  * Behavior:
  *  1. Writes accounts.tier (+ tierStartedAt / tierExpiresAt when the caller
- *     passes `dates.startsAt` / `dates.expiresAt`; `undefined` leaves a column
- *     untouched, `null` clears it — null expiry = permanent).
+ *     passes `dates`). For `expiresAt`, `undefined` leaves the column untouched
+ *     and `null` clears it (null expiry = permanent). For `startsAt`, a `Date`
+ *     sets it, `CLEAR_TIER_START` clears it, and `null`/`undefined` leave it
+ *     untouched (P1-9 — a blank start field never wipes a stored start).
  *  2. Mirrors the tier into account_profiles.data->>'tier' (jsonb merge that
  *     preserves sibling keys). Skipped when the account has no profile row.
  *  3. Syncs the Greece auto-assignment based on the account's NEW EFFECTIVE
@@ -77,7 +96,14 @@ export async function setAccountTier(
     tierSourceId?: string | null;
     revenuecatEventAt?: Date;
   } = { tier };
-  if (dates?.startsAt !== undefined) set.tierStartedAt = dates.startsAt;
+  // startsAt (P1-9): a Date sets the column; CLEAR_TIER_START explicitly nulls
+  // it; `null`/`undefined` leave it untouched so a save that never learned the
+  // stored start (blank field) can't overwrite a real start timestamp with null.
+  if (dates?.startsAt === CLEAR_TIER_START) {
+    set.tierStartedAt = null;
+  } else if (dates?.startsAt instanceof Date) {
+    set.tierStartedAt = dates.startsAt;
+  }
   if (dates?.expiresAt !== undefined) set.tierExpiresAt = dates.expiresAt;
   if (source !== undefined) {
     set.tierSource = source;
@@ -152,7 +178,15 @@ export async function setAccountTier(
     reason,
     source,
     sourceId,
-    startsAt: dates?.startsAt !== undefined ? isoOrNull(dates.startsAt) : undefined,
+    // Audit records the resulting value: a Date → its ISO string, an explicit
+    // clear (CLEAR_TIER_START) → null; a bare null/undefined leaves the column
+    // untouched, so it is omitted from the audit meta (P1-9).
+    startsAt:
+      dates?.startsAt instanceof Date
+        ? dates.startsAt.toISOString()
+        : dates?.startsAt === CLEAR_TIER_START
+          ? null
+          : undefined,
     expiresAt: dates?.expiresAt !== undefined ? isoOrNull(dates.expiresAt) : undefined,
   });
   return true;

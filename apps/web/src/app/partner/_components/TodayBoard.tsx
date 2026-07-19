@@ -3,9 +3,10 @@
 import { canActorAdvance, ORDER_STATUSES, type MealWindow, type OrderStatus } from '@gym/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Badge, Button, EmptyState } from '@/components/console';
+import { Badge, Button, ConfirmButton, EmptyState } from '@/components/console';
 import type { PartnerOrderView } from '../_data';
 import {
+  formatDateLabel,
   formatMoney,
   isOrderLate,
   ORDER_STATUS_LABEL,
@@ -50,6 +51,11 @@ function nextAction(from: OrderStatus): OrderStatus | null {
   return to ?? null;
 }
 
+/** May the partner mark this order refused (only from out-for-delivery)? */
+function canRefuse(from: OrderStatus): boolean {
+  return canActorAdvance(from, 'refused', 'partner');
+}
+
 export function TodayBoard({
   orders: initial,
   today,
@@ -66,11 +72,24 @@ export function TodayBoard({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newIds, setNewIds] = useState<Set<string>>(() => new Set());
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [pollFailed, setPollFailed] = useState(false);
 
   const knownIds = useRef<Set<string>>(new Set(initial.map((o) => o.orderId)));
 
   const todaysOrders = useMemo(
     () => orders.filter((o) => o.deliveryDate === today),
+    [orders, today],
+  );
+
+  // Non-terminal orders whose delivery date is strictly in the PAST — one-time
+  // orders that slipped past their date are otherwise permanently invisible
+  // (P0-12). `loadActiveOrders` returns non-terminal orders regardless of date
+  // (contract C-E), including subscription orders materialized for TOMORROW; a
+  // `!== today` test would wrongly flag those on-schedule future deliveries as
+  // overdue, so match only dates strictly before today. Future orders that
+  // aren't today yet simply wait to appear in today's board when they come due.
+  const overdueOrders = useMemo(
+    () => orders.filter((o) => o.deliveryDate < today),
     [orders, today],
   );
 
@@ -84,7 +103,10 @@ export function TodayBoard({
   const poll = useCallbackRef(async () => {
     try {
       const res = await fetch('/api/partner/orders?scope=active', { credentials: 'include' });
-      if (!res.ok) return;
+      if (!res.ok) {
+        setPollFailed(true);
+        return;
+      }
       const body = (await res.json()) as { orders: PartnerOrderView[] };
       const fetched = body.orders;
       const fresh = fetched.filter(
@@ -99,8 +121,11 @@ export function TodayBoard({
       }
       for (const o of fetched) knownIds.current.add(o.orderId);
       setOrders(fetched);
+      setPollFailed(false);
     } catch {
-      /* transient — next tick retries */
+      // Transient (offline / server hiccup) — flag it so the kitchen knows the
+      // board may be stale; the next tick retries and clears the flag.
+      setPollFailed(true);
     }
   });
 
@@ -161,7 +186,8 @@ export function TodayBoard({
   }
 
   const windows: MealWindow[] = ['lunch', 'dinner'];
-  const hasAny = todaysOrders.length > 0;
+  const hasToday = todaysOrders.length > 0;
+  const hasOverdue = overdueOrders.length > 0;
 
   return (
     <div>
@@ -175,10 +201,13 @@ export function TodayBoard({
           flexWrap: 'wrap',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
             Auto-refreshing every 15s · {todaysOrders.length} live today
           </span>
+          {pollFailed ? (
+            <Badge tone="warning">Live updates paused — retrying</Badge>
+          ) : null}
           {newIds.size > 0 ? (
             <button
               onClick={acknowledgeNew}
@@ -200,11 +229,25 @@ export function TodayBoard({
         </div>
       </div>
 
-      {!hasAny ? (
-        <EmptyState
-          title="No orders for today yet"
-          description="New one-time and subscription orders for today appear here automatically."
+      {hasOverdue ? (
+        <OverdueLane
+          orders={overdueOrders}
+          currency={currency}
+          nowMs={nowMs}
+          busyId={busyId}
+          errorById={errorById}
+          onAdvance={advance}
+          onOpen={setSelectedId}
         />
+      ) : null}
+
+      {!hasToday ? (
+        hasOverdue ? null : (
+          <EmptyState
+            title="No orders for today yet"
+            description="New one-time and subscription orders for today appear here automatically."
+          />
+        )
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           {windows.map((window) => {
@@ -236,6 +279,74 @@ export function TodayBoard({
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Needs-attention lane: non-terminal orders whose delivery date is no longer
+ * today (P0-12). Rendered as a flat responsive grid rather than a kanban since
+ * these orders can sit in any live status. Each card shows its (past) delivery
+ * date and offers the same advance / mark-refused actions so the partner can
+ * clear the backlog.
+ */
+function OverdueLane({
+  orders,
+  currency,
+  nowMs,
+  busyId,
+  errorById,
+  onAdvance,
+  onOpen,
+}: {
+  orders: PartnerOrderView[];
+  currency: string;
+  nowMs: number;
+  busyId: string | null;
+  errorById: Record<string, string>;
+  onAdvance: (id: string, to: OrderStatus) => void;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <section
+      aria-label="Overdue orders needing attention"
+      style={{
+        marginBottom: 20,
+        border: '1px solid var(--gt-danger)',
+        borderRadius: 12,
+        padding: 14,
+        background: 'var(--gt-surface-sunken)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+        <h3 style={{ margin: 0, fontFamily: 'var(--font-heading)', fontSize: 16 }}>Needs attention</h3>
+        <Badge tone="critical">{orders.length} overdue</Badge>
+      </div>
+      <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--gt-text-dim)' }}>
+        Open orders past their delivery date. Complete or mark each refused to clear it.
+      </p>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(264px, 1fr))',
+          gap: 8,
+        }}
+      >
+        {orders.map((o) => (
+          <BoardCard
+            key={o.orderId}
+            order={o}
+            currency={currency}
+            late={isOrderLate(o, nowMs)}
+            isNew={false}
+            busy={busyId === o.orderId}
+            error={errorById[o.orderId]}
+            showDate
+            onAdvance={onAdvance}
+            onOpen={onOpen}
+          />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -346,6 +457,7 @@ function BoardCard({
   isNew,
   busy,
   error,
+  showDate,
   onAdvance,
   onOpen,
 }: {
@@ -355,10 +467,12 @@ function BoardCard({
   isNew: boolean;
   busy: boolean;
   error?: string;
+  showDate?: boolean;
   onAdvance: (id: string, to: OrderStatus) => void;
   onOpen: (id: string) => void;
 }) {
   const to = nextAction(order.status);
+  const refusable = canRefuse(order.status);
   const digitalUnpaid =
     order.paymentMethod !== 'cod' &&
     order.paymentStatus !== 'paid' &&
@@ -389,6 +503,20 @@ function BoardCard({
         }}
         aria-label={`Open order for ${order.deliveryName}`}
       >
+        {showDate ? (
+          <span
+            style={{
+              fontSize: 11,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              color: 'var(--gt-danger)',
+              fontFamily: 'var(--font-heading)',
+              fontWeight: 600,
+            }}
+          >
+            {formatDateLabel(order.deliveryDate)} · {windowShort(order.window)}
+          </span>
+        ) : null}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
           <strong style={{ fontSize: 14 }}>{order.deliveryName}</strong>
           <span className="gt-numeric" style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
@@ -438,6 +566,17 @@ function BoardCard({
         >
           {busy ? 'Working…' : ADVANCE_META[to]}
         </Button>
+      ) : null}
+
+      {refusable ? (
+        <ConfirmButton
+          label="Mark refused"
+          confirmLabel="Confirm refused"
+          busyLabel="Working…"
+          size="sm"
+          busy={busy}
+          onConfirm={() => onAdvance(order.orderId, 'refused')}
+        />
       ) : null}
 
       {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 12 }}>{error}</div> : null}

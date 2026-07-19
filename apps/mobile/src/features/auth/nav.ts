@@ -29,7 +29,17 @@ export function replacePath(path: string): void {
  * Resets the WHOLE stack (not just the top route): plain replace left the
  * Welcome poster underneath, so Android back from the dashboard reopened
  * "Get started" right after signing in.
+ *
+ * P0-13: routing to the hub requires staffRole AND a non-empty effective
+ * permission list — the SAME gate `/staff/_layout.tsx` enforces. Before this
+ * fix, a staff account with a role but zero granted permissions (a stripped
+ * override, or a brand-new role preset) was sent to the hub here, only for
+ * the layout guard to immediately Redirect it back out to '/' — the
+ * round-trip flash read as "login did nothing". Checking the same condition
+ * here sends that account straight to '/' with no bounce.
  */
 export function enterApp(): void {
-  resetStackTo(useAuth.getState().staffRole !== null ? STAFF_ROUTES.hub : '/');
+  const { staffRole, staffPermissions } = useAuth.getState();
+  const hasConsole = staffRole !== null && staffPermissions.length > 0;
+  resetStackTo(hasConsole ? STAFF_ROUTES.hub : '/');
 }

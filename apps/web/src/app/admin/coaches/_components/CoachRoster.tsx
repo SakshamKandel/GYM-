@@ -51,12 +51,16 @@ export function CoachRoster({
   coaches,
   clientsByCoach,
   tierRequestsByCoach,
-  canEdit,
+  canAssign,
+  canReview,
 }: {
   coaches: CoachSummary[];
   clientsByCoach: Record<string, ClientAssignment[]>;
   tierRequestsByCoach: Record<string, TierRequest[]>;
-  canEdit: boolean;
+  /** Effective `coach.assign` — gates the "Assign client" control. */
+  canAssign: boolean;
+  /** Effective `coach.application.review` — gates the Edit panel + tier decisions. */
+  canReview: boolean;
 }) {
   const router = useRouter();
   const [query, setQuery] = useState('');
@@ -231,7 +235,8 @@ export function CoachRoster({
           coach={selected}
           clients={clientsByCoach[selected.id] ?? []}
           tierRequests={tierRequestsByCoach[selected.id] ?? []}
-          canEdit={canEdit}
+          canAssign={canAssign}
+          canReview={canReview}
           onChanged={() => router.refresh()}
         />
       ) : (

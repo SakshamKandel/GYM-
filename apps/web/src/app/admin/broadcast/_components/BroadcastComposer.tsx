@@ -33,6 +33,13 @@ interface SendResult {
   devices: number;
   delivered: number;
   failed: number;
+  /**
+   * True when the audience exceeded the server's per-send device cap
+   * (MAX_BROADCAST_TOKENS) and only the first slice was actually pushed. The
+   * route returns this flag but the client previously dropped it, so a PARTIAL
+   * send read as a complete one (P1-4). Surfaced as a warning below.
+   */
+  truncated: boolean;
 }
 
 const TIERS = ['starter', 'silver', 'gold', 'elite'] as const;
@@ -118,6 +125,7 @@ export function BroadcastComposer({
         devices: numberOr(data.devices),
         delivered: numberOr(data.delivered),
         failed: numberOr(data.failed),
+        truncated: data.truncated === true,
       });
       setSending(false);
       setConfirmOpen(false);
@@ -292,6 +300,13 @@ export function BroadcastComposer({
             {result.recipients === 1 ? '' : 's'} ({result.devices} device
             {result.devices === 1 ? '' : 's'}): <strong>{result.delivered}</strong> delivered
             {result.failed > 0 ? `, ${result.failed} failed` : ''}.
+            {result.truncated ? (
+              <div style={{ color: 'var(--gt-warning)', marginTop: 6 }}>
+                This audience was larger than a single broadcast can reach, so only
+                the first {result.devices.toLocaleString()} devices were sent to.
+                Narrow the tier or country filter and send again to reach the rest.
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -380,7 +395,14 @@ function errorCopy(status: number, code: string | null): string {
   if (code === 'push_not_configured') {
     return 'Push is not configured on the server (no Firebase credential). No broadcast was sent.';
   }
-  if (status === 403) return 'You are not allowed to send broadcasts.';
+  // 503 from the fail-closed permission guard when the override lookup itself
+  // errors — a transient auth-layer failure, NOT a validation problem. Retrying
+  // shortly is the right advice; the old copy funnelled this into the generic
+  // "Try again" with no signal that nothing was sent (P1-4).
+  if (code === 'authorization_unavailable') {
+    return 'Could not verify your permissions just now. No broadcast was sent — try again in a moment.';
+  }
+  if (status === 401 || status === 403) return 'You are not allowed to send broadcasts.';
   if (status === 400 || code === 'invalid') {
     return 'Check the title (1–120 chars) and message (1–500 chars).';
   }

@@ -1,5 +1,5 @@
 import { accounts, admins, coachProfiles } from '@gym/db';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, ne } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { getDb } from '@/lib/db';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -41,6 +41,11 @@ async function loadStaff(): Promise<StaffMember[]> {
     .from(admins)
     .innerJoin(accounts, eq(accounts.id, admins.accountId))
     .leftJoin(coachProfiles, eq(coachProfiles.accountId, accounts.id))
+    // Partner (rank-0 restaurant operator) is a web-only delivery role minted
+    // via /api/admin/partners, never a staff grant — it has no place in the
+    // staff & roles roster, and surfacing it here would invite an accidental
+    // re-role (the grant path can't target it anyway). Keep it out entirely.
+    .where(ne(admins.role, 'partner'))
     .orderBy(asc(accounts.email));
 
   return rows.map((r) => ({

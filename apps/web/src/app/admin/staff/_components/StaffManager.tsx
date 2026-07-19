@@ -532,6 +532,14 @@ export function StaffManager({
           setGrantOpen(false);
           router.refresh();
         }}
+        onNeedsOffboard={(member, newRole) => {
+          // Re-roling an existing coach away from coach strips the coach role and
+          // fires the offboarding cascade server-side just like a revoke — hand
+          // off to the same typed-confirm gate the row dropdown uses (P0-7)
+          // instead of POSTing silently.
+          setGrantOpen(false);
+          setOffboard({ member, newRole });
+        }}
       />
 
       <OffboardModal
@@ -854,6 +862,7 @@ function SegBtn({
 interface OffboardCounts {
   activeClients: number;
   pendingRequests: number;
+  pendingTierRequests: number;
   activeWorkoutPlans: number;
   activeDietPlans: number;
   walletBalances: { currency: string; amountMinor: number }[];
@@ -933,6 +942,7 @@ function OffboardModal({
     counts != null &&
     (counts.activeClients > 0 ||
       counts.pendingRequests > 0 ||
+      counts.pendingTierRequests > 0 ||
       counts.activeWorkoutPlans > 0 ||
       counts.activeDietPlans > 0 ||
       counts.walletBalances.length > 0);
@@ -1030,11 +1040,19 @@ function OffboardModal({
               verb="decline"
             />
             <CountLine
+              n={counts.pendingTierRequests}
+              label="pending tier-up request"
+              verb="reject"
+            />
+            <CountLine
               n={counts.activeWorkoutPlans}
               label="assigned workout plan"
               verb="archive"
             />
             <CountLine n={counts.activeDietPlans} label="assigned diet plan" verb="archive" />
+            <div style={{ color: 'var(--gt-text-dim)' }}>
+              deactivate any promo codes this coach owns
+            </div>
             {counts.walletBalances.length > 0 ? (
               <div style={{ color: 'var(--gt-warning)', marginTop: 4 }}>
                 ⚠ Outstanding wallet balance: {formatBalances(counts.walletBalances)} — settle
@@ -1091,6 +1109,7 @@ function GrantRoleModal({
   currentAccountId,
   assignable,
   onGranted,
+  onNeedsOffboard,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1098,6 +1117,12 @@ function GrantRoleModal({
   currentAccountId: string;
   assignable: StaffRole[];
   onGranted: () => void;
+  /**
+   * Called instead of submitting when the picked account is currently a coach
+   * and the chosen role is NOT coach — the caller opens the shared offboard
+   * confirm so the blast radius is shown and typed-confirmed first (P0-7).
+   */
+  onNeedsOffboard: (member: StaffMember, newRole: StaffRole) => void;
 }) {
   // support_admin is the least-privileged default; every role that may open
   // this page can grant it, but fall back defensively to the last (lowest-rank)
@@ -1172,6 +1197,25 @@ function GrantRoleModal({
 
   async function submit() {
     if (!picked || pickedIsSelf || pickedLocked) return;
+    // Re-roling an existing coach to a non-coach role strips the coach role and
+    // triggers the offboarding cascade server-side — route through the shared
+    // typed-confirm gate first (P0-7) rather than POSTing silently, exactly as
+    // the per-row dropdown does. Coach→coach (no change) still POSTs normally.
+    if (pickedRole === 'coach' && role !== 'coach') {
+      onNeedsOffboard(
+        {
+          accountId: picked.id,
+          email: picked.email,
+          displayName: picked.displayName,
+          status: 'active',
+          role: 'coach',
+          coachName: null,
+        },
+        role,
+      );
+      reset();
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {

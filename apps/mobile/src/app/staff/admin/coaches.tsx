@@ -85,6 +85,7 @@ const ERR_TEXT: Record<StaffErrorCode, string> = {
   confirm_required: 'This needs an explicit confirmation first.',
   already_refunded: 'That payment was already refunded.',
   not_approved: 'That payment is no longer approved.',
+  non_refundable: 'That can no longer be refunded.',
   insufficient_balance: "That would take the coach's balance negative.",
   not_configured: 'This feature is not set up yet.',
   network: "Couldn't reach the server.",

@@ -2,12 +2,13 @@
 
 import { canActorAdvance, ORDER_STATUSES, type OrderStatus } from '@gym/shared';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, ConfirmButton, EmptyState } from '@/components/console';
 import type { PartnerOrderView } from '../_data';
 import {
   formatDateLabel,
   formatMoney,
+  isOrderLate,
   ORDER_STATUS_LABEL,
   ORDER_STATUS_TONE,
   PAYMENT_LABEL,
@@ -50,6 +51,14 @@ export function OrdersQueue({
   const [orders, setOrders] = useState<PartnerOrderView[]>(initial);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [errorById, setErrorById] = useState<Record<string, string>>({});
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  // Recompute late-highlighting periodically without re-fetching, so an order
+  // whose delivery window opens while the page is open turns red on its own.
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   async function advance(orderId: string, toStatus: OrderStatus) {
     setBusyId(orderId);
@@ -98,9 +107,14 @@ export function OrdersQueue({
           o.paymentMethod !== 'cod' && o.paymentStatus !== 'paid' && o.paymentStatus !== 'refunded';
         const busy = busyId === o.orderId;
         const err = errorById[o.orderId];
+        const late = isOrderLate(o, nowMs);
 
         return (
-          <div key={o.orderId} className="gt-card" style={{ padding: 18 }}>
+          <div
+            key={o.orderId}
+            className="gt-card"
+            style={{ padding: 18, borderLeft: late ? '3px solid var(--gt-danger)' : undefined }}
+          >
             <div
               style={{
                 display: 'flex',
@@ -115,6 +129,7 @@ export function OrdersQueue({
                 <span style={{ color: 'var(--gt-text-dim)', fontSize: 13 }}>
                   {windowLabel(o.window)}
                 </span>
+                {late ? <Badge tone="critical">Late</Badge> : null}
               </div>
               <Badge tone={ORDER_STATUS_TONE[o.status]}>{ORDER_STATUS_LABEL[o.status]}</Badge>
             </div>

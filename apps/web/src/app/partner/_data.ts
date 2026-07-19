@@ -1,17 +1,24 @@
 import 'server-only';
 
 import {
+  accounts,
   mealAvailability,
+  mealBillingCycles,
   mealOrderEvents,
   mealOrderItems,
   mealOrders,
   meals,
+  mealSubSkips,
   mealSubscriptions,
   savedAddresses,
   type Db,
 } from '@gym/db';
 import {
   TERMINAL_ORDER_STATUSES,
+  ktmAddDays,
+  ktmDayOfWeek,
+  weekBoundsFor,
+  type CycleStatus,
   type MealCurrency,
   type MealDietType,
   type MealGoalTag,
@@ -19,13 +26,14 @@ import {
   type MealWindow,
   type OrderStatus,
 } from '@gym/shared';
-import { and, asc, desc, eq, gte, inArray, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte, notInArray, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
-import type { Principal } from '@/lib/authz';
+import { effectivePermissionSet, type Permission, type Principal } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { buildPartnerOrderView } from '@/lib/meals';
 import { staffFromCookie } from '@/lib/staffSession';
 import { mealPartners } from '@gym/db';
+import { isOrderLate } from './_format';
 
 /**
  * Server-only data layer for the partner portal (P5). Every read here is scoped
@@ -58,19 +66,28 @@ export interface PartnerOrderView {
   currency: MealCurrency;
   paymentMethod: MealPaymentMethod;
   paymentStatus: string;
+  /**
+   * True when the order's delivery window has already begun yet it is still
+   * non-terminal — i.e. it needs the kitchen's attention now. Precomputed at
+   * serialization time (server "now") so a client surface can highlight/lane
+   * stuck orders without re-deriving KTM cutoffs (C-E; consumed by WP-7).
+   */
+  isLate: boolean;
 }
 
 type OrderRow = typeof mealOrders.$inferSelect;
 type ItemRow = typeof mealOrderItems.$inferSelect;
 
-/** Wrap the shared projection and serialize its one Date field for the client. */
+/** Wrap the shared projection, serialize its one Date field, and stamp `isLate`. */
 export function serializePartnerOrder(
   order: OrderRow,
   items: readonly ItemRow[],
   fallback?: { lat: number | null; lng: number | null },
 ): PartnerOrderView {
   const v = buildPartnerOrderView(order, items, fallback);
-  return { ...v, placedAt: v.placedAt.toISOString() };
+  const view: PartnerOrderView = { ...v, placedAt: v.placedAt.toISOString(), isLate: false };
+  view.isLate = isOrderLate(view, Date.now());
+  return view;
 }
 
 /** A partner's own menu item, with its availability slots, for the CRUD grid. */
@@ -111,6 +128,14 @@ export interface PartnerContext {
  * Mirrors {@link requirePartner} (the API guard) for the SSR surface: the layout
  * already bounces non-partners, but this re-checks `isActive` on every page load
  * so a mid-session deactivation can't keep serving data.
+ *
+ * Effective-permission gate (C-B / P0-3): like `requirePartner`, the caller's
+ * effective set must contain BOTH `meals.own` AND `orders.fulfill`. A DENY
+ * override on either native key (the only overrides the rail permits on a
+ * partner) must lock the partner out of the SSR read surface too — otherwise the
+ * override 403s every API call but leaves every server-rendered page (Today
+ * board, roster, earnings, menu, history) fully disclosed. Fail closed: any
+ * missing key OR an override-lookup failure redirects to login.
  */
 export async function requirePartnerPage(): Promise<PartnerContext> {
   const principal = await staffFromCookie();
@@ -129,6 +154,17 @@ export async function requirePartnerPage(): Promise<PartnerContext> {
     .limit(1);
   const row = rows[0];
   if (!row || !row.isActive) redirect('/partner/login');
+
+  let permissions: ReadonlySet<Permission>;
+  try {
+    permissions = await effectivePermissionSet(principal);
+  } catch (err) {
+    console.error('partner page permission override lookup failed:', err);
+    redirect('/partner/login');
+  }
+  if (!permissions.has('meals.own') || !permissions.has('orders.fulfill')) {
+    redirect('/partner/login');
+  }
 
   return { principal, partnerId: row.id, partnerName: row.name, currency: row.currency };
 }
@@ -472,4 +508,254 @@ export async function countActiveSubscriptions(db: Db, partnerId: string): Promi
     .from(mealSubscriptions)
     .where(and(eq(mealSubscriptions.partnerId, partnerId), eq(mealSubscriptions.status, 'active')));
   return Number(row?.n ?? '0');
+}
+
+// ── Subscription roster (WP-8) ──────────────────────────────────────────────
+//
+// The partner-facing subscriber roster is a MANAGEMENT view, not a fulfillment
+// view: the restaurant needs to see who is subscribed, on what schedule, at what
+// price, and — crucially — this week's billing state, so it can tell an *unpaid*
+// week apart from a *skipped/paused/cancelled* one (§4.3). Because it is not a
+// delivery surface, member contact is MASKED here (unlike the per-order
+// projection, which reveals name/phone for the rider). No accountId ever leaves
+// this layer.
+
+const CUSTOMER_FALLBACK = 'Customer';
+
+/** "Saksham Kandel" → "Saksham K." — first name plus surname initials only. */
+function maskCustomerName(name: string | null): string {
+  const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return CUSTOMER_FALLBACK;
+  const [first, ...rest] = parts;
+  if (rest.length === 0) return first;
+  return `${first} ${rest.map((p) => `${p.charAt(0).toUpperCase()}.`).join(' ')}`;
+}
+
+/** "+977 98-1234-5210" → "•••• 210" — last three digits only, never the full number. */
+function maskPhone(phone: string | null): string {
+  const digits = (phone ?? '').replace(/\D/g, '');
+  if (digits.length < 3) return '••••';
+  return `•••• ${digits.slice(-3)}`;
+}
+
+/** One subscriber row in the partner roster — masked contact, no member identity. */
+export interface PartnerSubscriptionRow {
+  id: string;
+  /** Masked display name (first name + surname initials). */
+  customerLabel: string;
+  /** Masked phone (last three digits). */
+  phoneMasked: string;
+  daysOfWeek: number[];
+  window: MealWindow;
+  planType: 'fixed_meal' | 'partner_rotating';
+  /** Meal name for fixed plans (or "Removed meal" if deleted); null for rotating. */
+  mealName: string | null;
+  pricePerDayMinor: number;
+  currency: MealCurrency;
+  startDate: string;
+  status: 'active' | 'paused' | 'cancelled';
+  /** Scheduled deliveries per full week (count of subscribed weekdays). */
+  weeklySlots: number;
+  /** This (Sun–Sat KTM) week's billing cycle, or null if none exists yet. */
+  thisWeekCycle: { status: CycleStatus; plannedSlots: number; amountMinor: number } | null;
+}
+
+const STATUS_RANK: Record<PartnerSubscriptionRow['status'], number> = {
+  active: 0,
+  paused: 1,
+  cancelled: 2,
+};
+
+/**
+ * The partner's full subscriber roster (active → paused → cancelled), each row
+ * carrying its schedule, plan, price, start date, status, and THIS week's
+ * billing-cycle state. Contact is masked (management, not delivery). Every read
+ * is scoped to the caller's own `partnerId`. `today` is a KTM `YYYY-MM-DD`.
+ */
+export async function loadSubscriptionRoster(
+  db: Db,
+  partnerId: string,
+  today: string,
+): Promise<PartnerSubscriptionRow[]> {
+  const rows = await db
+    .select({
+      id: mealSubscriptions.id,
+      daysOfWeek: mealSubscriptions.daysOfWeek,
+      window: mealSubscriptions.window,
+      planType: mealSubscriptions.planType,
+      mealId: mealSubscriptions.mealId,
+      pricePerDayMinor: mealSubscriptions.pricePerDayMinor,
+      currency: mealSubscriptions.currency,
+      startDate: mealSubscriptions.startDate,
+      status: mealSubscriptions.status,
+      customerName: accounts.displayName,
+      phone: savedAddresses.phone,
+      mealName: meals.name,
+    })
+    .from(mealSubscriptions)
+    .leftJoin(accounts, eq(accounts.id, mealSubscriptions.accountId))
+    .leftJoin(savedAddresses, eq(savedAddresses.id, mealSubscriptions.addressId))
+    .leftJoin(meals, eq(meals.id, mealSubscriptions.mealId))
+    .where(eq(mealSubscriptions.partnerId, partnerId))
+    .limit(500);
+  if (rows.length === 0) return [];
+
+  // This week's cycle per subscription (single batched read).
+  const subIds = rows.map((r) => r.id);
+  const weekStart = weekBoundsFor(today).weekStart;
+  const cycleRows = await db
+    .select({
+      subscriptionId: mealBillingCycles.subscriptionId,
+      status: mealBillingCycles.status,
+      plannedSlots: mealBillingCycles.plannedSlots,
+      amountMinor: mealBillingCycles.amountMinor,
+    })
+    .from(mealBillingCycles)
+    .where(
+      and(
+        inArray(mealBillingCycles.subscriptionId, subIds),
+        eq(mealBillingCycles.weekStart, weekStart),
+      ),
+    );
+  const cycleBySub = new Map(
+    cycleRows.map((c) => [
+      c.subscriptionId,
+      { status: c.status as CycleStatus, plannedSlots: c.plannedSlots, amountMinor: c.amountMinor },
+    ]),
+  );
+
+  const mapped: PartnerSubscriptionRow[] = rows.map((r) => ({
+    id: r.id,
+    customerLabel: maskCustomerName(r.customerName),
+    phoneMasked: maskPhone(r.phone),
+    daysOfWeek: [...r.daysOfWeek].sort((a, b) => a - b),
+    window: r.window,
+    planType: r.planType,
+    mealName: r.planType === 'fixed_meal' ? (r.mealName ?? 'Removed meal') : null,
+    pricePerDayMinor: r.pricePerDayMinor,
+    currency: r.currency,
+    startDate: r.startDate,
+    status: r.status,
+    weeklySlots: r.daysOfWeek.length,
+    thisWeekCycle: cycleBySub.get(r.id) ?? null,
+  }));
+
+  return mapped.sort(
+    (a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status] || a.startDate.localeCompare(b.startDate),
+  );
+}
+
+/** One forecast week: total scheduled subscription slots, split by window. */
+export interface SubscriptionForecastWeek {
+  weekStart: string;
+  weekEnd: string;
+  slots: number;
+  lunch: number;
+  dinner: number;
+}
+
+/** Read-only multi-week subscription-demand forecast for the partner. */
+export interface SubscriptionForecast {
+  weeks: SubscriptionForecastWeek[];
+  activeCount: number;
+  pausedCount: number;
+}
+
+/**
+ * A forward-looking demand forecast for the partner's ACTIVE subscriptions,
+ * derived PURELY from `daysOfWeek`/`startDate` (+ member skips) over the next
+ * `weeks` KTM weeks. This is a schedule projection for kitchen capacity planning
+ * — it deliberately does NOT touch the materializer's today+tomorrow spawn
+ * horizon, nor apply cutoff/prepaid gating (those govern real order creation, not
+ * what a member is *scheduled* to receive). Paused subs are excluded from the
+ * counts but reported via `pausedCount`; cancelled subs are ignored entirely.
+ */
+export async function loadSubscriptionForecast(
+  db: Db,
+  partnerId: string,
+  today: string,
+  weeks = 4,
+): Promise<SubscriptionForecast> {
+  const subs = await db
+    .select({
+      id: mealSubscriptions.id,
+      daysOfWeek: mealSubscriptions.daysOfWeek,
+      window: mealSubscriptions.window,
+      startDate: mealSubscriptions.startDate,
+      status: mealSubscriptions.status,
+    })
+    .from(mealSubscriptions)
+    .where(
+      and(
+        eq(mealSubscriptions.partnerId, partnerId),
+        inArray(mealSubscriptions.status, ['active', 'paused']),
+      ),
+    )
+    .limit(1000);
+
+  const activeSubs = subs.filter((s) => s.status === 'active');
+  const pausedCount = subs.length - activeSubs.length;
+
+  const horizonEnd = ktmAddDays(today, weeks * 7 - 1);
+
+  // Member skips inside the horizon suppress a scheduled slot.
+  const skipSet = new Set<string>();
+  if (activeSubs.length > 0) {
+    const skipRows = await db
+      .select({
+        subscriptionId: mealSubSkips.subscriptionId,
+        deliveryDate: mealSubSkips.deliveryDate,
+      })
+      .from(mealSubSkips)
+      .where(
+        and(
+          inArray(
+            mealSubSkips.subscriptionId,
+            activeSubs.map((s) => s.id),
+          ),
+          gte(mealSubSkips.deliveryDate, today),
+          lte(mealSubSkips.deliveryDate, horizonEnd),
+        ),
+      );
+    for (const s of skipRows) skipSet.add(`${s.subscriptionId}|${s.deliveryDate}`);
+  }
+
+  // Walk every KTM date in the horizon, tallying scheduled slots per week bucket.
+  const buckets = new Map<string, { lunch: number; dinner: number }>();
+  for (let d = today; d <= horizonEnd; d = ktmAddDays(d, 1)) {
+    const dow = ktmDayOfWeek(d);
+    const weekStart = weekBoundsFor(d).weekStart;
+    let bucket = buckets.get(weekStart);
+    if (!bucket) {
+      bucket = { lunch: 0, dinner: 0 };
+      buckets.set(weekStart, bucket);
+    }
+    for (const sub of activeSubs) {
+      if (d < sub.startDate) continue;
+      if (!sub.daysOfWeek.includes(dow)) continue;
+      if (skipSet.has(`${sub.id}|${d}`)) continue;
+      if (sub.window === 'lunch') bucket.lunch += 1;
+      else bucket.dinner += 1;
+    }
+  }
+
+  // The horizon runs today..horizonEnd, which need not align to week boundaries,
+  // so the first and last calendar-week buckets are partial: they only tally the
+  // dates actually inside the horizon. Clamp the displayed range to the counted
+  // span (never before `today`, never after `horizonEnd`) so a partial edge week
+  // isn't mislabeled with its full Sun–Sat range and read as under-booked.
+  const weekRows: SubscriptionForecastWeek[] = [...buckets.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([weekStart, b]) => {
+      const fullEnd = weekBoundsFor(weekStart).weekEnd;
+      return {
+        weekStart: weekStart < today ? today : weekStart,
+        weekEnd: fullEnd > horizonEnd ? horizonEnd : fullEnd,
+        slots: b.lunch + b.dinner,
+        lunch: b.lunch,
+        dinner: b.dinner,
+      };
+    });
+
+  return { weeks: weekRows, activeCount: activeSubs.length, pausedCount };
 }

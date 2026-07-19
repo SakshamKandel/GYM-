@@ -1,4 +1,5 @@
-import { meals } from '@gym/db';
+import { mealPartners, meals } from '@gym/db';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requirePartner } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -28,7 +29,9 @@ const upsertSchema = z.object({
   sugarG: macroInt.nullable().optional(),
   dietType: z.enum(['veg', 'non_veg', 'egg']),
   goalTags: z.array(z.enum(['cutting', 'bulking', 'balanced'])).max(3).default([]),
-  priceMinor: z.number().int().min(0).max(100_000_000),
+  // A live menu item must carry a real price — a blank/zero price would silently
+  // publish a free dish (P0-15). Members always pay ≥ 1 minor unit.
+  priceMinor: z.number().int().min(1).max(100_000_000),
   currency: z.enum(['NPR', 'USD']),
   isActive: z.boolean().default(true),
   sortOrder: z.number().int().min(0).max(100_000).default(0),
@@ -54,7 +57,21 @@ export async function POST(req: Request) {
   if (!parsed.success) return json({ error: 'invalid' }, 400);
   const d = parsed.data;
 
-  const [meal] = await getDb()
+  // A meal's currency MUST match the partner's own account currency. A mismatch
+  // (e.g. a USD dish under an NPR restaurant) corrupts every downstream revenue
+  // rollup, which sums minor units without re-checking currency (P0-15).
+  const db = getDb();
+  const [account] = await db
+    .select({ currency: mealPartners.currency })
+    .from(mealPartners)
+    .where(eq(mealPartners.id, partnerId))
+    .limit(1);
+  if (!account) return json({ error: 'forbidden' }, 403);
+  if (d.currency !== account.currency) {
+    return json({ error: 'currency_mismatch', expected: account.currency }, 400);
+  }
+
+  const [meal] = await db
     .insert(meals)
     .values({
       partnerId,

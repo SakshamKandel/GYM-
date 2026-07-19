@@ -6,9 +6,11 @@ import { useRouter } from 'next/navigation';
 import {
   Button,
   type Column,
+  ConfirmButton,
   DataTable,
   Drawer,
   EmptyState,
+  SearchField,
   StatusChip,
   TierChip,
 } from '@/components/console';
@@ -182,6 +184,7 @@ export function PaymentsQueue({
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<(typeof TABS)[number]['key']>('pending');
+  const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [refundReason, setRefundReason] = useState('');
@@ -191,9 +194,21 @@ export function PaymentsQueue({
   const [confirmPreview, setConfirmPreview] = useState<WindowPreview | null>(null);
 
   const filtered = useMemo(() => {
-    if (tab === 'all') return requests;
-    return requests.filter((r) => r.status === tab);
-  }, [requests, tab]);
+    // The server ships pending-first then decided (each newest-first within its
+    // group), so the "All" tab must be re-sorted globally by submitted-time to
+    // read as one reverse-chronological stream instead of two stitched blocks.
+    const base =
+      tab === 'all'
+        ? [...requests].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        : requests.filter((r) => r.status === tab);
+    const q = query.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter(
+      (r) =>
+        r.accountDisplayName.toLowerCase().includes(q) ||
+        r.accountEmail.toLowerCase().includes(q),
+    );
+  }, [requests, tab, query]);
 
   const selected = requests.find((r) => r.id === selectedId) ?? null;
   const preview = selected && selected.status === 'pending' ? previewWindow(selected) : null;
@@ -410,6 +425,16 @@ export function PaymentsQueue({
 
   return (
     <>
+      <div style={{ marginBottom: 16 }}>
+        <SearchField
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by member name or email"
+          aria-label="Search payments by member"
+          style={{ maxWidth: 320 }}
+        />
+      </div>
+
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         {TABS.map((t) => {
           const active = tab === t.key;
@@ -447,7 +472,7 @@ export function PaymentsQueue({
           rows={filtered}
           rowKey={(r) => r.id}
           onRowClick={openRow}
-          empty="No requests in this status."
+          empty={query.trim() ? 'No matching members.' : 'No requests in this status.'}
         />
       )}
 
@@ -667,9 +692,16 @@ export function PaymentsQueue({
                   style={{ resize: 'vertical', fontFamily: 'inherit' }}
                 />
                 <div>
-                  <Button variant="danger" disabled={busy} onClick={() => void refund()}>
-                    {busy ? 'Refunding…' : 'Refund payment'}
-                  </Button>
+                  {/* P0-5: a refund claws back coach commission and rolls back
+                      the granted tier — irreversible, so require an explicit
+                      two-step confirm rather than firing on a single click. */}
+                  <ConfirmButton
+                    label="Refund payment"
+                    confirmLabel="Confirm refund"
+                    busyLabel="Refunding…"
+                    busy={busy}
+                    onConfirm={() => void refund()}
+                  />
                 </div>
               </div>
             ) : null}

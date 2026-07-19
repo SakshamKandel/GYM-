@@ -1,6 +1,7 @@
 'use client';
 
 import { formatMoney } from '@gym/shared';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge, Button, EmptyState, TextField, TierChip } from '@/components/console';
 
@@ -54,6 +55,7 @@ const STATUS_LABEL: Record<PayoutStatus, string> = {
  * guard keeps a slow reload from clobbering a newer one.
  */
 export function PayoutsQueue() {
+  const router = useRouter();
   const [data, setData] = useState<QueueData | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -132,11 +134,22 @@ export function PayoutsQueue() {
                   : 'Could not record that decision. Try again.',
         }));
         setBusyId(null);
-        if (apiError === 'already_decided') await load();
+        if (apiError === 'already_decided') {
+          await load();
+          // A payout approval by another admin already moved the coach's
+          // balance; refresh the server-rendered roster/StatTiles so they
+          // don't show the pre-decision figure (P1-6).
+          router.refresh();
+        }
         return;
       }
       setBusyId(null);
       await load();
+      // An approve records a negative ledger entry (balance change) and a reject
+      // frees the coach's open-request slot; both invalidate the server-rendered
+      // wallet roster balances + top-of-page StatTiles, which only re-derive on a
+      // router.refresh() (P1-6).
+      router.refresh();
     } catch {
       setRowError((m) => ({ ...m, [row.id]: 'Network error.' }));
       setBusyId(null);

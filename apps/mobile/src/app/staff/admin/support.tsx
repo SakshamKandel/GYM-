@@ -20,6 +20,7 @@ import {
   assignSupportThread,
   getAdminSupportThread,
   getAdminSupportThreads,
+  markAdminSupportThreadRead,
   replyToSupportThread,
   resolveSupportThread,
   toSupportError,
@@ -202,6 +203,12 @@ export default function AdminSupportScreen() {
         const result = await getAdminSupportThread(accountId, token);
         if (mySeq !== threadReqSeq.current) return; // superseded by a newer open/close
         setMessages(result);
+        // P1-15: mark-read was never called — the inbox's unread badge for
+        // this thread never cleared no matter how many times it was opened.
+        // Best-effort and fire-and-forget (per markAdminSupportThreadRead's
+        // contract): a failure here must not block the thread from
+        // displaying, and it only fires for the thread still on screen.
+        void markAdminSupportThreadRead(accountId, token).catch(() => {});
       } catch (e) {
         if (mySeq !== threadReqSeq.current) return;
         setThreadError(loadErrorLine(toSupportError(e).code));

@@ -106,7 +106,6 @@ const COACH_CONSOLE_PERMISSIONS: readonly Permission[] = [
   'coach.user.read',
   'content.video.own',
   'coach.wallet.read',
-  'client.tier_grant',
 ];
 
 export function canOpenCoachConsole(permissions: readonly Permission[]): boolean {
@@ -140,6 +139,8 @@ const ADMIN_CONSOLE_PERMISSIONS: readonly Permission[] = [
   'catalog.manage',
   'gamification.manage',
   'orders.review',
+  'partners.manage',
+  'gyms.manage',
 ];
 
 export function canOpenAdminConsole(permissions: readonly Permission[]): boolean {

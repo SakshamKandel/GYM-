@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Badge, Button, EmptyState } from '@/components/console';
+import { Badge, Button, ConfirmButton, EmptyState } from '@/components/console';
 import { SkeletonBars } from '../../_components/SkeletonBars';
 
 /**
@@ -12,7 +12,12 @@ import { SkeletonBars } from '../../_components/SkeletonBars';
  * Each row shows the offending top set (heaviest set in the workout) and a
  * plain-English reason, plus a one-click Acknowledge that POSTs
  * /api/coach/flags/[workoutId] — idempotent, so a repeat click is harmless.
- * Copy stays neutral throughout: no accusations, no punishment framing.
+ * A two-step Restore (same route, {action:'restore'}) clears a false positive:
+ * it re-ranks the workout so the session counts toward badges/leaderboards/PR
+ * credit again — the ONLY path to un-flag a plausibility false positive. Since
+ * it grants credit it is guarded behind ConfirmButton, and the row leaves the
+ * list on success (a ranked workout is no longer flagged). Copy stays neutral
+ * throughout: no accusations, no punishment framing.
  *
  * Thin fetches only: no drizzle, no server imports. Weights are canonical kg
  * on the wire and rendered as kg here (console convention).
@@ -57,6 +62,7 @@ export function FlagsList() {
   const [items, setItems] = useState<FlagItem[]>([]);
 
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<'acknowledge' | 'restore' | null>(null);
   const [rowError, setRowError] = useState<{ id: string; msg: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -88,6 +94,7 @@ export function FlagsList() {
   async function acknowledge(item: FlagItem) {
     if (busyId || item.acked) return;
     setBusyId(item.workoutId);
+    setBusyAction('acknowledge');
     setRowError(null);
     try {
       const res = await fetch(`/api/coach/flags/${encodeURIComponent(item.workoutId)}`, {
@@ -110,15 +117,63 @@ export function FlagsList() {
           });
         }
         setBusyId(null);
+        setBusyAction(null);
         return;
       }
       setItems((prev) =>
         prev.map((i) => (i.workoutId === item.workoutId ? { ...i, acked: true } : i)),
       );
       setBusyId(null);
+      setBusyAction(null);
     } catch {
       setRowError({ id: item.workoutId, msg: 'Network error. Check your connection and retry.' });
       setBusyId(null);
+      setBusyAction(null);
+    }
+  }
+
+  /**
+   * Clear a false-positive flag: re-rank the workout so it counts again. The
+   * route is idempotent (an already-ranked workout is a no-op). On success the
+   * workout is no longer flagged, so it drops off this list.
+   */
+  async function restore(item: FlagItem) {
+    if (busyId) return;
+    setBusyId(item.workoutId);
+    setBusyAction('restore');
+    setRowError(null);
+    try {
+      const res = await fetch(`/api/coach/flags/${encodeURIComponent(item.workoutId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'restore' }),
+      });
+      if (!res.ok) {
+        if (res.status === 404) {
+          setItems((prev) => prev.filter((i) => i.workoutId !== item.workoutId));
+        } else {
+          setRowError({
+            id: item.workoutId,
+            msg:
+              res.status === 403
+                ? 'You are not assigned to this client.'
+                : res.status === 401
+                  ? 'Your session expired. Sign in again.'
+                  : 'Could not restore this workout. Try again.',
+          });
+        }
+        setBusyId(null);
+        setBusyAction(null);
+        return;
+      }
+      // Re-ranked → no longer a flag → leaves the list.
+      setItems((prev) => prev.filter((i) => i.workoutId !== item.workoutId));
+      setBusyId(null);
+      setBusyAction(null);
+    } catch {
+      setRowError({ id: item.workoutId, msg: 'Network error. Check your connection and retry.' });
+      setBusyId(null);
+      setBusyAction(null);
     }
   }
 
@@ -249,9 +304,25 @@ export function FlagsList() {
               </div>
             ) : null}
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Button size="sm" onClick={() => void acknowledge(item)} disabled={busy || item.acked}>
-                {busy ? 'Saving…' : item.acked ? 'Acknowledged' : 'Acknowledge'}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <ConfirmButton
+                size="sm"
+                label="Restore"
+                confirmLabel="Confirm restore"
+                busyLabel="Restoring…"
+                busy={busy && busyAction === 'restore'}
+                onConfirm={() => void restore(item)}
+              />
+              <Button
+                size="sm"
+                onClick={() => void acknowledge(item)}
+                disabled={busy || item.acked}
+              >
+                {busy && busyAction === 'acknowledge'
+                  ? 'Saving…'
+                  : item.acked
+                    ? 'Acknowledged'
+                    : 'Acknowledge'}
               </Button>
             </div>
           </div>

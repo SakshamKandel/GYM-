@@ -3,6 +3,7 @@ import {
   coachAssignments,
   coachMilestones,
   coachProfiles,
+  mealPaymentRequests,
   paymentRequests,
   promoCodes,
   promoRedemptions,
@@ -168,6 +169,14 @@ export async function loadAnalytics(): Promise<AnalyticsData> {
  * refunded inside the window nets to ~0, while one refunded in a later month
  * correctly reduces that later month — this is what "respect refunded rows as
  * negatives" means for a net-revenue view.
+ *
+ * P1-10: the SAME net-revenue treatment is applied to `meal_payment_requests`
+ * (the meal-delivery vertical) so finance figures aren't blind to meal money.
+ * Meal rows have no tier_granted_at, so the grant anchor is the refund-stable
+ * settled_at→created_at (NOT decided_at, which the refund route re-stamps to the
+ * refund time — anchoring there would erase the earned month's revenue) and the
+ * refund anchor is refunded_at→decided_at; amounts merge into the same
+ * per-currency buckets (NPR overlaps membership revenue).
  */
 async function loadRevenueByMonth(
   windowStart: Date,
@@ -180,7 +189,18 @@ async function loadRevenueByMonth(
   const grantMonth = sql<string>`to_char(date_trunc('month', ${grantAnchor}), 'YYYY-MM')`;
   const refundMonth = sql<string>`to_char(date_trunc('month', ${paymentRequests.decidedAt}), 'YYYY-MM')`;
 
-  const [grossRows, refundRows] = await Promise.all([
+  // Meal-payment anchors (no tier_granted_at column on this table). The grant
+  // leg must anchor on a refund-STABLE column: the refund route re-stamps
+  // decidedAt to the refund time, so anchoring on decidedAt would erase a
+  // refunded payment's revenue from the month it was actually earned. settledAt
+  // (stamped once when the payment settles, never touched by refund) → createdAt
+  // (immutable) is stable across a later refund.
+  const mealGrantAnchor = sql`coalesce(${mealPaymentRequests.settledAt}, ${mealPaymentRequests.createdAt})`;
+  const mealGrantMonth = sql<string>`to_char(date_trunc('month', ${mealGrantAnchor}), 'YYYY-MM')`;
+  const mealRefundAnchor = sql`coalesce(${mealPaymentRequests.refundedAt}, ${mealPaymentRequests.decidedAt})`;
+  const mealRefundMonth = sql<string>`to_char(date_trunc('month', ${mealRefundAnchor}), 'YYYY-MM')`;
+
+  const [grossRows, refundRows, mealGrossRows, mealRefundRows] = await Promise.all([
     // Positive leg: every row that was ever approved (approved OR later refunded).
     db
       .select({
@@ -206,6 +226,36 @@ async function loadRevenueByMonth(
       .from(paymentRequests)
       .where(and(eq(paymentRequests.status, 'refunded'), gte(paymentRequests.decidedAt, windowStart)))
       .groupBy(refundMonth, paymentRequests.currency),
+    // Meal positive leg.
+    db
+      .select({
+        month: mealGrantMonth,
+        currency: mealPaymentRequests.currency,
+        amt: sql<string>`sum(${mealPaymentRequests.amountMinor})::text`,
+      })
+      .from(mealPaymentRequests)
+      .where(
+        and(
+          inArray(mealPaymentRequests.status, ['approved', 'refunded']),
+          sql`${mealGrantAnchor} >= ${windowStart}`,
+        ),
+      )
+      .groupBy(mealGrantMonth, mealPaymentRequests.currency),
+    // Meal negative leg.
+    db
+      .select({
+        month: mealRefundMonth,
+        currency: mealPaymentRequests.currency,
+        amt: sql<string>`sum(${mealPaymentRequests.amountMinor})::text`,
+      })
+      .from(mealPaymentRequests)
+      .where(
+        and(
+          eq(mealPaymentRequests.status, 'refunded'),
+          sql`${mealRefundAnchor} >= ${windowStart}`,
+        ),
+      )
+      .groupBy(mealRefundMonth, mealPaymentRequests.currency),
   ]);
 
   // net[month][currency] = gross − refunds
@@ -223,6 +273,8 @@ async function loadRevenueByMonth(
   };
   for (const r of grossRows) apply(r.month, r.currency, Number(r.amt ?? 0));
   for (const r of refundRows) apply(r.month, r.currency, -Number(r.amt ?? 0));
+  for (const r of mealGrossRows) apply(r.month, r.currency, Number(r.amt ?? 0));
+  for (const r of mealRefundRows) apply(r.month, r.currency, -Number(r.amt ?? 0));
 
   // Emit all 12 buckets in order, each carrying every observed currency (0 when
   // absent) so the rendered table has uniform columns.
@@ -410,22 +462,40 @@ async function loadDeltas(
   const db = getDb();
 
   // Net approved revenue in [start, end) by currency (refunds subtract).
+  // P1-10: membership + meal-delivery payments are summed into the same
+  // per-currency buckets so the delta reflects total platform revenue.
   const revenueBetween = async (start: Date, end: Date): Promise<Map<string, number>> => {
-    const rows = await db
-      .select({
-        currency: paymentRequests.currency,
-        amt: sql<string>`sum(case when ${paymentRequests.status} = 'refunded' then -${paymentRequests.amountMinor} else ${paymentRequests.amountMinor} end)::text`,
-      })
-      .from(paymentRequests)
-      .where(
-        and(
-          inArray(paymentRequests.status, ['approved', 'refunded']),
-          gte(paymentRequests.decidedAt, start),
-          lt(paymentRequests.decidedAt, end),
-        ),
-      )
-      .groupBy(paymentRequests.currency);
-    return sumByCurrency(rows);
+    const [membershipRows, mealRows] = await Promise.all([
+      db
+        .select({
+          currency: paymentRequests.currency,
+          amt: sql<string>`sum(case when ${paymentRequests.status} = 'refunded' then -${paymentRequests.amountMinor} else ${paymentRequests.amountMinor} end)::text`,
+        })
+        .from(paymentRequests)
+        .where(
+          and(
+            inArray(paymentRequests.status, ['approved', 'refunded']),
+            gte(paymentRequests.decidedAt, start),
+            lt(paymentRequests.decidedAt, end),
+          ),
+        )
+        .groupBy(paymentRequests.currency),
+      db
+        .select({
+          currency: mealPaymentRequests.currency,
+          amt: sql<string>`sum(case when ${mealPaymentRequests.status} = 'refunded' then -${mealPaymentRequests.amountMinor} else ${mealPaymentRequests.amountMinor} end)::text`,
+        })
+        .from(mealPaymentRequests)
+        .where(
+          and(
+            inArray(mealPaymentRequests.status, ['approved', 'refunded']),
+            gte(mealPaymentRequests.decidedAt, start),
+            lt(mealPaymentRequests.decidedAt, end),
+          ),
+        )
+        .groupBy(mealPaymentRequests.currency),
+    ]);
+    return sumByCurrency([...membershipRows, ...mealRows]);
   };
 
   const membersBetween = async (start: Date, end: Date): Promise<number> => {
@@ -436,18 +506,31 @@ async function loadDeltas(
     return Number(r?.n ?? 0);
   };
 
+  // Approved manual payments in [start, end) — membership + meal verticals.
   const approvalsBetween = async (start: Date, end: Date): Promise<number> => {
-    const [r] = await db
-      .select({ n: count() })
-      .from(paymentRequests)
-      .where(
-        and(
-          eq(paymentRequests.status, 'approved'),
-          gte(paymentRequests.decidedAt, start),
-          lt(paymentRequests.decidedAt, end),
+    const [membership, meal] = await Promise.all([
+      db
+        .select({ n: count() })
+        .from(paymentRequests)
+        .where(
+          and(
+            eq(paymentRequests.status, 'approved'),
+            gte(paymentRequests.decidedAt, start),
+            lt(paymentRequests.decidedAt, end),
+          ),
         ),
-      );
-    return Number(r?.n ?? 0);
+      db
+        .select({ n: count() })
+        .from(mealPaymentRequests)
+        .where(
+          and(
+            eq(mealPaymentRequests.status, 'approved'),
+            gte(mealPaymentRequests.decidedAt, start),
+            lt(mealPaymentRequests.decidedAt, end),
+          ),
+        ),
+    ]);
+    return Number(membership[0]?.n ?? 0) + Number(meal[0]?.n ?? 0);
   };
 
   const [

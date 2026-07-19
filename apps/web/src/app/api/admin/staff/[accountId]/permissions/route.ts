@@ -87,7 +87,14 @@ async function buildPayload(
 }> {
   const overrides = await getAccountOverrides(accountId);
   const preset = new Set(permissionsForRole(role));
-  const effective = new Set(effectivePermissionsForRole(role, overrides));
+  // super_admin AND main_admin are safety floors (C-A) — overrides never apply,
+  // so their effective set always equals the (full) preset and the editor locks.
+  // Computing effective via the same rule enforcement uses keeps the provenance
+  // view from drifting from what the guards actually do.
+  const locked = role === 'super_admin' || role === 'main_admin';
+  const effective = new Set(
+    locked ? permissionsForRole(role) : effectivePermissionsForRole(role, overrides),
+  );
   const permissions: PermissionRow[] = ALL_PERMISSIONS.map((key) => {
     const override: 'allow' | 'deny' | null = overrides.has(key)
       ? overrides.get(key)
@@ -101,8 +108,7 @@ async function buildPayload(
       effective: effective.has(key),
     };
   });
-  // super_admin is the safety floor — overrides never apply, so the UI locks.
-  return { accountId, role, locked: role === 'super_admin', permissions };
+  return { accountId, role, locked, permissions };
 }
 
 export function OPTIONS() {
@@ -156,9 +162,13 @@ export async function PUT(
   const rankBlock = requireOutranks(principal, targetRole);
   if (rankBlock) return rankBlock;
 
-  // FP0 safety floor: a super_admin's permissions can never be overridden — the
-  // merge ignores overrides for it, so persisting one would only mislead.
-  if (targetRole === 'super_admin') {
+  // Safety floor (C-A): neither a super_admin's NOR a main_admin's permissions
+  // can be overridden — enforcement floors both to the full set, so persisting an
+  // override (a preset-removing DENY in particular) would silently no-op and only
+  // mislead the provenance view. Reject the write outright for both top tiers.
+  // Error code kept as the established `cannot_modify_super_admin` literal so the
+  // /api response stays contract-stable and the console's existing message maps.
+  if (targetRole === 'super_admin' || targetRole === 'main_admin') {
     return json({ error: 'cannot_modify_super_admin' }, 403);
   }
 

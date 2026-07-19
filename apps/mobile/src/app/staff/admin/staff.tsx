@@ -38,16 +38,25 @@ import { useAuth } from '../../../state/auth';
 /**
  * Offboarding-impact preview (P0-3 / plan §3 gap-build #3): a coach revoke
  * triggers the C2 cascade (end active assignments, decline pending requests,
- * deactivate the coach profile) — this is what the confirm sheet shows
- * BEFORE the admin commits. Fetched via `revokeRole(accountId, token,
- * { dryRun: true })`, which appends `?dryRun=1` and hits the server's
- * READ-ONLY preflight branch — it can never trigger the real cascade, no
- * matter when it's called (including the instant the admin taps the revoke
- * icon, before the typed-confirm sheet or the real Revoke button).
+ * deactivate the coach profile, deactivate owned promo codes) — this is what
+ * the confirm sheet shows BEFORE the admin commits. Fetched via
+ * `revokeRole(accountId, token, { dryRun: true })`, which appends `?dryRun=1`
+ * and hits the server's READ-ONLY preflight branch — it can never trigger the
+ * real cascade, no matter when it's called (including the instant the admin
+ * taps the revoke icon, before the typed-confirm sheet or the real Revoke
+ * button).
+ *
+ * P1-14 / C-F: the dry-run counts grew `pendingTierRequests`,
+ * `activeWorkoutPlans` and `activeDietPlans` alongside the offboarding
+ * cascade itself deactivating owned promo codes — this preview used to drop
+ * all three, understating the blast radius an admin sees before confirming.
  */
 interface RevokeImpact {
   activeClients: number;
   pendingCoachRequests: number;
+  pendingTierRequests: number;
+  activeWorkoutPlans: number;
+  activeDietPlans: number;
   walletBalances: { currency: string; amountMinor: number }[];
 }
 
@@ -56,6 +65,9 @@ async function fetchRevokeImpact(accountId: string, token: string): Promise<Revo
   return {
     activeClients: counts?.activeClients ?? 0,
     pendingCoachRequests: counts?.pendingRequests ?? 0,
+    pendingTierRequests: counts?.pendingTierRequests ?? 0,
+    activeWorkoutPlans: counts?.activeWorkoutPlans ?? 0,
+    activeDietPlans: counts?.activeDietPlans ?? 0,
     walletBalances: counts?.walletBalances ?? [],
   };
 }
@@ -205,6 +217,89 @@ export default function StaffAndRolesScreen() {
       setGranting(false);
     }
   }, [token, picked, role, loadStaff]);
+
+  // ── Re-role-away-from-coach impact preview (P1-14 / P0-7 mobile half) ──
+  // Granting a NEW role to an account that currently holds 'coach' triggers
+  // the SAME C2 offboarding cascade as an explicit Revoke — before this fix
+  // `doGrant()` had no impact check at all, so re-roling a coach through the
+  // Grant-a-role search flow silently cascaded with zero warning. Reuses the
+  // same dry-run + typed-confirm pattern as the roster's Revoke action.
+  const [regrantTarget, setRegrantTarget] = useState<{ picked: MemberRow; role: StaffRole } | null>(
+    null,
+  );
+  const [regrantTypedConfirm, setRegrantTypedConfirm] = useState('');
+  const [regrantImpact, setRegrantImpact] = useState<RevokeImpact | null>(null);
+  const [regrantImpactLoading, setRegrantImpactLoading] = useState(false);
+  const [regrantImpactError, setRegrantImpactError] = useState<string | null>(null);
+  const [regrantBusy, setRegrantBusy] = useState(false);
+
+  const loadRegrantImpact = useCallback(
+    async (accountId: string) => {
+      if (!token) return;
+      setRegrantImpactLoading(true);
+      setRegrantImpactError(null);
+      try {
+        setRegrantImpact(await fetchRevokeImpact(accountId, token));
+      } catch (err) {
+        setRegrantImpactError(revokeFailLine(toStaffError(err).code));
+      } finally {
+        setRegrantImpactLoading(false);
+      }
+    },
+    [token],
+  );
+
+  /** Entry point for the Grant button — re-roling AWAY from coach previews
+   * the offboard cascade first; every other grant proceeds straight to the
+   * (still reauth-gated) doGrant(). */
+  function requestGrant(): void {
+    if (!picked) return;
+    if (picked.staffRole === 'coach' && role !== 'coach') {
+      setRegrantTarget({ picked, role });
+      setRegrantTypedConfirm('');
+      setRegrantImpact(null);
+      setRegrantImpactError(null);
+      void loadRegrantImpact(picked.id);
+      return;
+    }
+    reauth.guard(() => void doGrant());
+  }
+
+  function closeRegrant(): void {
+    if (regrantBusy) return;
+    setRegrantTarget(null);
+    setRegrantTypedConfirm('');
+    setRegrantImpact(null);
+    setRegrantImpactError(null);
+  }
+
+  const regrantConfirmMatches =
+    regrantTarget !== null &&
+    regrantTypedConfirm.trim().toLowerCase() === regrantTarget.picked.email.toLowerCase();
+
+  const doRegrant = useCallback(async () => {
+    if (!token || !regrantTarget || !regrantConfirmMatches) return;
+    const { picked: target, role: newRole } = regrantTarget;
+    setRegrantBusy(true);
+    try {
+      await grantRole(target.id, newRole, token);
+      setBanner(`${target.email} is now ${ROLE_LABEL[newRole]}.`);
+      setQuery('');
+      setResults([]);
+      setPicked(null);
+      setRegrantTarget(null);
+      setRegrantTypedConfirm('');
+      setRegrantImpact(null);
+      await loadStaff();
+    } catch (err) {
+      setBanner(grantFailLine(toStaffError(err).code));
+      setRegrantTarget(null);
+      setRegrantTypedConfirm('');
+      setRegrantImpact(null);
+    } finally {
+      setRegrantBusy(false);
+    }
+  }, [token, regrantTarget, regrantConfirmMatches, loadStaff]);
 
   // ── Revoke flow (P0-3: offboarding confirm — dry-run counts + typed confirm) ──
   const [revoking, setRevoking] = useState<StaffRow | null>(null);
@@ -419,7 +514,7 @@ export default function StaffAndRolesScreen() {
           </View>
           <Button
             label={`Grant ${ROLE_LABEL[role]}`}
-            onPress={() => reauth.guard(() => void doGrant())}
+            onPress={requestGrant}
             loading={granting}
           />
         </Animated.View>
@@ -528,7 +623,28 @@ export default function StaffAndRolesScreen() {
                     client request
                     {revokeImpact.pendingCoachRequests === 1 ? '' : 's'}
                   </AppText>
+                  {revokeImpact.pendingTierRequests > 0 ? (
+                    <AppText variant="caption">
+                      • Leave {revokeImpact.pendingTierRequests} pending
+                      seniority-tier request
+                      {revokeImpact.pendingTierRequests === 1 ? '' : 's'} undecided
+                    </AppText>
+                  ) : null}
+                  {revokeImpact.activeWorkoutPlans > 0 ? (
+                    <AppText variant="caption">
+                      • Orphan {revokeImpact.activeWorkoutPlans} active
+                      client workout plan
+                      {revokeImpact.activeWorkoutPlans === 1 ? '' : 's'}
+                    </AppText>
+                  ) : null}
+                  {revokeImpact.activeDietPlans > 0 ? (
+                    <AppText variant="caption">
+                      • Orphan {revokeImpact.activeDietPlans} active client
+                      diet plan{revokeImpact.activeDietPlans === 1 ? '' : 's'}
+                    </AppText>
+                  ) : null}
                   <AppText variant="caption">• Deactivate their coach profile</AppText>
+                  <AppText variant="caption">• Deactivate their promo code</AppText>
                   {revokeImpact.walletBalances.length > 0 ? (
                     revokeImpact.walletBalances.map((b) => (
                       <AppText
@@ -578,6 +694,114 @@ export default function StaffAndRolesScreen() {
                 onPress={() => reauth.guard(() => void doRevoke())}
                 disabled={revokeBusy || !revokeConfirmMatches}
                 loading={revokeBusy}
+              />
+            </View>
+          </View>
+        ) : null}
+      </Sheet>
+
+      {/* ── Re-role away from coach: offboard-impact preview (P1-14) ──
+          Granting a different role to a current coach triggers the SAME C2
+          cascade as an explicit Revoke — this mirrors that sheet exactly so
+          the admin sees the blast radius before it happens either way. */}
+      <Sheet
+        visible={regrantTarget !== null}
+        onClose={closeRegrant}
+        title={regrantTarget ? `Change role to ${ROLE_LABEL[regrantTarget.role]}?` : 'Change role?'}
+      >
+        {regrantTarget ? (
+          <View style={styles.revokeSheetBody}>
+            <AppText variant="body" color={colors.textDim}>
+              {regrantTarget.picked.email} is currently a coach. Changing their role to{' '}
+              {ROLE_LABEL[regrantTarget.role]} ends their coaching access immediately.
+            </AppText>
+
+            {regrantImpactLoading ? (
+              <View style={styles.center}>
+                <ActivityIndicator color={colors.accent} />
+              </View>
+            ) : regrantImpactError ? (
+              <RetryLine
+                label={regrantImpactError}
+                onRetry={() => void loadRegrantImpact(regrantTarget.picked.id)}
+              />
+            ) : regrantImpact ? (
+              <View style={styles.impactBox}>
+                <AppText variant="bodyBold" color={colors.warning}>
+                  This will also:
+                </AppText>
+                <AppText variant="caption">
+                  • End {regrantImpact.activeClients} active client
+                  assignment{regrantImpact.activeClients === 1 ? '' : 's'}
+                </AppText>
+                <AppText variant="caption">
+                  • Decline {regrantImpact.pendingCoachRequests} pending
+                  client request{regrantImpact.pendingCoachRequests === 1 ? '' : 's'}
+                </AppText>
+                {regrantImpact.pendingTierRequests > 0 ? (
+                  <AppText variant="caption">
+                    • Leave {regrantImpact.pendingTierRequests} pending
+                    seniority-tier request
+                    {regrantImpact.pendingTierRequests === 1 ? '' : 's'} undecided
+                  </AppText>
+                ) : null}
+                {regrantImpact.activeWorkoutPlans > 0 ? (
+                  <AppText variant="caption">
+                    • Orphan {regrantImpact.activeWorkoutPlans} active client
+                    workout plan{regrantImpact.activeWorkoutPlans === 1 ? '' : 's'}
+                  </AppText>
+                ) : null}
+                {regrantImpact.activeDietPlans > 0 ? (
+                  <AppText variant="caption">
+                    • Orphan {regrantImpact.activeDietPlans} active client
+                    diet plan{regrantImpact.activeDietPlans === 1 ? '' : 's'}
+                  </AppText>
+                ) : null}
+                <AppText variant="caption">• Deactivate their coach profile</AppText>
+                <AppText variant="caption">• Deactivate their promo code</AppText>
+                {regrantImpact.walletBalances.length > 0 ? (
+                  regrantImpact.walletBalances.map((b) => (
+                    <AppText key={b.currency} variant="caption" color={colors.error}>
+                      • Outstanding wallet balance: {(b.amountMinor / 100).toFixed(2)}{' '}
+                      {b.currency} — settle this first, or the balance becomes
+                      untrackable once changed.
+                    </AppText>
+                  ))
+                ) : (
+                  <AppText variant="caption" color={colors.textFaint}>
+                    • No outstanding wallet balance.
+                  </AppText>
+                )}
+              </View>
+            ) : null}
+
+            <AppText variant="caption" color={colors.textDim} style={styles.typedHint}>
+              Type {regrantTarget.picked.email} to confirm.
+            </AppText>
+            <AppTextInput
+              value={regrantTypedConfirm}
+              onChangeText={setRegrantTypedConfirm}
+              placeholder={regrantTarget.picked.email}
+              autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel="Type the account's email to confirm"
+            />
+
+            <View style={styles.revokeButtons}>
+              <Button
+                label="Cancel"
+                variant="secondary"
+                style={styles.decisionBtn}
+                onPress={closeRegrant}
+                disabled={regrantBusy}
+              />
+              <Button
+                label={regrantBusy ? 'Changing…' : 'Change role'}
+                variant="danger"
+                style={styles.decisionBtn}
+                onPress={() => reauth.guard(() => void doRegrant())}
+                disabled={regrantBusy || !regrantConfirmMatches}
+                loading={regrantBusy}
               />
             </View>
           </View>

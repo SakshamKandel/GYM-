@@ -68,11 +68,30 @@ const TYPE_LABEL: Record<LedgerEntry['type'], string> = {
  * Recording an adjustment/payout hits POST /api/admin/wallets/[coachId]/entries;
  * on success we reload the drawer detail and router.refresh() the roster.
  */
-export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
+export function WalletsManager({
+  wallets,
+  canManageWallets,
+  canReviewPayouts,
+}: {
+  wallets: WalletRow[];
+  /** `wallet.manage` — balances table + record-entry drawer. */
+  canManageWallets: boolean;
+  /** `payouts.review` — the coach-initiated payout request queue. */
+  canReviewPayouts: boolean;
+}) {
   const router = useRouter();
+  // Which top-level views this operator may see. A payouts.review-only reviewer
+  // gets the queue and never the balances table (P1-5 / C-C).
+  const availableTabs = [
+    ...(canManageWallets ? (['balances'] as const) : []),
+    ...(canReviewPayouts ? (['payouts'] as const) : []),
+  ];
   // Top-level view: coach balances (with the record-entry drawer) or the
-  // coach-initiated payout request queue (plan §3 P1-12).
-  const [tab, setTab] = useState<'balances' | 'payouts'>('balances');
+  // coach-initiated payout request queue (plan §3 P1-12). Default to the first
+  // tab this operator is actually allowed to open.
+  const [tab, setTab] = useState<'balances' | 'payouts'>(
+    canManageWallets ? 'balances' : 'payouts',
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<WalletDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -91,6 +110,16 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
   // Monotonic guard so a slow detail fetch for coach A can't overwrite the
   // drawer after the admin has already opened coach B.
   const detailSeq = useRef(0);
+
+  // Idempotency key for the current record-entry attempt. Manual ledger rows
+  // land with a NULL source, so without this a double-clicked or network-retried
+  // payout deducts the coach's balance TWICE. The key is stable across retries
+  // of the SAME values and is dropped whenever a money-affecting field changes
+  // or the entry succeeds, so a fresh (intended) entry always gets a new key.
+  const entryKeyRef = useRef<string | null>(null);
+  const resetEntryKey = useCallback(() => {
+    entryKeyRef.current = null;
+  }, []);
 
   const selected = wallets.find((w) => w.coachId === selectedId) ?? null;
 
@@ -132,6 +161,7 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
     setCurrency('NPR');
     setNote('');
     setError(null);
+    resetEntryKey();
     void loadDetail(row.coachId);
   }
 
@@ -154,6 +184,10 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
     // positive (E8).
     const negative = type === 'payout' || direction === 'debit';
     const signedMinor = negative ? -Math.abs(minor) : Math.abs(minor);
+    // Mint the idempotency key on first attempt and keep it for retries of this
+    // same entry; a lost-response retry then records ONE row, not two.
+    if (entryKeyRef.current == null) entryKeyRef.current = crypto.randomUUID();
+    const idempotencyKey = entryKeyRef.current;
     setSaving(true);
     setError(null);
     try {
@@ -168,6 +202,7 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
             amountMinor: signedMinor,
             currency,
             note: note.trim() || undefined,
+            idempotencyKey,
           }),
         },
       );
@@ -192,6 +227,8 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
       setSaving(false);
       setAmount('');
       setNote('');
+      // Entry committed — the next one is a distinct row, so retire this key.
+      resetEntryKey();
       await loadDetail(selected.coachId);
       router.refresh();
     } catch {
@@ -264,33 +301,35 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
 
   return (
     <>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
-        {(['balances', 'payouts'] as const).map((t) => {
-          const active = tab === t;
-          return (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setTab(t)}
-              style={{
-                padding: '7px 14px',
-                borderRadius: 10,
-                cursor: 'pointer',
-                fontFamily: 'var(--font-heading)',
-                fontSize: 13,
-                fontWeight: 600,
-                background: active ? 'var(--gt-accent-strong)' : 'transparent',
-                color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
-                border: active
-                  ? '1px solid var(--gt-accent-strong)'
-                  : '1px solid var(--gt-border)',
-              }}
-            >
-              {t === 'balances' ? 'Balances' : 'Payout requests'}
-            </button>
-          );
-        })}
-      </div>
+      {availableTabs.length > 1 ? (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
+          {availableTabs.map((t) => {
+            const active = tab === t;
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTab(t)}
+                style={{
+                  padding: '7px 14px',
+                  borderRadius: 10,
+                  cursor: 'pointer',
+                  fontFamily: 'var(--font-heading)',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  background: active ? 'var(--gt-accent-strong)' : 'transparent',
+                  color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
+                  border: active
+                    ? '1px solid var(--gt-accent-strong)'
+                    : '1px solid var(--gt-border)',
+                }}
+              >
+                {t === 'balances' ? 'Balances' : 'Payout requests'}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       {tab === 'payouts' ? (
         <PayoutsQueue />
@@ -358,6 +397,19 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
               >
                 Record entry
               </div>
+              {selected.revoked ? (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: 'var(--gt-text-dim)',
+                    marginBottom: 10,
+                    lineHeight: 1.4,
+                  }}
+                >
+                  This coach’s role was revoked, but their balance is still owed.
+                  You can record a final payout here to settle and zero it out.
+                </div>
+              ) : null}
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 {(['adjustment', 'payout'] as const).map((t) => {
                   const active = type === t;
@@ -365,7 +417,10 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
                     <button
                       key={t}
                       type="button"
-                      onClick={() => setType(t)}
+                      onClick={() => {
+                        setType(t);
+                        resetEntryKey();
+                      }}
                       style={{
                         flex: 1,
                         padding: '7px 10px',
@@ -395,7 +450,10 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
                       <button
                         key={d}
                         type="button"
-                        onClick={() => setDirection(d)}
+                        onClick={() => {
+                          setDirection(d);
+                          resetEntryKey();
+                        }}
                         style={{
                           flex: 1,
                           padding: '6px 10px',
@@ -425,7 +483,10 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
                   min={0}
                   step="0.01"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => {
+                    setAmount(e.target.value);
+                    resetEntryKey();
+                  }}
                   disabled={saving}
                   style={{ flex: 1 }}
                 />
@@ -436,9 +497,10 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
                   <select
                     className="gt-input"
                     value={currency}
-                    onChange={(e) =>
-                      setCurrency(e.target.value as (typeof CURRENCIES)[number])
-                    }
+                    onChange={(e) => {
+                      setCurrency(e.target.value as (typeof CURRENCIES)[number]);
+                      resetEntryKey();
+                    }}
                     disabled={saving}
                     style={{ cursor: 'pointer' }}
                   >
@@ -455,7 +517,10 @@ export function WalletsManager({ wallets }: { wallets: WalletRow[] }) {
                 className="gt-input"
                 placeholder="Note (optional)"
                 value={note}
-                onChange={(e) => setNote(e.target.value)}
+                onChange={(e) => {
+                  setNote(e.target.value);
+                  resetEntryKey();
+                }}
                 rows={2}
                 maxLength={500}
                 disabled={saving}

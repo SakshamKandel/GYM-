@@ -1,6 +1,6 @@
 import { accounts, paymentRequests } from '@gym/db';
 import { resolveRegion } from '@gym/shared';
-import { desc, eq } from 'drizzle-orm';
+import { count, desc, eq, ne } from 'drizzle-orm';
 import { requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
@@ -20,10 +20,18 @@ export const runtime = 'nodejs';
  *    `unsigned:<uid>` so the row is still visible/actionable instead of the
  *    whole list 503ing.
  *
+ * Response shape (C-D, mobile contract): `{ rows, counts: { pending } }`.
+ * PENDING is loaded UNBOUNDED (up to a high safety ceiling) so an old pending
+ * request can never starve invisibly behind a flat newest-N cap (P0-6); decided
+ * history is capped. `counts.pending` is an authoritative COUNT so the mobile
+ * badge is accurate even when the pending list is (implausibly) truncated.
+ *
  * Guarded by requirePermission('payments.review'); super_admin/main_admin pass.
  */
 
-const MAX_ROWS = 200;
+// PENDING_CAP is a very high safety ceiling, not an expected working-set size.
+const PENDING_CAP = 2000;
+const DECIDED_CAP = 200;
 const STATUSES = ['pending', 'approved', 'rejected', 'refunded'] as const;
 
 export function OPTIONS() {
@@ -40,35 +48,59 @@ export async function GET(req: Request) {
     : undefined;
 
   const db = getDb();
-  const rows = await db
-    .select({
-      id: paymentRequests.id,
-      accountId: accounts.id,
-      email: accounts.email,
-      displayName: accounts.displayName,
-      tierNow: accounts.tier,
-      tierExpiresAt: accounts.tierExpiresAt,
-      country: accounts.country,
-      tier: paymentRequests.tier,
-      months: paymentRequests.months,
-      region: paymentRequests.region,
-      amountMinor: paymentRequests.amountMinor,
-      currency: paymentRequests.currency,
-      method: paymentRequests.method,
-      receiptUid: paymentRequests.receiptUrl,
-      note: paymentRequests.note,
-      status: paymentRequests.status,
-      reviewNote: paymentRequests.reviewNote,
-      createdAt: paymentRequests.createdAt,
-    })
-    .from(paymentRequests)
-    .innerJoin(accounts, eq(accounts.id, paymentRequests.accountId))
-    .where(status ? eq(paymentRequests.status, status) : undefined)
-    .orderBy(desc(paymentRequests.createdAt))
-    .limit(MAX_ROWS);
+
+  const selectRows = (where: ReturnType<typeof eq> | undefined, cap: number) =>
+    db
+      .select({
+        id: paymentRequests.id,
+        accountId: accounts.id,
+        email: accounts.email,
+        displayName: accounts.displayName,
+        tierNow: accounts.tier,
+        tierExpiresAt: accounts.tierExpiresAt,
+        country: accounts.country,
+        tier: paymentRequests.tier,
+        months: paymentRequests.months,
+        region: paymentRequests.region,
+        amountMinor: paymentRequests.amountMinor,
+        currency: paymentRequests.currency,
+        method: paymentRequests.method,
+        receiptUid: paymentRequests.receiptUrl,
+        note: paymentRequests.note,
+        status: paymentRequests.status,
+        reviewNote: paymentRequests.reviewNote,
+        createdAt: paymentRequests.createdAt,
+      })
+      .from(paymentRequests)
+      .innerJoin(accounts, eq(accounts.id, paymentRequests.accountId))
+      .where(where)
+      .orderBy(desc(paymentRequests.createdAt))
+      .limit(cap);
+
+  // Pending never starves (P0-6): loaded unbounded up to PENDING_CAP; decided
+  // history capped. When a specific status is requested, honour it with the
+  // matching cap; with no filter, pending-unbounded + decided-capped.
+  const [rows, pendingCountRow] = await Promise.all([
+    status === 'pending'
+      ? selectRows(eq(paymentRequests.status, 'pending'), PENDING_CAP)
+      : status
+        ? selectRows(eq(paymentRequests.status, status), DECIDED_CAP)
+        : (async () => {
+            const [pending, decided] = await Promise.all([
+              selectRows(eq(paymentRequests.status, 'pending'), PENDING_CAP),
+              selectRows(ne(paymentRequests.status, 'pending'), DECIDED_CAP),
+            ]);
+            return [...pending, ...decided];
+          })(),
+    db
+      .select({ n: count() })
+      .from(paymentRequests)
+      .where(eq(paymentRequests.status, 'pending')),
+  ]);
+  const pendingCount = Number(pendingCountRow[0]?.n ?? 0);
 
   const provider = getVideoProvider();
-  const requests = await Promise.all(
+  const shaped = await Promise.all(
     rows.map(async (r) => {
       let receiptUrl: string;
       try {
@@ -105,5 +137,5 @@ export async function GET(req: Request) {
     }),
   );
 
-  return json({ requests }, 200);
+  return json({ rows: shaped, counts: { pending: pendingCount } }, 200);
 }

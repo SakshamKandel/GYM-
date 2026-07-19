@@ -336,6 +336,7 @@ export default function AdminMembersScreen() {
     setDetail(null);
     setTierPickerOpen(false);
     setCoachPickerOpen(false);
+    setAssignOverrideFor(null);
   }
 
   // ── Mutations (all refetch the detail + list on success) ─────
@@ -383,6 +384,7 @@ export default function AdminMembersScreen() {
 
   const openCoachPicker = useCallback(async () => {
     setCoachPickerOpen(true);
+    setAssignOverrideFor(null);
     if (!token) return;
     setCoachesLoading(true);
     try {
@@ -395,21 +397,43 @@ export default function AdminMembersScreen() {
     }
   }, [token]);
 
+  // assignClient `force` (plan §7 "assignClient force"): the server 409s
+  // {error:'full'} when the picked coach is at their roster capacity. Rather
+  // than dead-end on a generic error, arm a one-shot override for THAT exact
+  // coach — tapping the same coach again resends with force:true. Any other
+  // pick, or reopening the picker fresh, clears the arm so a stale override
+  // can never silently apply to a different coach.
+  const [assignOverrideFor, setAssignOverrideFor] = useState<string | null>(null);
+
   const assignCoach = useCallback(
     async (coach: CoachRow) => {
-      setCoachPickerOpen(false);
       if (!token || !detail) return;
+      const force = assignOverrideFor === coach.id;
+      setCoachPickerOpen(false);
       setSaving(true);
       try {
-        await assignClient(coach.id, detail.member.id, token);
+        await assignClient(coach.id, detail.member.id, token, force);
+        setAssignOverrideFor(null);
         await refresh(detail.member.id);
       } catch (err) {
-        setMutationError(errorLine(toStaffError(err).code));
+        const code = toStaffError(err).code;
+        if (code === 'full' && !force) {
+          // Leave the picker reachable so the admin can tap the same coach
+          // again to force it — re-fetching isn't needed, `coaches` is fresh.
+          setAssignOverrideFor(coach.id);
+          setCoachPickerOpen(true);
+          setMutationError(
+            'That coach is at their client capacity. Tap them again to assign anyway.',
+          );
+        } else {
+          setAssignOverrideFor(null);
+          setMutationError(errorLine(code));
+        }
       } finally {
         setSaving(false);
       }
     },
-    [token, detail, refresh],
+    [token, detail, refresh, assignOverrideFor],
   );
 
   // ── P1-7 handlers ─────────────────────────────────────────────
@@ -531,9 +555,12 @@ export default function AdminMembersScreen() {
 
   const suspended = detail?.member.status === 'suspended';
 
-  // A staff-holding member may only be suspended/reactivated by a caller who
-  // outranks their role (server: 403 insufficient_rank). Tier changes and
-  // coach assignment are NOT rank-checked.
+  // A staff-holding member's tier AND suspend/reactivate status may only be
+  // changed by a caller who outranks their role (server: PATCH
+  // /api/admin/members/[id] runs requireOutranks for BOTH the `tier` and
+  // `status` fields — P1-13: this screen used to gate only Suspend on
+  // statusLocked, so tapping "Change tier" against a protected staff row was
+  // a guaranteed 403-trap). Coach assignment is NOT rank-checked.
   const targetStaffRole = detail?.member.staffRole ?? null;
   const statusLocked =
     targetStaffRole !== null &&
@@ -744,16 +771,29 @@ export default function AdminMembersScreen() {
                 <PressableScale
                   accessibilityRole="button"
                   accessibilityLabel="Change tier"
-                  disabled={saving}
+                  accessibilityState={{ disabled: saving || statusLocked }}
+                  disabled={saving || statusLocked}
                   onPress={() => setTierPickerOpen(true)}
-                  style={[styles.action, saving && styles.actionDisabled]}
+                  style={[styles.action, (saving || statusLocked) && styles.actionDisabled]}
                 >
-                  <Ionicons name="pricetag-outline" size={18} color={colors.text} />
-                  <AppText variant="body" color={colors.text}>
+                  <Ionicons
+                    name={statusLocked ? 'lock-closed' : 'pricetag-outline'}
+                    size={18}
+                    color={statusLocked ? colors.textDim : colors.text}
+                  />
+                  <AppText variant="body" color={statusLocked ? colors.textDim : colors.text}>
                     Change tier
                   </AppText>
-                  <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                  {statusLocked ? null : (
+                    <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                  )}
                 </PressableScale>
+              ) : null}
+
+              {canChangeTier && statusLocked ? (
+                <AppText variant="caption" color={colors.textFaint}>
+                  Staff account — managed by a higher admin.
+                </AppText>
               ) : null}
 
               {canAssignCoach ? (
@@ -1225,6 +1265,8 @@ function errorLine(code: string): string {
       return 'That change was rejected. Try again.';
     case 'conflict':
       return 'That change conflicts with the current state.';
+    case 'full':
+      return "That coach is at their client capacity.";
     default:
       return "Couldn't reach the server. Check your connection and retry.";
   }

@@ -58,7 +58,12 @@ const createSchema = z.object({
     .trim()
     .min(1)
     .max(120)
-    .regex(/^[a-z0-9-]+$/, 'lowercase letters, numbers, and hyphens only')
+    // Canonical exercise-id space is the bundled free-exercise-db slug
+    // (WP-9 / contract C-G): mixed-case with underscores AND hyphens
+    // (e.g. 'Barbell_Squat', '3_4_Sit-Up'). The old lowercase-hyphen-only
+    // rule made it impossible to author a row matching a member-visible
+    // exercise, which is exactly what plan_videos.exercise_id must FK to.
+    .regex(/^[A-Za-z0-9_-]+$/, 'letters, numbers, underscores, and hyphens only')
     .optional(),
   name: z.string().trim().min(1).max(200),
   muscleGroup: z.string().trim().min(1).max(100),

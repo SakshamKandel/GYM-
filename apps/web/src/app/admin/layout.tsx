@@ -24,7 +24,17 @@ export const dynamic = 'force-dynamic';
  * they surface for those roles only. Orders / Partners / Meal Payments pages are
  * delivered by sibling packages; the links are permission-gated regardless.
  */
-type NavSpec = { href: string; label: string; perm?: Permission; match?: 'exact' | 'prefix'; badge?: number };
+type NavSpec = {
+  href: string;
+  label: string;
+  /** Single permission that unlocks the item. */
+  perm?: Permission;
+  /** OR-list: the item unlocks when the set holds ANY of these (C-C). Takes
+   *  precedence over `perm` when present. */
+  anyPerm?: readonly Permission[];
+  match?: 'exact' | 'prefix';
+  badge?: number;
+};
 
 const NAV_GROUPS: { label: string; items: NavSpec[] }[] = [
   {
@@ -44,6 +54,7 @@ const NAV_GROUPS: { label: string; items: NavSpec[] }[] = [
       { href: '/admin/payments', label: 'Payments', perm: 'payments.review' },
       { href: '/admin/orders', label: 'Orders', perm: 'orders.review' },
       { href: '/admin/meal-payments', label: 'Meal Payments', perm: 'payments.review' },
+      { href: '/admin/meal-subscriptions', label: 'Meal Subscriptions', perm: 'payments.review' },
       { href: '/admin/support', label: 'Support', perm: 'support.thread.read' },
       { href: '/admin/abuse', label: 'Abuse', perm: 'subscription.override' },
     ],
@@ -53,7 +64,9 @@ const NAV_GROUPS: { label: string; items: NavSpec[] }[] = [
     items: [
       { href: '/admin/pricing', label: 'Pricing', perm: 'pricing.manage' },
       { href: '/admin/promos', label: 'Promos', perm: 'promo.manage' },
-      { href: '/admin/wallets', label: 'Wallets', perm: 'wallet.manage' },
+      // Wallets holds both the coach-wallet ledger (wallet.manage) and the payout
+      // queue (payouts.review); either scoped grant must reveal the link (C-C).
+      { href: '/admin/wallets', label: 'Wallets', anyPerm: ['wallet.manage', 'payouts.review'] },
       { href: '/admin/partners', label: 'Partners', perm: 'partners.manage' },
       { href: '/admin/broadcast', label: 'Broadcast', perm: 'broadcast.send' },
       { href: '/admin/gamification', label: 'Gamification', perm: 'gamification.manage' },
@@ -73,15 +86,25 @@ const NAV_GROUPS: { label: string; items: NavSpec[] }[] = [
 
 /** Every gated permission in the nav — used to decide admin-console access. */
 const ALL_NAV_PERMS: Permission[] = NAV_GROUPS.flatMap((g) =>
-  g.items.map((i) => i.perm).filter((p): p is Permission => p != null),
+  g.items.flatMap((i) => (i.anyPerm ? [...i.anyPerm] : i.perm ? [i.perm] : [])),
 );
+
+/**
+ * An item is visible when it carries no gate, OR the set holds any of its
+ * `anyPerm` keys (OR-list), OR the set holds its single `perm`.
+ */
+function itemVisible(item: NavSpec, permissions: ReadonlySet<Permission>): boolean {
+  if (item.anyPerm) return item.anyPerm.some((p) => permissions.has(p));
+  if (item.perm) return permissions.has(item.perm);
+  return true;
+}
 
 /** Builds the visible grouped nav from the server-resolved permission set. */
 function navFor(permissions: ReadonlySet<Permission>): NavGroup[] {
   return NAV_GROUPS.map((group) => ({
     label: group.label,
     items: group.items
-      .filter((item) => item.perm == null || permissions.has(item.perm))
+      .filter((item) => itemVisible(item, permissions))
       .map(({ href, label, match, badge }) => ({
         href,
         label,

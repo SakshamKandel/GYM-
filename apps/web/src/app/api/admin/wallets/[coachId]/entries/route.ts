@@ -1,4 +1,4 @@
-import { admins } from '@gym/db';
+import { accounts, admins, coachProfiles, walletLedger } from '@gym/db';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
@@ -61,12 +61,37 @@ export async function POST(req: Request, { params }: { params: Promise<{ coachId
   const { type, amountMinor, currency, note, override, idempotencyKey } = parsed.data;
 
   const db = getDb();
-  const [coach] = await db
-    .select({ role: admins.role })
-    .from(admins)
-    .where(eq(admins.accountId, coachId))
+  // Resolve the coach off any account that IS currently role='coach', HAS a
+  // coach profile, OR appears in wallet_ledger history (P0-4). Gating on the
+  // live `admins.role` alone 404'd every REVOKED coach (E10 / C2 offboarding
+  // cascade), making a final settlement payout impossible — the exact flow the
+  // wallet roster unions revoked coaches back in for. Mirrors the roster filter
+  // in wallets/page.tsx and the sibling GET route's account-scoped resolution.
+  const [resolved] = await db
+    .select({
+      id: accounts.id,
+      role: admins.role,
+      profileId: coachProfiles.accountId,
+    })
+    .from(accounts)
+    .leftJoin(admins, eq(admins.accountId, accounts.id))
+    .leftJoin(coachProfiles, eq(coachProfiles.accountId, accounts.id))
+    .where(eq(accounts.id, coachId))
     .limit(1);
-  if (!coach || coach.role !== 'coach') return json({ error: 'coach_not_found' }, 404);
+  if (!resolved) return json({ error: 'coach_not_found' }, 404);
+
+  let eligible = resolved.role === 'coach' || resolved.profileId != null;
+  if (!eligible) {
+    // Last resort: a coach whose profile was also torn down still owns their
+    // ledger balance. Any historical wallet row makes them a valid payout target.
+    const [ledgerRow] = await db
+      .select({ id: walletLedger.id })
+      .from(walletLedger)
+      .where(eq(walletLedger.coachId, coachId))
+      .limit(1);
+    eligible = ledgerRow != null;
+  }
+  if (!eligible) return json({ error: 'coach_not_found' }, 404);
 
   // Payout balance floor (E7): a payout must not drive the coach's balance in
   // that currency negative — over-paid money is unrecoverable in-app. The floor

@@ -45,6 +45,15 @@ const createSchema = z.object({
   tierRequired: z.enum(['starter', 'silver', 'gold', 'elite']),
 });
 
+/** Postgres error code off a thrown driver error, if present (e.g. '23503'). */
+function pgErrorCode(err: unknown): string | null {
+  if (err && typeof err === 'object' && 'code' in err) {
+    const code = (err as { code?: unknown }).code;
+    return typeof code === 'string' ? code : null;
+  }
+  return null;
+}
+
 /** Best-effort caller IP for the audit trail (proxy header, first hop). */
 function clientIp(req: Request): string | null {
   const fwd = req.headers.get('x-forwarded-for');
@@ -95,32 +104,53 @@ export async function POST(req: Request) {
   }
 
   const db = getDb();
-  const inserted = await db
-    .insert(planVideos)
-    .values({
-      title,
-      description: description ?? '',
-      exerciseId: exerciseId ?? null,
-      planId: planId ?? null,
-      tierRequired,
-      provider: selectedProviderLabel(),
-      providerVideoId: reservation.uid,
-      status: 'processing',
-      createdBy: principal.id,
-    })
-    .returning({
-      id: planVideos.id,
-      title: planVideos.title,
-      description: planVideos.description,
-      exerciseId: planVideos.exerciseId,
-      planId: planVideos.planId,
-      tierRequired: planVideos.tierRequired,
-      status: planVideos.status,
-      position: planVideos.position,
-      thumbnailUrl: planVideos.thumbnailUrl,
-      durationSec: planVideos.durationSec,
-      createdAt: planVideos.createdAt,
-    });
+  // The host upload slot is already reserved above. If the DB insert fails —
+  // most commonly a foreign-key violation (23503) when exerciseId/planId does
+  // not resolve to a real row — the reservation would be orphaned on the host
+  // and the operator would see a bare "Could not start the upload" 500. Wrap
+  // the insert so we roll the reservation back and return a precise 400 the UI
+  // can act on. deleteVideo is idempotent (WP-9).
+  let inserted;
+  try {
+    inserted = await db
+      .insert(planVideos)
+      .values({
+        title,
+        description: description ?? '',
+        exerciseId: exerciseId ?? null,
+        planId: planId ?? null,
+        tierRequired,
+        provider: selectedProviderLabel(),
+        providerVideoId: reservation.uid,
+        status: 'processing',
+        createdBy: principal.id,
+      })
+      .returning({
+        id: planVideos.id,
+        title: planVideos.title,
+        description: planVideos.description,
+        exerciseId: planVideos.exerciseId,
+        planId: planVideos.planId,
+        tierRequired: planVideos.tierRequired,
+        status: planVideos.status,
+        position: planVideos.position,
+        thumbnailUrl: planVideos.thumbnailUrl,
+        durationSec: planVideos.durationSec,
+        createdAt: planVideos.createdAt,
+      });
+  } catch (err) {
+    // Release the reserved host upload so it doesn't leak (best-effort).
+    try {
+      await getVideoProvider().deleteVideo(reservation.uid);
+    } catch {
+      /* cleanup is best-effort — never mask the original failure */
+    }
+    // FK violation → the attached exercise/plan doesn't exist. Actionable 400.
+    if (pgErrorCode(err) === '23503') {
+      return json({ error: 'invalid_exercise' }, 400);
+    }
+    throw err;
+  }
 
   const video = inserted[0];
   if (!video) return json({ error: 'invalid' }, 400);

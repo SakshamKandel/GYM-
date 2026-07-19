@@ -71,10 +71,24 @@ function receiptUnusable(url: string): boolean {
   return !/^https?:\/\//i.test(url);
 }
 
+/**
+ * P1-17: the refund action can fail three DISTINCT ways
+ * (`refundMealPayment`'s doc comment / apps/web .../[id]/refund/route.ts) —
+ * before this fix all three fell through to the generic 'conflict' copy
+ * ("Another admin already decided this"), which is actively misleading for
+ * `non_refundable` (the request is still perfectly valid; the ORDER moved
+ * into production or the cycle's week began) and for `not_approved` (a race
+ * against a reject, not a double-decision).
+ */
 function errorLine(code: StaffErrorCode): string {
   if (code === 'unauthorized') return 'Your session expired — sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'not_found') return 'That request is no longer available.';
+  if (code === 'already_refunded') return 'This payment was already refunded.';
+  if (code === 'not_approved')
+    return "This request isn't approved — refresh the queue to see its current state.";
+  if (code === 'non_refundable')
+    return "This can no longer be refunded — the order is already in production or past its cutoff, or the cycle's billed week has begun.";
   if (code === 'conflict')
     return 'Another admin already decided this — refresh the queue and try again.';
   return "Couldn't load the queue.";

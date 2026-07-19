@@ -1,6 +1,7 @@
 'use client';
 
-import { canManageRole, effectiveTier, hasPermission } from '@gym/shared';
+import { canManageRole, effectiveTier, type Permission } from '@gym/shared';
+import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge,
@@ -28,22 +29,28 @@ const TIERS: Tier[] = ['starter', 'silver', 'gold', 'elite'];
  * GET /api/admin/members/[id]. `fallback` (the table row) seeds the header so
  * the panel isn't blank while the detail loads.
  *
- * Actions (each only rendered if the caller's role allows it):
+ * Actions (each only rendered if the caller's EFFECTIVE permission set allows
+ * it — `callerPermissions` already merges per-account overrides, so a granted
+ * or stripped permission is honored here, unlike a role-only `hasPermission`
+ * check which ignored overrides; P1-7):
  *  - change tier      → PATCH /api/admin/members/[id] { tier, reason }
- *  - suspend/reactivate → PATCH /api/admin/members/[id] { status }
- *  - assign a coach   → POST /api/admin/assignments { coachId, userId }
+ *  - suspend/reactivate → PATCH /api/admin/members/[id] { status, reason }
+ *  - assign a coach   → POST /api/admin/assignments { coachId, userId, force? }
+ *  - credentials/data → members.manage_credentials sub-panels
  * Every fetch sends credentials:'include' for the httpOnly gt_staff cookie.
  * After any success we re-fetch detail (fresh coach/tier/status) and call
  * onMutated() so the parent table refreshes.
+ *
+ * `callerRole` is still passed for the RANK gate (canManageRole needs the
+ * actor's role, which no permission key encodes); every permission decision
+ * otherwise flows through `callerPermissions`.
  */
 export function MemberDrawer({
   memberId,
   fallback,
   coaches,
   callerRole,
-  canSuspend,
-  canTier,
-  canAssign,
+  callerPermissions,
   onClose,
   onMutated,
 }: {
@@ -51,12 +58,17 @@ export function MemberDrawer({
   fallback: MemberRow | null;
   coaches: CoachOption[];
   callerRole: StaffRole;
-  canSuspend: boolean;
-  canTier: boolean;
-  canAssign: boolean;
+  callerPermissions: ReadonlySet<Permission>;
   onClose: () => void;
   onMutated: () => void;
 }) {
+  // All permission gating is override-aware (derived from the effective set),
+  // not role-preset-only (P1-7 — the credentials gate previously used
+  // hasPermission(callerRole, …) and ignored per-account grants/denials).
+  const canSuspend = callerPermissions.has('members.suspend');
+  const canTier = callerPermissions.has('subscription.override');
+  const canAssign = callerPermissions.has('coach.assign');
+  const canManageCredentials = callerPermissions.has('members.manage_credentials');
   const [detail, setDetail] = useState<MemberDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,11 +78,21 @@ export function MemberDrawer({
   const [tierChoice, setTierChoice] = useState<Tier>('starter');
   const [tierReason, setTierReason] = useState('');
   const [coachChoice, setCoachChoice] = useState('');
+  // Suspend reason (audited via PATCH { status, reason }) — P1-7.
+  const [suspendReason, setSuspendReason] = useState('');
+  // Set when an assign is blocked by the coach's capacity/inactive guard (409);
+  // surfaces an "assign anyway" override that retries with { force: true } (P1-7).
+  const [assignBlock, setAssignBlock] = useState<'full' | 'inactive' | null>(null);
+  // The coach id that actually triggered assignBlock. "Assign anyway" must only
+  // be armed while coachChoice still matches this id — otherwise switching the
+  // dropdown after a 409 would silently force-assign a different, never-checked
+  // coach (mirrors mobile's assignOverrideFor === coach.id scoping).
+  const [assignBlockCoachId, setAssignBlockCoachId] = useState<string | null>(null);
 
-  // Credential-management (members.manage_credentials) action state. Only the
-  // super/main-admin flows below use these; everyone else never sees the
-  // section (the server is the boundary either way).
-  const canManageCredentials = hasPermission(callerRole, 'members.manage_credentials');
+  // Credential-management (members.manage_credentials) action state. The
+  // server is the boundary either way; the panel is additionally rank-locked in
+  // the render below so a staff/partner row a caller can't manage never exposes
+  // these controls.
   const [credBusy, setCredBusy] = useState(false);
   const [credError, setCredError] = useState<string | null>(null);
   const [resetLink, setResetLink] = useState<{ url: string; expiresAt: string } | null>(null);
@@ -108,6 +130,8 @@ export function MemberDrawer({
       setTierChoice(data.member.tier);
       setTierReason('');
       setCoachChoice('');
+      setSuspendReason('');
+      setAssignBlock(null);
     } catch {
       if (mySeq !== reqSeq.current) return;
       setError('Could not load this member.');
@@ -126,6 +150,8 @@ export function MemberDrawer({
     setLinkCopied(false);
     setSignOutMsg(null);
     setGdprConfirm('');
+    setSuspendReason('');
+    setAssignBlock(null);
     if (!memberId) {
       setDetail(null);
       setError(null);
@@ -165,11 +191,13 @@ export function MemberDrawer({
         setError(
           code === 'insufficient_rank'
             ? 'Only a higher-ranked admin can change this staff member’s account.'
-            : code === 'cannot_target_self'
-              ? 'You cannot change your own account this way.'
-              : res.status === 403
-                ? 'You do not have permission for that action.'
-                : 'That change could not be saved.',
+            : code === 'partner_target'
+              ? 'Partner accounts are managed in the Partners console, not here.'
+              : code === 'cannot_target_self'
+                ? 'You cannot change your own account this way.'
+                : res.status === 403
+                  ? 'You do not have permission for that action.'
+                  : 'That change could not be saved.',
         );
         return;
       }
@@ -182,18 +210,38 @@ export function MemberDrawer({
     }
   }
 
-  async function assignCoach() {
+  async function assignCoach(force = false) {
     if (!memberId || !coachChoice) return;
+    const attemptedCoachId = coachChoice;
     setBusy(true);
     setError(null);
+    setAssignBlock(null);
+    setAssignBlockCoachId(null);
     try {
       const res = await fetch('/api/admin/assignments', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ coachId: coachChoice, userId: memberId }),
+        body: JSON.stringify({ coachId: attemptedCoachId, userId: memberId, force }),
       });
       if (!res.ok) {
+        let code: string | null = null;
+        try {
+          const data = (await res.json()) as { error?: unknown };
+          code = typeof data.error === 'string' ? data.error : null;
+        } catch {
+          code = null;
+        }
+        // 409 full/inactive is a soft, overridable block: the coach is at
+        // capacity or not accepting clients. Offer an explicit force-retry
+        // instead of a dead end (P1-7). Record which coach id was actually
+        // checked so "Assign anyway" can't silently carry over to a
+        // different coach selected afterward.
+        if (res.status === 409 && (code === 'full' || code === 'inactive')) {
+          setAssignBlock(code);
+          setAssignBlockCoachId(attemptedCoachId);
+          return;
+        }
         setError(
           res.status === 403
             ? 'You do not have permission to assign coaches.'
@@ -379,8 +427,20 @@ export function MemberDrawer({
   // staffer fill the form out and only discover the rejection on submit.
   const memberStaffRole =
     detail?.member.staffRole ?? fallback?.staffRole ?? null;
+  // Partner logins are NOT managed here at all — the server rejects
+  // suspend/tier on a partner target (partner_target), and credentials/data
+  // controls are hidden too. Mirror that lock in the UI so nothing looks
+  // actionable that the server will refuse (P1-8).
+  const isPartnerTarget = memberStaffRole === 'partner';
   const statusLocked =
-    memberStaffRole != null && !canManageRole(callerRole, memberStaffRole);
+    isPartnerTarget ||
+    (memberStaffRole != null && !canManageRole(callerRole, memberStaffRole));
+  // Explains WHY the sensitive controls are locked (staff rank vs partner).
+  const lockNote = isPartnerTarget
+    ? 'Partner accounts are managed in the Partners console, not here.'
+    : memberStaffRole != null
+      ? `This member is staff (${staffRoleLabel(memberStaffRole)}) — only a higher-ranked admin can manage this account.`
+      : '';
 
   // Lapsed = a non-starter stored tier whose dated window has already expired
   // (contract §4.7's tierExpiresAt). The console would otherwise show
@@ -467,6 +527,20 @@ export function MemberDrawer({
             })}
           </div>
         ) : null}
+        {memberId ? (
+          <div style={{ marginTop: 12 }}>
+            <Link
+              href={`/admin/members/${memberId}/view`}
+              style={{
+                fontSize: 13,
+                color: 'var(--gt-accent)',
+                textDecoration: 'none',
+              }}
+            >
+              View read-only snapshot →
+            </Link>
+          </div>
+        ) : null}
       </section>
 
       {loading ? (
@@ -505,7 +579,16 @@ export function MemberDrawer({
                 <select
                   className="gt-input"
                   value={coachChoice}
-                  onChange={(e) => setCoachChoice(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setCoachChoice(next);
+                    // A block armed for a previously-selected coach must not
+                    // silently carry over onto a newly-selected one.
+                    if (next !== assignBlockCoachId) {
+                      setAssignBlock(null);
+                      setAssignBlockCoachId(null);
+                    }
+                  }}
                   disabled={busy}
                   style={{ flex: 1, cursor: 'pointer' }}
                 >
@@ -526,6 +609,34 @@ export function MemberDrawer({
                 >
                   Assign
                 </Button>
+              </div>
+            ) : null}
+            {canAssign && assignBlock && assignBlockCoachId === coachChoice ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  border: '1px solid var(--gt-border)',
+                  background: 'var(--gt-surface-2, transparent)',
+                }}
+              >
+                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                  {assignBlock === 'full'
+                    ? 'This coach is at capacity.'
+                    : 'This coach is not currently accepting clients.'}{' '}
+                  You can assign anyway to override their limit.
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    disabled={busy || !coachChoice || coachChoice !== assignBlockCoachId}
+                    onClick={() => void assignCoach(true)}
+                  >
+                    {busy ? 'Assigning…' : 'Assign anyway'}
+                  </Button>
+                </div>
               </div>
             ) : null}
             {canAssign && coaches.length === 0 ? (
@@ -556,10 +667,7 @@ export function MemberDrawer({
                 </select>
               </div>
               {statusLocked ? (
-                <Muted>
-                  This member is staff ({staffRoleLabel(memberStaffRole)}) —
-                  only a higher-ranked admin can change their tier.
-                </Muted>
+                <Muted>{lockNote}</Muted>
               ) : tierDirty ? (
                 <>
                   <input
@@ -604,20 +712,31 @@ export function MemberDrawer({
                       ? 'Suspend account'
                       : 'Reactivate account'}
                   </Button>
-                  <Muted>
-                    This member is staff ({staffRoleLabel(memberStaffRole)}) —
-                    managed by a higher-ranked admin.
-                  </Muted>
+                  <Muted>{lockNote}</Muted>
                 </>
               ) : currentStatus === 'active' ? (
                 <>
+                  <input
+                    className="gt-input"
+                    placeholder="Reason (optional, audited)"
+                    value={suspendReason}
+                    onChange={(e) => setSuspendReason(e.target.value)}
+                    disabled={busy}
+                    aria-label="Suspend reason"
+                    style={{ width: '100%', marginBottom: 10 }}
+                  />
                   <ConfirmButton
                     label="Suspend account"
                     confirmLabel="Confirm suspend"
                     busyLabel="Suspending…"
                     busy={busy}
                     size="sm"
-                    onConfirm={() => void patch({ status: 'suspended' })}
+                    onConfirm={() =>
+                      void patch({
+                        status: 'suspended',
+                        reason: suspendReason.trim() || undefined,
+                      })
+                    }
                   />
                   <Muted>
                     Suspending immediately signs the member out of every device.
@@ -636,8 +755,12 @@ export function MemberDrawer({
             </FieldGroup>
           ) : null}
 
-          {/* Credentials & data (members.manage_credentials — super/main) */}
-          {canManageCredentials ? (
+          {/* Credentials & data (members.manage_credentials — super/main).
+              Rank-locked: hidden for a staff/partner row the caller can't
+              manage, mirroring the tier/status locks (P1-7). The credential
+              routes rank-check server-side too — this only prevents a dead,
+              server-rejected panel. */}
+          {canManageCredentials && !statusLocked ? (
             <>
               {credError ? (
                 <div

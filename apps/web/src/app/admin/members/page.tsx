@@ -20,11 +20,6 @@ const PAGE_SIZE = 50;
  */
 const CAN_READ = 'members.read' as const;
 
-/** Which roles may mutate — drives whether the drawer shows action controls. */
-const CAN_SUSPEND = 'members.suspend' as const;
-const CAN_TIER = 'subscription.override' as const;
-const CAN_ASSIGN = 'coach.assign' as const;
-
 /**
  * Loads page 1 of the member directory directly via getDb so the first paint
  * has data with no client round-trip — email, name, tier, status, joined
@@ -115,9 +110,7 @@ export default async function AdminMembersPage() {
         initialCursor={cursor}
         coaches={coaches}
         callerRole={principal.role}
-        canSuspend={permissions.has(CAN_SUSPEND)}
-        canTier={permissions.has(CAN_TIER)}
-        canAssign={permissions.has(CAN_ASSIGN)}
+        callerPermissions={permissions}
       />
     </div>
   );

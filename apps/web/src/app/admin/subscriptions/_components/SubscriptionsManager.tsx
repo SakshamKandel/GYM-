@@ -223,7 +223,15 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
       }
       setSaving(false);
       setEditing(null);
+      // Refresh the SSR roster + stat tiles + recent-changes log.
       router.refresh();
+      // When live search results are showing (remoteRows), router.refresh only
+      // re-renders the server component's `members` prop, NOT the client-held
+      // search rows — the edited member would keep showing its pre-save tier
+      // until the next keystroke. Re-run the search so the new tier/expiry is
+      // reflected immediately (P1-9 stale-after-save).
+      const q = filter.trim();
+      if (q) void runSearch(q, null);
     } catch {
       setError('Network error.');
       setSaving(false);

@@ -1,5 +1,5 @@
 import { accounts, coachMessages } from '@gym/db';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { TierChip } from '@/components/console';
@@ -12,6 +12,9 @@ import { ReplyBox } from '../../_components/ReplyBox';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** Most-recent messages loaded for first paint; MessageList polls for newer. */
+const HISTORY_LIMIT = 100;
+
 interface PageProps {
   params: Promise<{ userId: string }>;
 }
@@ -22,6 +25,13 @@ interface PageProps {
  * isn't assigned — we hide existence rather than surface a 403 in the UI). The
  * history renders with mobile-mirrored bubble sides (client right / coach left)
  * and a sticky reply composer that POSTs to the coach reply API.
+ *
+ * This render is now PURE (no mutation): the old GET-render `db.update`
+ * mark-read was reachable on any RSC prefetch of an inbox `<Link>`, silently
+ * clearing the coach's unread work-queue badge before they actually read the
+ * thread. Marking read now happens client-side in MessageList via the explicit
+ * POST `.../read` route once the thread is genuinely open, and MessageList
+ * polls the GET route so inbound client messages arrive without a reload.
  */
 export default async function CoachThreadPage({ params }: PageProps) {
   const { userId } = await params;
@@ -47,6 +57,9 @@ export default async function CoachThreadPage({ params }: PageProps) {
   const user = userRows[0];
   if (!user) notFound();
 
+  // Newest HISTORY_LIMIT rows for first paint (a long thread must not load
+  // unbounded rows every render — P1-12), flipped back to chronological order
+  // for display. MessageList takes over live updates from here.
   const messageRows = await db
     .select({
       id: coachMessages.id,
@@ -58,22 +71,9 @@ export default async function CoachThreadPage({ params }: PageProps) {
     .where(
       and(eq(coachMessages.accountId, userId), eq(coachMessages.kind, 'coach_chat')),
     )
-    .orderBy(asc(coachMessages.createdAt));
-
-  // Clear the coach-side unread flag on the inbound rows we just loaded so the
-  // inbox unread badge and 'Awaiting reply' / 'Unread messages' counts clear on
-  // open — mirrors GET /api/coach/threads/[userId].
-  await db
-    .update(coachMessages)
-    .set({ readByCoach: true })
-    .where(
-      and(
-        eq(coachMessages.accountId, userId),
-        eq(coachMessages.kind, 'coach_chat'),
-        eq(coachMessages.sender, 'user'),
-        eq(coachMessages.readByCoach, false),
-      ),
-    );
+    .orderBy(desc(coachMessages.createdAt))
+    .limit(HISTORY_LIMIT);
+  messageRows.reverse();
 
   const messages: ThreadMessage[] = messageRows.map((m) => ({
     id: m.id,
@@ -170,7 +170,7 @@ export default async function CoachThreadPage({ params }: PageProps) {
         </span>
       </header>
 
-      <MessageList messages={messages} />
+      <MessageList userId={user.id} initialMessages={messages} />
 
       <ReplyBox userId={user.id} />
     </div>

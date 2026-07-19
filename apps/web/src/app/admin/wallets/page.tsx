@@ -83,44 +83,65 @@ export default async function AdminWalletsPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
   const permissions = await effectivePermissionSet(principal);
-  if (!permissions.has('wallet.manage')) redirect('/admin');
+  // C-C: this surface is reachable by wallet.manage (balances + record entry)
+  // OR payouts.review (the payout-request queue). Gating on wallet.manage alone
+  // stranded a scoped payouts.review grantee out of the queue entirely (P1-5).
+  const canManageWallets = permissions.has('wallet.manage');
+  const canReviewPayouts = permissions.has('payouts.review');
+  if (!canManageWallets && !canReviewPayouts) redirect('/admin');
 
-  const balances = await loadBalances();
-  const coaches = await loadCoaches(Object.keys(balances));
-
-  const wallets: WalletRow[] = coaches.map((c) => ({
-    coachId: c.id,
-    displayName: c.displayName,
-    email: c.email,
-    coachTier: c.coachTier,
-    revoked: c.revoked,
-    balances: balances[c.id] ?? [],
-  }));
+  // Balance/roster data (and its ledger CSV) is wallet.manage territory; a
+  // payouts-only reviewer never sees it — the queue carries its own coach names
+  // and balances.
+  const wallets: WalletRow[] = canManageWallets
+    ? await (async () => {
+        const balances = await loadBalances();
+        const coaches = await loadCoaches(Object.keys(balances));
+        return coaches.map((c) => ({
+          coachId: c.id,
+          displayName: c.displayName,
+          email: c.email,
+          coachTier: c.coachTier,
+          revoked: c.revoked,
+          balances: balances[c.id] ?? [],
+        }));
+      })()
+    : [];
 
   return (
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Coach wallets"
         subtitle="Commission balances from promo-coded purchases. Record manual adjustments or payouts here — payout rails are still manual."
-        action={<DownloadCsv href="/api/admin/exports/wallet-ledger" label="Download ledger CSV" />}
+        action={
+          canManageWallets ? (
+            <DownloadCsv href="/api/admin/exports/wallet-ledger" label="Download ledger CSV" />
+          ) : undefined
+        }
       />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-          gap: 14,
-          marginBottom: 24,
-        }}
-      >
-        <StatTile label="Coaches" value={wallets.length} />
-        <StatTile
-          label="With balance"
-          value={wallets.filter((w) => w.balances.length > 0).length}
-        />
-      </div>
+      {canManageWallets ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: 14,
+            marginBottom: 24,
+          }}
+        >
+          <StatTile label="Coaches" value={wallets.length} />
+          <StatTile
+            label="With balance"
+            value={wallets.filter((w) => w.balances.length > 0).length}
+          />
+        </div>
+      ) : null}
 
-      <WalletsManager wallets={wallets} />
+      <WalletsManager
+        wallets={wallets}
+        canManageWallets={canManageWallets}
+        canReviewPayouts={canReviewPayouts}
+      />
     </div>
   );
 }

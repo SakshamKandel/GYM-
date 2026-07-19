@@ -96,6 +96,13 @@ export async function getAccountOverrides(
  * several capabilities (overview/nav/content OR-guards) cannot accidentally
  * bypass an explicit deny by falling back to role presets.
  *
+ * super_admin AND main_admin are SAFETY FLOORS (C-A): both hold the full
+ * permission set and it can NEVER be stripped by a per-account override — a
+ * misconfigured or hostile DENY override must not be able to lock the top two
+ * admin tiers out of a console or leave them in an inconsistent-privilege
+ * state. main_admin's only restriction is RANK (canManageRole), never
+ * permissions, so it is floored here exactly like super_admin.
+ *
  * Override lookup errors intentionally propagate. Returning preset permissions
  * when a deny row cannot be read would widen access during a database failure;
  * server routes catch this and return 503, while server components fail without
@@ -104,7 +111,9 @@ export async function getAccountOverrides(
 export async function effectivePermissionSet(
   principal: Principal,
 ): Promise<ReadonlySet<Permission>> {
-  if (principal.role === 'super_admin') return new Set(ALL_PERMISSIONS);
+  if (principal.role === 'super_admin' || principal.role === 'main_admin') {
+    return new Set(ALL_PERMISSIONS);
+  }
   const overrides = await getAccountOverrides(principal.id);
   return new Set(effectivePermissionsForRole(principal.role, overrides));
 }
@@ -146,10 +155,10 @@ export async function clearPermissionOverride(
 
 /**
  * Like requireStaff, then enforces a specific permission (fail closed), merging
- * any per-account overrides. super_admin short-circuits BEFORE the override
- * query (zero extra queries, never strippable). For everyone else exactly one
- * override query runs; a lookup failure returns 503 so an unread explicit deny
- * can never be widened back to the role preset.
+ * any per-account overrides. super_admin AND main_admin short-circuit BEFORE the
+ * override query (zero extra queries, never strippable — the C-A safety floor).
+ * For everyone else exactly one override query runs; a lookup failure returns 503
+ * so an unread explicit deny can never be widened back to the role preset.
  */
 export async function requirePermission(
   req: Request,
@@ -157,7 +166,10 @@ export async function requirePermission(
 ): Promise<Principal | Response> {
   const principal = await requireStaff(req);
   if (principal instanceof Response) return principal;
-  if (principal.role === 'super_admin') return principal; // safety floor, no query
+  // Safety floor (C-A): both top tiers bypass the matrix, no override query.
+  if (principal.role === 'super_admin' || principal.role === 'main_admin') {
+    return principal;
+  }
   let permissions: ReadonlySet<Permission>;
   try {
     permissions = await effectivePermissionSet(principal);
@@ -274,6 +286,13 @@ export interface PartnerPrincipal {
  * Deactivation also deletes the partner's sessions (a second kill-switch in the
  * admin route), so a live token can't outrace the isActive flip — but this guard
  * enforces isActive on every request regardless, closing any residual race.
+ *
+ * Effective-permission gate (C-B / P0-3): beyond role + active row, the caller's
+ * effective set must contain BOTH `meals.own` AND `orders.fulfill`. The partner
+ * preset grants both, so normal partners are unaffected; but an admin who strips
+ * either key via a per-account DENY override (the only overrides the override
+ * rail permits on a partner) now actually locks the partner out of the portal —
+ * previously that override had zero enforcement effect.
  */
 export async function requirePartner(
   req: Request,
@@ -288,6 +307,16 @@ export async function requirePartner(
     .limit(1);
   const row = rows[0];
   if (!row || !row.isActive) return json({ error: 'forbidden' }, 403);
+  let permissions: ReadonlySet<Permission>;
+  try {
+    permissions = await effectivePermissionSet(principal);
+  } catch (err) {
+    console.error('permission override lookup failed:', err);
+    return json({ error: 'authorization_unavailable' }, 503);
+  }
+  if (!permissions.has('meals.own') || !permissions.has('orders.fulfill')) {
+    return json({ error: 'forbidden' }, 403);
+  }
   return { principal, partnerId: row.id };
 }
 

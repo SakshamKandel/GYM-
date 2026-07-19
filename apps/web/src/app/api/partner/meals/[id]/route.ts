@@ -1,4 +1,4 @@
-import { meals } from '@gym/db';
+import { mealPartners, meals } from '@gym/db';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requirePartner } from '@/lib/authz';
@@ -28,7 +28,10 @@ const patchSchema = z
     sugarG: macroInt.nullable(),
     dietType: z.enum(['veg', 'non_veg', 'egg']),
     goalTags: z.array(z.enum(['cutting', 'bulking', 'balanced'])).max(3),
-    priceMinor: z.number().int().min(0).max(100_000_000),
+    // A live menu item must carry a real price — mirror the POST floor so a
+    // blank/zero price can't silently publish a free dish on the update path
+    // (P0-15).
+    priceMinor: z.number().int().min(1).max(100_000_000),
     currency: z.enum(['NPR', 'USD']),
     isActive: z.boolean(),
     sortOrder: z.number().int().min(0).max(100_000),
@@ -49,7 +52,25 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (!parsed.success) return json({ error: 'invalid' }, 400);
   if (Object.keys(parsed.data).length === 0) return json({ error: 'no_fields' }, 400);
 
-  const [meal] = await getDb()
+  const db = getDb();
+
+  // A meal's currency MUST match the partner's own account currency. A mismatch
+  // (e.g. patching an NPR dish to USD) corrupts every downstream revenue rollup,
+  // which sums minor units without re-checking currency. The sibling POST route
+  // enforces this on create; the update path must too (P0-15).
+  if (parsed.data.currency !== undefined) {
+    const [account] = await db
+      .select({ currency: mealPartners.currency })
+      .from(mealPartners)
+      .where(eq(mealPartners.id, partnerId))
+      .limit(1);
+    if (!account) return json({ error: 'forbidden' }, 403);
+    if (parsed.data.currency !== account.currency) {
+      return json({ error: 'currency_mismatch', expected: account.currency }, 400);
+    }
+  }
+
+  const [meal] = await db
     .update(meals)
     .set({ ...parsed.data, updatedAt: new Date() })
     .where(and(eq(meals.id, id), eq(meals.partnerId, partnerId), eq(meals.isDeleted, false)))

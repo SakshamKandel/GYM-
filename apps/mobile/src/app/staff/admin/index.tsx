@@ -272,13 +272,20 @@ export default function AdminHomeScreen() {
               Couldn&apos;t load stats — tap to retry
             </AppText>
           </PressableScale>
-        ) : overview ? (
+        ) : overview?.membership ? (
           <View style={styles.statGrid}>
-            <HeroStat label="Members" value={overview.totalMembers} />
-            <HeroStat label="Coaches" value={overview.activeCoaches} />
-            <HeroStat label="Assignments" value={overview.activeAssignments} />
-            <HeroStat label="Videos" value={overview.readyVideos} />
+            <HeroStat label="Members" value={overview.membership.totalMembers} />
+            <HeroStat label="Coaches" value={overview.membership.activeCoaches} />
+            <HeroStat label="Assignments" value={overview.membership.activeAssignments} />
+            <HeroStat label="Videos" value={overview.membership.readyVideos} />
           </View>
+        ) : overview ? (
+          // P0-2: `membership` is permission-gated (members.read) — a role
+          // without it (e.g. support_admin, content_admin) still gets a valid
+          // overview, just with no platform-wide stat grid to show.
+          <AppText variant="body" color={colors.onBlock} style={styles.heroRetry}>
+            No platform-wide stats for your role.
+          </AppText>
         ) : null}
       </Animated.View>
 

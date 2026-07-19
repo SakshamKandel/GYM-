@@ -25,6 +25,12 @@ export default async function AdminSupportPage() {
   if (!principal) redirect('/admin/login');
   const permissions = await effectivePermissionSet(principal);
   if (!permissions.has('support.thread.read')) redirect('/admin');
+  // Replying, resolving, reopening and assigning all hit routes guarded by
+  // `support.thread.reply` — a stricter permission than the read grant that
+  // opens this page. Deriving it here and disabling those controls when it is
+  // absent (e.g. stripped by a DENY override) kills the 403-trap where a
+  // read-only support viewer could type a reply that the API rejects (P1-3).
+  const canReply = permissions.has('support.thread.reply');
 
   // Full set (both open and resolved) — the inbox's Open/Resolved/Mine tabs
   // filter this client-side (no pagination here, matching the endpoint's
@@ -61,7 +67,7 @@ export default async function AdminSupportPage() {
         <StatTile label="Resolved" value={resolvedCount} />
       </div>
 
-      <SupportInbox threads={threads} viewerId={principal.id} />
+      <SupportInbox threads={threads} viewerId={principal.id} canReply={canReply} />
     </div>
   );
 }

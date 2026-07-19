@@ -157,6 +157,12 @@ export default async function AdminCoachesPage() {
   const permissions = await effectivePermissionSet(principal);
   const canAssign = permissions.has('coach.assign');
   if (!canAssign) redirect('/admin');
+  // Editing a coach's profile and deciding tier requests hit routes guarded by
+  // `coach.application.review` — a DIFFERENT permission from `coach.assign`.
+  // Deriving it here (rather than reusing canAssign) is what kills the 403-trap:
+  // an operator with only `coach.assign` no longer sees an Edit panel / tier
+  // Approve+Reject buttons that the API would reject (P1-1).
+  const canReview = permissions.has('coach.application.review');
   const canModerate = permissions.has('moderation.manage');
 
   const [coaches, clientsByCoach, tierRequestsByCoach] = await Promise.all([
@@ -202,7 +208,8 @@ export default async function AdminCoachesPage() {
         coaches={coaches}
         clientsByCoach={clientsByCoach}
         tierRequestsByCoach={tierRequestsByCoach}
-        canEdit={canAssign}
+        canAssign={canAssign}
+        canReview={canReview}
       />
 
       {canModerate ? <CoachRequestsOversight /> : null}

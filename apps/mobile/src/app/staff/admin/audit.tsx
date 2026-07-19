@@ -71,6 +71,13 @@ async function shareFile(uri: string): Promise<void> {
  * `broadcast.send`, `promo.grant.expire`) that WP1/WP2/WP6 land in parallel —
  * action strings are a FROZEN, stable contract so these chips are safe to
  * ship ahead of those routes.
+ *
+ * (stale-chips follow-up, WP-12): re-audited against every LIVE
+ * `logAudit(...)` call site again for the v1.0.2 wave — the marketplace/gym/
+ * catalog verticals that landed since F5 (meal-delivery payments, the gyms
+ * directory, the plan-video catalog, coach-profile edits, member identity
+ * edits) had NO chip at all, so an admin filtering audit for e.g. a meal
+ * refund saw an empty feed with no indication the action even exists here.
  */
 const ACTION_FILTERS: { key: string; label: string }[] = [
   { key: '', label: 'All' },
@@ -78,6 +85,7 @@ const ACTION_FILTERS: { key: string; label: string }[] = [
   { key: 'coach.assign', label: 'Coach assigned' },
   { key: 'coach.unassign', label: 'Coach unassigned' },
   { key: 'coach.offboard', label: 'Coach offboarded' },
+  { key: 'coach.update', label: 'Coach profile edited' },
   { key: 'coach.application.approve', label: 'Applications approved' },
   { key: 'coach.application.reject', label: 'Applications rejected' },
   { key: 'coach.tier.change', label: 'Coach tier approved' },
@@ -88,18 +96,26 @@ const ACTION_FILTERS: { key: string; label: string }[] = [
   { key: 'staff.logout', label: 'Staff sign-outs' },
   { key: 'account.suspend', label: 'Suspensions' },
   { key: 'account.reactivate', label: 'Reactivations' },
+  { key: 'member.identity_update', label: 'Member identity edited' },
   { key: 'content.video.create', label: 'Videos added' },
   { key: 'content.video.update', label: 'Videos updated' },
   { key: 'content.video.delete', label: 'Videos removed' },
+  { key: 'catalog.plan.create', label: 'Catalog plan added' },
+  { key: 'catalog.plan.delete', label: 'Catalog plan removed' },
+  { key: 'catalog.exercise.delete', label: 'Catalog exercise removed' },
   { key: 'payment.approve', label: 'Payments approved' },
   { key: 'payment.reject', label: 'Payments rejected' },
   { key: 'payment.refund', label: 'Payments refunded' },
+  { key: 'meal_payment.approve', label: 'Meal payments approved' },
+  { key: 'meal_payment.reject', label: 'Meal payments rejected' },
+  { key: 'meal_payment.refund', label: 'Meal payments refunded' },
   { key: 'promo.create', label: 'Promo created' },
   { key: 'promo.update', label: 'Promo updated' },
   { key: 'promo.grant.expire', label: 'Promo grants expired' },
   { key: 'pricing.update', label: 'Pricing updated' },
   { key: 'wallet.adjust', label: 'Wallet adjustments' },
   { key: 'support.reply', label: 'Support replies' },
+  { key: 'gym.update', label: 'Gym updated' },
   { key: 'broadcast.send', label: 'Broadcasts sent' },
 ];
 

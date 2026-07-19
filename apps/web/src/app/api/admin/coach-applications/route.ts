@@ -58,7 +58,9 @@ export async function GET(req: Request) {
     .innerJoin(accounts, eq(accounts.id, coachApplications.accountId))
     .where(eq(coachApplications.status, status))
     .orderBy(desc(coachApplications.createdAt))
-    .limit(200);
+    // Pending must never starve behind a flat cap (P1-11): load it unbounded up
+    // to a high safety ceiling; decided history stays capped.
+    .limit(status === 'pending' ? 2000 : 200);
 
   return json({ applications: rows }, 200);
 }

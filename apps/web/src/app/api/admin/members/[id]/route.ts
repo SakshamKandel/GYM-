@@ -204,6 +204,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     // rewrite a higher/peer staff account's tier (and, for 'elite', trigger a
     // coach auto-assignment). Non-staff targets always pass.
     const targetRole = await adminRoleOf(id);
+    // Partner logins are managed ONLY through the Partners admin surface
+    // (partners.manage, super/main-only), never this generic member drawer —
+    // otherwise a member_admin (which outranks the rank-0 partner role) could
+    // rewrite a restaurant account's tier, bypassing partners.manage (P1-8).
+    if (targetRole === 'partner') return json({ error: 'partner_target' }, 403);
     const rankBlock = requireOutranks(base, targetRole);
     if (rankBlock) return rankBlock;
   }
@@ -218,6 +223,11 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     // role the actor does not outrank would be a de-facto role takeover —
     // suspension kills every live session. Non-staff targets always pass.
     const targetRole = await adminRoleOf(id);
+    // Partner logins are managed ONLY through the Partners admin surface
+    // (partners.manage, super/main-only). Blocking here stops a member_admin —
+    // which outranks the rank-0 partner role — from suspending a restaurant
+    // login via the generic member drawer, bypassing partners.manage (P1-8).
+    if (targetRole === 'partner') return json({ error: 'partner_target' }, 403);
     const rankBlock = requireOutranks(base, targetRole);
     if (rankBlock) return rankBlock;
   }
