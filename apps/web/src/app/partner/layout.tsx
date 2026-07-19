@@ -25,6 +25,7 @@ const PARTNER_NAV: NavGroup[] = [
       { href: '/partner/prep', label: 'Prep Summary' },
       { href: '/partner/subscriptions', label: 'Subscriptions' },
       { href: '/partner/history', label: 'Order History' },
+      { href: '/partner/verify', label: 'Verify Member' },
     ],
   },
   {

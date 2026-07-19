@@ -3,3 +3,12 @@ apps/mobile
 node_modules
 pnpm-lock.yaml
 .env.local
+# Local build/dev caches — never needed by the remote build (it rebuilds from
+# source) and easily push the upload past Vercel's 100 MB source limit.
+.next
+.turbo
+.expo
+.findex_db
+*.apk
+*.aab
+docs

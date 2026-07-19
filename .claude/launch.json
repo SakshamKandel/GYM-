@@ -9,6 +9,12 @@
       "autoPort": false
     },
     {
+      "name": "web-alt",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "web", "exec", "next", "dev", "--turbo"],
+      "autoPort": true
+    },
+    {
       "name": "mobile",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "mobile", "exec", "expo", "start", "--port", "8081"],

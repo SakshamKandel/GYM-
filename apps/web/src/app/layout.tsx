@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Oswald, Poppins } from 'next/font/google';
 import type { ReactNode } from 'react';
 import './globals.css';
+import '@/components/landing/motion.css';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://gym-xi-tawny.vercel.app';
 
@@ -32,7 +33,7 @@ export const metadata: Metadata = {
 // Exposed as CSS variables consumed by globals.css.
 const poppins = Poppins({
   subsets: ['latin'],
-  weight: ['400', '500', '600'],
+  weight: ['400', '500', '600', '700'],
   variable: '--font-poppins',
   display: 'swap',
 });
