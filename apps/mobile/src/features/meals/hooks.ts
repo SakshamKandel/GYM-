@@ -6,11 +6,15 @@ import {
   fetchMealSubscriptions,
   fetchMyMealOrders,
   listAddresses,
+  quoteMealSubscriptionEdit,
+  toMealsError,
   type MealAddress,
   type MealMenuFilters,
   type MealOrder,
   type MealPartner,
   type MealSubscription,
+  type MealSubscriptionEditInput,
+  type MealSubscriptionPlanQuote,
   type MenuMeal,
 } from './api';
 import { quoteMealOrder, type MealQuote, type MealQuoteInput } from '../staff/api';
@@ -163,4 +167,53 @@ export function useMealQuote(
   }, [token, key]);
 
   return { quote, status };
+}
+
+/** Debounced, server-authoritative preview for the recurring-plan edit form. */
+export function useMealSubscriptionEditQuote(
+  token: string | null,
+  subscriptionId: string | null,
+  input: MealSubscriptionEditInput | null,
+): {
+  quote: MealSubscriptionPlanQuote | null;
+  status: MealQuoteStatus;
+  errorCode: string | null;
+} {
+  const [quote, setQuote] = useState<MealSubscriptionPlanQuote | null>(null);
+  const [status, setStatus] = useState<MealQuoteStatus>('idle');
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const key = token && subscriptionId && input ? JSON.stringify(input) : null;
+  const seqRef = useRef(0);
+
+  useEffect(() => {
+    if (!token || !subscriptionId || !input || !key) {
+      seqRef.current += 1;
+      setStatus('idle');
+      setQuote(null);
+      setErrorCode(null);
+      return;
+    }
+    const seq = ++seqRef.current;
+    setStatus('loading');
+    setErrorCode(null);
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const next = await quoteMealSubscriptionEdit(token, subscriptionId, input);
+          if (seqRef.current !== seq) return;
+          setQuote(next);
+          setStatus('ready');
+        } catch (error) {
+          if (seqRef.current !== seq) return;
+          setQuote(null);
+          setErrorCode(toMealsError(error).code);
+          setStatus('error');
+        }
+      })();
+    }, QUOTE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, subscriptionId, key]);
+
+  return { quote, status, errorCode };
 }

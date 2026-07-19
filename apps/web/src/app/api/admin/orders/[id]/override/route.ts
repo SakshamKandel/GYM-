@@ -88,7 +88,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     actorId: principal.id,
     cancelReason: toStatus === 'cancelled' ? (reason ?? null) : undefined,
   });
-  if (!result.ok) return json({ error: 'conflict' }, 409);
+  if (!result.ok) {
+    if (toStatus === 'cancelled' || toStatus === 'refused') {
+      const [current] = await db
+        .select({ paymentStatus: mealOrders.paymentStatus })
+        .from(mealOrders)
+        .where(eq(mealOrders.id, id))
+        .limit(1);
+      const currentBlock = current
+        ? orderPaymentMutationBlock(current.paymentStatus)
+        : null;
+      if (currentBlock) return json({ error: currentBlock }, 409);
+    }
+    return json({ error: 'conflict' }, 409);
+  }
 
   await logAudit(
     principal,

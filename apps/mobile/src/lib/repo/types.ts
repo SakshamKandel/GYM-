@@ -7,6 +7,7 @@ import type {
   SetLog,
   Streak,
   WeightLog,
+  WorkoutSessionBlueprint,
   WorkoutLog,
 } from '@gym/shared';
 
@@ -29,8 +30,15 @@ export interface AnalyticsSet {
  */
 export interface Repo {
   // ── Workouts ────────────────────────────────────────────────
-  startWorkout(w: Omit<WorkoutLog, 'finishedAt' | 'durationSec'>): Promise<void>;
+  startWorkout(
+    w: Omit<WorkoutLog, 'finishedAt' | 'durationSec'>,
+    blueprint?: WorkoutSessionBlueprint,
+  ): Promise<void>;
   finishWorkout(id: string, finishedAt: string, durationSec: number): Promise<void>;
+  /** Replace the restart metadata for an active workout after its exercise list changes. */
+  saveWorkoutBlueprint(id: string, blueprint: WorkoutSessionBlueprint): Promise<void>;
+  /** Null for completed sessions and workouts created before blueprint persistence landed. */
+  getWorkoutBlueprint(id: string): Promise<WorkoutSessionBlueprint | null>;
   /** Delete a workout and its sets (e.g. discarded empty session). */
   deleteWorkout(id: string): Promise<void>;
   getWorkout(id: string): Promise<WorkoutLog | null>;

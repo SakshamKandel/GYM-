@@ -1,5 +1,10 @@
 import { create } from 'zustand';
-import type { SetLog, WorkoutLog } from '@gym/shared';
+import type {
+  SetLog,
+  WorkoutExerciseBlueprint,
+  WorkoutLog,
+  WorkoutSessionBlueprint,
+} from '@gym/shared';
 import { checkPr, epley1Rm, updateStreak } from '@gym/shared';
 import { type CoachWorkoutItem, type CoachWorkoutRow } from '../../lib/api/client';
 import { nowIso, secondsBetween, todayIso } from '../../lib/dates';
@@ -114,6 +119,31 @@ function planExerciseToSession(pe: {
   };
 }
 
+function blueprintExerciseToSession(exercise: WorkoutExerciseBlueprint): SessionExercise {
+  return {
+    ...exercise,
+    loggedSets: [],
+    lastSets: [],
+  };
+}
+
+function sessionExercisesToBlueprint(
+  exercises: readonly SessionExercise[],
+): WorkoutSessionBlueprint {
+  return {
+    exercises: exercises.map(
+      ({ exerciseId, exerciseName, equipment, targetSets, repRange, restSec }) => ({
+        exerciseId,
+        exerciseName,
+        equipment,
+        targetSets,
+        repRange,
+        restSec,
+      }),
+    ),
+  };
+}
+
 /**
  * A coach-assigned item's `exerciseId` is optional (SCALE-UP-PLAN §4.3 — the
  * coach console lets a coach type a free-text exercise name with no local-
@@ -192,8 +222,8 @@ export const useSession = create<SessionState>()((set, get) => {
         name: pw ? pw.name : 'Freestyle',
         startedAt: nowIso(),
       };
-      await repo.startWorkout(log);
       const exercises = pw ? pw.exercises.map(planExerciseToSession) : [];
+      await repo.startWorkout(log, sessionExercisesToBlueprint(exercises));
       await Promise.all(
         exercises.map(async (e) => {
           e.lastSets = await repo.getLastSetsForExercise(e.exerciseId, log.id);
@@ -230,8 +260,8 @@ export const useSession = create<SessionState>()((set, get) => {
         name: template.name,
         startedAt: nowIso(),
       };
-      await repo.startWorkout(log);
       const exercises = template.exercises.map(planExerciseToSession);
+      await repo.startWorkout(log, sessionExercisesToBlueprint(exercises));
       await Promise.all(
         exercises.map(async (e) => {
           e.lastSets = await repo.getLastSetsForExercise(e.exerciseId, log.id);
@@ -268,10 +298,10 @@ export const useSession = create<SessionState>()((set, get) => {
         name: workout.title,
         startedAt: nowIso(),
       };
-      await repo.startWorkout(log);
       const exercises = workout.items.map((item, index) =>
         coachItemToSession(item, workout.id, index),
       );
+      await repo.startWorkout(log, sessionExercisesToBlueprint(exercises));
       await Promise.all(
         exercises.map(async (e) => {
           e.lastSets = await repo.getLastSetsForExercise(e.exerciseId, log.id);
@@ -297,10 +327,17 @@ export const useSession = create<SessionState>()((set, get) => {
       if (!active) return false;
       if (get().workoutId === active.id && get().status === 'active') return true;
 
-      const sets = await repo.getSetsForWorkout(active.id);
+      const [sets, blueprint] = await Promise.all([
+        repo.getSetsForWorkout(active.id),
+        repo.getWorkoutBlueprint(active.id),
+      ]);
       const pw = active.planWorkoutId ? getPlanWorkout(active.planWorkoutId) : undefined;
       const byExercise = new Map<string, SessionExercise>();
-      if (pw) {
+      if (blueprint) {
+        for (const exercise of blueprint.exercises) {
+          byExercise.set(exercise.exerciseId, blueprintExerciseToSession(exercise));
+        }
+      } else if (pw) {
         for (const pe of pw.exercises) byExercise.set(pe.exerciseId, planExerciseToSession(pe));
       }
       for (const s of sets) {
@@ -372,19 +409,24 @@ export const useSession = create<SessionState>()((set, get) => {
         loggedSets: [],
         lastSets: [],
       };
-      set({ exercises: [...s.exercises, entry], currentIdx: s.exercises.length, pendingRpe: null });
+      const exercises = [...s.exercises, entry];
+      set({ exercises, currentIdx: s.exercises.length, pendingRpe: null });
       // Ghost targets arrive in the background — no need to block the tap.
       void (async () => {
         const repo = await getRepo();
         const workoutId = get().workoutId;
         if (!workoutId) return;
+        await repo.saveWorkoutBlueprint(workoutId, sessionExercisesToBlueprint(get().exercises));
         const lastSets = await repo.getLastSetsForExercise(exerciseId, workoutId);
         set({
           exercises: get().exercises.map((e) =>
             e.exerciseId === exerciseId ? { ...e, lastSets } : e,
           ),
         });
-      })();
+      })().catch(() => {
+        // Keep the in-memory session responsive; committed sets still provide
+        // the backwards-compatible hydration fallback if local storage fails.
+      });
     },
 
     setPendingRpe: (rpe) => {

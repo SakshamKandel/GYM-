@@ -18,7 +18,7 @@ import {
   TERMINAL_ORDER_STATUSES,
   type MealAvailabilitySlot,
 } from '@gym/shared';
-import { and, asc, desc, eq, inArray, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, notInArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
@@ -37,6 +37,7 @@ import {
   materializeDueOrders,
   type PricedLine,
 } from '@/lib/meals';
+import { atomicOneTimeOrderSql } from '@/lib/meals/atomicOneTimeOrder';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -266,16 +267,6 @@ export async function POST(req: Request) {
       qty: i.qty,
     };
   });
-  const itemPayload = JSON.stringify(
-    itemValues.map((item) => ({
-      id: item.id,
-      meal_id: item.mealId,
-      name_snapshot: item.nameSnapshot,
-      price_minor_snapshot: item.priceMinorSnapshot,
-      macros_snapshot: item.macrosSnapshot,
-      qty: item.qty,
-    })),
-  );
   const eventId = crypto.randomUUID();
   const deliveryNotes = notes ? maskPii(notes) : '';
 
@@ -283,64 +274,33 @@ export async function POST(req: Request) {
   // active row and fans its RETURNING id into every item + initial event. The
   // preceding advisory-lock statement is deliberately separate: READ COMMITTED
   // takes a new snapshot per statement after a waiter acquires the lock.
-  const createOrder = db.execute<{ id: string }>(sql`
-    with active_partner as materialized (
-      select id
-      from meal_partners
-      where id = ${partnerId} and is_active = true and accepting_orders = true
-    ),
-    inserted_order as (
-      insert into meal_orders (
-        id, account_id, partner_id, source, subscription_id, cycle_id,
-        client_request_id, request_fingerprint, delivery_date, window,
-        address_id, delivery_name, delivery_phone, delivery_address_text,
-        delivery_lat, delivery_lng, delivery_notes, subtotal_minor,
-        delivery_fee_minor, small_order_fee_minor, total_minor, currency,
-        payment_method, payment_status, status, status_version, cutoff_at
-      )
-      select
-        ${orderId}, ${me.id}, ${partnerId}, 'one_time', null, null,
-        ${requestId}, ${requestFingerprint}, ${deliveryDate}, ${window},
-        ${addressId}, ${me.displayName || 'Customer'}, ${address.phone},
-        ${deliveryAddressText}, ${address.lat}, ${address.lng}, ${deliveryNotes},
-        ${financials.subtotalMinor}, ${financials.deliveryFeeMinor},
-        ${financials.smallOrderFeeMinor}, ${financials.totalMinor}, ${currency},
-        ${paymentMethod}, 'unpaid', 'pending', 0, ${cutoffAt}
-      from active_partner
-      returning id
-    ),
-    inserted_items as (
-      insert into meal_order_items (
-        id, order_id, meal_id, name_snapshot, price_minor_snapshot,
-        macros_snapshot, qty
-      )
-      select
-        item.id, inserted_order.id, item.meal_id, item.name_snapshot,
-        item.price_minor_snapshot, item.macros_snapshot, item.qty
-      from jsonb_to_recordset(${itemPayload}::jsonb) as item(
-        id text,
-        meal_id text,
-        name_snapshot text,
-        price_minor_snapshot integer,
-        macros_snapshot jsonb,
-        qty integer
-      )
-      cross join inserted_order
-      returning id
-    ),
-    inserted_event as (
-      insert into meal_order_events (
-        id, order_id, from_status, to_status, actor_id, actor_role
-      )
-      select ${eventId}, inserted_order.id, null, 'pending', ${me.id}, 'member'
-      from inserted_order
-      returning id
-    )
-    select inserted_order.id
-    from inserted_order
-    cross join (select count(*) from inserted_items) item_count
-    cross join (select count(*) from inserted_event) event_count
-  `);
+  const createOrder = db.execute<{ id: string }>(
+    atomicOneTimeOrderSql({
+      orderId,
+      eventId,
+      accountId: me.id,
+      partnerId,
+      requestId,
+      requestFingerprint,
+      deliveryDate,
+      window,
+      addressId,
+      deliveryName: me.displayName || 'Customer',
+      deliveryPhone: address.phone,
+      deliveryAddressText,
+      deliveryLat: address.lat,
+      deliveryLng: address.lng,
+      deliveryNotes,
+      subtotalMinor: financials.subtotalMinor,
+      deliveryFeeMinor: financials.deliveryFeeMinor,
+      smallOrderFeeMinor: financials.smallOrderFeeMinor,
+      totalMinor: financials.totalMinor,
+      currency,
+      paymentMethod,
+      cutoffAt,
+      items: itemValues,
+    }),
+  );
 
   // Installed neon-http implements db.batch() through Neon's transaction()
   // API. The lock and all three writes therefore release/commit together.

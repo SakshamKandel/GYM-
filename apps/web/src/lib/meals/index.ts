@@ -18,3 +18,20 @@ export {
 export { advanceOrderStatus, type AdvanceOrderParams, type AdvanceOrderResult } from './advance';
 export { materializeDueOrders, type MaterializeScope } from './materialize';
 export { subscriptionPaymentMutationBlock } from './paymentSafety';
+export {
+  atomicCycleReceiptSql,
+  atomicSubscriptionSkipSql,
+  mealCycleOperationLockSql,
+  type AtomicSubscriptionSkipOutcome,
+} from './skipRepricing';
+export {
+  atomicSubscriptionCreateSql,
+  atomicSubscriptionEditSql,
+  type AtomicSubscriptionEditOutcome,
+} from './subscriptionEdit';
+export { guardedMealSoftDeleteSql } from './menuSubscriptionSafety';
+export {
+  buildSubscriptionCycleAdjustments,
+  quoteSubscriptionPlan,
+  type SubscriptionPlanShape,
+} from './subscriptionPlan';

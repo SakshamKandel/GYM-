@@ -1,12 +1,17 @@
-import { mealAvailability, mealBillingCycles, mealPartners, meals, mealSubscriptions, savedAddresses } from '@gym/db';
-import { ktmAddDays, ktmDateString, type MealWindow } from '@gym/shared';
+import { mealBillingCycles, mealSubscriptions } from '@gym/db';
+import { ktmAddDays, ktmDateString } from '@gym/shared';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
-import { deliveryEligibility, deliveryEligibilityError } from '@/lib/deliveryEligibility';
 import { json, preflight, readJson } from '@/lib/http';
-import { loadDeliveryConfig, materializeDueOrders } from '@/lib/meals';
+import {
+  atomicSubscriptionCreateSql,
+  materializeDueOrders,
+  quoteSubscriptionPlan,
+  type SubscriptionPlanShape,
+} from '@/lib/meals';
+import { partnerOperationLockSql } from '@/lib/partnerOperationLock';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -68,6 +73,7 @@ function serialize(s: typeof mealSubscriptions.$inferSelect, pendingCycle: Pendi
     startDate: s.startDate,
     status: s.status,
     createdAt: s.createdAt,
+    updatedAt: s.updatedAt,
     pendingCycle,
   };
 }
@@ -146,139 +152,59 @@ export async function POST(req: Request) {
   if (startDate < today || startDate > ktmAddDays(today, MAX_START_DAYS)) {
     return json({ error: 'start_out_of_range' }, 400);
   }
-  if (planType === 'fixed_meal' && !mealId) return json({ error: 'meal_required' }, 400);
-  if (planType === 'partner_rotating' && mealId) return json({ error: 'meal_not_allowed' }, 400);
-
   const db = getDb();
+  const shape: SubscriptionPlanShape = {
+    daysOfWeek,
+    window,
+    planType,
+    mealId: planType === 'fixed_meal' ? (mealId ?? null) : null,
+    addressId,
+  };
+  const quoted = await quoteSubscriptionPlan({
+    db,
+    accountId: me.id,
+    partnerId,
+    paymentMethod,
+    shape,
+  });
+  if (!quoted.ok) return json({ error: quoted.error }, 400);
 
-  const [partner] = await db
-    .select({
-      id: mealPartners.id,
-      acceptsCod: mealPartners.acceptsCod,
-      serviceAreas: mealPartners.serviceAreas,
-      serviceLat: mealPartners.serviceLat,
-      serviceLng: mealPartners.serviceLng,
-      serviceRadiusKm: mealPartners.serviceRadiusKm,
-    })
-    .from(mealPartners)
-    .where(
-      and(
-        eq(mealPartners.id, partnerId),
-        eq(mealPartners.isActive, true),
-        eq(mealPartners.acceptingOrders, true),
-      ),
-    )
-    .limit(1);
-  if (!partner) return json({ error: 'partner_unavailable' }, 400);
-  if (paymentMethod === 'cod' && !partner.acceptsCod) return json({ error: 'cod_unavailable' }, 400);
-
-  const [address] = await db
-    .select({
-      id: savedAddresses.id,
-      area: savedAddresses.area,
-      lat: savedAddresses.lat,
-      lng: savedAddresses.lng,
-    })
-    .from(savedAddresses)
-    .where(
-      and(
-        eq(savedAddresses.id, addressId),
-        eq(savedAddresses.accountId, me.id),
-        eq(savedAddresses.isDeleted, false),
-      ),
-    )
-    .limit(1);
-  if (!address) return json({ error: 'address_not_found' }, 400);
-
-  const eligibilityError = deliveryEligibilityError(deliveryEligibility(partner, address));
-  if (eligibilityError) return json({ error: eligibilityError }, 400);
-
-  const cfg = await loadDeliveryConfig(db);
-  const fold = cfg.deliveryFeeMinor; // delivery folded into the daily price.
-
-  // Resolve the snapshot price + currency from the partner's live menu.
-  let pricePerDayMinor: number;
-  let currency: 'NPR' | 'USD';
-
-  if (planType === 'fixed_meal') {
-    const [meal] = await db
-      .select()
-      .from(meals)
-      .where(
-        and(
-          eq(meals.id, mealId!),
-          eq(meals.partnerId, partnerId),
-          eq(meals.isActive, true),
-          eq(meals.isDeleted, false),
-        ),
-      )
-      .limit(1);
-    if (!meal) return json({ error: 'meal_unavailable' }, 400);
-
-    // The chosen meal must be offered at the chosen window (if it narrows).
-    const avail = await db
-      .select({ window: mealAvailability.window })
-      .from(mealAvailability)
-      .where(eq(mealAvailability.mealId, meal.id));
-    if (avail.length > 0 && !avail.some((a) => a.window === window)) {
-      return json({ error: 'meal_unavailable_for_window' }, 400);
-    }
-
-    pricePerDayMinor = meal.priceMinor + fold;
-    currency = meal.currency;
-  } else {
-    // Rotating: the pool is the partner's active window-appropriate meals.
-    const menu = await db
-      .select({
-        id: meals.id,
-        priceMinor: meals.priceMinor,
-        currency: meals.currency,
-      })
-      .from(meals)
-      .where(and(eq(meals.partnerId, partnerId), eq(meals.isActive, true), eq(meals.isDeleted, false)));
-    if (menu.length === 0) return json({ error: 'no_meals' }, 400);
-
-    const menuIds = menu.map((m) => m.id);
-    const avail = await db
-      .select({ mealId: mealAvailability.mealId, window: mealAvailability.window })
-      .from(mealAvailability)
-      .where(inArray(mealAvailability.mealId, menuIds));
-    const windowsByMeal = new Map<string, Set<MealWindow>>();
-    for (const a of avail) {
-      const set = windowsByMeal.get(a.mealId) ?? new Set<MealWindow>();
-      set.add(a.window);
-      windowsByMeal.set(a.mealId, set);
-    }
-    const pool = menu.filter((m) => {
-      const w = windowsByMeal.get(m.id);
-      return !w || w.has(window);
+  const subscriptionId = crypto.randomUUID();
+  const [, insertResult] = await db.batch([
+    db.execute(partnerOperationLockSql(partnerId)),
+    db.execute(
+      atomicSubscriptionCreateSql({
+        id: subscriptionId,
+        accountId: me.id,
+        partnerId,
+        shape,
+        pricePerDayMinor: quoted.quote.pricePerDayMinor,
+        currency: quoted.quote.currency,
+        paymentMethod,
+        startDate,
+      }),
+    ),
+  ]);
+  const insertedId = insertResult.rows[0]?.id;
+  if (insertedId !== subscriptionId) {
+    // A partner/menu/address write won after the preview. Re-quote so the race
+    // resolves to the most actionable current error instead of a vague 500.
+    const current = await quoteSubscriptionPlan({
+      db,
+      accountId: me.id,
+      partnerId,
+      paymentMethod,
+      shape,
     });
-    if (pool.length === 0) return json({ error: 'no_meals_for_window' }, 400);
-
-    const currencies = new Set(pool.map((m) => m.currency));
-    if (currencies.size !== 1) return json({ error: 'mixed_currency' }, 400);
-    currency = pool[0].currency;
-    const mean = Math.round(pool.reduce((sum, m) => sum + m.priceMinor, 0) / pool.length);
-    pricePerDayMinor = mean + fold;
+    return json({ error: current.ok ? 'conflict' : current.error }, 409);
   }
 
   const [sub] = await db
-    .insert(mealSubscriptions)
-    .values({
-      accountId: me.id,
-      partnerId,
-      daysOfWeek,
-      window,
-      planType,
-      mealId: planType === 'fixed_meal' ? mealId! : null,
-      addressId,
-      pricePerDayMinor,
-      currency,
-      paymentMethod,
-      startDate,
-      status: 'active',
-    })
-    .returning();
+    .select()
+    .from(mealSubscriptions)
+    .where(and(eq(mealSubscriptions.id, subscriptionId), eq(mealSubscriptions.accountId, me.id)))
+    .limit(1);
+  if (!sub) return json({ error: 'conflict' }, 409);
 
   // Bootstrap: bill the first prepaid cycle (digital) / spawn due COD orders now
   // so the member immediately sees the bill or the upcoming delivery.

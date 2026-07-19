@@ -189,12 +189,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     .where(and(...predicates))
     .returning();
   const updated = deactivating
-    ? (
-        await db.batch([
-          db.execute(partnerOperationLockSql(id)),
-          updateQuery,
-        ])
-      )[1]
+    ? (await db.batch([db.execute(partnerOperationLockSql(id)), updateQuery]))[1]
     : await updateQuery;
   if (updated.length === 0) {
     const [current] = await db

@@ -1,15 +1,24 @@
-import { mealBillingCycles, mealOrders, mealSubscriptions } from '@gym/db';
+import { mealBillingCycles, mealOrders, mealSubSkips, mealSubscriptions } from '@gym/db';
 import {
   canAdvanceSubscription,
   ktmDateString,
   subscriptionActionTarget,
 } from '@gym/shared';
-import { and, eq, gt, gte, inArray } from 'drizzle-orm';
+import { and, eq, gt, gte, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { subscriptionPaymentMutationBlock } from '@/lib/meals';
+import {
+  atomicSubscriptionEditSql,
+  buildSubscriptionCycleAdjustments,
+  loadDeliveryConfig,
+  materializeDueOrders,
+  quoteSubscriptionPlan,
+  subscriptionPaymentMutationBlock,
+  type AtomicSubscriptionEditOutcome,
+  type SubscriptionPlanShape,
+} from '@/lib/meals';
 
 export const runtime = 'nodejs';
 
@@ -21,7 +30,18 @@ export const runtime = 'nodejs';
  * future orders whose cutoff hasn't passed, so a cancelled plan never delivers.
  */
 
-const bodySchema = z.object({ action: z.enum(['pause', 'resume', 'cancel']) });
+const lifecycleSchema = z.object({ action: z.enum(['pause', 'resume', 'cancel']) }).strict();
+const editSchema = z
+  .object({
+    action: z.literal('edit'),
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    window: z.enum(['lunch', 'dinner']),
+    planType: z.enum(['fixed_meal', 'partner_rotating']),
+    mealId: z.string().min(1).nullable(),
+    addressId: z.string().min(1),
+  })
+  .strict();
+const bodySchema = z.discriminatedUnion('action', [lifecycleSchema, editSchema]);
 
 export function OPTIONS() {
   return preflight();
@@ -38,11 +58,142 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const db = getDb();
   const [sub] = await db
-    .select({ id: mealSubscriptions.id, status: mealSubscriptions.status })
+    .select({
+      id: mealSubscriptions.id,
+      partnerId: mealSubscriptions.partnerId,
+      paymentMethod: mealSubscriptions.paymentMethod,
+      startDate: mealSubscriptions.startDate,
+      status: mealSubscriptions.status,
+      updatedAt: mealSubscriptions.updatedAt,
+    })
     .from(mealSubscriptions)
     .where(and(eq(mealSubscriptions.id, id), eq(mealSubscriptions.accountId, me.id)))
     .limit(1);
   if (!sub) return json({ error: 'not_found' }, 404);
+
+  if (action === 'edit') {
+    if (sub.status === 'cancelled') return json({ error: 'not_active' }, 409);
+
+    const shape: SubscriptionPlanShape = {
+      daysOfWeek: [...new Set(parsed.data.daysOfWeek)].sort((a, b) => a - b),
+      window: parsed.data.window,
+      planType: parsed.data.planType,
+      mealId: parsed.data.planType === 'fixed_meal' ? parsed.data.mealId : null,
+      addressId: parsed.data.addressId,
+    };
+    const quoted = await quoteSubscriptionPlan({
+      db,
+      accountId: me.id,
+      partnerId: sub.partnerId,
+      paymentMethod: sub.paymentMethod,
+      shape,
+    });
+    if (!quoted.ok) return json({ error: quoted.error }, 400);
+
+    const now = new Date();
+    const today = ktmDateString(now);
+    const config = await loadDeliveryConfig(db);
+    const cycleRows = await db
+      .select({
+        id: mealBillingCycles.id,
+        weekStart: mealBillingCycles.weekStart,
+        status: mealBillingCycles.status,
+        plannedSlots: mealBillingCycles.plannedSlots,
+        updatedAt: mealBillingCycles.updatedAt,
+      })
+      .from(mealBillingCycles)
+      .where(
+        and(
+          eq(mealBillingCycles.subscriptionId, sub.id),
+          gte(mealBillingCycles.weekEnd, today),
+          inArray(mealBillingCycles.status, ['open', 'awaiting_payment', 'void']),
+        ),
+      );
+    // The WHERE above excludes 'paid' at runtime; narrow the row type to match
+    // (paid cycles are funded money and must never be repriced — see
+    // buildSubscriptionCycleAdjustments's contract).
+    const cycles = cycleRows.filter(
+      (c): c is (typeof cycleRows)[number] & { status: 'open' | 'awaiting_payment' | 'void' } =>
+        c.status !== 'paid',
+    );
+    const [skipRows, materializedRows] = await Promise.all([
+      db
+        .select({ deliveryDate: mealSubSkips.deliveryDate })
+        .from(mealSubSkips)
+        .where(and(eq(mealSubSkips.subscriptionId, sub.id), gte(mealSubSkips.deliveryDate, today))),
+      db
+        .select({ deliveryDate: mealOrders.deliveryDate })
+        .from(mealOrders)
+        .where(and(eq(mealOrders.subscriptionId, sub.id), gte(mealOrders.deliveryDate, today))),
+    ]);
+    // Every already-materialized date stays frozen. Treating it as a plan-level
+    // suppression date prevents a window edit from spawning a second order for
+    // the same day while preserving the original order snapshot.
+    const suppressedDates = new Set([
+      ...skipRows.map((row) => row.deliveryDate),
+      ...materializedRows.map((row) => row.deliveryDate),
+    ]);
+    const cycleAdjustments = buildSubscriptionCycleAdjustments({
+      cycles,
+      startDate: sub.startDate,
+      shape,
+      pricePerDayMinor: quoted.quote.pricePerDayMinor,
+      skipDates: suppressedDates,
+      now,
+      config,
+    });
+
+    const result = await db.execute(
+      atomicSubscriptionEditSql({
+        subscriptionId: sub.id,
+        accountId: me.id,
+        partnerId: sub.partnerId,
+        expectedUpdatedAt: sub.updatedAt,
+        now,
+        today,
+        shape,
+        pricePerDayMinor: quoted.quote.pricePerDayMinor,
+        currency: quoted.quote.currency,
+        cycleAdjustments,
+      }),
+    );
+    const resultRow = result.rows[0];
+    const outcome: AtomicSubscriptionEditOutcome =
+      resultRow && typeof resultRow.outcome === 'string'
+        ? (resultRow.outcome as AtomicSubscriptionEditOutcome)
+        : 'conflict';
+    if (outcome !== 'updated') {
+      const status = outcome === 'not_found' ? 404 : 409;
+      return json({ error: outcome }, status);
+    }
+
+    await materializeDueOrders(db, { kind: 'member', accountId: me.id }, now);
+    const preservedOrderDates =
+      resultRow && Array.isArray(resultRow.preserved_order_dates)
+        ? resultRow.preserved_order_dates.filter((date): date is string => typeof date === 'string')
+        : [];
+    return json(
+      {
+        subscription: {
+          id: sub.id,
+          status: sub.status,
+          daysOfWeek: shape.daysOfWeek,
+          window: shape.window,
+          planType: shape.planType,
+          mealId: shape.mealId,
+          addressId: shape.addressId,
+          pricePerDayMinor: quoted.quote.pricePerDayMinor,
+          currency: quoted.quote.currency,
+        },
+        effective: {
+          mode: 'future_unmaterialized',
+          fromDate: today,
+          preservedOrderDates,
+        },
+      },
+      200,
+    );
+  }
 
   const target = subscriptionActionTarget(action);
   if (!canAdvanceSubscription(sub.status, target)) {
@@ -75,20 +226,53 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const row = updated[0];
   if (!row) return json({ error: 'conflict' }, 409);
 
+  // Close the read/CAS race with receipt submission or approval. If money
+  // became protected after the preflight, compensate the lifecycle CAS before
+  // any fulfilment rows are touched and direct the caller to support.
+  if (target === 'paused' || target === 'cancelled') {
+    const paymentBlock = await subscriptionPaymentMutationBlock({
+      db,
+      subscriptionId: sub.id,
+      scope: { kind: 'remaining' },
+    });
+    if (paymentBlock) {
+      const reverted = await db
+        .update(mealSubscriptions)
+        .set({ status: sub.status, updatedAt: new Date() })
+        .where(
+          and(
+            eq(mealSubscriptions.id, sub.id),
+            eq(mealSubscriptions.accountId, me.id),
+            eq(mealSubscriptions.status, target),
+          ),
+        )
+        .returning({ id: mealSubscriptions.id });
+      return json({ error: reverted[0] ? paymentBlock : 'conflict' }, 409);
+    }
+  }
+
   // A cancelled plan must not deliver: void its still-cancellable future orders
   // (pending, cutoff not yet passed). Bulk lifecycle action — no per-order push.
   if (target === 'cancelled') {
-    const today = ktmDateString(new Date());
+    const cancelNow = new Date();
+    const today = ktmDateString(cancelNow);
     await db
       .update(mealOrders)
-      .set({ status: 'cancelled', cancelledAt: new Date(), cancelReason: 'Subscription cancelled' })
+      .set({
+        status: 'cancelled',
+        statusVersion: sql`${mealOrders.statusVersion} + 1`,
+        cancelledAt: cancelNow,
+        cancelReason: 'Subscription cancelled',
+        decidedBy: me.id,
+        updatedAt: cancelNow,
+      })
       .where(
         and(
           eq(mealOrders.subscriptionId, sub.id),
           eq(mealOrders.status, 'pending'),
           inArray(mealOrders.paymentStatus, ['unpaid', 'refunded']),
           gte(mealOrders.deliveryDate, today),
-          gt(mealOrders.cutoffAt, new Date()),
+          gt(mealOrders.cutoffAt, cancelNow),
         ),
       );
 
@@ -98,7 +282,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // never be materialized). Cycle void is otherwise admin-only.
     await db
       .update(mealBillingCycles)
-      .set({ status: 'void', updatedAt: new Date() })
+      .set({ status: 'void', updatedAt: cancelNow })
       .where(
         and(
           eq(mealBillingCycles.subscriptionId, sub.id),

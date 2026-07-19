@@ -10,6 +10,7 @@ import type {
   SetLog,
   Streak,
   WeightLog,
+  WorkoutSessionBlueprint,
   WorkoutLog,
 } from '@gym/shared';
 import {
@@ -38,6 +39,8 @@ interface OwnerMemoryState {
   streak: Streak;
   /** Ids of workouts already backed up to the server (mirrors sqlite synced_at). */
   syncedWorkoutIds: string[];
+  /** Restart metadata for active sessions only, keyed by local workout id. */
+  workoutBlueprints: Record<string, WorkoutSessionBlueprint>;
 }
 
 interface MemoryStoreState {
@@ -62,6 +65,7 @@ function emptyOwnerState(): OwnerMemoryState {
     steps: {},
     streak: { current: 0, best: 0, lastWorkoutDate: null },
     syncedWorkoutIds: [],
+    workoutBlueprints: {},
   };
 }
 
@@ -77,8 +81,9 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
 
   return {
     // ── Workouts ────────────────────────────────────────────
-    async startWorkout(w) {
+    async startWorkout(w, blueprint) {
       state.workouts.push({ ...w, finishedAt: null, durationSec: null });
+      if (blueprint) state.workoutBlueprints[w.id] = blueprint;
       persist();
     },
     async finishWorkout(id, finishedAt, durationSec) {
@@ -87,11 +92,22 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
         w.finishedAt = finishedAt;
         w.durationSec = durationSec;
       }
+      delete state.workoutBlueprints[id];
       persist();
+    },
+    async saveWorkoutBlueprint(id, blueprint) {
+      if (state.workouts.some((workout) => workout.id === id && workout.finishedAt === null)) {
+        state.workoutBlueprints[id] = blueprint;
+        persist();
+      }
+    },
+    async getWorkoutBlueprint(id) {
+      return state.workoutBlueprints[id] ?? null;
     },
     async deleteWorkout(id) {
       state.workouts = state.workouts.filter((w) => w.id !== id);
       state.sets = state.sets.filter((s) => s.workoutLogId !== id);
+      delete state.workoutBlueprints[id];
       persist();
     },
     async getWorkout(id) {
@@ -431,7 +447,19 @@ export async function createMemoryRepo(): Promise<RepoStore> {
     const raw = await AsyncStorage.getItem(KEY);
     if (raw !== null) {
       const parsed: unknown = JSON.parse(raw);
-      if (isMemoryStoreState(parsed)) store = parsed;
+      if (isMemoryStoreState(parsed)) {
+        store = parsed;
+        // v2 stores created before active-session blueprints remain compatible.
+        for (const owner of Object.values(store.owners)) {
+          if (
+            typeof owner.workoutBlueprints !== 'object' ||
+            owner.workoutBlueprints === null ||
+            Array.isArray(owner.workoutBlueprints)
+          ) {
+            owner.workoutBlueprints = {};
+          }
+        }
+      }
     }
   } catch {
     // Corrupt/unavailable storage starts isolated instead of exposing v1 data.

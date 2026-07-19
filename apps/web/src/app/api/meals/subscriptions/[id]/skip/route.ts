@@ -1,24 +1,26 @@
-import { mealOrders, mealSubSkips, mealSubscriptions } from '@gym/db';
-import { cutoffFor, ktmDateString, ktmDayOfWeek } from '@gym/shared';
+import { mealSubscriptions } from '@gym/db';
+import { cutoffFor, ktmDateString, ktmDayOfWeek, weekBoundsFor } from '@gym/shared';
 import { and, eq } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import {
-  advanceOrderStatus,
+  atomicSubscriptionSkipSql,
   loadDeliveryConfig,
-  subscriptionPaymentMutationBlock,
+  mealCycleOperationLockSql,
 } from '@/lib/meals';
+import { sendPushToAccount } from '@/lib/push';
 
 export const runtime = 'nodejs';
 
 /**
  * Skip one delivery date of a subscription (§3). Recording a skip suppresses
  * materialization BEFORE the order exists; if the order was already spawned for
- * that slot it is additionally CAS-cancelled (both guarded `now < cutoff`, so a
- * member can't skip a slot that's already being cooked). Idempotent via the
- * (subscriptionId, deliveryDate) unique index.
+ * that slot it is cancelled in the same transaction. A newly inserted skip also
+ * decrements and reprices an unfunded weekly cycle. The shared cycle lock makes
+ * this mutually exclusive with receipt submission; duplicate skips are no-ops.
  */
 
 const bodySchema = z.object({ deliveryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
@@ -41,6 +43,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     .select({
       id: mealSubscriptions.id,
       status: mealSubscriptions.status,
+      startDate: mealSubscriptions.startDate,
       window: mealSubscriptions.window,
       daysOfWeek: mealSubscriptions.daysOfWeek,
     })
@@ -53,6 +56,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const now = new Date();
   // The date must be a subscribed weekday, today or later, and still pre-cutoff.
   if (deliveryDate < ktmDateString(now)) return json({ error: 'past_date' }, 400);
+  if (deliveryDate < sub.startDate) return json({ error: 'not_a_delivery_day' }, 400);
   if (!sub.daysOfWeek.includes(ktmDayOfWeek(deliveryDate))) {
     return json({ error: 'not_a_delivery_day' }, 400);
   }
@@ -61,46 +65,48 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     return json({ error: 'past_cutoff' }, 400);
   }
 
-  const paymentBlock = await subscriptionPaymentMutationBlock({
-    db,
-    subscriptionId: sub.id,
-    scope: { kind: 'slot', deliveryDate, window: sub.window },
-    now,
-  });
-  if (paymentBlock) return json({ error: paymentBlock }, 409);
-
   // Record the skip (idempotent) — suppresses any future spawn for this slot.
-  await db
-    .insert(mealSubSkips)
-    .values({ subscriptionId: sub.id, deliveryDate })
-    .onConflictDoNothing({ target: [mealSubSkips.subscriptionId, mealSubSkips.deliveryDate] });
+  const weekStart = weekBoundsFor(deliveryDate).weekStart;
+  const [, mutation] = await db.batch([
+    db.execute(mealCycleOperationLockSql(sub.id, weekStart)),
+    db.execute(
+      atomicSubscriptionSkipSql({
+        skipId: crypto.randomUUID(),
+        eventId: crypto.randomUUID(),
+        subscriptionId: sub.id,
+        accountId: me.id,
+        deliveryDate,
+        weekStart,
+        window: sub.window,
+        now,
+      }),
+    ),
+  ]);
 
-  // If the order was already materialized for this slot, cancel it (CAS on
-  // 'pending' scoped to the caller — a lost race just no-ops).
-  const [existing] = await db
-    .select({ id: mealOrders.id, status: mealOrders.status })
-    .from(mealOrders)
-    .where(
-      and(
-        eq(mealOrders.subscriptionId, sub.id),
-        eq(mealOrders.deliveryDate, deliveryDate),
-        eq(mealOrders.window, sub.window),
-        eq(mealOrders.source, 'subscription'),
-      ),
-    )
-    .limit(1);
-  if (existing && existing.status === 'pending') {
-    await advanceOrderStatus({
-      db,
-      orderId: existing.id,
-      expectedStatus: 'pending',
-      toStatus: 'cancelled',
-      actor: 'member',
-      actorId: me.id,
-      scope: { accountId: me.id },
-      cancelReason: 'Skipped by member',
-      now,
-    });
+  const mutationRow = mutation.rows[0];
+  const outcome =
+    mutationRow && typeof mutationRow.outcome === 'string'
+      ? mutationRow.outcome
+      : 'conflict';
+  if (outcome === 'payment_review_required' || outcome === 'refund_required') {
+    return json({ error: outcome }, 409);
+  }
+  if (outcome !== 'inserted' && outcome !== 'duplicate') {
+    return json({ error: 'conflict' }, 409);
+  }
+
+  const cancelledOrderId =
+    mutationRow && typeof mutationRow.cancelled_order_id === 'string'
+      ? mutationRow.cancelled_order_id
+      : null;
+  if (cancelledOrderId) {
+    after(() =>
+      sendPushToAccount(me.id, {
+        title: 'Order cancelled',
+        body: 'Your subscription meal was skipped and cancelled.',
+        data: { type: 'meal_order', orderId: cancelledOrderId, status: 'cancelled' },
+      }),
+    );
   }
 
   return json({ ok: true }, 200);

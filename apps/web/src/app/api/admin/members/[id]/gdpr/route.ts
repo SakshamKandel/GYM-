@@ -18,8 +18,11 @@ import {
   coachProfiles,
   coachRequests,
   devicePushTokens,
+  foods,
   gamificationProfiles,
   passwordResetTokens,
+  profiles,
+  progressPhotos,
   progressionSuggestions,
   referrals,
   restShieldUses,
@@ -27,11 +30,10 @@ import {
   syncedSets,
   syncedWorkouts,
   trialUsage,
-  walletLedger,
   workoutFlagAcks,
   xpEvents,
 } from '@gym/db';
-import { eq, inArray, or } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   adminRoleOf,
@@ -39,42 +41,30 @@ import {
   requireOutranks,
   requirePermission,
 } from '@/lib/authz';
+import {
+  loadAccountDeletionContext,
+  pgErrorCode,
+  purgeAccountProgressPhotos,
+  scrubAccountAuditHistory,
+} from '@/lib/accountDeletionDb';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 
 export const runtime = 'nodejs';
 
 /**
- * POST /api/admin/members/[id]/gdpr — admin-initiated GDPR erasure (P1-7, gated
- * `members.manage_credentials`).
+ * POST /api/admin/members/[id]/gdpr — staff-issued hard account deletion.
  *
- * This runs the EXACT cascade the self-serve DELETE /api/me performs (children
- * before parents, one atomic db.batch — neon-http has no interactive
- * transactions), so history that merely REFERENCES this account on someone
- * else's data (audit_log.actor_id, plan_videos.created_by, coach_messages
- * sender, awarded_badges.verified_by, progression_suggestions.coach_id) is FK
- * SET NULL — it survives, anonymized. The only difference from the self-serve
- * route is the actor: here a staffer erases someone else's account.
+ * Authorization stays stricter than self-service: credential-management
+ * permission, rank protection, cannot-target-self, and an exact typed-email
+ * confirmation. The destructive policy itself is identical to DELETE /api/me:
+ * active services, offboarding dependencies, ambiguous legacy identity, or any
+ * retained commerce/financial history return the same typed 409 impact object.
  *
- * ONE reference is deliberately NOT nullable: `wallet_ledger.coach_id` is a FK
- * with `onDelete: 'restrict'` — money history must never vanish with an account
- * row, so a coach who ever earned a commission / took a payout / received a
- * wallet adjustment can only be SUSPENDED, not hard-deleted. We fail-fast on
- * such accounts with `coach_has_wallet_ledger` BEFORE writing the audit row or
- * opening the batch, so the audit log never records a completed erasure that
- * Postgres would then roll back on the RESTRICT violation. A defensive
- * 23503 → 409 map around the batch covers the narrow race where a ledger row is
- * written between the pre-check and the delete.
- *
- * Guards:
- *  - `cannot_target_self`: an admin must erase their OWN account through
- *    DELETE /api/me (self-erasing here would kill the console mid-batch and,
- *    for the sole super_admin, be an unrecoverable lockout).
- *  - `requireOutranks`: a lower-ranked staffer cannot erase a peer/higher admin.
- *  - typed confirm: the request body must echo the exact account email, so an
- *    irreversible wipe can never fire on a stray click / wrong drawer.
- *  - `coach_has_wallet_ledger`: an account with wallet_ledger history cannot be
- *    erased (suspend-only, per the RESTRICT FK); returned as 409.
+ * This endpoint does not claim to anonymize retained records. It only performs
+ * a hard delete when the shared policy proves that doing so cannot destroy them.
+ * Private progress images and one unambiguous legacy profile are cleaned with
+ * the same retry-safe sequence as self-service deletion.
  */
 
 const bodySchema = z.object({
@@ -86,15 +76,6 @@ function getIp(req: Request): string | null {
   const fwd = req.headers.get('x-forwarded-for');
   if (fwd) return fwd.split(',')[0]?.trim() ?? null;
   return req.headers.get('x-real-ip');
-}
-
-/** Postgres/driver error shape carrying a SQLSTATE code, when present. */
-function pgErrorCode(err: unknown): string | null {
-  if (err && typeof err === 'object' && 'code' in err) {
-    const code = (err as { code?: unknown }).code;
-    return typeof code === 'string' ? code : null;
-  }
-  return null;
 }
 
 export function OPTIONS() {
@@ -137,37 +118,32 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return json({ error: 'confirm_mismatch' }, 400);
   }
 
-  // Money-history guard, BEFORE the audit write. wallet_ledger.coach_id FK's
-  // accounts.id with ON DELETE 'restrict' (money history must never vanish with
-  // an account row — coaches with ledger entries can only be SUSPENDED, not
-  // hard-deleted). If this account has any ledger row, the terminal
-  // `db.delete(accounts)` below would throw the restrict violation, and since
-  // neon-http runs the whole db.batch as ONE transaction, the entire erasure
-  // rolls back. Reject explicitly here so the caller gets an actionable error
-  // instead of a raw 500 — and, critically, so we never write a
-  // `member.gdpr_anonymize` audit row claiming an erasure that never happened.
-  const ledgerRows = await db
-    .select({ id: walletLedger.id })
-    .from(walletLedger)
-    .where(eq(walletLedger.coachId, id))
-    .limit(1);
-  if (ledgerRows.length > 0) {
-    return json({ error: 'coach_has_wallet_ledger' }, 409);
+  const deletionContext = await loadAccountDeletionContext(db, id, account.email);
+  if (!deletionContext.impact.canDelete) {
+    return json(
+      { error: 'account_deletion_blocked', impact: deletionContext.impact },
+      409,
+    );
   }
 
-  // Audit FIRST (actor = staff) — if the batch below fails, the attempt is
-  // still on record. The audit row outlives the account via audit_log's ON
-  // DELETE SET NULL on actor_id/target_id.
+  const photoCleanup = await purgeAccountProgressPhotos(db, id);
+  if (!photoCleanup.ok) return json(photoCleanup.body, photoCleanup.status);
+
+  // Audit the hard-delete attempt without copying the member email into the
+  // retained audit metadata. If the atomic batch fails, this remains an attempt
+  // record; it never claims that retained history was anonymized.
   await logAudit(
     actor,
-    'member.gdpr_anonymize',
+    'member.account_delete',
     'account',
     id,
-    { email: account.email, reason, self: false },
+    { reason, self: false, confirmation: 'typed_email' },
     ip,
   );
 
   const uid = id;
+  const legacyProfileId =
+    deletionContext.legacyProfileId ?? `__no_matching_legacy_profile__:${uid}`;
 
   // Subqueries for grandchildren rows keyed to this account's parents.
   const myWorkoutIds = db
@@ -188,10 +164,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   // self-serve path never mints (FK'd ON DELETE CASCADE, so the final accounts
   // delete would clear them anyway — deleted explicitly here for clarity).
   //
-  // Defensive 23503 map: the pre-check above rejects accounts that already hold
-  // wallet_ledger rows, but a commission credit could land in the narrow window
-  // between that check and this batch. Rather than let a RESTRICT violation
-  // surface as a raw 500, map it back to the same actionable 409.
+  // Defensive 23503 map: a retained/offboarding dependency can appear after
+  // the shared impact read. Reload the canonical impact instead of surfacing a
+  // raw FK error; already-destroyed Cloudinary assets remain retry-safe.
   try {
     await db.batch([
     db
@@ -255,12 +230,30 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     db.delete(coachProfiles).where(eq(coachProfiles.accountId, uid)),
     db.delete(admins).where(eq(admins.accountId, uid)),
     db.delete(accountProfiles).where(eq(accountProfiles.accountId, uid)),
+    db.delete(progressPhotos).where(eq(progressPhotos.accountId, uid)),
+    scrubAccountAuditHistory(db, uid, account.email),
+    db.update(foods).set({ createdBy: null }).where(eq(foods.createdBy, legacyProfileId)),
+    db
+      .delete(profiles)
+      .where(
+        and(
+          eq(profiles.id, legacyProfileId),
+          sql`lower(${profiles.email}) = ${account.email.toLowerCase()}`,
+        ),
+      ),
     db.delete(sessions).where(eq(sessions.accountId, uid)),
     db.delete(accounts).where(eq(accounts.id, uid)),
     ]);
   } catch (err) {
     if (pgErrorCode(err) === '23503') {
-      return json({ error: 'coach_has_wallet_ledger' }, 409);
+      const racedContext = await loadAccountDeletionContext(db, uid, account.email);
+      if (!racedContext.impact.canDelete) {
+        return json(
+          { error: 'account_deletion_blocked', impact: racedContext.impact },
+          409,
+        );
+      }
+      return json({ error: 'account_deletion_conflict', retryable: true }, 409);
     }
     throw err;
   }

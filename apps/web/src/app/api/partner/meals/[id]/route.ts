@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { requirePartner } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { guardedMealSoftDeleteSql } from '@/lib/meals';
+import { partnerOperationLockSql } from '@/lib/partnerOperationLock';
 
 export const runtime = 'nodejs';
 
@@ -86,12 +88,25 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   const { partnerId } = guard;
 
   const { id } = await ctx.params;
-  const [meal] = await getDb()
-    .update(meals)
-    .set({ isDeleted: true, isActive: false, updatedAt: new Date() })
-    .where(and(eq(meals.id, id), eq(meals.partnerId, partnerId), eq(meals.isDeleted, false)))
-    .returning({ id: meals.id });
-  if (!meal) return json({ error: 'not_found' }, 404);
+  const db = getDb();
+  const [, deleteResult] = await db.batch([
+    db.execute(partnerOperationLockSql(partnerId)),
+    db.execute(guardedMealSoftDeleteSql({ mealId: id, partnerId, now: new Date() })),
+  ]);
+  const row = deleteResult.rows[0];
+  const outcome = row && typeof row.outcome === 'string' ? row.outcome : 'conflict';
+  if (outcome === 'not_found') return json({ error: outcome }, 404);
+  if (outcome === 'fixed_subscription_in_use') {
+    const rawCount = row?.subscription_count;
+    const subscriptionCount =
+      typeof rawCount === 'number'
+        ? rawCount
+        : typeof rawCount === 'string'
+          ? Number.parseInt(rawCount, 10)
+          : 0;
+    return json({ error: outcome, subscriptionCount }, 409);
+  }
+  if (outcome !== 'deleted') return json({ error: 'conflict' }, 409);
 
   return json({ ok: true }, 200);
 }

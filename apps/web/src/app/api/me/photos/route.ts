@@ -1,10 +1,14 @@
 import { progressPhotos } from '@gym/db';
-import { hasEntitlement, maskPii, minTierFor } from '@gym/shared';
+import { hasEntitlement, ktmDateString, maskPii, minTierFor } from '@gym/shared';
 import { desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import {
+  atomicProgressPhotoClaimSql,
+  progressPhotoCreateSchema,
+} from '@/lib/progressPhotoClaims';
 import { rateLimit } from '@/lib/rateLimit';
 import { getImageProvider, NotConfiguredError } from '@/lib/video';
 
@@ -29,21 +33,12 @@ export const runtime = 'nodejs';
  *          in-app-contact-only policy as coach_milestones.note.
  */
 
-const postSchema = z.object({
-  takenOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  // The `uid` returned by POST /api/uploads/image {kind:'progress_photo'} —
-  // that kind is always access:'authenticated', so the reservation never
-  // hands back a deliveryUrl, only this uid. The server (CloudinaryProvider)
-  // always mints uids as `progress_photo/<v4-uuid>`; enforcing that exact
-  // shape here stops a client from storing an uid from a DIFFERENT folder
-  // (e.g. a leaked `payment_receipt/<uuid>`) and later getting it signed
-  // through this route — this is a minimum bound, not full ownership
-  // binding (see review note on this route).
-  uid: z
-    .string()
-    .trim()
-    .regex(/^progress_photo\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
-  note: z.string().trim().max(300).optional(),
+const claimedPhotoRowSchema = z.object({
+  id: z.string().min(1),
+  taken_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  note: z.string(),
+  created_at: z.union([z.date(), z.string().min(1)]),
+  image_url: z.string().min(1),
 });
 
 export function OPTIONS() {
@@ -118,32 +113,47 @@ export async function POST(req: Request) {
   });
   if (limited) return limited;
 
-  const parsed = postSchema.safeParse(await readJson(req));
+  const parsed = progressPhotoCreateSchema(ktmDateString(new Date())).safeParse(
+    await readJson(req),
+  );
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { takenOn, uid, note } = parsed.data;
+  const { takenOn, reservationId, note } = parsed.data;
 
-  const inserted = await getDb()
-    .insert(progressPhotos)
-    .values({ accountId: user.id, takenOn, imageUrl: uid, note: note ? maskPii(note) : '' })
-    .returning({
-      id: progressPhotos.id,
-      takenOn: progressPhotos.takenOn,
-      note: progressPhotos.note,
-      createdAt: progressPhotos.createdAt,
-    });
-
-  const row = inserted[0];
-  if (!row) return json({ error: 'invalid' }, 400);
+  const result = await getDb().execute(
+    atomicProgressPhotoClaimSql({
+      photoId: crypto.randomUUID(),
+      reservationId,
+      accountId: user.id,
+      takenOn,
+      note: note ? maskPii(note) : '',
+    }),
+  );
+  const rawRow = result.rows[0];
+  if (!rawRow) return json({ error: 'upload_reservation_invalid' }, 409);
+  const parsedRow = claimedPhotoRowSchema.safeParse(rawRow);
+  if (!parsedRow.success) throw new Error('Unexpected progress-photo claim result');
+  const row = parsedRow.data;
 
   // Best-effort signed URL on the create response — if the provider becomes
   // unconfigured between the upload reservation and this call, the row still
   // saves fine; the client just re-fetches GET later once it's configured.
   let url: string | null = null;
   try {
-    url = await getImageProvider().signedImageUrl(uid);
+    url = await getImageProvider().signedImageUrl(row.image_url);
   } catch (err) {
     if (!(err instanceof NotConfiguredError)) throw err;
   }
 
-  return json({ photo: { ...row, url } }, 201);
+  return json(
+    {
+      photo: {
+        id: row.id,
+        takenOn: row.taken_on,
+        note: row.note,
+        createdAt: row.created_at,
+        url,
+      },
+    },
+    201,
+  );
 }

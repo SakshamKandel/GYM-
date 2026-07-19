@@ -169,6 +169,23 @@ export function MealSubscriptionsRoster() {
         body: JSON.stringify({ id: selected.id, action }),
       });
       if (!res.ok) {
+        const payload: unknown = await res.json().catch(() => null);
+        const code =
+          typeof payload === 'object' &&
+          payload !== null &&
+          'error' in payload &&
+          typeof payload.error === 'string'
+            ? payload.error
+            : null;
+        if (code === 'payment_review_required' || code === 'refund_required') {
+          setActionError(
+            code === 'payment_review_required'
+              ? 'A receipt is under review. Reject it in Meal Payments before changing this plan.'
+              : 'This plan has a paid delivery or cycle. Refund it in Meal Payments so payment and fulfilment are reversed together.',
+          );
+          setBusy(false);
+          return;
+        }
         setActionError(
           res.status === 409
             ? 'This plan already changed state — refreshing…'

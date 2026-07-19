@@ -1,28 +1,27 @@
-import { mealOrderEvents, mealOrders, type Db } from '@gym/db';
+import { mealOrders, type Db } from '@gym/db';
 import type { OrderActor, OrderStatus } from '@gym/shared';
-import { and, eq, inArray, sql } from 'drizzle-orm';
 import { after } from 'next/server';
 import { sendPushToAccount } from '@/lib/push';
+import { atomicAdvanceOrderSql } from './advanceSql';
 
 /**
- * The single race-safe order status-advance path (§3 / invariant §8b). Every
- * fulfillment transition — member cancel, partner queue advance, admin override
- * — funnels through here so the CAS guard, event audit, timestamp bookkeeping
- * and member push stay identical across all three consoles.
+ * The single race-safe order status-advance path. Every fulfillment transition
+ * — member cancel, partner queue advance, admin override — funnels through here
+ * so the CAS guard, event audit, timestamp bookkeeping, and member push stay
+ * identical across all three consoles.
  *
- * Concurrency: the UPDATE is a compare-and-swap on `status = expectedStatus`
- * (neon-http has no transactions). Two racing advances of the same order both
- * target the same expected status; the first flips it and bumps
- * `statusVersion`, the second matches 0 rows → `{ ok:false, reason:'conflict' }`
- * (the route maps that to 409). Optional `scope` adds the caller's ownership
- * predicate to the same WHERE (partnerId for a partner, accountId for a member)
- * so a mismatched scope also yields 0 rows — an IDOR attempt is indistinguishable
- * from a lost race, never a 200.
+ * Concurrency: the UPDATE is a compare-and-swap on `status = expectedStatus`.
+ * Two racing advances both target the same expected status; the first flips it
+ * and bumps `statusVersion`, while the second returns no row and becomes a 409.
+ * Optional `scope` adds the caller's ownership predicate to the same WHERE, so
+ * an ownership miss is indistinguishable from a lost race.
  *
- * The transition's LEGALITY and the actor's AUTHORITY are the caller's job
- * (canActorAdvance + payment/cutoff guards from @gym/shared and the route). This
- * helper assumes the caller already validated them and only enforces the atomic
- * write.
+ * The status update and append-only event are one PostgreSQL statement. If the
+ * event cannot be inserted, PostgreSQL rolls the UPDATE back; a successful CAS
+ * can therefore never exist without its audit event.
+ *
+ * Transition legality and actor authority remain the caller's responsibility
+ * (`canActorAdvance` plus payment/cutoff guards from @gym/shared and the route).
  */
 
 export interface AdvanceOrderParams {
@@ -47,7 +46,24 @@ export type AdvanceOrderResult =
   | { ok: true; order: typeof mealOrders.$inferSelect }
   | { ok: false; reason: 'conflict' };
 
-/** Member-facing push copy for the transitions worth notifying (§3). */
+type MealOrder = typeof mealOrders.$inferSelect;
+type MealOrderTimestamp =
+  | 'cutoffAt'
+  | 'placedAt'
+  | 'confirmedAt'
+  | 'deliveredAt'
+  | 'cancelledAt'
+  | 'updatedAt';
+type AtomicAdvanceOrderRow = Omit<MealOrder, MealOrderTimestamp> & {
+  cutoffAt: Date | string;
+  placedAt: Date | string;
+  confirmedAt: Date | string | null;
+  deliveredAt: Date | string | null;
+  cancelledAt: Date | string | null;
+  updatedAt: Date | string;
+};
+
+/** Member-facing push copy for transitions worth notifying. */
 const PUSH_COPY: Partial<Record<OrderStatus, { title: string; body: string }>> = {
   confirmed: { title: 'Order confirmed', body: 'Your meal order has been confirmed.' },
   out_for_delivery: { title: 'Out for delivery', body: 'Your meal is on the way.' },
@@ -56,59 +72,50 @@ const PUSH_COPY: Partial<Record<OrderStatus, { title: string; body: string }>> =
   refused: { title: 'Delivery refused', body: 'Your meal order was marked refused.' },
 };
 
+function requiredDate(value: Date | string): Date {
+  return value instanceof Date ? value : new Date(value);
+}
+
+function nullableDate(value: Date | string | null): Date | null {
+  return value === null ? null : requiredDate(value);
+}
+
+function mapAtomicOrderRow(row: AtomicAdvanceOrderRow): MealOrder {
+  return {
+    ...row,
+    cutoffAt: requiredDate(row.cutoffAt),
+    placedAt: requiredDate(row.placedAt),
+    confirmedAt: nullableDate(row.confirmedAt),
+    deliveredAt: nullableDate(row.deliveredAt),
+    cancelledAt: nullableDate(row.cancelledAt),
+    updatedAt: requiredDate(row.updatedAt),
+  };
+}
+
 export async function advanceOrderStatus(
   params: AdvanceOrderParams,
 ): Promise<AdvanceOrderResult> {
   const { db, orderId, expectedStatus, toStatus, actor, actorId, scope, cancelReason } = params;
   const now = params.now ?? new Date();
 
-  const predicates = [eq(mealOrders.id, orderId), eq(mealOrders.status, expectedStatus)];
-  if (scope?.partnerId) predicates.push(eq(mealOrders.partnerId, scope.partnerId));
-  if (scope?.accountId) predicates.push(eq(mealOrders.accountId, scope.accountId));
-  // Destructive fulfilment transitions may not strand captured money or an
-  // in-review receipt. Routes preflight this for stable, actionable error
-  // codes; this predicate is the concurrency backstop if payment changes after
-  // that read. The dedicated admin refund route updates payment + fulfilment
-  // together and deliberately does not pass through this ordinary advance.
-  if (toStatus === 'cancelled' || toStatus === 'refused') {
-    predicates.push(inArray(mealOrders.paymentStatus, ['unpaid', 'refunded']));
-  }
-
-  // Only the timestamp for THIS transition is stamped; the others keep their
-  // frozen value (a re-advance can never happen — the CAS forbids leaving a
-  // terminal state). The set literal is passed inline so drizzle accepts the
-  // SQL statusVersion increment (an explicit $inferInsert annotation would type
-  // that column as number and reject the SQL).
-  const updated = await db
-    .update(mealOrders)
-    .set({
-      status: toStatus,
-      statusVersion: sql`${mealOrders.statusVersion} + 1`,
-      updatedAt: now,
-      decidedBy: actorId,
-      ...(toStatus === 'confirmed' ? { confirmedAt: now } : {}),
-      ...(toStatus === 'delivered' ? { deliveredAt: now } : {}),
-      ...(toStatus === 'cancelled' ? { cancelledAt: now, cancelReason: cancelReason ?? null } : {}),
-    })
-    .where(and(...predicates))
-    .returning();
-  const order = updated[0];
-  if (!order) return { ok: false, reason: 'conflict' };
-
-  // Append-only audit + push are best-effort AFTER the committed CAS — a failure
-  // here must never undo the (already durable) status change (mirrors logAudit).
-  try {
-    await db.insert(mealOrderEvents).values({
-      orderId: order.id,
-      fromStatus: expectedStatus,
+  const mutation = await db.execute<AtomicAdvanceOrderRow>(
+    atomicAdvanceOrderSql({
+      orderId,
+      expectedStatus,
       toStatus,
+      actor,
       actorId,
-      actorRole: actor,
-    });
-  } catch (err) {
-    console.error('[meals] order event append failed', err);
-  }
+      scope,
+      cancelReason,
+      now,
+      eventId: crypto.randomUUID(),
+    }),
+  );
+  const mutationRow = mutation.rows[0];
+  if (!mutationRow) return { ok: false, reason: 'conflict' };
+  const order = mapAtomicOrderRow(mutationRow);
 
+  // Push remains best-effort after the atomic database statement commits.
   const copy = PUSH_COPY[toStatus];
   if (copy) {
     const accountId = order.accountId;

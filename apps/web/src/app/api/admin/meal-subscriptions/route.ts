@@ -1,6 +1,6 @@
 import { accounts, mealBillingCycles, mealPartners, mealOrders, mealSubscriptions, meals } from '@gym/db';
 import { canAdvanceSubscription, ktmDateString, subscriptionActionTarget } from '@gym/shared';
-import { and, desc, eq, gt, gte, inArray } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, sql } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
@@ -181,24 +181,48 @@ export async function POST(req: Request) {
   const row = updated[0];
   if (!row) return json({ error: 'conflict' }, 409);
 
+  if (target === 'paused' || target === 'cancelled') {
+    const paymentBlock = await subscriptionPaymentMutationBlock({
+      db,
+      subscriptionId: sub.id,
+      scope: { kind: 'remaining' },
+    });
+    if (paymentBlock) {
+      const reverted = await db
+        .update(mealSubscriptions)
+        .set({ status: sub.status, updatedAt: new Date() })
+        .where(and(eq(mealSubscriptions.id, sub.id), eq(mealSubscriptions.status, target)))
+        .returning({ id: mealSubscriptions.id });
+      return json({ error: reverted[0] ? paymentBlock : 'conflict' }, 409);
+    }
+  }
+
   if (target === 'cancelled') {
-    const today = ktmDateString(new Date());
+    const cancelNow = new Date();
+    const today = ktmDateString(cancelNow);
     await db
       .update(mealOrders)
-      .set({ status: 'cancelled', cancelledAt: new Date(), cancelReason: 'Subscription cancelled by admin' })
+      .set({
+        status: 'cancelled',
+        statusVersion: sql`${mealOrders.statusVersion} + 1`,
+        cancelledAt: cancelNow,
+        cancelReason: 'Subscription cancelled by admin',
+        decidedBy: principal.id,
+        updatedAt: cancelNow,
+      })
       .where(
         and(
           eq(mealOrders.subscriptionId, sub.id),
           eq(mealOrders.status, 'pending'),
           inArray(mealOrders.paymentStatus, ['unpaid', 'refunded']),
           gte(mealOrders.deliveryDate, today),
-          gt(mealOrders.cutoffAt, new Date()),
+          gt(mealOrders.cutoffAt, cancelNow),
         ),
       );
 
     await db
       .update(mealBillingCycles)
-      .set({ status: 'void', updatedAt: new Date() })
+      .set({ status: 'void', updatedAt: cancelNow })
       .where(
         and(
           eq(mealBillingCycles.subscriptionId, sub.id),

@@ -32,6 +32,12 @@ dedicated deleted-subject/tombstone model (or nullable anonymized ownership) and
 explicit retention periods before this blocker is relaxed. No database migration
 or production schema push is part of the 2026-07-19 hardening slice.
 
+The admin `POST /api/admin/members/[id]/gdpr` route now uses the same impact
+loader and private/legacy cleanup policy. It preserves its stricter permission,
+rank, cannot-target-self, and typed-email gates, but it is a hard-delete route —
+not the future retained-record anonymization process — and therefore returns the
+same 409 instead of bypassing retention safeguards.
+
 ## Data cleanup for eligible accounts
 
 - The one unambiguous legacy `profiles.email` match is deleted in the same
@@ -42,8 +48,10 @@ or production schema push is part of the 2026-07-19 hardening slice.
   rows. Every asset is attempted, missing assets are successful no-ops, and DB
   deletion does not begin if any provider call fails. Retrying the full request
   is therefore safe even after only some assets were removed.
-- Audit metadata records that typed confirmation occurred but does not copy the
-  member email into the retained audit row.
+- The deletion audit records typed confirmation without copying the member
+  email. Existing audit rows keep their action and timestamp for operational
+  integrity, while account-linked target identifiers, metadata, and IP
+  addresses are scrubbed before the account row is removed.
 
 The old `photos.storage_path` field belongs to the pre-account legacy storage
 model and does not identify a supported Cloudinary UID. Its database row is

@@ -124,6 +124,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       .from(mealOrders)
       .where(eq(mealOrders.id, row.orderId))
       .limit(1);
+    if (!before) return json({ error: 'target_not_found' }, 409);
     const reversed = await db
       .update(mealOrders)
       .set({
@@ -138,6 +139,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       .where(
         and(
           eq(mealOrders.id, row.orderId),
+          eq(mealOrders.status, before.status),
           inArray(mealOrders.paymentStatus, ['paid', 'receipt_submitted']),
           inArray(mealOrders.status, ['pending', 'confirmed', 'cancelled']),
           or(eq(mealOrders.status, 'cancelled'), gt(mealOrders.cutoffAt, now)),
@@ -154,7 +156,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       if (!current || current.status !== 'cancelled' || current.paymentStatus !== 'refunded') {
         return json({ error: 'non_refundable' }, 409);
       }
-    } else if (before && before.status !== 'cancelled') {
+    } else if (before.status !== 'cancelled') {
       try {
         await db.insert(mealOrderEvents).values({
           orderId: row.orderId,

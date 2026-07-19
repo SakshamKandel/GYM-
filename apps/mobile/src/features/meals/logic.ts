@@ -214,6 +214,10 @@ export function mealErrorMessage(code: string): string {
     case 'invalid_transition':
     case 'conflict':
       return 'That action no longer applies — refresh and try again.';
+    case 'payment_review_required':
+      return 'A payment receipt is under review. Contact support before cancelling or skipping.';
+    case 'refund_required':
+      return 'This has already been paid. Contact support so the refund and cancellation happen together.';
     case 'idempotency_conflict':
       return 'This checkout changed while it was being submitted. Review it and try again.';
     case 'not_active':

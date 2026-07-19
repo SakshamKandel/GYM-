@@ -85,6 +85,25 @@ export interface WorkoutLog {
   durationSec: number | null;
 }
 
+/**
+ * The immutable exercise shape needed to restore an in-progress workout after
+ * an app restart. Logged sets remain separate; this preserves unlogged
+ * template/coach exercises and their targets locally while the session is
+ * active.
+ */
+export interface WorkoutExerciseBlueprint {
+  exerciseId: string;
+  exerciseName: string;
+  equipment: string | null;
+  targetSets: number;
+  repRange: string | null;
+  restSec: number;
+}
+
+export interface WorkoutSessionBlueprint {
+  exercises: WorkoutExerciseBlueprint[];
+}
+
 export interface WeightLog {
   id: string;
   date: string; // ISO date, one per day

@@ -1,8 +1,15 @@
 'use client';
 
-import { canManageRole, effectiveTier, type Permission } from '@gym/shared';
+import {
+  ACCOUNT_DELETION_BLOCKER_CODES,
+  canManageRole,
+  effectiveTier,
+  type AccountDeletionBlockerCode,
+  type Permission,
+} from '@gym/shared';
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { z } from 'zod';
 import {
   Badge,
   Button,
@@ -22,6 +29,19 @@ import type {
 } from './types';
 
 const TIERS: Tier[] = ['starter', 'silver', 'gold', 'elite'];
+
+const accountDeletionErrorSchema = z.object({
+  error: z.string(),
+  impact: z
+    .object({
+      blockers: z.array(
+        z.object({
+          code: z.enum(ACCOUNT_DELETION_BLOCKER_CODES),
+        }),
+      ),
+    })
+    .optional(),
+});
 
 /**
  * Member detail Drawer. Opens when `memberId` is set; fetches the full detail
@@ -259,11 +279,45 @@ export function MemberDrawer({
   }
 
   // Map a credential-route error code to member-facing copy.
-  function credErrorCopy(status: number, code: string | null): string {
+  function credErrorCopy(
+    status: number,
+    code: string | null,
+    deletionBlockers: readonly AccountDeletionBlockerCode[] = [],
+  ): string {
     if (code === 'email_taken') return 'That email is already used by another account.';
     if (code === 'insufficient_rank')
       return 'Only a higher-ranked admin can manage this staff member’s credentials.';
     if (code === 'confirm_mismatch') return 'The confirmation email did not match.';
+    if (code === 'private_asset_cleanup_pending')
+      return 'Private progress-photo cleanup is incomplete. Nothing else was deleted; retry after storage recovers.';
+    if (code === 'account_deletion_conflict')
+      return 'The account changed while deletion was starting. Nothing was deleted; refresh and review it again.';
+    if (code === 'account_deletion_blocked') {
+      const blockers = new Set(deletionBlockers);
+      if (
+        blockers.has('live_meal_orders') ||
+        blockers.has('open_meal_subscriptions')
+      ) {
+        return 'Finish or cancel the member’s active meal orders and subscriptions first. Nothing was deleted.';
+      }
+      if (
+        blockers.has('pending_meal_payment_requests') ||
+        blockers.has('pending_membership_payment_requests')
+      ) {
+        return 'Resolve the member’s pending payment reviews first. Nothing was deleted.';
+      }
+      if (
+        blockers.has('staff_offboarding_required') ||
+        blockers.has('partner_offboarding_required') ||
+        blockers.has('coach_offboarding_required')
+      ) {
+        return 'Offboard this staff, coach, or meal-partner identity and its active relationships first. Nothing was deleted.';
+      }
+      if (blockers.has('legacy_identity_ambiguous')) {
+        return 'Multiple legacy profiles match this email. Verify the correct identity before erasure; nothing was deleted.';
+      }
+      return 'Order, payment, discount, or payout history requires retention. Use the verified retention/anonymization process; nothing was deleted.';
+    }
     if (status === 403) return 'You do not have permission for that action.';
     if (status === 404) return 'This member no longer exists.';
     return 'That action could not be completed.';
@@ -392,12 +446,18 @@ export function MemberDrawer({
       });
       if (!res.ok) {
         let code: string | null = null;
+        let deletionBlockers: AccountDeletionBlockerCode[] = [];
         try {
-          code = ((await res.json()) as { error?: unknown }).error as string;
+          const parsedError = accountDeletionErrorSchema.safeParse(await res.json());
+          if (parsedError.success) {
+            code = parsedError.data.error;
+            deletionBlockers =
+              parsedError.data.impact?.blockers.map((blocker) => blocker.code) ?? [];
+          }
         } catch {
           code = null;
         }
-        setCredError(credErrorCopy(res.status, code));
+        setCredError(credErrorCopy(res.status, code, deletionBlockers));
         return;
       }
       // The account is gone — refresh the directory and close the drawer.
@@ -921,8 +981,9 @@ export function MemberDrawer({
               {/* GDPR erasure (danger) */}
               <FieldGroup label="Delete account (GDPR)">
                 <Muted>
-                  Permanently erases this account and everything it owns. History that
-                  references others is anonymized. This cannot be undone.
+                  Hard-deletes only an eligible account. Active services, staff/coach/partner
+                  access, ambiguous legacy identity, and retained order or payment history
+                  block the action without deleting or claiming to anonymize anything.
                 </Muted>
                 <input
                   className="gt-input"

@@ -218,6 +218,36 @@ export function canAdvanceCycle(from: CycleStatus, to: CycleStatus): boolean {
   return CYCLE_TRANSITIONS[from]?.includes(to) ?? false;
 }
 
+export interface SkipRepricedCycle {
+  status: CycleStatus;
+  plannedSlots: number;
+  pricePerDayMinor: number;
+  amountMinor: number;
+}
+
+/**
+ * Reprice an unfunded weekly cycle after a newly-created skip. Duplicate skips
+ * and non-editable cycles are exact no-ops. A final removed slot voids the
+ * cycle so it can never accept a zero-value receipt.
+ */
+export function repriceCycleForNewSkip(
+  cycle: SkipRepricedCycle,
+  isNewSkip: boolean,
+): SkipRepricedCycle {
+  if (!isNewSkip || (cycle.status !== 'open' && cycle.status !== 'awaiting_payment')) {
+    return { ...cycle };
+  }
+
+  const plannedSlots = Math.max(0, Math.trunc(cycle.plannedSlots) - 1);
+  const pricePerDayMinor = Math.max(0, Math.trunc(cycle.pricePerDayMinor));
+  return {
+    status: plannedSlots === 0 ? 'void' : cycle.status,
+    plannedSlots,
+    pricePerDayMinor,
+    amountMinor: plannedSlots * pricePerDayMinor,
+  };
+}
+
 // --- Partner rotation (deterministic) ----------------------------------------
 
 /** Minimal shape needed to resolve a rotating-plan meal for a date/window. */

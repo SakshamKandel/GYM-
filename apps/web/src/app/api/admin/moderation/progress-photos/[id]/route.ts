@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
+import { getImageProvider, NotConfiguredError } from '@/lib/video';
 
 export const runtime = 'nodejs';
 
@@ -10,9 +11,8 @@ export const runtime = 'nodejs';
  * Admin console — moderator removal of a progress_photos row
  * (ADMIN-MASTER-PLAN §3 P1-9). Mirrors DELETE /api/me/photos/[id] (the
  * member's own-row delete) but without the accountId===caller scoping, and
- * always audited. Same NOTE as that route: this removes the DB row only, the
- * underlying Cloudinary asset is left in place (no deleteImage on the provider
- * yet — out of scope here too).
+ * always audited. The provider asset is now destroyed before the DB row. The
+ * same lifecycle is used by member self-deletion and full account erasure.
  *
  * Guarded by requirePermission('moderation.manage').
  */
@@ -28,13 +28,32 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   const { id } = await params;
 
   const db = getDb();
-  const deleted = await db
-    .delete(progressPhotos)
+  const [row] = await db
+    .select({
+      id: progressPhotos.id,
+      accountId: progressPhotos.accountId,
+      takenOn: progressPhotos.takenOn,
+      uid: progressPhotos.imageUrl,
+    })
+    .from(progressPhotos)
     .where(eq(progressPhotos.id, id))
-    .returning({ id: progressPhotos.id, accountId: progressPhotos.accountId, takenOn: progressPhotos.takenOn });
-
-  const row = deleted[0];
+    .limit(1);
   if (!row) return json({ error: 'not_found' }, 404);
+
+  try {
+    await getImageProvider().deleteImage(row.uid, 'authenticated');
+  } catch (error) {
+    if (error instanceof NotConfiguredError) {
+      return json({ error: 'image_not_configured' }, 503);
+    }
+    console.error('Moderated progress photo provider deletion failed', {
+      photoId: row.id,
+      error: error instanceof Error ? error.message : 'unknown_error',
+    });
+    return json({ error: 'image_delete_failed' }, 502);
+  }
+
+  await db.delete(progressPhotos).where(eq(progressPhotos.id, row.id));
 
   const ip = req.headers.get('x-forwarded-for');
   await logAudit(
@@ -42,7 +61,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     'moderation.progress_photo.remove',
     'account',
     row.accountId,
-    { photoId: id, takenOn: row.takenOn },
+    { photoId: row.id, takenOn: row.takenOn },
     ip,
   );
 

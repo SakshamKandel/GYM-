@@ -66,7 +66,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     scope: { accountId: me.id },
     cancelReason: parsed.data.reason ? maskPii(parsed.data.reason) : 'Cancelled by member',
   });
-  if (!result.ok) return json({ error: 'conflict' }, 409);
+  if (!result.ok) {
+    const [current] = await db
+      .select({ paymentStatus: mealOrders.paymentStatus })
+      .from(mealOrders)
+      .where(and(eq(mealOrders.id, order.id), eq(mealOrders.accountId, me.id)))
+      .limit(1);
+    const currentBlock = current
+      ? orderPaymentMutationBlock(current.paymentStatus)
+      : null;
+    return json({ error: currentBlock ?? 'conflict' }, 409);
+  }
 
   const items = await db
     .select()

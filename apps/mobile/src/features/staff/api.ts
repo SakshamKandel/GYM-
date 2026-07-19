@@ -74,6 +74,9 @@ export type StaffErrorCode =
   | 'conflict'
   | 'already_pending'
   | 'not_an_upgrade'
+  | 'account_deletion_blocked'
+  | 'private_asset_cleanup_pending'
+  | 'account_deletion_conflict'
   | 'not_configured'
   | 'rate_limited'
   | 'network';
@@ -173,6 +176,9 @@ const BODY_ERROR_CODES: Partial<Record<string, StaffErrorCode>> = {
   not_approved: 'not_approved',
   non_refundable: 'non_refundable',
   insufficient_balance: 'insufficient_balance',
+  account_deletion_blocked: 'account_deletion_blocked',
+  private_asset_cleanup_pending: 'private_asset_cleanup_pending',
+  account_deletion_conflict: 'account_deletion_conflict',
 };
 
 /** Perform the request; resolve with the parsed JSON (or null) of a 2xx body. */
@@ -2409,24 +2415,26 @@ export async function updateMemberIdentity(
 }
 
 /**
- * POST /api/admin/members/[id]/gdpr {confirm} → runs the same anonymization
- * cascade as the member's own self-serve DELETE /api/me, admin-initiated.
- * The server requires `confirm` to exactly equal the account's current email
- * (its own typed-confirm gate against a stray click); this fetches that email
- * via getMemberDetail internally so the call stays a simple (accountId,
- * token) pair — the CALLER's UI is still responsible for collecting its own
- * typed confirmation from the admin before invoking this at all, since the
- * cascade is irreversible. 'cannot_target_self' when aimed at the caller's
- * own account (self-erasure only via DELETE /api/me). Requires
- * `members.manage_credentials`.
+ * POST /api/admin/members/[id]/gdpr {confirm} → hard-deletes only an eligible
+ * account. Active/offboarding/retention blockers return a typed conflict and
+ * nothing is deleted. This endpoint does not claim to anonymize retained data.
+ * The server requires `confirm` to exactly equal the account's current email.
+ * The caller must pass the value the admin actually typed; do not refetch and
+ * substitute a newer email, because that would bypass the human confirmation
+ * when the member changes concurrently. `cannot_target_self` is returned when
+ * aimed at the caller's own account (self-erasure only via DELETE /api/me).
+ * Requires `members.manage_credentials`.
  */
-export async function gdprAnonymizeMember(accountId: string, token: string): Promise<void> {
-  const detail = await getMemberDetail(accountId, token);
+export async function deleteMemberAccount(
+  accountId: string,
+  confirmationEmail: string,
+  token: string,
+): Promise<void> {
   const data = await staffRequest({
     method: 'POST',
     path: `/api/admin/members/${encodeURIComponent(accountId)}/gdpr`,
     token,
-    body: { confirm: detail.member.email },
+    body: { confirm: confirmationEmail },
   });
   parse(okSchema, data);
 }

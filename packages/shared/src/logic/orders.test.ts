@@ -33,6 +33,7 @@ const {
   mergePaymentMutationBlocks,
   orderPaymentMutationBlock,
   partnerRotationFor,
+  repriceCycleForNewSkip,
   subscriptionActionTarget,
   weekBoundsFor,
 } = await import('./orders.ts');
@@ -170,6 +171,50 @@ describe('payment-safe cancellation policy', () => {
     );
     assert.equal(mergePaymentMutationBlocks([null, 'payment_review_required']), 'payment_review_required');
     assert.equal(mergePaymentMutationBlocks([null, null]), null);
+  });
+});
+
+describe('unfunded cycle repricing after a skip', () => {
+  const awaiting = {
+    status: 'awaiting_payment' as const,
+    plannedSlots: 4,
+    pricePerDayMinor: 25_000,
+    amountMinor: 100_000,
+  };
+
+  it('decrements exactly once and recomputes the authoritative amount', () => {
+    assert.deepEqual(repriceCycleForNewSkip(awaiting, true), {
+      ...awaiting,
+      plannedSlots: 3,
+      amountMinor: 75_000,
+    });
+    assert.deepEqual(repriceCycleForNewSkip(awaiting, false), awaiting);
+  });
+
+  it('voids a cycle when its final planned slot is skipped', () => {
+    assert.deepEqual(
+      repriceCycleForNewSkip(
+        { ...awaiting, plannedSlots: 1, amountMinor: 25_000 },
+        true,
+      ),
+      {
+        ...awaiting,
+        status: 'void',
+        plannedSlots: 0,
+        amountMinor: 0,
+      },
+    );
+  });
+
+  it('never mutates paid, void, or duplicate cycles', () => {
+    assert.deepEqual(
+      repriceCycleForNewSkip({ ...awaiting, status: 'paid' }, true),
+      { ...awaiting, status: 'paid' },
+    );
+    assert.deepEqual(
+      repriceCycleForNewSkip({ ...awaiting, status: 'void' }, true),
+      { ...awaiting, status: 'void' },
+    );
   });
 });
 

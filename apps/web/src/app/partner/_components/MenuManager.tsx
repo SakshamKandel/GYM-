@@ -27,6 +27,13 @@ const DAYS: { i: number; label: string }[] = [
 const WINDOWS: MealWindow[] = ['lunch', 'dinner'];
 const GOALS: MealGoalTag[] = ['cutting', 'bulking', 'balanced'];
 
+function fixedSubscriptionBlockCount(value: unknown): number | null {
+  if (typeof value !== 'object' || value === null) return null;
+  if (!('error' in value) || value.error !== 'fixed_subscription_in_use') return null;
+  if (!('subscriptionCount' in value) || typeof value.subscriptionCount !== 'number') return null;
+  return value.subscriptionCount;
+}
+
 interface FormState {
   name: string;
   description: string;
@@ -412,6 +419,20 @@ function MealFormDrawer({
         credentials: 'include',
       });
       if (!res.ok) {
+        let blockerCount: number | null = null;
+        try {
+          blockerCount = fixedSubscriptionBlockCount((await res.json()) as unknown);
+        } catch {
+          // Keep the generic fallback for a proxy/non-JSON response.
+        }
+        if (blockerCount !== null) {
+          setError(
+            `${blockerCount} active or paused fixed ${blockerCount === 1 ? 'plan still uses' : 'plans still use'} this meal. ` +
+              'Keep it temporarily unavailable, or ask affected members to edit their plan before removing it.',
+          );
+          setBusy(false);
+          return;
+        }
         setError('Could not remove this item.');
         setBusy(false);
         return;
@@ -434,8 +455,8 @@ function MealFormDrawer({
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
           {currentId ? (
             <ConfirmButton
-              label="Remove"
-              confirmLabel="Confirm remove"
+              label="Remove from menu"
+              confirmLabel="Permanently remove"
               busyLabel="Removing…"
               busy={busy}
               onConfirm={() => void softDelete()}

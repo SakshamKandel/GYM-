@@ -201,6 +201,7 @@ const subscriptionSchema = z.object({
   startDate: z.string(),
   status: subscriptionStatusSchema,
   createdAt: z.string(),
+  updatedAt: z.string().optional(),
   // Additive (older server responses simply lack it): the oldest still-unpaid
   // weekly bill for this plan, if any — the only client-visible way to
   // discover a `cycleId` to pay via submitMealReceipt.
@@ -220,6 +221,33 @@ const subscriptionListSchema = z.object({
 const subscriptionEnvelope = z.object({
   subscription: z.object({ id: z.string(), status: subscriptionStatusSchema }),
 });
+
+const subscriptionPlanQuoteSchema = z.object({
+  pricePerDayMinor: z.number().int().nonnegative(),
+  currency: currencySchema,
+  deliveryFeeMinor: z.number().int().nonnegative(),
+});
+export type MealSubscriptionPlanQuote = z.infer<typeof subscriptionPlanQuoteSchema>;
+
+const subscriptionEditResultSchema = z.object({
+  subscription: z.object({
+    id: z.string(),
+    status: subscriptionStatusSchema,
+    daysOfWeek: z.array(z.number().int().min(0).max(6)),
+    window: mealWindowSchema,
+    planType: planTypeSchema,
+    mealId: z.string().nullable(),
+    addressId: z.string(),
+    pricePerDayMinor: z.number().int().nonnegative(),
+    currency: currencySchema,
+  }),
+  effective: z.object({
+    mode: z.literal('future_unmaterialized'),
+    fromDate: z.string(),
+    preservedOrderDates: z.array(z.string()),
+  }),
+});
+export type MealSubscriptionEditResult = z.infer<typeof subscriptionEditResultSchema>;
 
 // ── Addresses ─────────────────────────────────────────────────────
 
@@ -423,6 +451,44 @@ export async function updateMealSubscription(
     body: { action },
   });
   return parse(subscriptionEnvelope, data).subscription;
+}
+
+export interface MealSubscriptionEditInput {
+  daysOfWeek: number[];
+  window: MealWindow;
+  planType: MealPlanType;
+  mealId: string | null;
+  addressId: string;
+}
+
+/** Live preview only; editMealSubscription re-quotes on the write path. */
+export async function quoteMealSubscriptionEdit(
+  token: string,
+  subscriptionId: string,
+  input: MealSubscriptionEditInput,
+): Promise<MealSubscriptionPlanQuote> {
+  const data = await mealsRequest({
+    method: 'POST',
+    path: `/api/meals/subscriptions/${encodeURIComponent(subscriptionId)}/quote`,
+    token,
+    body: { ...input },
+  });
+  return parse(z.object({ quote: subscriptionPlanQuoteSchema }), data).quote;
+}
+
+/** Edit future unfunded deliveries; existing order snapshots remain frozen. */
+export async function editMealSubscription(
+  token: string,
+  subscriptionId: string,
+  input: MealSubscriptionEditInput,
+): Promise<MealSubscriptionEditResult> {
+  const data = await mealsRequest({
+    method: 'PATCH',
+    path: `/api/meals/subscriptions/${encodeURIComponent(subscriptionId)}`,
+    token,
+    body: { action: 'edit', ...input },
+  });
+  return parse(subscriptionEditResultSchema, data);
 }
 
 /** POST /api/meals/subscriptions/[id]/skip {deliveryDate} — skip one delivery day. */

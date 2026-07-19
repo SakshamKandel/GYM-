@@ -1547,9 +1547,50 @@ export const buddyMessages = pgTable(
 );
 
 /**
- * Member-captured progress photos (silver+ entitlement). `imageUrl` points at
- * an 'authenticated'-delivery Cloudinary asset — always resolved to a signed
- * URL per request, same pattern as plan_videos, never stored/served public.
+ * Short-lived ownership records for direct provider image uploads. Private
+ * assets can only be attached by atomically consuming the account-bound row.
+ */
+export const imageUploadReservations = pgTable(
+  'image_upload_reservations',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    kind: text('kind', {
+      enum: [
+        'progress_photo',
+        'payment_receipt',
+        'application_avatar',
+        'coach_avatar',
+        'custom_exercise',
+        'diet_item',
+        'meal_photo',
+        'meal_receipt',
+        'gym_photo',
+      ],
+    }).notNull(),
+    assetUid: text('asset_uid').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('image_upload_reservations_asset_uid').on(t.assetUid),
+    index('image_upload_reservations_account_kind_expiry').on(
+      t.accountId,
+      t.kind,
+      t.expiresAt,
+    ),
+    index('image_upload_reservations_expiry').on(t.expiresAt),
+  ],
+);
+
+/**
+ * Member-captured progress photos (silver+ entitlement). `imageUrl` is an
+ * authenticated-delivery provider UID, signed freshly for each API response.
  */
 export const progressPhotos = pgTable(
   'progress_photos',
@@ -1565,7 +1606,10 @@ export const progressPhotos = pgTable(
     note: text('note').notNull().default(''),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('progress_photos_account_taken').on(t.accountId, t.takenOn)],
+  (t) => [
+    index('progress_photos_account_taken').on(t.accountId, t.takenOn),
+    uniqueIndex('progress_photos_image_uid').on(t.imageUrl),
+  ],
 );
 
 /**

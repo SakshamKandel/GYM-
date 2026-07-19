@@ -20,9 +20,9 @@ import {
 import { canManageRole, effectiveTier } from '@gym/shared';
 import {
   assignClient,
+  deleteMemberAccount,
   forceSignOutMember,
   exportCsvToFile,
-  gdprAnonymizeMember,
   generateResetLink,
   getCoaches,
   getMemberDetail,
@@ -49,9 +49,9 @@ import { useAuth } from '../../../state/auth';
  *   generateResetLink(memberId, token) => Promise<{ resetUrl: string; expiresAt: string }>
  *   forceSignOutMember(memberId, token) => Promise<void>
  *   updateMemberIdentity(memberId, { email?, displayName? }, token) => Promise<MemberAccount>
- *   gdprAnonymizeMember(memberId, token) => Promise<void> — the "typed confirm"
- *     is a CLIENT-side gate (type the member's email) before the button
- *     enables; nothing beyond the id crosses the wire.
+ *   deleteMemberAccount(memberId, confirmationEmail, token) => Promise<void> —
+ *     the exact value typed by the admin crosses the network and is rechecked
+ *     against the member's current email immediately before deletion.
  *   exportCsvToFile(kind, token) => Promise<string> — downloads the CSV
  *     straight to a local file (native-side streaming; never buffered into
  *     one JS string) and returns its `file://` URI, shared via the OS share
@@ -173,7 +173,7 @@ export default function AdminMembersScreen() {
   const staffRole = useAuth((s) => s.staffRole);
   const staffPermissions = useAuth((s) => s.staffPermissions);
   // Step-up (plan §3 #14): reset-link minting, force sign-out, identity edit,
-  // and GDPR anonymize are account-takeover / irreversible-data actions —
+  // and GDPR account deletion are account-takeover / irreversible-data actions —
   // same step-up gate as staff.tsx's role grant/revoke and subscriptions.tsx's
   // tier override, just newly wired here (defect: these P1-7 actions used to
   // fire on a bare confirm with no fresh password re-entry).
@@ -211,7 +211,7 @@ export default function AdminMembersScreen() {
   const [mutationError, setMutationError] = useState<string | null>(null);
 
   // ── P1-7: member lifecycle tools (reset link / force sign-out / edit
-  // identity / GDPR anonymize) — all gated on `members.manage_credentials`. ──
+  // identity / GDPR account deletion) — all gated on `members.manage_credentials`. ──
   const [resetLinkOpen, setResetLinkOpen] = useState(false);
   const [resetLinkLoading, setResetLinkLoading] = useState(false);
   const [resetLinkResult, setResetLinkResult] = useState<{
@@ -513,15 +513,15 @@ export default function AdminMembersScreen() {
   const gdprConfirmMatches =
     detail !== null && gdprConfirmText.trim().toLowerCase() === detail.member.email.toLowerCase();
 
-  async function doGdprAnonymize(): Promise<void> {
+  async function doDeleteAccount(): Promise<void> {
     if (!token || !detail || !gdprConfirmMatches) return;
     setGdprSaving(true);
     setGdprError(null);
     try {
-      await gdprAnonymizeMember(detail.member.id, token);
+      await deleteMemberAccount(detail.member.id, gdprConfirmText, token);
       setGdprDone(true);
       // The account no longer resolves to a normal member row after
-      // anonymization — close out and refresh the LIST rather than the
+      // deletion — close out and refresh the LIST rather than the
       // (now-gone) detail sheet.
       setTimeout(() => {
         setGdprOpen(false);
@@ -572,7 +572,7 @@ export default function AdminMembersScreen() {
   const canChangeTier = staffCan(staffPermissions, 'subscription.override');
   const canAssignCoach = staffCan(staffPermissions, 'coach.assign');
   const canSuspend = staffCan(staffPermissions, 'members.suspend');
-  // P1-7: reset link / force sign-out / identity edit / GDPR anonymize.
+  // P1-7: reset link / force sign-out / identity edit / GDPR account deletion.
   const canManageCredentials = staffCan(staffPermissions, 'members.manage_credentials');
   const canAnyAction = canChangeTier || canAssignCoach || canSuspend || canManageCredentials;
   // P1-10: CSV export of the directory — same read gate as the list itself.
@@ -1189,20 +1189,21 @@ export default function AdminMembersScreen() {
         </View>
       </Sheet>
 
-      {/* ── GDPR anonymize (P1-7) — typed confirm: the admin must type the
+      {/* ── GDPR account deletion (P1-7) — typed confirm: the admin must type the
           member's exact email before the button enables. ── */}
-      <Sheet visible={gdprOpen} onClose={() => setGdprOpen(false)} title="Anonymize member">
+      <Sheet visible={gdprOpen} onClose={() => setGdprOpen(false)} title="Delete account">
         <View style={styles.sheetBody}>
           {gdprDone ? (
             <AppText variant="body" color={colors.success}>
-              This member’s personal data has been anonymized.
+              This eligible account and its erasable personal data were deleted.
             </AppText>
           ) : (
             <>
               <AppText variant="body" color={colors.textDim}>
-                This permanently scrubs {detail?.member.email ?? 'this member'}&apos;s
-                personal data (GDPR right-to-erasure). It cannot be undone. Type
-                their email address to confirm.
+                This hard-deletes {detail?.member.email ?? 'this member'} only when no
+                active service, offboarding dependency, ambiguous legacy identity, or
+                retained order/payment history blocks it. It does not claim to anonymize
+                retained records. Type the email address to confirm.
               </AppText>
               <AppTextInput
                 value={gdprConfirmText}
@@ -1227,12 +1228,12 @@ export default function AdminMembersScreen() {
                   onPress={() => setGdprOpen(false)}
                 />
                 <Button
-                  label="Anonymize"
+                  label="Delete account"
                   variant="danger"
                   style={styles.decisionBtn}
                   loading={gdprSaving}
                   disabled={gdprSaving || !gdprConfirmMatches}
-                  onPress={() => reauth.guard(() => void doGdprAnonymize())}
+                  onPress={() => reauth.guard(() => void doDeleteAccount())}
                 />
               </View>
             </>
@@ -1241,7 +1242,7 @@ export default function AdminMembersScreen() {
       </Sheet>
 
       {/* Step-up password prompt for reset link / force sign-out / edit / GDPR
-          anonymize (plan §3 #14). */}
+          account deletion (plan §3 #14). */}
       <ReauthSheet controller={reauth} />
     </Screen>
   );
@@ -1262,6 +1263,12 @@ function errorLine(code: string): string {
       return 'That change was rejected. Try again.';
     case 'conflict':
       return 'That change conflicts with the current state.';
+    case 'account_deletion_blocked':
+      return 'Deletion is blocked by active services, offboarding, ambiguous legacy identity, or retained order/payment history. Nothing was deleted.';
+    case 'private_asset_cleanup_pending':
+      return 'Private progress-photo cleanup is incomplete. Nothing else was deleted; retry after storage recovers.';
+    case 'account_deletion_conflict':
+      return 'The account changed while deletion was starting. Nothing was deleted; refresh and try again.';
     case 'full':
       return "That coach is at their client capacity.";
     default:

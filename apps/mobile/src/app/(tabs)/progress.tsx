@@ -25,6 +25,7 @@ import { NutritionSection } from '../../features/analytics/components/NutritionS
 import { OverviewSection } from '../../features/analytics/components/OverviewSection';
 import { useAnalytics } from '../../features/analytics/hooks';
 import { MeasurementsSection } from '../../features/body/components/MeasurementsSection';
+import { ProgressPhotosCard } from '../../features/body/progressPhotos/ProgressPhotosCard';
 import { MilestonesSection } from '../../features/mentorship/components/MilestonesSection';
 import { StrengthSection } from '../../features/body/components/StrengthSection';
 import { WeightSection } from '../../features/body/components/WeightSection';
@@ -240,6 +241,7 @@ export default function ProgressScreen() {
         <Animated.View key="weight" entering={enterFade(0)}>
           <WeightSection />
           <MeasurementsSection />
+          <ProgressPhotosCard />
         </Animated.View>
       ) : null}
 

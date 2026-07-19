@@ -1550,7 +1550,7 @@ export default function SettingsScreen() {
       <ConfirmDialog
         visible={deleteStep === 'confirm'}
         title="Delete your account?"
-        message="This permanently erases your sign-in, health and training data, and private progress photos. Active services must be closed first; billing and order history may require support-assisted anonymization. Logs saved on this phone stay on the phone."
+        message="This permanently erases your sign-in, health and training data, and private progress photos. Active services must be closed first; billing and order history may require support-assisted anonymization. After the server confirms, this device’s local health and training logs are also removed."
         confirmLabel="Continue"
         cancelLabel="Keep my account"
         danger

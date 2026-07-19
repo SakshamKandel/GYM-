@@ -5,6 +5,10 @@ import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import {
+  atomicCycleReceiptSql,
+  mealCycleOperationLockSql,
+} from '@/lib/meals';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -17,7 +21,9 @@ export const runtime = 'nodejs';
  *  POST {orderId?|cycleId?, method, receiptUrl, note?} → EXACTLY ONE of
  *  orderId/cycleId. The amount is SERVER-authoritative: it is copied from the
  *  frozen order.totalMinor / cycle.amountMinor — the client cannot supply or
- *  influence it (invariant §8d). One live (`pending`) request per target and a
+ *  influence it (invariant §8d). Cycle submission shares a transaction lock
+ *  with skip repricing and reads the live amount inside that lock. One live
+ *  (`pending`) request per target and a
  *  globally-unique `receiptUrl` (DB unique index + friendly pre-read) prevent a
  *  member double-submitting or reusing one screenshot to fund two requests.
  *
@@ -76,63 +82,111 @@ export async function POST(req: Request) {
 
   const db = getDb();
 
-  // Resolve the server-authoritative amount + currency from the caller's own
-  // target, gating on a payable state. The member never supplies the amount.
-  let amountMinor: number;
-  let currency: string;
-  if (orderId) {
-    const [order] = await db
-      .select({
-        id: mealOrders.id,
-        totalMinor: mealOrders.totalMinor,
-        currency: mealOrders.currency,
-        paymentMethod: mealOrders.paymentMethod,
-        paymentStatus: mealOrders.paymentStatus,
-        status: mealOrders.status,
-      })
-      .from(mealOrders)
-      .where(and(eq(mealOrders.id, orderId), eq(mealOrders.accountId, me.id)))
-      .limit(1);
-    if (!order) return json({ error: 'order_not_found' }, 404);
-    // COD reconciles on delivery — it must never mint a payment request.
-    if (order.paymentMethod === 'cod') return json({ error: 'cod_no_receipt' }, 400);
-    if (order.status === 'cancelled' || order.status === 'refused') {
-      return json({ error: 'order_closed' }, 409);
-    }
-    if (order.paymentStatus === 'paid') return json({ error: 'already_paid' }, 409);
-    if (order.paymentStatus === 'refunded') return json({ error: 'order_refunded' }, 409);
-    amountMinor = order.totalMinor;
-    currency = order.currency;
-  } else {
+  if (cycleId) {
+    // Resolve only the stable lock identity here. The amount/currency are read
+    // again inside the locked insert so a concurrent pre-cutoff skip either
+    // reprices first or sees this new pending receipt and is rejected.
     const [cycle] = await db
       .select({
         id: mealBillingCycles.id,
-        amountMinor: mealBillingCycles.amountMinor,
-        currency: mealBillingCycles.currency,
+        subscriptionId: mealBillingCycles.subscriptionId,
+        weekStart: mealBillingCycles.weekStart,
         status: mealBillingCycles.status,
       })
       .from(mealBillingCycles)
-      .where(and(eq(mealBillingCycles.id, cycleId!), eq(mealBillingCycles.accountId, me.id)))
+      .where(and(eq(mealBillingCycles.id, cycleId), eq(mealBillingCycles.accountId, me.id)))
       .limit(1);
     if (!cycle) return json({ error: 'cycle_not_found' }, 404);
-    // Only a billed cycle has a frozen amount to pay. `open` isn't billed yet;
-    // `paid`/`void` are terminal for payment.
-    if (cycle.status !== 'awaiting_payment') return json({ error: 'cycle_not_payable' }, 409);
-    amountMinor = cycle.amountMinor;
-    currency = cycle.currency;
+    if (cycle.status !== 'awaiting_payment') {
+      return json({ error: 'cycle_not_payable' }, 409);
+    }
+
+    const [duplicateReceipt] = await db
+      .select({ id: mealPaymentRequests.id })
+      .from(mealPaymentRequests)
+      .where(eq(mealPaymentRequests.receiptUrl, receiptUrl))
+      .limit(1);
+    if (duplicateReceipt) return json({ error: 'receipt_already_used' }, 409);
+
+    try {
+      const [, insertResult] = await db.batch([
+        db.execute(mealCycleOperationLockSql(cycle.subscriptionId, cycle.weekStart)),
+        db.execute(
+          atomicCycleReceiptSql({
+            requestId: crypto.randomUUID(),
+            cycleId: cycle.id,
+            accountId: me.id,
+            method,
+            receiptUrl,
+            note: note ? maskPii(note) : null,
+          }),
+        ),
+      ]);
+
+      const insertRow = insertResult.rows[0];
+      const outcome =
+        insertRow && typeof insertRow.outcome === 'string'
+          ? insertRow.outcome
+          : 'conflict';
+      if (outcome === 'cycle_not_found') return json({ error: outcome }, 404);
+      if (outcome !== 'inserted') return json({ error: outcome }, 409);
+
+      const requestId =
+        insertRow && typeof insertRow.request_id === 'string'
+          ? insertRow.request_id
+          : null;
+      const requestStatus =
+        insertRow && typeof insertRow.request_status === 'string'
+          ? insertRow.request_status
+          : 'pending';
+      if (!requestId) return json({ error: 'conflict' }, 409);
+      return json({ request: { id: requestId, status: requestStatus } }, 201);
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      return json({ error: 'receipt_already_used' }, 409);
+    }
   }
+
+  if (!orderId) return json({ error: 'invalid' }, 400);
+
+  // Resolve the server-authoritative amount + currency from the caller's own
+  // target, gating on a payable state. The member never supplies the amount.
+  const [order] = await db
+    .select({
+      id: mealOrders.id,
+      totalMinor: mealOrders.totalMinor,
+      currency: mealOrders.currency,
+      paymentMethod: mealOrders.paymentMethod,
+      paymentStatus: mealOrders.paymentStatus,
+      status: mealOrders.status,
+    })
+    .from(mealOrders)
+    .where(and(eq(mealOrders.id, orderId), eq(mealOrders.accountId, me.id)))
+    .limit(1);
+  if (!order) return json({ error: 'order_not_found' }, 404);
+  // COD reconciles on delivery — it must never mint a payment request.
+  if (order.paymentMethod === 'cod') return json({ error: 'cod_no_receipt' }, 400);
+  if (order.status === 'cancelled' || order.status === 'refused') {
+    return json({ error: 'order_closed' }, 409);
+  }
+  if (order.paymentStatus === 'paid') return json({ error: 'already_paid' }, 409);
+  if (order.paymentStatus === 'refunded') return json({ error: 'order_refunded' }, 409);
+  const amountMinor = order.totalMinor;
+  const currency = order.currency;
 
   // One live request per target: a resubmitted (different) receipt while an
   // earlier one is still pending would let two approvals double-stamp the same
   // order/cycle. The DB has no partial-unique for this (a target may accrue
   // rejected history), so this read is the guard.
-  const targetPredicate = orderId
-    ? eq(mealPaymentRequests.orderId, orderId)
-    : eq(mealPaymentRequests.cycleId, cycleId!);
   const [pending] = await db
     .select({ id: mealPaymentRequests.id })
     .from(mealPaymentRequests)
-    .where(and(targetPredicate, eq(mealPaymentRequests.status, 'pending')))
+    .where(
+      and(
+        eq(mealPaymentRequests.orderId, orderId),
+        eq(mealPaymentRequests.status, 'pending'),
+      ),
+    )
     .limit(1);
   if (pending) return json({ error: 'already_pending' }, 409);
 
@@ -151,8 +205,8 @@ export async function POST(req: Request) {
       .insert(mealPaymentRequests)
       .values({
         accountId: me.id,
-        orderId: orderId ?? null,
-        cycleId: cycleId ?? null,
+        orderId,
+        cycleId: null,
         amountMinor,
         currency,
         method,
@@ -170,15 +224,13 @@ export async function POST(req: Request) {
 
   // Reflect "under review" on the order (best-effort; never undoes the request).
   // CAS from unpaid so a paid/refunded order is never dragged backwards.
-  if (orderId) {
-    try {
-      await db
-        .update(mealOrders)
-        .set({ paymentStatus: 'receipt_submitted', updatedAt: new Date() })
-        .where(and(eq(mealOrders.id, orderId), eq(mealOrders.paymentStatus, 'unpaid')));
-    } catch (err) {
-      console.error('[meals] order paymentStatus flip failed', err);
-    }
+  try {
+    await db
+      .update(mealOrders)
+      .set({ paymentStatus: 'receipt_submitted', updatedAt: new Date() })
+      .where(and(eq(mealOrders.id, orderId), eq(mealOrders.paymentStatus, 'unpaid')));
+  } catch (err) {
+    console.error('[meals] order paymentStatus flip failed', err);
   }
 
   return json({ request: { id: inserted.id, status: inserted.status } }, 201);

@@ -1,4 +1,4 @@
-import { admins } from '@gym/db';
+import { admins, imageUploadReservations } from '@gym/db';
 import type { Permission } from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -9,6 +9,7 @@ import { json, preflight, readJson } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { staffTokenFromCookie } from '@/lib/staffSession';
 import { getImageProvider, NotConfiguredError } from '@/lib/video';
+import { PROGRESS_PHOTO_RESERVATION_TTL_MS } from '@/lib/progressPhotoClaims';
 
 export const runtime = 'nodejs';
 
@@ -148,12 +149,33 @@ export async function POST(req: Request) {
       kind,
       access: ACCESS_BY_KIND[kind],
     });
+
+    // Private progress photos require a second, server-owned capability: the
+    // provider UID alone is never accepted by /api/me/photos. Persist this
+    // binding only after the provider has successfully created its upload
+    // reservation, and give the client only the opaque row id to claim it.
+    let reservationId: string | undefined;
+    let expiresAt: Date | undefined;
+    if (kind === 'progress_photo') {
+      reservationId = crypto.randomUUID();
+      expiresAt = new Date(Date.now() + PROGRESS_PHOTO_RESERVATION_TTL_MS);
+      await getDb().insert(imageUploadReservations).values({
+        id: reservationId,
+        accountId: user.id,
+        kind,
+        assetUid: reservation.uid,
+        expiresAt,
+      });
+    }
+
     return json(
       {
         uploadUrl: reservation.uploadUrl,
         fields: reservation.fields,
         uid: reservation.uid,
         deliveryUrl: reservation.deliveryUrl,
+        reservationId,
+        expiresAt: expiresAt?.toISOString(),
       },
       201,
     );

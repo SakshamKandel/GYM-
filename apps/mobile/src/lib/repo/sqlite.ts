@@ -19,6 +19,7 @@ import {
   ownerIdForAnonymousSession,
 } from './ownership';
 import type { AnalyticsSet, Repo, RepoStore } from './types';
+import { parseWorkoutBlueprintJson, serializeWorkoutBlueprint } from './workoutBlueprint';
 
 /** Offline-first native store (CLAUDE.md rule 5): every write lands here first. */
 
@@ -31,6 +32,10 @@ CREATE TABLE IF NOT EXISTS workout_logs (
   owner_id TEXT NOT NULL, id TEXT NOT NULL, date TEXT NOT NULL, plan_workout_id TEXT,
   name TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, duration_sec INTEGER,
   synced_at TEXT, PRIMARY KEY (owner_id, id)
+);
+CREATE TABLE IF NOT EXISTS workout_session_blueprints (
+  owner_id TEXT NOT NULL, workout_log_id TEXT NOT NULL, blueprint_json TEXT NOT NULL,
+  PRIMARY KEY (owner_id, workout_log_id)
 );
 CREATE TABLE IF NOT EXISTS set_logs (
   owner_id TEXT NOT NULL, id TEXT NOT NULL, workout_log_id TEXT NOT NULL, exercise_id TEXT NOT NULL,
@@ -437,23 +442,75 @@ export async function createSqliteRepo(): Promise<RepoStore> {
     assertUsableOwnerId(ownerId);
     return {
     // ── Workouts ────────────────────────────────────────────
-    async startWorkout(w) {
-      await db.runAsync(
-        'INSERT INTO workout_logs (owner_id, id, date, plan_workout_id, name, started_at) VALUES (?,?,?,?,?,?)',
-        ownerId, w.id, w.date, w.planWorkoutId, w.name, w.startedAt,
-      );
+    async startWorkout(w, blueprint) {
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          'INSERT INTO workout_logs (owner_id, id, date, plan_workout_id, name, started_at) VALUES (?,?,?,?,?,?)',
+          ownerId, w.id, w.date, w.planWorkoutId, w.name, w.startedAt,
+        );
+        if (blueprint) {
+          await transaction.runAsync(
+            `INSERT INTO workout_session_blueprints
+             (owner_id, workout_log_id, blueprint_json) VALUES (?, ?, ?)`,
+            ownerId,
+            w.id,
+            serializeWorkoutBlueprint(blueprint),
+          );
+        }
+      });
     },
     async finishWorkout(id, finishedAt, durationSec) {
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          'UPDATE workout_logs SET finished_at = ?, duration_sec = ? WHERE owner_id = ? AND id = ?',
+          finishedAt, durationSec, ownerId, id,
+        );
+        await transaction.runAsync(
+          'DELETE FROM workout_session_blueprints WHERE owner_id = ? AND workout_log_id = ?',
+          ownerId,
+          id,
+        );
+      });
+    },
+    async saveWorkoutBlueprint(id, blueprint) {
       await db.runAsync(
-        'UPDATE workout_logs SET finished_at = ?, duration_sec = ? WHERE owner_id = ? AND id = ?',
-        finishedAt, durationSec, ownerId, id,
+        `INSERT INTO workout_session_blueprints (owner_id, workout_log_id, blueprint_json)
+         SELECT ?, ?, ? WHERE EXISTS (
+           SELECT 1 FROM workout_logs
+           WHERE owner_id = ? AND id = ? AND finished_at IS NULL
+         )
+         ON CONFLICT(owner_id, workout_log_id)
+         DO UPDATE SET blueprint_json = excluded.blueprint_json`,
+        ownerId,
+        id,
+        serializeWorkoutBlueprint(blueprint),
+        ownerId,
+        id,
       );
     },
-    async deleteWorkout(id) {
-      await db.runAsync(
-        'DELETE FROM set_logs WHERE owner_id = ? AND workout_log_id = ?', ownerId, id,
+    async getWorkoutBlueprint(id) {
+      const row = await db.getFirstAsync<{ blueprint_json: string }>(
+        `SELECT blueprint_json FROM workout_session_blueprints
+         WHERE owner_id = ? AND workout_log_id = ?`,
+        ownerId,
+        id,
       );
-      await db.runAsync('DELETE FROM workout_logs WHERE owner_id = ? AND id = ?', ownerId, id);
+      return row ? parseWorkoutBlueprintJson(row.blueprint_json) : null;
+    },
+    async deleteWorkout(id) {
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          'DELETE FROM set_logs WHERE owner_id = ? AND workout_log_id = ?', ownerId, id,
+        );
+        await transaction.runAsync(
+          'DELETE FROM workout_session_blueprints WHERE owner_id = ? AND workout_log_id = ?',
+          ownerId,
+          id,
+        );
+        await transaction.runAsync(
+          'DELETE FROM workout_logs WHERE owner_id = ? AND id = ?', ownerId, id,
+        );
+      });
     },
     async getWorkout(id) {
       const r = await db.getFirstAsync<WorkoutRow>(
@@ -907,6 +964,9 @@ export async function createSqliteRepo(): Promise<RepoStore> {
       assertUsableOwnerId(ownerId);
       await db.withExclusiveTransactionAsync(async (transaction) => {
         await transaction.runAsync('DELETE FROM set_logs WHERE owner_id = ?', ownerId);
+        await transaction.runAsync(
+          'DELETE FROM workout_session_blueprints WHERE owner_id = ?', ownerId,
+        );
         await transaction.runAsync('DELETE FROM workout_logs WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM weight_logs WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM measurements WHERE owner_id = ?', ownerId);

@@ -64,6 +64,8 @@ release dependency rather than an implied feature.
   sitemap, robots, 404, and recoverable error state.
 - [x] Add security headers and explicit no-store API responses.
 - [x] Add server-side no-index metadata to admin, coach, and partner consoles.
+- [x] Replace duplicated bare staff login forms with one responsive, accessible,
+  role-specific admin/coach/partner sign-in surface.
 - [x] Add partner currency-history and live-order impact summaries to the admin UI.
 - [x] Preserve independently sold-out menu items across global store
   pause/resume by using a partner-level accepting-orders switch.
