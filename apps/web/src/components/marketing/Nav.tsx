@@ -92,16 +92,17 @@ export function Nav() {
   return (
     <header className="fixed inset-x-0 top-0 z-50 px-3 pt-3 sm:px-5 sm:pt-4">
       <div
-        className={`mx-auto flex h-[60px] w-full max-w-[1240px] items-center justify-between rounded-full pl-5 pr-2.5 transition-all duration-300 ${
+        className={`mx-auto flex h-[58px] sm:h-[62px] w-full max-w-[1240px] items-center justify-between rounded-full pl-3.5 pr-2.5 sm:pl-5 transition-all duration-300 ${
           open
-            ? 'border border-transparent'
+            ? 'border border-transparent bg-ink/90 backdrop-blur-xl'
             : light
-              ? 'border border-mist bg-white/80 shadow-nav backdrop-blur-xl'
-              : 'border border-transparent'
+              ? 'border border-mist bg-white/90 shadow-nav backdrop-blur-xl'
+              : 'border border-line-strong/30 bg-ink/80 backdrop-blur-xl shadow-pop'
         }`}
       >
-        <Link href="/" aria-label="Home" className="flex items-center gap-3">
-          <LogoMark size={48} />
+        <Link href="/" aria-label="Home" className="flex items-center gap-3 shrink-0">
+          <LogoMark size={40} className="sm:hidden" />
+          <LogoMark size={48} className="hidden sm:block" />
         </Link>
 
         {/* Desktop nav */}
@@ -184,9 +185,9 @@ export function Nav() {
             aria-expanded={open}
             aria-label={open ? 'Close menu' : 'Open menu'}
             onClick={() => setOpen((v) => !v)}
-            className="flex size-11 items-center justify-center rounded-full lg:hidden"
+            className="flex size-10 items-center justify-center rounded-full lg:hidden active:scale-95 transition-transform"
           >
-            <span className="relative block h-3.5 w-6">
+            <span className="relative block h-3.5 w-5">
               <span
                 className={`absolute left-0 top-0 h-[2px] w-full rounded transition-all duration-300 ${
                   darkText ? 'bg-snow' : 'bg-ink'
