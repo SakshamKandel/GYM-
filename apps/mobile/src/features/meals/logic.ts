@@ -235,6 +235,10 @@ export function mealErrorMessage(code: string): string {
       return "This partner doesn't accept cash on delivery — pick eSewa or Khalti.";
     case 'address_not_found':
       return "That address couldn't be found — pick or add another.";
+    case 'outside_delivery_area':
+      return "That address is outside this partner's delivery area; pick another.";
+    case 'delivery_area_unverified':
+      return "We couldn't verify delivery to that address; add a map pin or pick another.";
     case 'meal_unavailable':
     case 'meal_unavailable_for_slot':
     case 'meal_unavailable_for_window':

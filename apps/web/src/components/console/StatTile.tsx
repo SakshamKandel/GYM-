@@ -21,12 +21,17 @@ export function StatTile({
   hint,
   delta,
   viz,
+  live,
 }: {
   label: string;
   value: ReactNode;
   hint?: string;
   delta?: { value: string; direction: 'up' | 'down' | 'flat' };
   viz?: Viz;
+  /** Renders a pulsing "live" dot before the label — for metrics that update
+   * in near-real-time (today's order counts, active pipelines). Pure CSS,
+   * reduced-motion safe. */
+  live?: boolean;
 }) {
   const deltaColor =
     delta?.direction === 'up'
@@ -56,8 +61,12 @@ export function StatTile({
             textTransform: 'uppercase',
             color: 'var(--gt-text-dim)',
             fontFamily: 'var(--font-heading)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
           }}
         >
+          {live ? <span className="gt-live-dot" aria-hidden /> : null}
           {label}
         </span>
         <span

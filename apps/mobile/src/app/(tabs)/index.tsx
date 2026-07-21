@@ -59,6 +59,13 @@ import { useHomeData, useQuestProgress, type DoneToday } from '../../features/en
 import { avatarLetter, formatCompact, greetingForHour, toHref } from '../../features/engagement/logic';
 import { useWeeklyStreak } from '../../features/streak/hooks';
 import { useQuest } from '../../state/quest';
+import { WeeklyActivityStrip } from '../../components/home/WeeklyActivityStrip';
+import { QuickActionsRow } from '../../components/home/QuickActionsRow';
+import { NutritionHomeCard } from '../../components/home/NutritionHomeCard';
+import { DailyHabitsCard } from '../../components/home/DailyHabitsCard';
+import { useNutritionDay } from '../../features/nutrition/useNutritionDay';
+import { sumDayTotals } from '../../features/nutrition/logic';
+import { todayIso } from '../../lib/dates';
 
 /** Home — answers "what's today?" in one glance. */
 
@@ -419,21 +426,37 @@ export default function HomeScreen() {
   // never useProfile.tier (local upgrade-only mirror, known to drift above
   // the server's value, which would route downgraded users into a dead-end).
   const serverTier = useAuth((s) => s.user?.tier ?? 'starter');
+  const targets = useProfile((s) => s.targets);
+  const nutrition = useNutritionDay(todayIso());
+  const totals = sumDayTotals(nutrition.logs);
   const data = useHomeData(planId);
   const weeklyStreak = useWeeklyStreak();
   const quest = useQuestProgress();
   const questDismissed = useQuest((s) => s.dismissed);
+
+  const activeDates = useMemo(() => {
+    const set = new Set<string>();
+    if (data?.weekSessionList) {
+      for (const s of data.weekSessionList) {
+        set.add(s.date);
+      }
+    }
+    if (data?.doneToday) {
+      set.add(todayIso());
+    }
+    return set;
+  }, [data]);
 
   // Weight trend, straight from the offline store (features/body). Deriving
   // from an empty list while loading keeps hook order stable; the card shows
   // a skeleton until `weights` resolves. Headline = SMOOTHED trend (EWMA),
   // never the latest raw weigh-in.
   const weights = useWeights();
-  const weightList = weights ?? [];
   // Trend smoothing (EWMA) + chart projection are pure but non-trivial over
   // ~90 rows; recompute only when the weight list or unit actually changes,
   // not on every one of Home's ~5 focus-driven re-renders.
   const { headline, weightDelta30, lastWeighIn } = useMemo(() => {
+    const weightList = weights ?? [];
     const hl = weightHeadline(weightList, unitPref);
     const trendPoints = weightChartData(weightList, unitPref).trend;
     const firstTrend = trendPoints[0];
@@ -561,10 +584,21 @@ export default function HomeScreen() {
         </AppText>
       </Animated.View>
 
+      <Animated.View entering={enterDown(2)}>
+        <QuickActionsRow
+          onAddWater={() => void nutrition.addWater(250)}
+          nextWorkoutId={data?.nextWorkout?.id}
+        />
+      </Animated.View>
+
       {data === null ? (
         <HomeSkeleton />
       ) : (
         <>
+          <Animated.View entering={enterUp(0)}>
+            <WeeklyActivityStrip activeDates={activeDates} />
+          </Animated.View>
+
           <Animated.View entering={enterUp(0)} style={styles.heroWrap}>
             <Hero
               planName={data.planName}
@@ -573,6 +607,41 @@ export default function HomeScreen() {
               volume={displayWeight(data.doneToday?.volumeKg ?? 0, unitPref)}
               unit={unit}
               muscle={heroMuscle}
+            />
+          </Animated.View>
+
+          <Animated.View entering={enterUp(1)}>
+            <DailyHabitsCard
+              workoutDone={data.doneToday !== null}
+              workoutName={data.doneToday?.name ?? data.nextWorkout?.name}
+              nextWorkoutId={data.nextWorkout?.id}
+              eatenKcal={Math.round(totals.kcal)}
+              targetKcal={targets.kcal}
+              waterMl={nutrition.waterMl}
+              targetWaterMl={targets.waterMl}
+              weighedInToday={lastWeighIn?.date === todayIso()}
+              lastWeightText={
+                lastWeighIn
+                  ? `${displayWeight(lastWeighIn.kg, unitPref)} ${unit}`
+                  : null
+              }
+              onAddWater={() => void nutrition.addWater(250)}
+            />
+          </Animated.View>
+
+          <Animated.View entering={enterUp(1)}>
+            <NutritionHomeCard
+              eatenKcal={Math.round(totals.kcal)}
+              targetKcal={targets.kcal}
+              protein={totals.protein}
+              targetProtein={targets.protein}
+              carbs={totals.carbs}
+              targetCarbs={targets.carbs}
+              fat={totals.fat}
+              targetFat={targets.fat}
+              waterMl={nutrition.waterMl}
+              targetWaterMl={targets.waterMl}
+              onAddWater={(delta) => void nutrition.addWater(delta)}
             />
           </Animated.View>
 

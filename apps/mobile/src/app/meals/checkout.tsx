@@ -4,7 +4,7 @@ import Animated from 'react-native-reanimated';
 import { router } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing, touch } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import { formatMoney } from '@gym/shared';
 import {
   AppText,
@@ -54,6 +54,11 @@ import { pushPath, replacePath } from '../../features/meals/nav';
  * eSewa/Khalti-with-receipt payment. Reads the in-memory cart built on the
  * menu screen; the server re-prices and re-freezes everything on submit
  * (invariant §8a) — this screen only assembles the request.
+ *
+ * Visual language (2026-07-21 professional pass): numbered step sections
+ * (slot → address → payment → notes → tip), payment methods as tappable
+ * radio rows with per-method hints, and a receipt-style summary card with an
+ * Oswald total mirrored into the Place-order CTA.
  */
 
 const styles = StyleSheet.create({
@@ -68,6 +73,16 @@ const styles = StyleSheet.create({
   },
   header: { marginBottom: spacing.md },
   section: { gap: spacing.sm, marginBottom: spacing.gutter },
+  stepLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  stepNumber: {
+    width: 22,
+    height: 22,
+    borderRadius: radius.full,
+    backgroundColor: colors.accentFaint,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepNumberText: { fontFamily: type.display, fontSize: 13, color: colors.accent },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   addressRow: {
     flexDirection: 'row',
@@ -78,18 +93,104 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     minHeight: touch.min,
   },
+  addressIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    backgroundColor: colors.accentFaint,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   addressMain: { flex: 1, gap: 2 },
   deliveryBadgeRow: { flexDirection: 'row', marginTop: spacing.xs },
+  payOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    minHeight: touch.primary,
+  },
+  payOptionSelected: { backgroundColor: colors.surfacePressed },
+  payRadio: {
+    width: 22,
+    height: 22,
+    borderRadius: radius.full,
+    borderWidth: 2,
+    borderColor: colors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  payRadioSelected: { borderColor: colors.accent },
+  payRadioCore: { width: 12, height: 12, borderRadius: radius.full, backgroundColor: colors.accent },
+  payMain: { flex: 1, gap: 1 },
   summaryCard: { gap: spacing.sm },
-  summaryLine: { flexDirection: 'row', justifyContent: 'space-between' },
+  summaryTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.xs,
+  },
+  summaryLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm },
+  qtyChip: {
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    marginRight: spacing.sm,
+  },
+  divider: { height: 1, backgroundColor: colors.borderStrong, marginVertical: spacing.sm },
+  totalValue: { fontFamily: type.display, fontSize: 28, color: colors.text, letterSpacing: 0.5 },
   errorText: { marginTop: spacing.sm },
 });
 
-function SectionLabel({ children }: { children: string }) {
+function StepLabel({ n, children }: { n: number; children: string }) {
   return (
-    <AppText variant="label" color={colors.textDim}>
-      {children}
-    </AppText>
+    <View style={styles.stepLabelRow}>
+      <View style={styles.stepNumber} accessible={false} importantForAccessibility="no-hide-descendants">
+        <AppText style={styles.stepNumberText}>{n}</AppText>
+      </View>
+      <AppText variant="label" color={colors.textDim}>
+        {children}
+      </AppText>
+    </View>
+  );
+}
+
+function PaymentOption({
+  icon,
+  label,
+  hint,
+  selected,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  hint: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <PressableScale
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`${label}. ${hint}`}
+      onPress={onPress}
+      style={[styles.payOption, selected && styles.payOptionSelected]}
+    >
+      <View style={[styles.payRadio, selected && styles.payRadioSelected]}>
+        {selected ? <View style={styles.payRadioCore} /> : null}
+      </View>
+      <Ionicons name={icon} size={20} color={selected ? colors.accent : colors.textDim} />
+      <View style={styles.payMain}>
+        <AppText variant="bodyBold">{label}</AppText>
+        <AppText variant="caption" color={colors.textDim}>
+          {hint}
+        </AppText>
+      </View>
+    </PressableScale>
   );
 }
 
@@ -161,22 +262,26 @@ export default function CheckoutScreen() {
   const items = Object.values(lines);
   const subtotal = cartSubtotalMinor(lines);
   const currency = partner?.currency ?? items[0]?.meal.currency ?? 'NPR';
+  const itemCount = items.reduce((sum, l) => sum + l.qty, 0);
 
   // Live server-priced fee breakdown (subtotal + delivery + small-order + total),
   // refreshed on any cart / address / slot change. `quoteStatus` gates the
   // Place order button so the member never commits against a stale total.
   const quoteInput: MealQuoteInput | null = useMemo(() => {
-    if (!partnerId || items.length === 0 || !slot?.orderable) return null;
+    // A delivery address is mandatory at order creation, and the quote route
+    // runs the same delivery-eligibility rule. Do not issue a guaranteed 400
+    // while saved addresses are still hydrating (or before one is selected).
+    if (!partnerId || !selectedAddress || items.length === 0 || !slot?.orderable) return null;
     return {
       partnerId,
       items: items.map((l) => ({ mealId: l.meal.id, qty: l.qty })),
-      ...(addressId ? { addressId } : {}),
+      addressId: selectedAddress.id,
       window: slot.window,
       date: slot.date,
       tipMinor,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [partnerId, lines, addressId, slot?.date, slot?.window, slot?.orderable, tipMinor]);
+  }, [partnerId, lines, selectedAddress?.id, slot?.date, slot?.window, slot?.orderable, tipMinor]);
   const {
     quote,
     status: quoteStatus,
@@ -294,7 +399,7 @@ export default function CheckoutScreen() {
       <ScreenHeader eyebrow="Review order" title="Checkout" style={styles.header} />
 
       <Animated.View entering={enterUp(0)} style={styles.section}>
-        <SectionLabel>Delivery slot</SectionLabel>
+        <StepLabel n={1}>Delivery slot</StepLabel>
         <View style={styles.chipRow}>
           {slots.map((s, i) => (
             <Chip
@@ -313,7 +418,7 @@ export default function CheckoutScreen() {
       </Animated.View>
 
       <Animated.View entering={enterUp(1)} style={styles.section}>
-        <SectionLabel>Deliver to</SectionLabel>
+        <StepLabel n={2}>Deliver to</StepLabel>
         {selectedAddress ? (
           <>
             <PressableScale
@@ -322,7 +427,9 @@ export default function CheckoutScreen() {
               onPress={() => setAddressSheetOpen(true)}
               style={styles.addressRow}
             >
-              <Ionicons name="location-outline" size={20} color={colors.textDim} />
+              <View style={styles.addressIcon} accessible={false} importantForAccessibility="no-hide-descendants">
+                <Ionicons name="location" size={20} color={colors.accent} />
+              </View>
               <View style={styles.addressMain}>
                 <AppText variant="bodyBold" numberOfLines={1}>
                   {selectedAddress.label || selectedAddress.line}
@@ -353,18 +460,34 @@ export default function CheckoutScreen() {
       </Animated.View>
 
       <Animated.View entering={enterUp(2)} style={styles.section}>
-        <SectionLabel>Pay with</SectionLabel>
-        <View style={styles.chipRow}>
-          {partner?.acceptsCod !== false ? (
-            <Chip label="Cash on delivery" selected={method === 'cod'} onPress={() => setMethod('cod')} />
-          ) : null}
-          <Chip label="eSewa" selected={method === 'esewa'} onPress={() => setMethod('esewa')} />
-          <Chip label="Khalti" selected={method === 'khalti'} onPress={() => setMethod('khalti')} />
-        </View>
+        <StepLabel n={3}>Pay with</StepLabel>
+        {partner?.acceptsCod !== false ? (
+          <PaymentOption
+            icon="cash-outline"
+            label="Cash on delivery"
+            hint="Pay the rider when your food arrives"
+            selected={method === 'cod'}
+            onPress={() => setMethod('cod')}
+          />
+        ) : null}
+        <PaymentOption
+          icon="wallet-outline"
+          label="eSewa"
+          hint="Transfer first, then upload the receipt"
+          selected={method === 'esewa'}
+          onPress={() => setMethod('esewa')}
+        />
+        <PaymentOption
+          icon="wallet-outline"
+          label="Khalti"
+          hint="Transfer first, then upload the receipt"
+          selected={method === 'khalti'}
+          onPress={() => setMethod('khalti')}
+        />
       </Animated.View>
 
       <Animated.View entering={enterUp(3)} style={styles.section}>
-        <SectionLabel>Delivery notes (optional)</SectionLabel>
+        <StepLabel n={4}>Delivery notes (optional)</StepLabel>
         <AppTextInput
           value={notes}
           onChangeText={setNotes}
@@ -375,7 +498,7 @@ export default function CheckoutScreen() {
       </Animated.View>
 
       <Animated.View entering={enterUp(4)} style={styles.section}>
-        <SectionLabel>Add a tip (optional)</SectionLabel>
+        <StepLabel n={5}>Add a tip (optional)</StepLabel>
         <View style={styles.chipRow}>
           {tipOptions(quote?.subtotalMinor ?? subtotal).map((opt) => (
             <Chip
@@ -394,16 +517,32 @@ export default function CheckoutScreen() {
 
       <Animated.View entering={enterUp(5)}>
         <Card style={styles.summaryCard}>
+          <View style={styles.summaryTitleRow}>
+            <AppText variant="label" color={colors.textDim}>
+              Order summary
+            </AppText>
+            <AppText variant="caption" color={colors.textFaint}>
+              {itemCount} {itemCount === 1 ? 'item' : 'items'}
+            </AppText>
+          </View>
           {items.map((l) => (
             <View key={l.meal.id} style={styles.summaryLine}>
-              <AppText variant="body" numberOfLines={1}>
-                {l.qty}× {l.meal.name}
-              </AppText>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                <View style={styles.qtyChip}>
+                  <AppText variant="caption" tabular>
+                    {l.qty}×
+                  </AppText>
+                </View>
+                <AppText variant="body" numberOfLines={1} style={{ flex: 1 }}>
+                  {l.meal.name}
+                </AppText>
+              </View>
               <AppText variant="body" tabular>
                 {formatMoney(l.meal.priceMinor * l.qty, l.meal.currency)}
               </AppText>
             </View>
           ))}
+          <View style={styles.divider} />
           <View style={styles.summaryLine}>
             <AppText variant="body" color={colors.textDim}>
               Subtotal
@@ -421,7 +560,11 @@ export default function CheckoutScreen() {
             <AppText variant="body" color={colors.textDim}>
               Delivery fee
             </AppText>
-            <AppText variant="body" tabular>
+            <AppText
+              variant="body"
+              tabular
+              color={quote && quote.deliveryFeeMinor === 0 ? colors.success : colors.text}
+            >
               {quote
                 ? quote.deliveryFeeMinor === 0
                   ? 'Free'
@@ -449,9 +592,10 @@ export default function CheckoutScreen() {
               </AppText>
             </View>
           ) : null}
+          <View style={styles.divider} />
           <View style={styles.summaryLine}>
             <AppText variant="bodyBold">Total</AppText>
-            <AppText variant="bodyBold" tabular>
+            <AppText style={styles.totalValue} tabular>
               {quote ? formatMoney(quote.totalMinor, currency) : '—'}
             </AppText>
           </View>
@@ -461,7 +605,7 @@ export default function CheckoutScreen() {
             </AppText>
           ) : quoteStatus === 'error' ? (
             <AppText variant="caption" color={colors.error}>
-              {quoteMealUnavailable ?? "Couldn't calculate the total. Adjust your order or try again."}
+              {quoteMealUnavailable ?? mealErrorMessage(quoteErrorCode ?? 'network')}
             </AppText>
           ) : quote?.deliversTo === false ? (
             <AppText variant="caption" color={colors.warning}>
@@ -479,7 +623,7 @@ export default function CheckoutScreen() {
       ) : null}
 
       <Button
-        label="Place order"
+        label={quote && quoteStatus === 'ready' ? `Place order · ${formatMoney(quote.totalMinor, currency)}` : 'Place order'}
         onPress={() => place()}
         disabled={!token || !slot?.orderable || !addressId || items.length === 0 || quoteStatus !== 'ready'}
         loading={placing}

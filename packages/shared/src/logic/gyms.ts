@@ -30,9 +30,45 @@ export const GYM_AMENITIES = [
   'showers',
   'wifi',
   'ac',
+  'turf',
+  'power_racks',
+  'recovery',
+  '24_7_access',
 ] as const;
 
 export type GymAmenity = (typeof GYM_AMENITIES)[number];
+
+export type GymEquipmentCategory = 'free_weights' | 'cardio' | 'machines' | 'functional' | 'recovery';
+
+export interface GymEquipmentItem {
+  id: string;
+  name: string;
+  category: GymEquipmentCategory;
+  count?: number;
+  description?: string;
+}
+
+export type GymCrowdLevel = 'quiet' | 'moderate' | 'busy' | 'packed';
+
+export interface GymCrowdStatus {
+  level: GymCrowdLevel;
+  percentage: number; // 0 - 100
+  hourlyOccupancy?: number[]; // 24 values representing occupancy % throughout the day
+  peakHoursText?: string;
+}
+
+export type GymPassType = 'day_pass' | 'weekly_pass' | 'monthly' | 'annual';
+
+export interface GymPassOption {
+  id: string;
+  type: GymPassType;
+  title: string;
+  priceMinor: number;
+  currency: 'NPR' | 'USD';
+  features: string[];
+  isPopular?: boolean;
+}
+
 
 /** Weekday keys, index 0=Sunday … 6=Saturday (matches Date.getUTCDay). */
 export const GYM_DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;

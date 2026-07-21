@@ -3,6 +3,7 @@
 import {
   canActorAdvance,
   ORDER_STATUSES,
+  orderNumber,
   partnerCanRefuse,
   partnerRefuseTarget,
   type OrderStatus,
@@ -15,12 +16,14 @@ import {
   formatDateLabel,
   formatMoney,
   isOrderLate,
+  ORDER_STATUS_COLOR,
   ORDER_STATUS_LABEL,
   ORDER_STATUS_TONE,
   PAYMENT_LABEL,
   windowLabel,
 } from '../_format';
 import { RefuseControl } from './RefuseControl';
+import styles from './board.module.css';
 
 /**
  * The partner fulfillment queue (Today's Orders + Subscriptions fulfillment).
@@ -28,6 +31,10 @@ import { RefuseControl } from './RefuseControl';
  * fields only, never member identity. Advance buttons are derived from
  * `canActorAdvance(from, to, 'partner')` so the UI can never offer an illegal or
  * unauthorized transition; the server re-validates every one via CAS.
+ *
+ * Visual language (2026-07-21 professional pass): status-colored edge strips,
+ * GM-order numbers, and a two-column delivery/items layout shared with the
+ * Today board's card vocabulary.
  */
 
 /** Per-transition button copy + emphasis (partner-reachable transitions only). */
@@ -110,7 +117,7 @@ export function OrdersQueue({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div className={styles.queueStack}>
       {visible.map((o) => {
         const targets = advanceTargets(o.status);
         const refuseTarget = partnerCanRefuse(o.status) ? partnerRefuseTarget(o.status) : null;
@@ -119,42 +126,23 @@ export function OrdersQueue({
         const busy = busyId === o.orderId;
         const err = errorById[o.orderId];
         const late = isOrderLate(o, nowMs);
+        const stripColor = late ? 'var(--gt-danger)' : ORDER_STATUS_COLOR[o.status];
 
         return (
-          <div
-            key={o.orderId}
-            className="gt-card"
-            style={{ padding: 18, borderLeft: late ? '3px solid var(--gt-danger)' : undefined }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 12,
-                flexWrap: 'wrap',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <strong style={{ fontSize: 16 }}>{formatDateLabel(o.deliveryDate)}</strong>
-                <span style={{ color: 'var(--gt-text-dim)', fontSize: 13 }}>
-                  {windowLabel(o.window)}
-                </span>
+          <div key={o.orderId} className={`gt-card ${styles.queueCard}`} style={{ borderLeftColor: stripColor }}>
+            <div className={styles.queueTopRow}>
+              <div className={styles.queueTitleGroup}>
+                <span className={styles.orderNumber}>{orderNumber(o.orderId)}</span>
+                <strong className={styles.queueDate}>{formatDateLabel(o.deliveryDate)}</strong>
+                <span className={styles.queueWindow}>{windowLabel(o.window)}</span>
                 {late ? <Badge tone="critical">Late</Badge> : null}
               </div>
               <Badge tone={ORDER_STATUS_TONE[o.status]}>{ORDER_STATUS_LABEL[o.status]}</Badge>
             </div>
 
-            <div
-              style={{
-                marginTop: 12,
-                display: 'grid',
-                gridTemplateColumns: 'minmax(200px, 1fr) minmax(200px, 1fr)',
-                gap: 14,
-              }}
-            >
+            <div className={styles.queueGrid}>
               <div>
-                <FieldLabel>Deliver to</FieldLabel>
+                <div className={styles.fieldLabel}>Deliver to</div>
                 <div style={{ fontSize: 15 }}>{o.deliveryName}</div>
                 <div style={{ fontSize: 14, color: 'var(--gt-text-dim)' }}>{o.deliveryPhone}</div>
                 <div style={{ fontSize: 14, color: 'var(--gt-text-dim)', marginTop: 2 }}>
@@ -168,41 +156,24 @@ export function OrdersQueue({
               </div>
 
               <div>
-                <FieldLabel>Items</FieldLabel>
-                <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none' }}>
+                <div className={styles.fieldLabel}>Items</div>
+                <ul className={styles.queueItems}>
                   {o.items.map((it, i) => (
-                    <li
-                      key={`${o.orderId}-${i}`}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        fontSize: 14,
-                        gap: 8,
-                      }}
-                    >
+                    <li key={`${o.orderId}-${i}`} className={styles.queueItemLine}>
                       <span>
                         {it.qty}× {it.name}
                       </span>
-                      <span style={{ color: 'var(--gt-text-dim)', whiteSpace: 'nowrap' }}>
+                      <span className={styles.queueItemPrice}>
                         {formatMoney(it.priceMinorSnapshot * it.qty, o.currency)}
                       </span>
                     </li>
                   ))}
                 </ul>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    marginTop: 8,
-                    paddingTop: 8,
-                    borderTop: '1px solid var(--gt-border)',
-                    fontSize: 15,
-                  }}
-                >
+                <div className={styles.queueTotalRow}>
                   <strong>Total</strong>
-                  <strong>{formatMoney(o.totalMinor, o.currency)}</strong>
+                  <strong className={styles.queueTotalValue}>{formatMoney(o.totalMinor, o.currency)}</strong>
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--gt-text-faint)', marginTop: 4 }}>
+                <div className={styles.queuePayMeta}>
                   {PAYMENT_LABEL[o.paymentMethod] ?? o.paymentMethod}
                   {digitalUnpaid ? ' · awaiting payment' : o.paymentStatus === 'paid' ? ' · paid' : ''}
                 </div>
@@ -210,15 +181,7 @@ export function OrdersQueue({
             </div>
 
             {(targets.length > 0 || refuseTarget) && (
-              <div
-                style={{
-                  marginTop: 14,
-                  display: 'flex',
-                  gap: 8,
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                }}
-              >
+              <div className={styles.queueActions}>
                 {targets.map((to) => {
                   const meta = ADVANCE_META[to];
                   if (!meta) return null;
@@ -246,28 +209,10 @@ export function OrdersQueue({
               </div>
             )}
 
-            {err ? (
-              <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 8 }}>{err}</div>
-            ) : null}
+            {err ? <div className={styles.queueError}>{err}</div> : null}
           </div>
         );
       })}
-    </div>
-  );
-}
-
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        fontSize: 11,
-        textTransform: 'uppercase',
-        letterSpacing: '0.05em',
-        color: 'var(--gt-text-faint)',
-        marginBottom: 4,
-      }}
-    >
-      {children}
     </div>
   );
 }

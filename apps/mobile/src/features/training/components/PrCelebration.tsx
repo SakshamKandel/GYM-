@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { StyleSheet } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { Canvas, Circle, Group } from '@shopify/react-native-skia';
 import {
   Easing,
@@ -65,10 +65,11 @@ function Particle({
 export function PrCelebration({ onDone, size = 140 }: Props) {
   const t = useSharedValue(0);
   const reduceMotion = useReducedMotion();
+  const isWeb = Platform.OS === 'web';
   const center = size / 2;
 
   useEffect(() => {
-    if (reduceMotion) {
+    if (reduceMotion || isWeb) {
       onDone();
       return;
     }
@@ -79,10 +80,10 @@ export function PrCelebration({ onDone, size = 140 }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (reduceMotion) return null;
+  if (reduceMotion || isWeb) return null;
 
   return (
-    <Canvas style={[styles.canvas, { width: size, height: size }]}>
+    <Canvas style={StyleSheet.flatten([styles.canvas, { width: size, height: size }])}>
       <Group>
         {PARTICLES.map((p, i) => (
           <Particle

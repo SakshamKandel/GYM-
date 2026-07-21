@@ -208,6 +208,43 @@ h4 {
   height: 12px;
 }
 
+/* Live-indicator dot — a soft sonar ping marking metrics/panels that update
+ * in near-real-time (order boards, live stats). The one sanctioned ambient
+ * animation in the console; holds still under reduced-motion. */
+.gt-live-dot {
+  position: relative;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gt-success);
+  flex-shrink: 0;
+}
+.gt-live-dot::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid var(--gt-success);
+  opacity: 0;
+  animation: gt-live-ping 1.6s ease-out infinite;
+}
+@keyframes gt-live-ping {
+  0% {
+    transform: scale(0.5);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.15);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gt-live-dot::after {
+    animation: none;
+  }
+}
+
 /* Drawer slide-in (right detail panel). Disabled for reduced-motion. */
 @keyframes gt-drawer-in {
   from {

@@ -1,8 +1,8 @@
 import { memo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing } from '@gym/ui-tokens';
-import { AnimatedNumber, AppText, Button, Card, Skeleton } from '../ui';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
+import { AnimatedNumber, AppText, Button, Card, PressableScale, Skeleton } from '../ui';
 import { EmptyArt, TrendMotif } from '../visual';
 
 /**
@@ -47,6 +47,7 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   main: { flex: 1, minWidth: 0, gap: spacing.xs },
+  openAction: { minHeight: touch.min, justifyContent: 'center' },
   valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm },
   directionRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   chevron: { marginTop: spacing.xs },
@@ -88,46 +89,49 @@ export const WeightHomeCard = memo(function WeightHomeCard({
   }
 
   return (
-    <Card
-      accessibilityLabel={
-        `Trend weight ${trendValue.toFixed(1)} ${unit}, ${rateText}` +
-        (lastLoggedText !== null ? `. ${lastLoggedText}` : '') +
-        '. Open Progress'
-      }
-      onPress={onOpen}
-      style={styles.card}
-    >
+    <Card style={styles.card}>
       <TrendMotif />
-      <View style={styles.headerRow}>
-        <View style={styles.main}>
-          <AppText variant="label" numberOfLines={1}>
-            Trend weight
-          </AppText>
-          <View style={styles.valueRow}>
-            <AnimatedNumber value={trendValue} decimals={1} variant="display" />
-            <AppText variant="caption" color={colors.textDim}>
-              {unit}
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={
+          `Trend weight ${trendValue.toFixed(1)} ${unit}, ${rateText}` +
+          (lastLoggedText !== null ? `. ${lastLoggedText}` : '') +
+          '. Open Progress'
+        }
+        onPress={onOpen}
+        style={styles.openAction}
+      >
+        <View style={styles.headerRow}>
+          <View style={styles.main}>
+            <AppText variant="label" numberOfLines={1}>
+              Trend weight
             </AppText>
+            <View style={styles.valueRow}>
+              <AnimatedNumber value={trendValue} decimals={1} variant="display" />
+              <AppText variant="caption" color={colors.textDim}>
+                {unit}
+              </AppText>
+            </View>
+            <View style={styles.directionRow}>
+              <Ionicons name={direction} size={18} color={colors.textDim} />
+              <AppText variant="caption" numberOfLines={1}>
+                {rateText}
+              </AppText>
+            </View>
+            {lastLoggedText !== null ? (
+              <AppText variant="caption" color={colors.textFaint} numberOfLines={1}>
+                {lastLoggedText}
+              </AppText>
+            ) : null}
           </View>
-          <View style={styles.directionRow}>
-            <Ionicons name={direction} size={18} color={colors.textDim} />
-            <AppText variant="caption" numberOfLines={1}>
-              {rateText}
-            </AppText>
-          </View>
-          {lastLoggedText !== null ? (
-            <AppText variant="caption" color={colors.textFaint} numberOfLines={1}>
-              {lastLoggedText}
-            </AppText>
-          ) : null}
+          <Ionicons
+            name="chevron-forward"
+            size={18}
+            color={colors.textDim}
+            style={styles.chevron}
+          />
         </View>
-        <Ionicons
-          name="chevron-forward"
-          size={18}
-          color={colors.textDim}
-          style={styles.chevron}
-        />
-      </View>
+      </PressableScale>
       <Button label="Log weight" variant="secondary" onPress={onLog} />
     </Card>
   );

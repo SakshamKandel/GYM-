@@ -45,105 +45,105 @@ export function OPTIONS() {
 }
 
 export async function GET(req: Request) {
-  const limited = rateLimit({
-    route: 'gyms.list',
-    limit: 60,
-    windowMs: 60_000,
-    ip: clientIp(req),
-  });
-  if (limited) return limited;
-
-  const url = new URL(req.url);
-  const parsed = querySchema.safeParse({
-    lat: url.searchParams.get('lat') ?? undefined,
-    lng: url.searchParams.get('lng') ?? undefined,
-    q: url.searchParams.get('q') ?? undefined,
-    limit: url.searchParams.get('limit') ?? undefined,
-    offset: url.searchParams.get('offset') ?? undefined,
-  });
-  if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { lat, lng, q, limit, offset } = parsed.data;
-
-  const db = getDb();
-
-  const where = and(
-    eq(gyms.status, 'published'),
-    eq(gyms.verifiedByAdmin, true),
-    q
-      ? or(
-          ilike(gyms.name, `%${q.replace(/[\\%_]/g, '\\$&')}%`),
-          ilike(gyms.city, `%${q.replace(/[\\%_]/g, '\\$&')}%`),
-        )
-      : undefined,
-  );
-
-  const [{ n: total }] = await db.select({ n: count() }).from(gyms).where(where);
-
-  // Distance sort needs every matching row's coordinates to sort correctly
-  // BEFORE paging — with lat/lng present we page in memory after sorting;
-  // without an origin, sort/limit/offset all push down to SQL (cheap, no
-  // full-table materialisation).
-  const hasOrigin = lat !== undefined && lng !== undefined;
-
-  const rows = hasOrigin
-    ? await db
-        .select({
-          id: gyms.id,
-          slug: gyms.slug,
-          name: gyms.name,
-          category: gyms.category,
-          city: gyms.city,
-          lat: gyms.lat,
-          lng: gyms.lng,
-        })
-        .from(gyms)
-        .where(where)
-        .orderBy(asc(gyms.name))
-    : await db
-        .select({
-          id: gyms.id,
-          slug: gyms.slug,
-          name: gyms.name,
-          category: gyms.category,
-          city: gyms.city,
-          lat: gyms.lat,
-          lng: gyms.lng,
-        })
-        .from(gyms)
-        .where(where)
-        .orderBy(asc(gyms.name))
-        .limit(limit)
-        .offset(offset);
-
-  const withDistance = rows.map((r) => ({
-    ...r,
-    distanceKm:
-      hasOrigin && r.lat !== null && r.lng !== null ? distanceKm({ lat, lng }, { lat: r.lat, lng: r.lng }) : null,
-  }));
-
-  if (hasOrigin) {
-    withDistance.sort((a, b) => {
-      if (a.distanceKm === null && b.distanceKm === null) return 0;
-      if (a.distanceKm === null) return 1;
-      if (b.distanceKm === null) return -1;
-      return a.distanceKm - b.distanceKm;
+  try {
+    const limited = rateLimit({
+      route: 'gyms.list',
+      limit: 60,
+      windowMs: 60_000,
+      ip: clientIp(req),
     });
+    if (limited) return limited;
+
+    const url = new URL(req.url);
+    const parsed = querySchema.safeParse({
+      lat: url.searchParams.get('lat') ?? undefined,
+      lng: url.searchParams.get('lng') ?? undefined,
+      q: url.searchParams.get('q') ?? undefined,
+      limit: url.searchParams.get('limit') ?? undefined,
+      offset: url.searchParams.get('offset') ?? undefined,
+    });
+    if (!parsed.success) return json({ error: 'invalid' }, 400);
+    const { lat, lng, q, limit, offset } = parsed.data;
+
+    const db = getDb();
+
+    const where = and(
+      eq(gyms.status, 'published'),
+      eq(gyms.verifiedByAdmin, true),
+      q
+        ? or(
+            ilike(gyms.name, `%${q.replace(/[\\%_]/g, '\\$&')}%`),
+            ilike(gyms.city, `%${q.replace(/[\\%_]/g, '\\$&')}%`),
+          )
+        : undefined,
+    );
+
+    const [{ n: total }] = await db.select({ n: count() }).from(gyms).where(where);
+
+    const hasOrigin = lat !== undefined && lng !== undefined;
+
+    const rows = hasOrigin
+      ? await db
+          .select({
+            id: gyms.id,
+            slug: gyms.slug,
+            name: gyms.name,
+            category: gyms.category,
+            city: gyms.city,
+            lat: gyms.lat,
+            lng: gyms.lng,
+          })
+          .from(gyms)
+          .where(where)
+          .orderBy(asc(gyms.name))
+      : await db
+          .select({
+            id: gyms.id,
+            slug: gyms.slug,
+            name: gyms.name,
+            category: gyms.category,
+            city: gyms.city,
+            lat: gyms.lat,
+            lng: gyms.lng,
+          })
+          .from(gyms)
+          .where(where)
+          .orderBy(asc(gyms.name))
+          .limit(limit)
+          .offset(offset);
+
+    const withDistance = rows.map((r) => ({
+      ...r,
+      distanceKm:
+        hasOrigin && r.lat !== null && r.lng !== null ? distanceKm({ lat, lng }, { lat: r.lat, lng: r.lng }) : null,
+    }));
+
+    if (hasOrigin) {
+      withDistance.sort((a, b) => {
+        if (a.distanceKm === null && b.distanceKm === null) return 0;
+        if (a.distanceKm === null) return 1;
+        if (b.distanceKm === null) return -1;
+        return a.distanceKm - b.distanceKm;
+      });
+    }
+
+    const paged = hasOrigin ? withDistance.slice(offset, offset + limit) : withDistance;
+
+    const ids = paged.map((r) => r.id);
+    const [photosByGym, ratingByGym] = await Promise.all([
+      loadPhotosByGym(ids),
+      loadRatingAggregates(ids),
+    ]);
+
+    const gymCards = paged.map((r) => ({
+      ...r,
+      photos: photosByGym.get(r.id) ?? [],
+      ...ratingFor(ratingByGym, r.id),
+    }));
+
+    return json({ gyms: gymCards, total, limit, offset }, 200);
+  } catch (err) {
+    console.error('API /api/gyms error:', err);
+    return json({ error: 'internal_error' }, 500);
   }
-
-  // Origin sort happened over the FULL matching set — page it now.
-  const paged = hasOrigin ? withDistance.slice(offset, offset + limit) : withDistance;
-
-  const ids = paged.map((r) => r.id);
-  const [photosByGym, ratingByGym] = await Promise.all([
-    loadPhotosByGym(ids),
-    loadRatingAggregates(ids),
-  ]);
-
-  const gymCards = paged.map((r) => ({
-    ...r,
-    photos: photosByGym.get(r.id) ?? [],
-    ...ratingFor(ratingByGym, r.id),
-  }));
-
-  return json({ gyms: gymCards, total, limit, offset }, 200);
 }

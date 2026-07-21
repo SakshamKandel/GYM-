@@ -76,12 +76,14 @@ const styles = StyleSheet.create({
   },
 });
 
+let isSecurityHydrated = false;
+
 export function AppLock({ children }: { children: ReactNode }) {
   const biometricOn = useSecurity((s) => s.biometricLock);
   const pinHash = useSecurity((s) => s.pinHash);
   const enabled = isAppLockEnabled({ biometricLock: biometricOn, pinHash });
   const native = Platform.OS !== 'web';
-  const [hydrated, setHydrated] = useState(() => useSecurity.persist.hasHydrated());
+  const [hydrated, setHydrated] = useState(() => isSecurityHydrated || useSecurity.persist.hasHydrated());
   // Lock BEFORE first paint when the lock could be on — MMKV reads are
   // synchronous, so the persisted preference is already available here. Waiting
   // for the post-paint arm effect would flash a frame of protected content.
@@ -104,9 +106,18 @@ export function AppLock({ children }: { children: ReactNode }) {
   const backgroundedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (hydrated) return;
-    const unsub = useSecurity.persist.onFinishHydration(() => setHydrated(true));
-    if (useSecurity.persist.hasHydrated()) setHydrated(true);
+    if (hydrated) {
+      isSecurityHydrated = true;
+      return;
+    }
+    const check = () => {
+      if (useSecurity.persist.hasHydrated()) {
+        isSecurityHydrated = true;
+        setHydrated(true);
+      }
+    };
+    const unsub = useSecurity.persist.onFinishHydration(check);
+    check();
     return unsub;
   }, [hydrated]);
 

@@ -16,6 +16,7 @@ import {
   formatCountdown,
   formatDateLabel,
   formatMoney,
+  ORDER_STATUS_COLOR,
   ORDER_STATUS_LABEL,
   ORDER_STATUS_TONE,
   PAYMENT_LABEL,
@@ -23,6 +24,7 @@ import {
   windowLabel,
   windowStartMs,
 } from '../_format';
+import styles from './board.module.css';
 
 /**
  * Read-only order detail panel for the Today board. Fetches the strict partner
@@ -147,9 +149,10 @@ export function OrderDetailDrawer({
         <div style={{ color: 'var(--gt-text-dim)', fontSize: 14 }}>Loading…</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
             <div>
-              <strong style={{ fontSize: 16 }}>{formatDateLabel(detail.deliveryDate)}</strong>
+              <div className={styles.drawerOrderNumber}>{orderNumber(detail.orderId)}</div>
+              <strong style={{ fontSize: 15 }}>{formatDateLabel(detail.deliveryDate)}</strong>
               <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>{windowLabel(detail.window)}</div>
             </div>
             <Badge tone={ORDER_STATUS_TONE[detail.status]}>{ORDER_STATUS_LABEL[detail.status]}</Badge>
@@ -159,23 +162,11 @@ export function OrderDetailDrawer({
             🖨 Print docket
           </Button>
 
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'baseline',
-              justifyContent: 'space-between',
-              padding: '10px 12px',
-              borderRadius: 10,
-              background: 'var(--gt-surface-sunken)',
-            }}
-          >
-            <span style={{ fontSize: 12, color: 'var(--gt-text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          <div className={`${styles.countdownPill} ${remaining <= 0 ? styles.countdownPillDanger : ''}`}>
+            <span className={styles.countdownLabel}>
               {remaining > 0 ? 'Delivery window in' : 'Delivery window'}
             </span>
-            <strong
-              className="gt-numeric"
-              style={{ fontSize: 16, color: remaining <= 0 ? 'var(--gt-danger)' : 'var(--gt-text)' }}
-            >
+            <strong className={`${styles.countdownValue} ${remaining <= 0 ? styles.countdownValueDanger : ''}`}>
               {formatCountdown(remaining)}
             </strong>
           </div>
@@ -270,15 +261,16 @@ export function OrderDetailDrawer({
             {detail.timeline.length === 0 ? (
               <div style={{ fontSize: 13, color: 'var(--gt-text-faint)' }}>No events recorded.</div>
             ) : (
-              <ol style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <ol className={styles.timeline}>
                 {detail.timeline.map((ev, i) => (
-                  <li key={i} style={{ display: 'flex', gap: 10, fontSize: 13 }}>
-                    <span
-                      className="gt-numeric"
-                      style={{ color: 'var(--gt-text-faint)', whiteSpace: 'nowrap', minWidth: 96 }}
-                    >
-                      {formatEventTime(ev.createdAt)}
+                  <li key={i} className={styles.timelineItem}>
+                    <span className={styles.timelineRail} aria-hidden>
+                      <span
+                        className={styles.timelineDot}
+                        style={{ background: ORDER_STATUS_COLOR[ev.toStatus] }}
+                      />
                     </span>
+                    <span className={styles.timelineTime}>{formatEventTime(ev.createdAt)}</span>
                     <span style={{ color: 'var(--gt-text-dim)' }}>
                       {ev.fromStatus ? `${ORDER_STATUS_LABEL[ev.fromStatus]} → ` : ''}
                       <strong style={{ color: 'var(--gt-text)' }}>{ORDER_STATUS_LABEL[ev.toStatus]}</strong>

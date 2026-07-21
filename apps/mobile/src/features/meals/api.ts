@@ -435,8 +435,8 @@ export type MealQuote = z.infer<typeof mealQuoteSchema>;
 export interface MealQuoteInput {
   partnerId: string;
   items: { mealId: string; qty: number }[];
-  /** A saved delivery address id, when quoting against one. */
-  addressId?: string;
+  /** A saved delivery address id. Quotes enforce delivery eligibility. */
+  addressId: string;
   window: MealWindow;
   /** 'YYYY-MM-DD' delivery date. */
   date: string;
@@ -457,7 +457,7 @@ export async function fetchMealQuote(token: string, input: MealQuoteInput): Prom
     body: {
       partnerId: input.partnerId,
       items: input.items,
-      ...(input.addressId !== undefined ? { addressId: input.addressId } : {}),
+      addressId: input.addressId,
       window: input.window,
       date: input.date,
       ...(input.tipMinor !== undefined ? { tipMinor: input.tipMinor } : {}),

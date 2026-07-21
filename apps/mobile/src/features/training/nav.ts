@@ -1,4 +1,5 @@
 import { router, type Href } from 'expo-router';
+import { blurActiveElement } from '../../lib/blurActiveElement';
 
 /**
  * Typed-routes escape hatch. `.expo/types/router.d.ts` only regenerates when
@@ -7,9 +8,11 @@ import { router, type Href } from 'expo-router';
  * clean and the cast is trivial to delete once the types catch up.
  */
 export function pushPath(path: string): void {
+  blurActiveElement();
   router.push(path as Href);
 }
 
 export function replacePath(path: string): void {
+  blurActiveElement();
   router.replace(path as Href);
 }

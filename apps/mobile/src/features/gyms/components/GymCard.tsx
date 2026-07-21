@@ -149,10 +149,27 @@ export function GymCard({ gym }: { gym: GymCardData }) {
 
       <LinearGradient colors={[...SCRIM]} style={styles.scrim} pointerEvents="none" />
 
-      {/* Floated badges — top-rated left, distance right. */}
-      {topRated || gym.distanceKm !== null ? (
-        <View style={styles.topRow} pointerEvents="none">
-          <View>{topRated ? <Tag label="Top rated" variant="filled" /> : null}</View>
+      {/* Floated badges — top-rated left, distance & crowd right. */}
+      <View style={styles.topRow} pointerEvents="none">
+        <View style={{ flexDirection: 'row', gap: spacing.xs }}>
+          {topRated ? <Tag label="Top rated" variant="filled" /> : null}
+          {gym.crowdData ? (
+            <View style={styles.distanceChip}>
+              <View
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: radius.full,
+                  backgroundColor: gym.crowdData.level === 'quiet' ? colors.success : colors.warning,
+                }}
+              />
+              <AppText variant="label" color={colors.text}>
+                {gym.crowdData.percentage}% Full
+              </AppText>
+            </View>
+          ) : null}
+        </View>
+        <View style={{ flexDirection: 'row', gap: spacing.xs }}>
           {gym.distanceKm !== null ? (
             <View style={styles.distanceChip}>
               <Ionicons name="navigate" size={12} color={colors.text} />
@@ -162,11 +179,11 @@ export function GymCard({ gym }: { gym: GymCardData }) {
             </View>
           ) : null}
         </View>
-      ) : null}
+      </View>
 
       {/* Identity over the scrim. */}
       <View style={styles.content} pointerEvents="none">
-        <AppText variant="title" color={colors.text} numberOfLines={2} style={styles.nameText}>
+        <AppText variant="title" color={colors.text} numberOfLines={1} style={styles.nameText}>
           {gym.name}
         </AppText>
         <View style={styles.metaRow}>
@@ -187,7 +204,7 @@ export function GymCard({ gym }: { gym: GymCardData }) {
               </View>
             </>
           ) : null}
-          {gym.rating !== null && !topRated ? (
+          {gym.rating !== null ? (
             <View style={styles.ratingPill}>
               <Ionicons name="star" size={12} color={colors.accent} />
               <AppText variant="label" color={colors.text}>

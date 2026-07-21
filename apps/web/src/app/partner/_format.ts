@@ -53,6 +53,22 @@ export const ORDER_STATUS_TONE: Record<OrderStatus, BadgeTone> = {
   refused: 'critical',
 };
 
+/**
+ * Semantic status colors (CSS custom properties from globals.css) for the ops
+ * board's strips/dots — the board reads state from across the room, so each
+ * stage carries its own color: amber waits on the kitchen, blue is in the
+ * kitchen, orange marks the rider moving, green is done, red is terminal.
+ */
+export const ORDER_STATUS_COLOR: Record<OrderStatus, string> = {
+  pending: 'var(--gt-warning)',
+  confirmed: 'var(--gt-info)',
+  preparing: 'var(--gt-info)',
+  out_for_delivery: 'var(--gt-accent)',
+  delivered: 'var(--gt-success)',
+  cancelled: 'var(--gt-danger)',
+  refused: 'var(--gt-danger)',
+};
+
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 

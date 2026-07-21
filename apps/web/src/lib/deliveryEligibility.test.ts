@@ -85,9 +85,15 @@ describe('deliveryEligibility', () => {
 });
 
 describe('deliveryEligibilityError', () => {
-  it('maps non-eligible states to stable API codes', () => {
+  it('rejects only confirmed out-of-area addresses', () => {
     assert.equal(deliveryEligibilityError('eligible'), null);
     assert.equal(deliveryEligibilityError('outside'), 'outside_delivery_area');
-    assert.equal(deliveryEligibilityError('unverified'), 'delivery_area_unverified');
+  });
+
+  it('does not block ordering when coverage cannot be verified', () => {
+    // Unverified means "not enough data to say yes or no" (missing area/geo on
+    // either side), not "confirmed out of range" — blocking it 400'd real
+    // orders for members/partners who simply hadn't filled in optional fields.
+    assert.equal(deliveryEligibilityError('unverified'), null);
   });
 });

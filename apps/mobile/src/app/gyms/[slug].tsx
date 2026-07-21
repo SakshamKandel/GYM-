@@ -27,6 +27,8 @@ import { GymReviewsSection } from '../../features/gyms/components/GymReviewsSect
 import { MapPreview } from '../../features/gyms/components/MapPreview';
 import { EnquireSheet } from '../../features/gyms/components/EnquireSheet';
 import { ReportGymSheet } from '../../features/gyms/components/ReportGymSheet';
+import { GymCrowdMeter } from '../../features/gyms/components/GymCrowdMeter';
+import { GymEquipmentList } from '../../features/gyms/components/GymEquipmentList';
 import { amenityIcon, amenityLabel } from '../../features/gyms/amenities';
 import { favoriteGym, unfavoriteGym } from '../../features/gyms/api';
 import { describeOpenState, formatShift } from '../../features/gyms/hours';
@@ -366,9 +368,25 @@ export default function GymDetailScreen() {
               ) : null}
             </Animated.View>
 
+            {/* ── Live Crowd Density ── */}
+            {gym.crowdData ? (
+              <Animated.View entering={enterUp(2)}>
+                <SectionLabel>Live Crowd & Peak Hours</SectionLabel>
+                <GymCrowdMeter crowd={gym.crowdData} />
+              </Animated.View>
+            ) : null}
+
+            {/* ── Equipment & Zones ── */}
+            {gym.equipment && gym.equipment.length > 0 ? (
+              <Animated.View entering={enterUp(4)}>
+                <SectionLabel>Equipment & Zones</SectionLabel>
+                <GymEquipmentList equipment={gym.equipment} />
+              </Animated.View>
+            ) : null}
+
             {/* ── Amenities ── */}
             {gym.amenities.length > 0 ? (
-              <Animated.View entering={enterUp(2)}>
+              <Animated.View entering={enterUp(5)}>
                 <SectionLabel>Amenities</SectionLabel>
                 <View style={styles.amenities}>
                   {gym.amenities.map((a) => (
@@ -386,7 +404,7 @@ export default function GymDetailScreen() {
             ) : null}
 
             {/* ── Weekly hours ── */}
-            <Animated.View entering={enterUp(3)}>
+            <Animated.View entering={enterUp(6)}>
               <SectionLabel>Hours</SectionLabel>
               <Card padding={spacing.lg}>
                 {GYM_DAY_KEYS.map((day, i) => {
@@ -426,7 +444,7 @@ export default function GymDetailScreen() {
 
             {/* ── Location ── */}
             {gym.addressText || gym.city || (gym.lat !== null && gym.lng !== null) ? (
-              <Animated.View entering={enterUp(4)}>
+              <Animated.View entering={enterUp(7)}>
                 <SectionLabel>Location</SectionLabel>
                 {gym.addressText || gym.city ? (
                   <PressableScale
@@ -455,6 +473,10 @@ export default function GymDetailScreen() {
                     <MapPreview
                       lat={gym.lat}
                       lng={gym.lng}
+                      addressText={gym.addressText}
+                      city={gym.city}
+                      gymName={gym.name}
+                      height={220}
                       onPress={openDirections}
                       accessibilityLabel={`Map preview of ${gym.name}'s location. Tap for directions`}
                     />
@@ -464,7 +486,7 @@ export default function GymDetailScreen() {
             ) : null}
 
             {/* ── Membership ── */}
-            <Animated.View entering={enterUp(5)}>
+            <Animated.View entering={enterUp(8)}>
               <SectionLabel>Membership</SectionLabel>
               {gym.priceNote ? (
                 <AppText variant="body" color={colors.textDim} style={styles.priceNote}>
@@ -476,7 +498,7 @@ export default function GymDetailScreen() {
 
             {/* ── About ── */}
             {gym.description ? (
-              <Animated.View entering={enterUp(6)}>
+              <Animated.View entering={enterUp(9)}>
                 <SectionLabel>About</SectionLabel>
                 <AppText variant="body" color={colors.textDim}>
                   {gym.description}

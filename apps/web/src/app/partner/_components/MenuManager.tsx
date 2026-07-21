@@ -6,6 +6,7 @@ import { useRef, useState } from 'react';
 import { Badge, Button, ConfirmButton, Drawer, EmptyState, Toolbar } from '@/components/console';
 import type { PartnerMenuItem } from '../_data';
 import { DIET_LABEL, formatMoney, windowShort } from '../_format';
+import styles from './menu.module.css';
 
 /**
  * Menu CRUD for the partner portal. Create / edit / soft-delete menu items,
@@ -126,14 +127,7 @@ export function MenuManager({
           action={<Button variant="primary" onClick={openNew}>Add menu item</Button>}
         />
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-            gap: 14,
-            marginTop: 16,
-          }}
-        >
+        <div className={styles.menuGrid}>
           {items.map((item) => (
             <MenuCard key={item.id} item={item} onEdit={() => openEdit(item)} />
           ))}
@@ -162,42 +156,27 @@ function MenuCard({ item, onEdit }: { item: PartnerMenuItem; onEdit: () => void 
           .join(', ');
 
   return (
-    <div className="gt-card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div className={`gt-card ${styles.menuCard}`}>
       {item.imageUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={item.imageUrl}
-          alt={item.name}
-          style={{ width: '100%', height: 140, objectFit: 'cover', borderRadius: 10 }}
-        />
+        <img src={item.imageUrl} alt={item.name} className={styles.menuPhoto} loading="lazy" />
       ) : (
-        <div
-          style={{
-            width: '100%',
-            height: 140,
-            borderRadius: 10,
-            background: 'var(--gt-surface-sunken)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--gt-text-faint)',
-            fontSize: 13,
-          }}
-        >
-          No photo
+        <div className={styles.menuPhotoFallback}>
+          <span className={styles.menuPhotoInitial} aria-hidden>
+            {item.name.trim().charAt(0).toUpperCase() || '?'}
+          </span>
+          No photo yet
         </div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-        <strong style={{ fontSize: 16 }}>{item.name}</strong>
-        <strong style={{ whiteSpace: 'nowrap' }}>{formatMoney(item.priceMinor, item.currency)}</strong>
+      <div className={styles.menuNameRow}>
+        <strong className={styles.menuName}>{item.name}</strong>
+        <span className={styles.pricePill}>{formatMoney(item.priceMinor, item.currency)}</span>
       </div>
 
-      {item.description ? (
-        <p style={{ margin: 0, fontSize: 13, color: 'var(--gt-text-dim)' }}>{item.description}</p>
-      ) : null}
+      {item.description ? <p className={styles.menuDescription}>{item.description}</p> : null}
 
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      <div className={styles.badgeRow}>
         <Badge tone={item.isActive ? 'positive' : 'neutral'}>
           {item.isActive ? 'Active' : 'Hidden'}
         </Badge>
@@ -209,12 +188,19 @@ function MenuCard({ item, onEdit }: { item: PartnerMenuItem; onEdit: () => void 
         ))}
       </div>
 
-      <div style={{ fontSize: 12, color: 'var(--gt-text-faint)' }}>
-        {item.kcal} kcal · P{item.proteinG} C{item.carbsG} F{item.fatG}
+      <div className={styles.macroRow}>
+        <span className={styles.macroChip}>{item.kcal} kcal</span>
+        <span className={styles.macroChip}>P {item.proteinG}</span>
+        <span className={styles.macroChip}>C {item.carbsG}</span>
+        <span className={styles.macroChip}>F {item.fatG}</span>
       </div>
-      <div style={{ fontSize: 12, color: 'var(--gt-text-faint)' }}>{availabilityLabel}</div>
 
-      <div style={{ marginTop: 'auto' }}>
+      <div className={styles.availabilityLine}>
+        <span className={styles.availabilityDot} aria-hidden />
+        {availabilityLabel}
+      </div>
+
+      <div className={styles.menuFooter}>
         <Button size="sm" onClick={onEdit}>
           Edit
         </Button>

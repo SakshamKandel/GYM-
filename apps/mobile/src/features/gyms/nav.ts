@@ -1,4 +1,5 @@
 import { router, type Href } from 'expo-router';
+import { blurActiveElement } from '../../lib/blurActiveElement';
 
 /**
  * Typed-routes escape hatch (same rationale as features/mentorship/nav.ts):
@@ -7,9 +8,11 @@ import { router, type Href } from 'expo-router';
  * across features, so each keeps its own copy of this two-liner.
  */
 export function pushPath(path: string): void {
+  blurActiveElement();
   router.push(path as Href);
 }
 
 export function replacePath(path: string): void {
+  blurActiveElement();
   router.replace(path as Href);
 }

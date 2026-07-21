@@ -1,5 +1,8 @@
-import * as Notifications from 'expo-notifications';
 import { AppState, Platform } from 'react-native';
+import {
+  registerNotificationListeners,
+  type PushRefreshNotification,
+} from './notificationListeners';
 import { hydrateCheckIns } from '../checkin/store';
 import { useGamificationBadges } from '../gamification/store';
 import { triggerMyCoachRefresh } from '../mentorship/hooks';
@@ -74,7 +77,7 @@ function isSupported(): boolean {
  * foreground, but Android tray-tapped pushes can carry them on the trigger's
  * remoteMessage instead — check both.
  */
-function eventType(notification: Notifications.Notification): string | null {
+function eventType(notification: PushRefreshNotification): string | null {
   try {
     const direct = notification.request.content.data?.type;
     if (typeof direct === 'string' && direct.length > 0) return direct;
@@ -121,7 +124,7 @@ function refreshForEvent(type: string): void {
   }
 }
 
-function handleNotification(notification: Notifications.Notification): void {
+function handleNotification(notification: PushRefreshNotification): void {
   // Refreshes are personal data fetches — never act on a stale session.
   if (useAuth.getState().status !== 'signedIn') return;
   const type = eventType(notification);
@@ -197,14 +200,7 @@ export function registerPushRefresh(): void {
   registered = true;
   if (isSupported()) {
     try {
-      // Foreground: a push arrived while the member is in the app — refresh
-      // the matching store right away so the UI updates without a banner tap.
-      Notifications.addNotificationReceivedListener(handleNotification);
-      // Tap: the member opened the app from the tray — make the target
-      // screen's data fresh before (or as) it renders.
-      Notifications.addNotificationResponseReceivedListener((response) => {
-        handleNotification(response.notification);
-      });
+      registerNotificationListeners(handleNotification);
     } catch {
       // Notifications module unavailable — foreground refresh still works.
     }

@@ -1,18 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-
-/**
- * Local Expo dev origins allowed to call /api/* cross-origin (Expo web dev
- * server ports). Kept to an explicit localhost allowlist: the API uses Bearer
- * tokens (no ambient cookies), but there is still no reason to reflect
- * arbitrary origins. Production mobile/web traffic is same-origin or native
- * (no CORS preflight), so nothing else needs listing.
- */
-const DEV_CORS_ORIGINS = new Set([
-  'http://localhost:8081',
-  'http://127.0.0.1:8081',
-  'http://localhost:19006',
-]);
+import { isAllowedDevOrigin } from '@/lib/cors';
 
 function applyCors(res: NextResponse, origin: string): void {
   res.headers.set('Access-Control-Allow-Origin', origin);
@@ -37,7 +25,7 @@ export function middleware(req: NextRequest) {
 
   if (pathname.startsWith('/api/')) {
     const origin = req.headers.get('origin');
-    const allowed = origin !== null && DEV_CORS_ORIGINS.has(origin);
+    const allowed = origin !== null && isAllowedDevOrigin(origin);
     if (req.method === 'OPTIONS') {
       const res = new NextResponse(null, { status: 204 });
       if (allowed && origin) applyCors(res, origin);

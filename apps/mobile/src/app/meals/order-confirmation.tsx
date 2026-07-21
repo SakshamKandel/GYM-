@@ -3,7 +3,7 @@ import { Share, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import { formatMoney } from '@gym/shared';
 import {
   AppText,
@@ -26,29 +26,67 @@ import { pushPath, replacePath } from '../../features/meals/nav';
  * itemized receipt, and "what happens next" copy — replacing the silent
  * redirect straight to the tracker. Reachable again later from Orders → the
  * order's detail sheet's Receipt action, so nav-away never strands it.
+ *
+ * Visual language (2026-07-21 professional pass): the screen's single red
+ * hero block celebrates the placement (check medallion + oversized Oswald
+ * order number), followed by a receipt-style fee card and numbered
+ * what-happens-next steps.
  */
 
 const styles = StyleSheet.create({
   header: { marginBottom: spacing.lg, alignItems: 'center' },
-  heroIcon: {
-    width: 64,
-    height: 64,
+  hero: { alignItems: 'center', gap: spacing.sm },
+  heroCheck: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.full,
+    backgroundColor: colors.onBlock,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.sm,
+  },
+  heroTitle: {
+    fontFamily: type.display,
+    fontSize: type.size.heading,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    textAlign: 'center',
+  },
+  orderNumberPill: {
+    backgroundColor: colors.onBlock,
+    borderRadius: radius.full,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xs,
+    marginTop: spacing.xs,
+  },
+  orderNumberText: {
+    fontFamily: type.display,
+    fontSize: 22,
+    letterSpacing: 1.5,
+    color: colors.text,
+  },
+  heroCopy: { textAlign: 'center', marginTop: spacing.xs },
+  card: { gap: spacing.sm, marginTop: spacing.lg },
+  cardLabel: { marginBottom: spacing.xs },
+  itemRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.sm },
+  feeRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  divider: { height: 1, backgroundColor: colors.borderStrong, marginVertical: spacing.sm },
+  totalValue: { fontFamily: type.display, fontSize: 26, color: colors.text, letterSpacing: 0.5 },
+  whatNext: { gap: spacing.md, marginTop: spacing.xl },
+  whatNextRow: { flexDirection: 'row', gap: spacing.md, alignItems: 'flex-start' },
+  stepNumber: {
+    width: 26,
+    height: 26,
     borderRadius: radius.full,
     backgroundColor: colors.accentFaint,
     alignItems: 'center',
     justifyContent: 'center',
-    alignSelf: 'center',
-    marginBottom: spacing.md,
+    marginTop: 1,
   },
-  orderNumber: { textAlign: 'center', marginTop: spacing.xs },
-  card: { gap: spacing.sm, marginTop: spacing.lg },
-  itemRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  feeRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  whatNext: { gap: spacing.xs, marginTop: spacing.lg },
-  whatNextRow: { flexDirection: 'row', gap: spacing.sm, alignItems: 'flex-start' },
-  buttonRow: { gap: spacing.sm, marginTop: spacing.gutter },
+  stepNumberText: { fontFamily: type.display, fontSize: 14, color: colors.accent },
+  buttonRow: { gap: spacing.sm, marginTop: spacing.xl },
   skeletons: { gap: spacing.md, marginTop: spacing.gutter },
-  skeletonRow: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg, height: 96 },
+  skeletonRow: { backgroundColor: colors.surface, borderRadius: radius.block, padding: spacing.lg, height: 96 },
 });
 
 function whatNextCopy(receipt: MealOrderReceipt): string[] {
@@ -106,18 +144,25 @@ export default function OrderConfirmationScreen() {
 
   return (
     <Screen scroll>
-      <Animated.View entering={enterUp(0)} style={styles.header}>
-        <View style={styles.heroIcon}>
-          <Ionicons name="checkmark-circle" size={36} color={colors.success} />
-        </View>
-        <AppText variant="title" center>
-          Order placed
-        </AppText>
-        {receipt ? (
-          <AppText variant="bodyBold" color={colors.accent} style={styles.orderNumber}>
-            {receipt.orderNumber}
+      <Animated.View entering={enterUp(0)}>
+        <Card variant="red" style={styles.hero}>
+          <View style={styles.heroCheck} accessible={false} importantForAccessibility="no-hide-descendants">
+            <Ionicons name="checkmark" size={40} color={colors.blockRed} />
+          </View>
+          <AppText style={styles.heroTitle} color={colors.onBlock}>
+            Order placed
           </AppText>
-        ) : null}
+          {receipt ? (
+            <View style={styles.orderNumberPill}>
+              <AppText style={styles.orderNumberText} tabular>
+                {receipt.orderNumber}
+              </AppText>
+            </View>
+          ) : null}
+          <AppText variant="caption" color={colors.onBlock} style={styles.heroCopy}>
+            {receipt ? 'Show this number if the kitchen asks.' : 'Preparing your receipt…'}
+          </AppText>
+        </Card>
       </Animated.View>
 
       {error ? (
@@ -136,9 +181,12 @@ export default function OrderConfirmationScreen() {
         <>
           <Animated.View entering={enterUp(1)}>
             <Card style={styles.card}>
+              <AppText variant="label" color={colors.textDim} style={styles.cardLabel}>
+                Receipt
+              </AppText>
               {receipt.items.map((item) => (
                 <View key={item.name} style={styles.itemRow}>
-                  <AppText variant="body" numberOfLines={1}>
+                  <AppText variant="body" numberOfLines={1} style={{ flex: 1 }}>
                     {item.qty}× {item.name}
                   </AppText>
                   <AppText variant="body" tabular>
@@ -146,11 +194,12 @@ export default function OrderConfirmationScreen() {
                   </AppText>
                 </View>
               ))}
+              <View style={styles.divider} />
               <View style={styles.feeRow}>
                 <AppText variant="body" color={colors.textDim}>
                   Delivery
                 </AppText>
-                <AppText variant="body" tabular>
+                <AppText variant="body" tabular color={receipt.deliveryFeeMinor === 0 ? colors.success : colors.text}>
                   {receipt.deliveryFeeMinor === 0 ? 'Free' : formatMoney(receipt.deliveryFeeMinor, receipt.currency)}
                 </AppText>
               </View>
@@ -174,9 +223,10 @@ export default function OrderConfirmationScreen() {
                   </AppText>
                 </View>
               ) : null}
+              <View style={styles.divider} />
               <View style={styles.feeRow}>
                 <AppText variant="bodyBold">Total</AppText>
-                <AppText variant="bodyBold" tabular>
+                <AppText style={styles.totalValue} tabular>
                   {formatMoney(receipt.totalMinor, receipt.currency)}
                 </AppText>
               </View>
@@ -187,9 +237,11 @@ export default function OrderConfirmationScreen() {
             <AppText variant="label" color={colors.textDim}>
               What happens next
             </AppText>
-            {whatNextCopy(receipt).map((line) => (
+            {whatNextCopy(receipt).map((line, i) => (
               <View key={line} style={styles.whatNextRow}>
-                <Ionicons name="arrow-forward-circle-outline" size={18} color={colors.accent} />
+                <View style={styles.stepNumber} accessible={false} importantForAccessibility="no-hide-descendants">
+                  <AppText style={styles.stepNumberText}>{i + 1}</AppText>
+                </View>
                 <AppText variant="body" style={{ flex: 1 }}>
                   {line}
                 </AppText>

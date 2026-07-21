@@ -26,63 +26,86 @@ export function OPTIONS() {
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ slug: string }> }) {
-  const limited = rateLimit({
-    route: 'gyms.detail',
-    limit: 60,
-    windowMs: 60_000,
-    ip: clientIp(req),
-  });
-  if (limited) return limited;
+  try {
+    const limited = rateLimit({
+      route: 'gyms.detail',
+      limit: 60,
+      windowMs: 60_000,
+      ip: clientIp(req),
+    });
+    if (limited) return limited;
 
-  const { slug } = await params;
-  const db = getDb();
+    const { slug } = await params;
+    const db = getDb();
 
-  const rows = await db
-    .select()
-    .from(gyms)
-    .where(and(eq(gyms.slug, slug), eq(gyms.status, 'published'), eq(gyms.verifiedByAdmin, true)))
-    .limit(1);
+    const rows = await db
+      .select({
+        id: gyms.id,
+        slug: gyms.slug,
+        name: gyms.name,
+        category: gyms.category,
+        addressText: gyms.addressText,
+        city: gyms.city,
+        district: gyms.district,
+        lat: gyms.lat,
+        lng: gyms.lng,
+        phone: gyms.phone,
+        website: gyms.website,
+        socialLinks: gyms.socialLinks,
+        hours: gyms.hours,
+        amenities: gyms.amenities,
+        externalImageUrl: gyms.externalImageUrl,
+        priceNote: gyms.priceNote,
+        description: gyms.description,
+      })
+      .from(gyms)
+      .where(and(eq(gyms.slug, slug), eq(gyms.status, 'published'), eq(gyms.verifiedByAdmin, true)))
+      .limit(1);
 
-  const row = rows[0];
-  if (!row) return json({ error: 'not_found' }, 404);
+    const row = rows[0];
+    if (!row) return json({ error: 'not_found' }, 404);
 
-  const [photosByGym, ratingByGym] = await Promise.all([
-    loadPhotosByGym([row.id]),
-    loadRatingAggregates([row.id]),
-  ]);
+    const [photosByGym, ratingByGym] = await Promise.all([
+      loadPhotosByGym([row.id]),
+      loadRatingAggregates([row.id]),
+    ]);
 
-  let isFavorited = false;
-  const token = bearerToken(req);
-  if (token) {
-    const user = await userForToken(token);
-    if (user) {
-      const favorited = await loadFavoritedSet(user.id, [row.id]);
-      isFavorited = favorited.has(row.id);
+    let isFavorited = false;
+    const token = bearerToken(req);
+    if (token) {
+      const user = await userForToken(token);
+      if (user) {
+        const favorited = await loadFavoritedSet(user.id, [row.id]);
+        isFavorited = favorited.has(row.id);
+      }
     }
+
+    const gym = {
+      id: row.id,
+      slug: row.slug,
+      name: row.name,
+      category: row.category,
+      addressText: row.addressText,
+      city: row.city,
+      district: row.district,
+      lat: row.lat,
+      lng: row.lng,
+      phone: row.phone,
+      website: row.website,
+      socialLinks: row.socialLinks,
+      hours: row.hours,
+      amenities: row.amenities,
+      externalImageUrl: row.externalImageUrl,
+      priceNote: row.priceNote,
+      description: row.description,
+      photos: photosByGym.get(row.id) ?? [],
+      isFavorited,
+      ...ratingFor(ratingByGym, row.id),
+    };
+
+    return json({ gym }, 200);
+  } catch (err) {
+    console.error('API /api/gyms/[slug] error:', err);
+    return json({ error: 'internal_error' }, 500);
   }
-
-  const gym = {
-    id: row.id,
-    slug: row.slug,
-    name: row.name,
-    category: row.category,
-    addressText: row.addressText,
-    city: row.city,
-    district: row.district,
-    lat: row.lat,
-    lng: row.lng,
-    phone: row.phone,
-    website: row.website,
-    socialLinks: row.socialLinks,
-    hours: row.hours,
-    amenities: row.amenities,
-    externalImageUrl: row.externalImageUrl,
-    priceNote: row.priceNote,
-    description: row.description,
-    photos: photosByGym.get(row.id) ?? [],
-    isFavorited,
-    ...ratingFor(ratingByGym, row.id),
-  };
-
-  return json({ gym }, 200);
 }

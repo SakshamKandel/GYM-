@@ -31,6 +31,7 @@ interface PipelineRow {
   label: string;
   value: number;
   tone: string;
+  dot: string;
 }
 
 function sevenDayRevenueDelta(earnings: PartnerEarnings, today: string) {
@@ -100,9 +101,9 @@ export function PartnerDashboardOverview({
   const revenueDelta = sevenDayRevenueDelta(earnings, today);
 
   const pipeline: PipelineRow[] = [
-    { label: 'Waiting confirmation', value: pending, tone: styles.fillWarning },
-    { label: 'In the kitchen', value: inKitchen, tone: styles.fillInfo },
-    { label: 'Out for delivery', value: enRoute, tone: styles.fillAccent },
+    { label: 'Waiting confirmation', value: pending, tone: styles.fillWarning, dot: 'var(--gt-warning)' },
+    { label: 'In the kitchen', value: inKitchen, tone: styles.fillInfo, dot: 'var(--gt-info)' },
+    { label: 'Out for delivery', value: enRoute, tone: styles.fillAccent, dot: 'var(--gt-accent)' },
   ];
 
   return (
@@ -113,6 +114,7 @@ export function PartnerDashboardOverview({
           value={stats.today.totalOrders.toLocaleString()}
           hint={`${stats.today.customers.toLocaleString()} unique customers`}
           viz={{ kind: 'ring', value: completionRate }}
+          live
         />
         <StatTile
           label="Revenue · 30 days"
@@ -148,7 +150,14 @@ export function PartnerDashboardOverview({
         />
 
         <Card padded={false} className={styles.fullHeightCard}>
-          <CardHeader title="Live fulfillment" />
+          <CardHeader
+            title={
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <span className="gt-live-dot" aria-hidden />
+                Live fulfillment
+              </span>
+            }
+          />
           <div className={styles.cardBody}>
             <ul className={styles.pipelineList}>
               {pipeline.map((row) => {
@@ -156,7 +165,10 @@ export function PartnerDashboardOverview({
                 return (
                   <li key={row.label}>
                     <div className={styles.pipelineHeader}>
-                      <span className={styles.pipelineLabel}>{row.label}</span>
+                      <span className={`${styles.pipelineLabel} ${styles.pipelineLabelWrap}`}>
+                        <span className={styles.pipelineDot} style={{ background: row.dot }} aria-hidden />
+                        {row.label}
+                      </span>
                       <span className={`${styles.pipelineValue} gt-numeric`}>{row.value}</span>
                     </div>
                     <div className={styles.pipelineTrack} aria-hidden>
@@ -170,8 +182,15 @@ export function PartnerDashboardOverview({
               })}
             </ul>
             <div className={styles.pipelineFooter}>
-              <span>
-                Lunch {lunchQueue} · Dinner {dinnerQueue}
+              <span style={{ display: 'inline-flex', gap: 8 }}>
+                <span className={styles.laneChip}>
+                  <span className={styles.laneChipDot} aria-hidden />
+                  Lunch {lunchQueue}
+                </span>
+                <span className={styles.laneChip}>
+                  <span className={styles.laneChipDot} aria-hidden />
+                  Dinner {dinnerQueue}
+                </span>
               </span>
               <span className={styles.pipelineTotal}>{totalLive}</span>
             </div>
@@ -197,7 +216,9 @@ export function PartnerDashboardOverview({
             <ol className={styles.sellerList}>
               {stats.bestSellers.slice(0, 4).map((seller, index) => (
                 <li key={seller.mealId} className={styles.sellerItem}>
-                  <span className={styles.sellerRank}>{index + 1}</span>
+                  <span className={`${styles.sellerRank} ${index === 0 ? styles.sellerRankTop : ''}`}>
+                    {index + 1}
+                  </span>
                   {seller.imageUrl ? (
                     // Cloudinary URLs are already transformed for the meal catalog.
                     // eslint-disable-next-line @next/next/no-img-element
@@ -261,7 +282,7 @@ export function PartnerDashboardOverview({
               </div>
             </div>
             {overdueCount > 0 ? (
-              <div className={styles.insightItem}>
+              <div className={`${styles.insightItem} ${styles.insightItemAlert}`}>
                 <div className={styles.insightLabel}>Needs attention</div>
                 <div className={styles.insightValue}>{overdueCount.toLocaleString()}</div>
                 <div className={styles.insightHint}>

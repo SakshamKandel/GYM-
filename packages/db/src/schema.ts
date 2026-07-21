@@ -2224,6 +2224,34 @@ export interface GymHoursShift {
 /** Structured weekly hours: per-weekday-key list of shifts (empty = closed). */
 export type GymWeeklyHours = Partial<Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat', GymHoursShift[]>>;
 
+/** An equipment item at a gym listing. */
+export interface GymEquipmentItem {
+  id: string;
+  name: string;
+  category: 'free_weights' | 'cardio' | 'machines' | 'functional' | 'recovery';
+  count?: number;
+  description?: string;
+}
+
+/** Live crowd density level and peak hours metadata. */
+export interface GymCrowdStatus {
+  level: 'quiet' | 'moderate' | 'busy' | 'packed';
+  percentage: number;
+  hourlyOccupancy?: number[];
+  peakHoursText?: string;
+}
+
+/** Day pass or membership pricing option. */
+export interface GymPassOption {
+  id: string;
+  type: 'day_pass' | 'weekly_pass' | 'monthly' | 'annual';
+  title: string;
+  priceMinor: number;
+  currency: 'NPR' | 'USD';
+  features: string[];
+  isPopular?: boolean;
+}
+
 /**
  * A discoverable nearby gym/studio. Admin-CRUD only. Publish gated behind
  * `verifiedByAdmin` + status='published'. `externalImageUrl` is operator-
@@ -2254,6 +2282,10 @@ export const gyms = pgTable(
     socialLinks: jsonb('social_links').$type<GymSocialLink[]>().notNull().default([]),
     hours: jsonb('hours').$type<GymWeeklyHours>().notNull().default({}),
     amenities: text('amenities').array().notNull().default(sql`'{}'::text[]`),
+    equipment: jsonb('equipment').$type<GymEquipmentItem[]>().notNull().default([]),
+    crowdData: jsonb('crowd_data').$type<GymCrowdStatus>(),
+    passOptions: jsonb('pass_options').$type<GymPassOption[]>().notNull().default([]),
+    coachIds: jsonb('coach_ids').$type<string[]>().notNull().default([]),
     externalImageUrl: text('external_image_url'), // operator-supplied, "not verified"
     priceNote: text('price_note').notNull().default(''),
     description: text('description').notNull().default(''),

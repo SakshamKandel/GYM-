@@ -1,4 +1,5 @@
 import { ktmAddDays, ktmDateString, MEAL_WINDOW_TIMES, type MealWindow } from '@gym/shared';
+import { colors } from '@gym/ui-tokens';
 import type { MealOrder, MealOrderStatus } from '../api';
 import { orderStatusLabel } from '../logic';
 
@@ -133,6 +134,43 @@ export const HAPPY_PATH: MealOrderStatus[] = [
   'out_for_delivery',
   'delivered',
 ];
+
+// ── Status color language (2026-07-21 professional pass) ───────────
+// One semantic color per live status so a member reads order state at a
+// glance: amber = waiting on the kitchen, blue = locked in, orange = on the
+// stove, red = rider moving (brand accent = action), green = done, and the
+// error red for the two terminal stops. Washes are the matching ~18% tints
+// from @gym/ui-tokens (contrast-checked there for text-on-wash use).
+
+const STATUS_COLOR: Record<MealOrderStatus, string> = {
+  pending: colors.warning,
+  confirmed: colors.info,
+  preparing: colors.orange,
+  out_for_delivery: colors.accent,
+  delivered: colors.success,
+  cancelled: colors.error,
+  refused: colors.error,
+};
+
+const STATUS_WASH: Record<MealOrderStatus, string> = {
+  pending: colors.warningFaint,
+  confirmed: colors.infoFaint,
+  preparing: colors.orangeFaint,
+  out_for_delivery: colors.accentFaint,
+  delivered: colors.successFaint,
+  cancelled: colors.accentFaint,
+  refused: colors.accentFaint,
+};
+
+/** Semantic foreground color for an order status (icons, pills, dots). */
+export function orderStatusColor(status: MealOrderStatus): string {
+  return STATUS_COLOR[status];
+}
+
+/** Matching tinted fill to sit behind {@link orderStatusColor} text/icons. */
+export function orderStatusWash(status: MealOrderStatus): string {
+  return STATUS_WASH[status];
+}
 
 /** Short stepper labels (the full "Out for delivery" is too wide under a dot). */
 const STEP_SHORT: Record<MealOrderStatus, string> = {

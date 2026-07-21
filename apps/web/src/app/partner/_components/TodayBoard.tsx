@@ -3,6 +3,7 @@
 import {
   canActorAdvance,
   ORDER_STATUSES,
+  orderNumber,
   partnerCanRefuse,
   partnerRefuseTarget,
   type MealWindow,
@@ -16,6 +17,7 @@ import {
   formatDateLabel,
   formatMoney,
   isOrderLate,
+  ORDER_STATUS_COLOR,
   ORDER_STATUS_LABEL,
   ORDER_STATUS_TONE,
   windowShort,
@@ -23,6 +25,7 @@ import {
 import { OrderDetailDrawer } from './OrderDetailDrawer';
 import { RefuseControl } from './RefuseControl';
 import { useCallbackRef } from './useCallbackRef';
+import styles from './board.module.css';
 
 /**
  * The Today board — the partner's live operations surface. Every non-terminal
@@ -33,6 +36,11 @@ import { useCallbackRef } from './useCallbackRef';
  * badge + document-title flash, an audible chime that repeats until
  * acknowledged (B8), and highlights any order whose delivery window has
  * already started but isn't delivered.
+ *
+ * Visual language (2026-07-21 professional pass): a live-pill toolbar,
+ * per-status column dots and card edge strips (amber → blue → orange, red for
+ * late/overdue), GM-order numbers on every card, and lane headers that carry
+ * both the order count and the money at stake.
  */
 
 const POLL_MS = 15_000;
@@ -263,38 +271,16 @@ export function TodayBoard({
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-          marginBottom: 14,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-            Auto-refreshing every 15s · {todaysOrders.length} live today
+      <div className={styles.toolbar}>
+        <div className={styles.toolbarLeft}>
+          <span className={`${styles.livePill} ${pollFailed ? styles.livePillPaused : ''}`}>
+            <span className="gt-live-dot" aria-hidden />
+            {pollFailed
+              ? 'Live updates paused — retrying'
+              : `Live · every 15s · ${todaysOrders.length} today`}
           </span>
-          {pollFailed ? (
-            <Badge tone="warning">Live updates paused — retrying</Badge>
-          ) : null}
           {newIds.size > 0 ? (
-            <button
-              onClick={acknowledgeNew}
-              style={{
-                border: 'none',
-                borderRadius: 999,
-                padding: '4px 12px',
-                background: 'var(--gt-accent-strong)',
-                color: 'var(--gt-accent-ink)',
-                fontFamily: 'var(--font-heading)',
-                fontWeight: 600,
-                fontSize: 12,
-                cursor: 'pointer',
-              }}
-            >
+            <button onClick={acknowledgeNew} className={styles.newOrdersBtn}>
               {newIds.size} new order{newIds.size === 1 ? '' : 's'} · review
             </button>
           ) : null}
@@ -303,18 +289,7 @@ export function TodayBoard({
           onClick={toggleSound}
           aria-label={soundOn ? 'Mute new-order chime' : 'Unmute new-order chime'}
           title={soundOn ? 'New-order chime is on' : 'New-order chime is muted'}
-          style={{
-            border: '1px solid var(--gt-border-strong)',
-            borderRadius: 999,
-            padding: '4px 10px',
-            background: 'var(--gt-surface)',
-            color: 'var(--gt-text-dim)',
-            fontSize: 12,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
+          className={styles.soundToggle}
         >
           <span aria-hidden="true">{soundOn ? '🔔' : '🔕'}</span>
           {soundOn ? 'Sound on' : 'Muted'}
@@ -341,7 +316,7 @@ export function TodayBoard({
           />
         )
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div className={styles.laneStack}>
           {windows.map((window) => {
             const windowOrders = todaysOrders.filter((o) => o.window === window);
             if (windowOrders.length === 0) return null;
@@ -399,30 +374,15 @@ function OverdueLane({
   onOpen: (id: string) => void;
 }) {
   return (
-    <section
-      aria-label="Overdue orders needing attention"
-      style={{
-        marginBottom: 20,
-        border: '1px solid var(--gt-danger)',
-        borderRadius: 12,
-        padding: 14,
-        background: 'var(--gt-surface-sunken)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-        <h3 style={{ margin: 0, fontFamily: 'var(--font-heading)', fontSize: 16 }}>Needs attention</h3>
+    <section aria-label="Overdue orders needing attention" className={styles.overdueLane}>
+      <div className={styles.overdueHeader}>
+        <h3 className={styles.overdueTitle}>Needs attention</h3>
         <Badge tone="critical">{orders.length} overdue</Badge>
       </div>
-      <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--gt-text-dim)' }}>
+      <p className={styles.overdueCopy}>
         Open orders past their delivery date. Complete or mark each refused to clear it.
       </p>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(264px, 1fr))',
-          gap: 8,
-        }}
-      >
+      <div className={styles.overdueGrid}>
         {orders.map((o) => (
           <BoardCard
             key={o.orderId}
@@ -464,56 +424,36 @@ function WindowLane({
   onOpen: (id: string) => void;
 }) {
   const lateCount = orders.filter((o) => isOrderLate(o, nowMs)).length;
+  const laneTotalMinor = orders.reduce((sum, o) => sum + o.totalMinor, 0);
   return (
     <section aria-label={`${windowShort(window)} orders`}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <h3 style={{ margin: 0, fontFamily: 'var(--font-heading)', fontSize: 16 }}>
-          {windowShort(window)}
-        </h3>
-        <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>{orders.length} orders</span>
+      <div className={styles.laneHeader}>
+        <h3 className={styles.laneTitle}>{windowShort(window)}</h3>
+        <span className={styles.laneMeta}>
+          {orders.length} {orders.length === 1 ? 'order' : 'orders'} ·{' '}
+          <span className="gt-numeric">{formatMoney(laneTotalMinor, currency)}</span>
+        </span>
         {lateCount > 0 ? <Badge tone="critical">{lateCount} late</Badge> : null}
       </div>
 
-      <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
-        <div style={{ display: 'flex', gap: 12, minWidth: 'min-content' }}>
+      <div className={styles.laneScroll}>
+        <div className={styles.laneColumns}>
           {COLUMNS.map((col) => {
             const colOrders = orders.filter((o) => o.status === col.status);
             return (
-              <div
-                key={col.status}
-                style={{
-                  flex: '0 0 264px',
-                  width: 264,
-                  background: 'var(--gt-surface-sunken)',
-                  borderRadius: 12,
-                  padding: 10,
-                }}
-              >
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '2px 4px 10px',
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: 12,
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.04em',
-                      color: 'var(--gt-text-dim)',
-                      fontFamily: 'var(--font-heading)',
-                      fontWeight: 600,
-                    }}
-                  >
+              <div key={col.status} className={styles.column}>
+                <div className={styles.columnHeader}>
+                  <span className={styles.columnLabel}>
+                    <span
+                      className={styles.columnDot}
+                      style={{ background: ORDER_STATUS_COLOR[col.status] }}
+                      aria-hidden
+                    />
                     {col.label}
                   </span>
-                  <span className="gt-numeric" style={{ fontSize: 13, color: 'var(--gt-text-faint)' }}>
-                    {colOrders.length}
-                  </span>
+                  <span className={styles.columnCount}>{colOrders.length}</span>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div className={styles.columnBody}>
                   {colOrders.map((o) => (
                     <BoardCard
                       key={o.orderId}
@@ -528,9 +468,7 @@ function WindowLane({
                     />
                   ))}
                   {colOrders.length === 0 ? (
-                    <div style={{ fontSize: 12, color: 'var(--gt-text-faint)', padding: '6px 4px' }}>
-                      —
-                    </div>
+                    <div className={styles.columnEmpty}>No orders</div>
                   ) : null}
                 </div>
               </div>
@@ -571,73 +509,32 @@ function BoardCard({
     order.paymentStatus !== 'refunded';
   const blocked = to === 'confirmed' && digitalUnpaid;
   const itemCount = order.items.reduce((sum, it) => sum + it.qty, 0);
+  const stripColor = late ? 'var(--gt-danger)' : ORDER_STATUS_COLOR[order.status];
 
   return (
     <div
-      className="gt-card"
-      style={{
-        padding: 12,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-        borderLeft: late ? '3px solid var(--gt-danger)' : undefined,
-        boxShadow: isNew ? '0 0 0 2px var(--gt-accent-strong)' : undefined,
-      }}
+      className={`gt-card ${styles.orderCard} ${isNew ? styles.orderCardNew : ''}`}
+      style={{ borderLeftColor: stripColor }}
     >
-      <button
-        onClick={() => onOpen(order.orderId)}
-        style={{
-          all: 'unset',
-          cursor: 'pointer',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-        }}
-        aria-label={`Open order for ${order.deliveryName}`}
-      >
-        {showDate ? (
-          <span
-            style={{
-              fontSize: 11,
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              color: 'var(--gt-danger)',
-              fontFamily: 'var(--font-heading)',
-              fontWeight: 600,
-            }}
-          >
-            {formatDateLabel(order.deliveryDate)} · {windowShort(order.window)}
-          </span>
-        ) : null}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-          <strong style={{ fontSize: 14 }}>{order.deliveryName}</strong>
-          <span className="gt-numeric" style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-            {formatMoney(order.totalMinor, currency)}
-          </span>
+      <button onClick={() => onOpen(order.orderId)} className={styles.orderCardOpen} aria-label={`Open order for ${order.deliveryName}`}>
+        <span className={`${styles.orderNumber} ${showDate ? styles.orderNumberOverdue : ''}`}>
+          {orderNumber(order.orderId)}
+          {showDate ? ` · ${formatDateLabel(order.deliveryDate)} · ${windowShort(order.window)}` : ''}
+        </span>
+        <div className={styles.orderNameRow}>
+          <strong className={styles.orderName}>{order.deliveryName}</strong>
+          <span className={styles.orderTotal}>{formatMoney(order.totalMinor, currency)}</span>
         </div>
         {order.deliveryAddressText ? (
-          <div
-            style={{
-              fontSize: 12,
-              color: 'var(--gt-text-dim)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-            title={order.deliveryAddressText}
-          >
-            <span aria-hidden="true">📍</span>
-            {order.deliveryAddressText}
+          <div className={styles.orderAddress} title={order.deliveryAddressText}>
+            <span aria-hidden="true">📍</span> {order.deliveryAddressText}
           </div>
         ) : null}
-        <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+        <div className={styles.orderItems}>
           {itemCount} item{itemCount === 1 ? '' : 's'} ·{' '}
           {order.items.map((it) => `${it.qty}× ${it.name}`).join(', ')}
         </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className={styles.badgeRow}>
           {late ? <Badge tone="critical">Late</Badge> : null}
           {isNew ? <Badge tone="info">New</Badge> : null}
           {digitalUnpaid ? <Badge tone="warning">Unpaid</Badge> : null}
@@ -668,7 +565,7 @@ function BoardCard({
         />
       ) : null}
 
-      {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 12 }}>{error}</div> : null}
+      {error ? <div className={styles.cardError}>{error}</div> : null}
     </div>
   );
 }

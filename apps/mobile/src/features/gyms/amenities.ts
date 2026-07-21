@@ -19,6 +19,10 @@ export const AMENITY_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
   showers: 'water-outline',
   wifi: 'wifi',
   ac: 'snow',
+  turf: 'fitness',
+  power_racks: 'hardware-chip',
+  recovery: 'sparkles',
+  '24_7_access': 'time',
 };
 
 export function amenityIcon(a: string): keyof typeof Ionicons.glyphMap {

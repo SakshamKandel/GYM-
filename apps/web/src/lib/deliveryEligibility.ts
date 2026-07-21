@@ -84,11 +84,23 @@ export function deliveryEligibility(
   return textMatch ? 'eligible' : 'outside';
 }
 
-/** Stable member-facing API code for a non-eligible result. */
+/**
+ * Stable member-facing API code for a non-eligible result.
+ *
+ * `unverified` does NOT block ordering. Both sides of the check have
+ * optional data — a member's saved address only requires `line` + `phone`
+ * (area/map pin are explicitly optional in AddressSheet), and a newly
+ * onboarded partner starts with no `serviceAreas`/geo radius configured — so
+ * hard-rejecting `unverified` here 400'd real, legitimate orders for members
+ * and partners who simply hadn't filled in that optional metadata (reported
+ * as "delivery address issue, must be server-side" — it was). We can only
+ * confidently reject `outside` (both sides had enough data to say no); an
+ * unverifiable address still reaches the partner, who can decline a specific
+ * order in the partner portal if it's genuinely out of range.
+ */
 export function deliveryEligibilityError(
   eligibility: DeliveryEligibility,
 ): DeliveryEligibilityError | null {
   if (eligibility === 'outside') return 'outside_delivery_area';
-  if (eligibility === 'unverified') return 'delivery_area_unverified';
   return null;
 }

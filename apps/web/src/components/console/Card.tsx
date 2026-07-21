@@ -36,7 +36,9 @@ export function CardHeader({
   title,
   action,
 }: {
-  title: string;
+  /** Header content — a plain label, or a node when the title needs an
+   * inline affordance (e.g. the live-indicator dot). */
+  title: ReactNode;
   action?: ReactNode;
 }) {
   return (
@@ -58,6 +60,8 @@ export function CardHeader({
           letterSpacing: '0.03em',
           textTransform: 'uppercase',
           color: 'var(--gt-text-dim)',
+          display: 'inline-flex',
+          alignItems: 'center',
         }}
       >
         {title}

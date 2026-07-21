@@ -24,6 +24,7 @@ import { useMealPartners, useMyMealOrders } from '../../features/meals/hooks';
 import { cancelMealOrder, toMealsError, type MealOrder } from '../../features/meals/api';
 import { ReceiptUploadPanel } from '../../features/meals/components/ReceiptUploadPanel';
 import { LiveOrderCard } from '../../features/meals/components/LiveOrderCard';
+import { LiveDot } from '../../features/meals/components/LiveDot';
 import { OrderHistoryCard } from '../../features/meals/components/OrderHistoryCard';
 import { OrderDetailSheet } from '../../features/meals/components/OrderDetailSheet';
 import { dayGroupLabel } from '../../features/meals/components/orderView';
@@ -52,6 +53,7 @@ const styles = StyleSheet.create({
   header: { marginBottom: spacing.lg },
   sectionLabel: { marginTop: spacing.xl, marginBottom: spacing.md },
   firstSectionLabel: { marginTop: spacing.xs, marginBottom: spacing.md },
+  liveLabelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   list: { gap: spacing.md },
   groupLabel: { marginTop: spacing.md, marginBottom: spacing.sm },
   historyList: { gap: spacing.sm },
@@ -251,9 +253,13 @@ export default function MyMealOrdersScreen() {
             <>
               {liveOrders.length > 0 ? (
                 <Animated.View entering={enterUp(0)}>
-                  <AppText variant="label" style={styles.firstSectionLabel}>
-                    On the way
-                  </AppText>
+                  <View style={[styles.firstSectionLabel, styles.liveLabelRow]}>
+                    <LiveDot color={colors.accent} />
+                    <AppText variant="label">On the way</AppText>
+                    <AppText variant="caption" color={colors.textFaint}>
+                      · updates automatically
+                    </AppText>
+                  </View>
                   <View style={styles.list}>
                     {liveOrders.map((o) => (
                       <LiveOrderCard

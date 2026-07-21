@@ -1,4 +1,5 @@
 import { router, type Href } from 'expo-router';
+import { blurActiveElement } from '../../lib/blurActiveElement';
 import { resetStackTo } from '../../lib/nav';
 import { useAuth } from '../../state/auth';
 import { STAFF_ROUTES } from '../staff/nav';
@@ -10,10 +11,12 @@ import { STAFF_ROUTES } from '../staff/nav';
  * union yet. Centralize the cast so it's trivial to delete later.
  */
 export function pushPath(path: string): void {
+  blurActiveElement();
   router.push(path as Href);
 }
 
 export function replacePath(path: string): void {
+  blurActiveElement();
   router.replace(path as Href);
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { ORDER_STATUSES, canActorAdvance, formatMoney, type OrderStatus } from '@gym/shared';
+import { ORDER_STATUSES, canActorAdvance, formatMoney, orderNumber, type OrderStatus } from '@gym/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
@@ -53,6 +53,17 @@ const STATUS_TONE: Record<OrderStatus, 'neutral' | 'positive' | 'warning' | 'cri
   delivered: 'positive',
   cancelled: 'neutral',
   refused: 'critical',
+};
+
+/** Same semantic status-color language as the partner ops board (CSS vars). */
+const STATUS_COLOR: Record<OrderStatus, string> = {
+  pending: 'var(--gt-warning)',
+  confirmed: 'var(--gt-info)',
+  preparing: 'var(--gt-info)',
+  out_for_delivery: 'var(--gt-accent)',
+  delivered: 'var(--gt-success)',
+  cancelled: 'var(--gt-text-faint)',
+  refused: 'var(--gt-danger)',
 };
 
 const DATE_FMT = new Intl.DateTimeFormat('en-US', {
@@ -233,6 +244,19 @@ export function OrdersOversight({
 
   const columns: Column<AdminOrderRow>[] = [
     {
+      key: 'order',
+      header: 'Order',
+      width: 110,
+      render: (r) => (
+        <span
+          className="gt-numeric"
+          style={{ fontSize: 12, letterSpacing: '0.04em', color: 'var(--gt-text)' }}
+        >
+          {orderNumber(r.id)}
+        </span>
+      ),
+    },
+    {
       key: 'placed',
       header: 'Placed',
       width: 130,
@@ -270,8 +294,22 @@ export function OrdersOversight({
     {
       key: 'status',
       header: 'Status',
-      width: 130,
-      render: (r) => <StatusChip status={r.status === 'delivered' ? 'live' : r.status === 'pending' ? 'pending' : r.status === 'cancelled' || r.status === 'refused' ? 'ended' : 'active'} label={STATUS_LABEL[r.status]} />,
+      width: 150,
+      render: (r) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+          <span
+            aria-hidden
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: STATUS_COLOR[r.status],
+              flexShrink: 0,
+            }}
+          />
+          <StatusChip status={r.status === 'delivered' ? 'live' : r.status === 'pending' ? 'pending' : r.status === 'cancelled' || r.status === 'refused' ? 'ended' : 'active'} label={STATUS_LABEL[r.status]} />
+        </span>
+      ),
     },
     {
       key: 'total',

@@ -12,6 +12,7 @@ import Animated, {
 import { Ionicons } from '@expo/vector-icons';
 import { router, type Href } from 'expo-router';
 import { colors, radius, spacing } from '@gym/ui-tokens';
+import { blurActiveElement } from '../../lib/blurActiveElement';
 import { tapHaptic } from '../../lib/haptics';
 import { useBottomClearance } from '../../lib/systemBars';
 import { useSession } from '../../features/training/session';
@@ -82,6 +83,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     alignItems: 'center',
+    pointerEvents: 'box-none',
   },
   bar: {
     height: BAR_H,
@@ -135,6 +137,7 @@ const styles = StyleSheet.create({
     height: 7,
     borderRadius: 4,
     backgroundColor: colors.accent,
+    pointerEvents: 'none',
   },
 });
 
@@ -233,7 +236,7 @@ function TabItem({
           </Animated.View>
         </View>
       </Animated.View>
-      {showLiveDot && !focused ? <View style={styles.liveDot} pointerEvents="none" /> : null}
+      {showLiveDot && !focused ? <View style={styles.liveDot} /> : null}
     </Pressable>
   );
 }
@@ -262,10 +265,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
   const systemClearance = useBottomClearance();
 
   return (
-    <View
-      style={[styles.wrap, { bottom: systemClearance + FLOAT_GAP }]}
-      pointerEvents="box-none"
-    >
+    <View style={[styles.wrap, { bottom: systemClearance + FLOAT_GAP }]}>
       <View style={styles.bar}>
         {state.routes.map((route, index) => {
           const options = descriptors[route.key]?.options ?? {};
@@ -296,12 +296,14 @@ export function FloatingTabBar({ state, descriptors, navigation }: TabBarProps) 
                   canPreventDefault: true,
                 });
                 if (!focused && !event.defaultPrevented) {
+                  blurActiveElement();
                   tapHaptic();
                   navigation.navigate(route.name);
                 }
               }}
               onLongPress={() => {
                 if (quickRoute) {
+                  blurActiveElement();
                   tapHaptic();
                   router.push(quickRoute as Href);
                 }

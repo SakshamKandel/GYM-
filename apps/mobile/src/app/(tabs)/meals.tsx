@@ -1,18 +1,17 @@
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, radius, spacing, touch } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
+  Card,
   EmptyState,
   enterDown,
   enterFade,
   enterUp,
   FLOATING_TAB_SPACE,
-  IconChip,
   PressableScale,
   Screen,
-  ScreenHeader,
   SkeletonRow,
   Tag,
 } from '../../components/ui';
@@ -25,24 +24,42 @@ import type { MealPartner } from '../../features/meals/api';
 /**
  * Meals tab — order-a-meal partner discovery hub (plan §6 P12), promoted from
  * /meals to its own bottom tab. Mirrors the gyms tab's screen skeleton
- * (Screen scroll, ScreenHeader, load-on-focus with skeleton rows + a quiet
- * retry, never a blocking error screen), gated on sign-in since every meals
- * route is a member-only surface.
+ * (Screen scroll, load-on-focus with skeleton rows + a quiet retry, never a
+ * blocking error screen), gated on sign-in since every meals route is a
+ * member-only surface.
+ *
+ * Visual language (2026-07-21 professional pass): a single red hero block
+ * carries the brand statement + the member's quick links (Orders / Plans) as
+ * black onBlock pills; partner kitchens list below as chunky block cards with
+ * a monogram tile, delivery-area line and service badges.
  */
 
 const styles = StyleSheet.create({
-  quickRow: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: spacing.lg },
-  quickLinks: { flexDirection: 'row', gap: spacing.sm },
-  quickLink: {
+  hero: { gap: spacing.md },
+  heroTitle: {
+    fontFamily: type.display,
+    fontSize: type.size.heading,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  heroCopy: { maxWidth: 300 },
+  heroLinks: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
+  heroLink: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
     minHeight: touch.min,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
     borderRadius: radius.full,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.onBlock,
   },
-  header: { marginBottom: spacing.md },
+  sectionLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.xl,
+    marginBottom: spacing.md,
+  },
   retryRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -55,42 +72,62 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   retryText: { flex: 1 },
-  list: { gap: spacing.sm },
-  skeletons: { gap: spacing.sm },
-  skeletonRow: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    backgroundColor: colors.surface,
+  list: { gap: spacing.md },
+  skeletons: { gap: spacing.md },
+  skeletonRow: { backgroundColor: colors.surface, borderRadius: radius.block, padding: spacing.lg, height: 108 },
+  cardTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  monogram: {
+    width: 56,
+    height: 56,
     borderRadius: radius.md,
-    padding: spacing.lg,
-    minHeight: 76,
+    backgroundColor: colors.accentFaint,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  rowMain: { flex: 1, gap: 2 },
+  monogramLetter: {
+    fontFamily: type.display,
+    fontSize: 26,
+    color: colors.accent,
+    textTransform: 'uppercase',
+  },
+  cardMain: { flex: 1, gap: 3 },
+  areaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
 });
 
-function PartnerRow({ partner }: { partner: MealPartner }) {
+function PartnerCard({ partner, index }: { partner: MealPartner; index: number }) {
   const areas = partner.serviceAreas.slice(0, 3).join(', ');
+  const initial = partner.name.trim().charAt(0) || '?';
   return (
-    <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel={`${partner.name}${areas ? `, delivers to ${areas}` : ''}. View menu`}
-      onPress={() => pushPath(`/meals/${partner.id}`)}
-      style={styles.row}
-    >
-      <IconChip icon="restaurant" />
-      <View style={styles.rowMain}>
-        <AppText variant="bodyBold" numberOfLines={1}>
-          {partner.name}
-        </AppText>
-        <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
-          {areas || 'Delivery area not listed'}
-        </AppText>
-      </View>
-      {partner.acceptsCod ? <Tag label="COD" variant="dim" /> : null}
-      <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-    </PressableScale>
+    <Animated.View entering={enterUp(Math.min(index, 4))}>
+      <Card
+        onPress={() => pushPath(`/meals/${partner.id}`)}
+        accessibilityLabel={`${partner.name}${areas ? `, delivers to ${areas}` : ''}. View menu`}
+      >
+        <View style={styles.cardTop}>
+          <View style={styles.monogram} accessible={false} importantForAccessibility="no-hide-descendants">
+            <AppText style={styles.monogramLetter}>{initial}</AppText>
+          </View>
+          <View style={styles.cardMain}>
+            <AppText variant="title" numberOfLines={1}>
+              {partner.name}
+            </AppText>
+            <View style={styles.areaRow}>
+              <Ionicons name="location-outline" size={14} color={colors.textDim} />
+              <AppText variant="caption" color={colors.textDim} numberOfLines={1} style={{ flex: 1 }}>
+                {areas || 'Delivery area not listed'}
+              </AppText>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textFaint} />
+        </View>
+        <View style={styles.badgeRow}>
+          {partner.acceptsCod ? <Tag label="Cash on delivery" variant="dim" /> : null}
+          <Tag label="Lunch & dinner" variant="dim" />
+          <Tag label="View menu" variant="outline" color={colors.accent} />
+        </View>
+      </Card>
+    </Animated.View>
   );
 }
 
@@ -101,35 +138,44 @@ export default function MealsTabScreen() {
 
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
-      {status === 'signedIn' ? (
-        <Animated.View entering={enterDown()} style={styles.quickRow}>
-          <View style={styles.quickLinks}>
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="My meal orders"
-              onPress={() => pushPath('/meals/orders')}
-              style={styles.quickLink}
-            >
-              <Ionicons name="receipt-outline" size={16} color={colors.text} />
-              <AppText variant="caption">Orders</AppText>
-            </PressableScale>
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="My meal subscriptions"
-              onPress={() => pushPath('/meals/subscriptions')}
-              style={styles.quickLink}
-            >
-              <Ionicons name="repeat-outline" size={16} color={colors.text} />
-              <AppText variant="caption">Plans</AppText>
-            </PressableScale>
-          </View>
-        </Animated.View>
-      ) : null}
-
-      <ScreenHeader eyebrow="Fuel your training" title="Order meals" style={styles.header} />
+      <Animated.View entering={enterDown()}>
+        <Card variant="red" style={styles.hero}>
+          <AppText variant="label" color={colors.onBlock}>
+            GM Meals
+          </AppText>
+          <AppText style={styles.heroTitle} color={colors.onBlock}>
+            Fuel, delivered.
+          </AppText>
+          <AppText variant="body" color={colors.onBlock} style={styles.heroCopy}>
+            Macro-tracked meals from partner kitchens, on your training schedule.
+          </AppText>
+          {status === 'signedIn' ? (
+            <View style={styles.heroLinks}>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="My meal orders"
+                onPress={() => pushPath('/meals/orders')}
+                style={styles.heroLink}
+              >
+                <Ionicons name="receipt-outline" size={16} color={colors.text} />
+                <AppText variant="bodyBold">Orders</AppText>
+              </PressableScale>
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="My meal subscriptions"
+                onPress={() => pushPath('/meals/subscriptions')}
+                style={styles.heroLink}
+              >
+                <Ionicons name="repeat-outline" size={16} color={colors.text} />
+                <AppText variant="bodyBold">Plans</AppText>
+              </PressableScale>
+            </View>
+          ) : null}
+        </Card>
+      </Animated.View>
 
       {status !== 'signedIn' ? (
-        <Animated.View entering={enterUp(0)}>
+        <Animated.View entering={enterUp(1)} style={{ marginTop: spacing.xl }}>
           <EmptyState
             icon="restaurant"
             title="Sign in to order meals"
@@ -141,6 +187,15 @@ export default function MealsTabScreen() {
         </Animated.View>
       ) : (
         <>
+          <View style={styles.sectionLabelRow}>
+            <AppText variant="label">Partner kitchens</AppText>
+            {partners !== null && partners.length > 0 ? (
+              <AppText variant="caption" color={colors.textFaint}>
+                {partners.length} {partners.length === 1 ? 'kitchen' : 'kitchens'}
+              </AppText>
+            ) : null}
+          </View>
+
           {error ? (
             <Animated.View entering={enterFade(0)}>
               <PressableScale
@@ -173,11 +228,11 @@ export default function MealsTabScreen() {
               />
             </Animated.View>
           ) : partners !== null ? (
-            <Animated.View entering={enterUp(0)} style={styles.list}>
-              {partners.map((p) => (
-                <PartnerRow key={p.id} partner={p} />
+            <View style={styles.list}>
+              {partners.map((p, i) => (
+                <PartnerCard key={p.id} partner={p} index={i} />
               ))}
-            </Animated.View>
+            </View>
           ) : null}
         </>
       )}

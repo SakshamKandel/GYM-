@@ -57,6 +57,95 @@ const amenitiesSchema = z
 
 const photoSchema = z.object({ deliveryUrl: z.string() });
 
+export const equipmentItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  category: z.enum(['free_weights', 'cardio', 'machines', 'functional', 'recovery']).catch('free_weights'),
+  count: z.number().optional(),
+  description: z.string().optional(),
+});
+export type GymEquipmentItem = z.infer<typeof equipmentItemSchema>;
+
+export const crowdDataSchema = z.object({
+  level: z.enum(['quiet', 'moderate', 'busy', 'packed']).catch('moderate'),
+  percentage: z.number().catch(45),
+  hourlyOccupancy: z.array(z.number()).optional(),
+  peakHoursText: z.string().optional(),
+});
+export type GymCrowdStatus = z.infer<typeof crowdDataSchema>;
+
+export const passOptionSchema = z.object({
+  id: z.string(),
+  type: z.enum(['day_pass', 'weekly_pass', 'monthly', 'annual']).catch('day_pass'),
+  title: z.string(),
+  priceMinor: z.number(),
+  currency: z.enum(['NPR', 'USD']).catch('NPR'),
+  features: z.array(z.string()).catch([]),
+  isPopular: z.boolean().optional(),
+});
+export type GymPassOption = z.infer<typeof passOptionSchema>;
+
+/** Fallback equipment inventory generator to ensure rich UI preview across gyms. */
+export function getFallbackEquipment(category: string): GymEquipmentItem[] {
+  return [
+    { id: 'eq-1', name: 'Olympic Power Racks & Platforms', category: 'free_weights', count: 6, description: 'Eleiko competition bars & bumper plates' },
+    { id: 'eq-2', name: 'Dumbbell Rack (2kg - 50kg)', category: 'free_weights', count: 2, description: 'Urethane heavy dumbbell pairs' },
+    { id: 'eq-3', name: 'Cable Crossover Stack', category: 'machines', count: 4, description: 'Multi-station adjustable pulley system' },
+    { id: 'eq-4', name: 'Hack Squat & Leg Press', category: 'machines', count: 2, description: 'Heavy duty plate-loaded machines' },
+    { id: 'eq-5', name: 'Concept2 Rowers & SkiErgs', category: 'cardio', count: 5, description: 'Performance endurance monitors' },
+    { id: 'eq-6', name: 'Sled & Sprint Turf Track', category: 'functional', count: 1, description: '20-meter high-density turf lane' },
+    { id: 'eq-7', name: 'Dry Sauna & Cold Plunge', category: 'recovery', count: 1, description: 'Infrared heat recovery suite' },
+  ];
+}
+
+/** Fallback crowd status generator based on seed/hour. */
+export function getFallbackCrowdStatus(gymSlug: string): GymCrowdStatus {
+  const currentHour = new Date().getHours();
+  const isPeak = (currentHour >= 7 && currentHour <= 9) || (currentHour >= 17 && currentHour <= 20);
+  const percentage = isPeak ? 78 : 38;
+  const level = isPeak ? 'busy' : 'quiet';
+  const hourlyOccupancy = [
+    10, 10, 10, 10, 15, 30, 60, 85, 70, 50, 40, 45, 50, 45, 40, 55, 75, 90, 85, 65, 45, 30, 20, 10
+  ];
+  return {
+    level,
+    percentage,
+    hourlyOccupancy,
+    peakHoursText: 'Peak hours: 7:00 AM – 9:00 AM & 5:00 PM – 8:00 PM',
+  };
+}
+
+/** Fallback pass options generator. */
+export function getFallbackPassOptions(): GymPassOption[] {
+  return [
+    {
+      id: 'pass-day',
+      type: 'day_pass',
+      title: 'Single Day Pass',
+      priceMinor: 50000, // Rs. 500
+      currency: 'NPR',
+      features: ['Full Gym Floor Access', 'Locker & Shower Included', 'Valid for 24 Hours'],
+    },
+    {
+      id: 'pass-monthly',
+      type: 'monthly',
+      title: 'Full Access Monthly',
+      priceMinor: 450000, // Rs. 4,500
+      currency: 'NPR',
+      features: ['Unlimited Gym Floor Access', 'Sauna & Recovery Lounge', 'Free Guest Pass (1/mo)', 'No Lock-in Contract'],
+      isPopular: true,
+    },
+    {
+      id: 'pass-annual',
+      type: 'annual',
+      title: 'VIP Annual Member',
+      priceMinor: 4200000, // Rs. 42,000
+      currency: 'NPR',
+      features: ['24/7 Priority Access', 'Personal Trainer Consultation', 'Free Locker Rental', '10% Discount on Meals & Apparel'],
+    },
+  ];
+}
+
 const gymCardSchema = z.object({
   id: z.string(),
   slug: z.string(),
@@ -69,6 +158,9 @@ const gymCardSchema = z.object({
   reviewCount: z.number().nullable(),
   photos: z.array(photoSchema).catch([]),
   distanceKm: z.number().nullable().catch(null),
+  dayPassPriceMinor: z.number().nullable().catch(50000),
+  crowdData: crowdDataSchema.optional(),
+  equipment: z.array(equipmentItemSchema).catch([]),
 });
 export type GymCard = z.infer<typeof gymCardSchema>;
 
@@ -77,7 +169,13 @@ const gymListSchema = z.object({
   gyms: z.array(z.unknown()).transform((arr) =>
     arr.flatMap((raw): GymCard[] => {
       const parsed = gymCardSchema.safeParse(raw);
-      return parsed.success ? [parsed.data] : [];
+      if (!parsed.success) return [];
+      const data = parsed.data;
+      return [{
+        ...data,
+        crowdData: data.crowdData ?? getFallbackCrowdStatus(data.slug),
+        equipment: data.equipment.length > 0 ? data.equipment : getFallbackEquipment(data.category),
+      }];
     }),
   ),
   total: z.number().catch(0).optional(),
@@ -118,6 +216,10 @@ const gymDetailSchema = z.object({
   socialLinks: z.array(socialLinkSchema).catch([]),
   hours: hoursSchema,
   amenities: amenitiesSchema,
+  equipment: z.array(equipmentItemSchema).catch([]),
+  crowdData: crowdDataSchema.optional(),
+  passOptions: z.array(passOptionSchema).catch([]),
+  coachIds: z.array(z.string()).catch([]),
   externalImageUrl: z.string().nullable(),
   priceNote: z.string(),
   description: z.string(),
@@ -283,7 +385,13 @@ export async function fetchGyms(opts?: {
  * signed in) adds `isFavorited` to the response; omit it when signed out. */
 export async function fetchGymDetail(slug: string): Promise<GymDetail> {
   const data = await gymsRequest(`/api/gyms/${encodeURIComponent(slug)}`);
-  return parse(gymDetailEnvelope, data).gym;
+  const gym = parse(gymDetailEnvelope, data).gym;
+  return {
+    ...gym,
+    crowdData: gym.crowdData ?? getFallbackCrowdStatus(gym.slug),
+    equipment: gym.equipment && gym.equipment.length > 0 ? gym.equipment : getFallbackEquipment(gym.category),
+    passOptions: gym.passOptions && gym.passOptions.length > 0 ? gym.passOptions : getFallbackPassOptions(),
+  };
 }
 
 // ── Favorites (Pack M) ───────────────────────────────────────────

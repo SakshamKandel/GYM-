@@ -62,6 +62,17 @@ export const colors = {
   success: '#34C759',
   warning: '#FF9F0A',
   error: '#FF453A',
+  /** Informational status (confirmed/in-transit) — alias family of `blue`. */
+  info: '#4A8CFF',
+  /**
+   * Status washes at ~18% over `bg` — tinted fills behind status-colored
+   * text/icons (pills, icon chips, live dots). Each keeps its matching
+   * foreground ≥4.5:1 (success ≈6.7, warning ≈7.1, info ≈4.9, orange ≈6.4).
+   */
+  successFaint: '#122E1B',
+  warningFaint: '#37260D',
+  infoFaint: '#162339',
+  orangeFaint: '#372314',
 
   // Macro colors (fixed meanings app-wide)
   kcal: '#FF3B30',
