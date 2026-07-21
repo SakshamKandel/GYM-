@@ -48,7 +48,7 @@ export function PhoneFrame({
     width: PHONE_W,
     height: PHONE_H,
     transform: `scale(${scale}) ${TILT_TRANSFORMS[tilt] === 'none' ? '' : TILT_TRANSFORMS[tilt]}`,
-    transformOrigin: 'top left',
+    transformOrigin: tilt === 'none' ? 'top center' : 'top left',
     transformStyle: 'preserve-3d',
   };
 
@@ -72,7 +72,10 @@ export function PhoneFrame({
           filter: 'blur(24px)',
         }}
       />
-      <div style={device} className="absolute left-0 top-0">
+      <div
+        style={device}
+        className={tilt === 'none' ? 'absolute left-1/2 top-0 -translate-x-1/2' : 'absolute left-0 top-0'}
+      >
         {/* Titanium rail */}
         <div
           className="absolute inset-0 rounded-[58px] shadow-phone"

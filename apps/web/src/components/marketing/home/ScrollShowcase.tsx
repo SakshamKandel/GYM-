@@ -81,8 +81,8 @@ function StepItem({
   step: (typeof STEPS)[number];
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
-  // Trigger active state when 35% of the step is visible in viewport
-  const isInView = useInView(ref, { amount: 0.35 });
+  // Trigger active state when step is centered in viewport
+  const isInView = useInView(ref, { margin: '-20% 0px -35% 0px' });
 
   useEffect(() => {
     if (isInView) {
@@ -93,9 +93,9 @@ function StepItem({
   return (
     <motion.div
       ref={ref}
-      animate={{ opacity: active ? 1 : 0.3, scale: active ? 1 : 0.98 }}
+      animate={{ opacity: active ? 1 : 0.25, scale: active ? 1 : 0.97 }}
       transition={{ duration: 0.3, ease: 'easeOut' }}
-      className="flex min-h-[60vh] flex-col justify-center py-8"
+      className="flex min-h-[70vh] flex-col justify-center py-10"
     >
       <p className="font-display text-5xl font-medium text-mist-strong sm:text-7xl">
         {step.stepNum}
@@ -124,35 +124,37 @@ export function ScrollShowcase() {
           </Lead>
         </Reveal>
 
-        <div className="mt-12 grid gap-12 lg:mt-16 lg:grid-cols-2 lg:items-start lg:gap-16">
-          {/* STABLE STICKY MOBILE PHONE STAGE */}
-          <div className="lg:sticky lg:top-28 z-20 flex justify-center self-start">
-            <div className="relative">
-              <InteractivePhone
-                activeTab={STEPS[activeIndex].tab}
-                onTabChange={(tab) => {
-                  const idx = STEPS.findIndex((s) => s.tab === tab);
-                  if (idx !== -1) setActiveIndex(idx);
-                }}
-                tilt="none"
-                scale={0.88}
-              />
+        <div className="relative mt-12 grid gap-12 lg:mt-16 lg:grid-cols-2 lg:gap-16">
+          {/* STABLE STICKY MOBILE PHONE STAGE ON THE LEFT */}
+          <div className="relative w-full">
+            <div className="sticky top-24 z-20 flex flex-col items-center justify-center py-4 lg:top-28">
+              <div className="relative flex justify-center">
+                <InteractivePhone
+                  activeTab={STEPS[activeIndex].tab}
+                  onTabChange={(tab) => {
+                    const idx = STEPS.findIndex((s) => s.tab === tab);
+                    if (idx !== -1) setActiveIndex(idx);
+                  }}
+                  tilt="none"
+                  scale={0.88}
+                />
 
-              {/* Step indicator dots */}
-              <div className="absolute -right-14 top-1/2 hidden -translate-y-1/2 flex-col gap-3 lg:flex">
-                {STEPS.map((s, i) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => setActiveIndex(i)}
-                    title={s.title}
-                    className={`h-9 w-1.5 rounded-full transition-all duration-300 ${
-                      i === activeIndex
-                        ? 'bg-red shadow-ember scale-110'
-                        : 'bg-mist-strong hover:bg-gravel'
-                    }`}
-                  />
-                ))}
+                {/* Step indicator dots on right side of phone */}
+                <div className="absolute -bottom-6 flex gap-2 lg:-right-12 lg:top-1/2 lg:bottom-auto lg:-translate-y-1/2 lg:flex-col lg:gap-3">
+                  {STEPS.map((s, i) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setActiveIndex(i)}
+                      title={s.title}
+                      className={`h-2.5 w-2.5 rounded-full transition-all duration-300 lg:h-9 lg:w-1.5 ${
+                        i === activeIndex
+                          ? 'bg-red shadow-ember scale-110'
+                          : 'bg-mist-strong hover:bg-gravel'
+                      }`}
+                    />
+                  ))}
+                </div>
               </div>
             </div>
           </div>
