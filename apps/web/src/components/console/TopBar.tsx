@@ -63,7 +63,7 @@ export function TopBar({
         display: 'flex',
         alignItems: 'center',
         gap: 12,
-        padding: '0 24px',
+        padding: onToggleSidebar ? '0 12px' : '0 24px',
         background: 'color-mix(in srgb, var(--gt-surface) 88%, transparent)',
         backdropFilter: 'saturate(1.4) blur(8px)',
         borderBottom: '1px solid var(--gt-border)',
@@ -88,7 +88,7 @@ export function TopBar({
       ) : null}
 
       {/* search */}
-      <div style={{ position: 'relative', flex: '1 1 320px', maxWidth: 440, minWidth: 0 }}>
+      <div style={{ position: 'relative', flex: '1 1 220px', maxWidth: 440, minWidth: 0 }}>
         <label htmlFor={searchId} className="gt-sr-only" style={srOnly}>
           Search
         </label>
@@ -128,7 +128,7 @@ export function TopBar({
           style={{
             width: '100%',
             height: 40,
-            padding: '0 44px 0 34px',
+            padding: '0 12px 0 34px',
             borderRadius: 10,
             border: '1px solid var(--gt-border)',
             background: 'var(--gt-surface-sunken)',
@@ -139,6 +139,7 @@ export function TopBar({
         />
         <kbd
           aria-hidden
+          className="hidden sm:inline-block"
           style={{
             position: 'absolute',
             right: 10,

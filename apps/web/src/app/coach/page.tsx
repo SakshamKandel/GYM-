@@ -124,14 +124,7 @@ export default async function CoachInboxPage() {
         subtitle="Your assigned clients and their conversations. Unread threads rise to the top."
       />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(3, 1fr)',
-          gap: 12,
-          marginBottom: 22,
-        }}
-      >
+      <div className="gt-grid-3" style={{ marginBottom: 22 }}>
         <StatTile label="Clients" value={users.length} />
         <StatTile
           label="Awaiting reply"

@@ -177,14 +177,7 @@ export default async function AdminOverviewPage() {
       <OpsTiles ops={data.ops} />
 
       {membership ? (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, minmax(180px, 1fr))',
-            gap: 12,
-            marginBottom: 24,
-          }}
-        >
+        <div className="gt-grid-4" style={{ marginBottom: 24 }}>
           <StatTile
             label="Total members"
             value={membership.totalMembers.toLocaleString()}
@@ -211,15 +204,7 @@ export default async function AdminOverviewPage() {
       ) : null}
 
       {membership ? (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(0, 2fr) minmax(220px, 1fr)',
-            gap: 16,
-            alignItems: 'stretch',
-            marginBottom: 24,
-          }}
-        >
+        <div className="gt-grid-split" style={{ marginBottom: 24, alignItems: 'stretch' }}>
           <ChartCard
             title="Signups"
             caption="Last 14 days"
@@ -238,18 +223,10 @@ export default async function AdminOverviewPage() {
       ) : null}
 
       {membership ? (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.4fr)',
-            gap: 16,
-            alignItems: 'start',
-            marginBottom: 24,
-          }}
-        >
+        <div className="gt-grid-split" style={{ marginBottom: 24, alignItems: 'start' }}>
           <Card padded={false}>
             <CardHeader title="Signups by weekday" />
-            <div style={{ padding: 18 }}>
+            <div style={{ padding: 18, overflowX: 'auto' }}>
               <HeatGrid
                 columns={WEEKDAY_LABELS}
                 rows={buildSignupHeatmap(membership.dailySignups28)}

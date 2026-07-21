@@ -112,11 +112,22 @@ export function ConsoleShell({
             style={{
               position: 'fixed',
               inset: 0,
-              background: 'rgba(16,17,18,0.36)',
+              background: 'rgba(16, 17, 18, 0.48)',
+              backdropFilter: 'blur(4px)',
               zIndex: 40,
             }}
           />
-          <div style={{ position: 'fixed', top: 0, left: 0, zIndex: 41, height: '100vh' }}>
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              zIndex: 41,
+              height: '100vh',
+              maxWidth: '84vw',
+              boxShadow: 'var(--gt-shadow-pop)',
+            }}
+          >
             {sidebar}
           </div>
         </>
@@ -129,17 +140,7 @@ export function ConsoleShell({
           hasNotifications={hasNotifications}
           onToggleSidebar={isNarrow ? () => setMobileOpen((o) => !o) : undefined}
         />
-        <main
-          id="gt-main"
-          style={{
-            flex: 1,
-            minWidth: 0,
-            width: '100%',
-            maxWidth: 1280,
-            margin: '0 auto',
-            padding: '28px 32px',
-          }}
-        >
+        <main id="gt-main" className="gt-console-main">
           {children}
         </main>
       </div>
