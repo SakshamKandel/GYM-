@@ -19,6 +19,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "mobile", "exec", "expo", "start", "--port", "8081"],
       "port": 8081
+    },
+    {
+      "name": "kurlybrains-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "E:\\Kurlybrains Web", "run", "dev", "--port", "4331"],
+      "port": 4331
     }
   ]
 }

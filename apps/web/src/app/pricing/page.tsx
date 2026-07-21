@@ -1,50 +1,33 @@
 import type { Metadata } from 'next';
-import { GM_TIERS } from '@gym/shared';
-import { MarketingShell } from '@/components/customer/MarketingShell';
-import styles from '@/components/customer/marketing.module.css';
+import { Shell } from '@/components/marketing/Shell';
+import { CardShowcase } from '@/components/marketing/pricing/CardShowcase';
+import { ClosingCta } from '@/components/marketing/pricing/ClosingCta';
+import { Comparison } from '@/components/marketing/pricing/Comparison';
+import { Faq } from '@/components/marketing/pricing/Faq';
+import { Payments } from '@/components/marketing/pricing/Payments';
+import { PricingHero } from '@/components/marketing/pricing/Tiers';
+import { loadPublicCatalog } from '@/lib/publicCatalog';
 
 export const metadata: Metadata = {
-  title: 'Membership plans | The GM Method',
-  description: 'Compare Starter, Silver, Gold, and Elite GM Method memberships.',
+  title: 'Pricing — The GM Method',
+  description:
+    'Live regional pricing in NPR and USD. Start free with the full self-tracking app; add coach-assigned workouts, a personal diet plan or full mentorship. Pay via eSewa or Khalti in Nepal — verified coach codes take 30% off.',
 };
 
-export default function PricingPage() {
+// Live tier prices from Neon — refetched at most every 5 minutes.
+export const revalidate = 300;
+
+export default async function PricingPage() {
+  const catalog = await loadPublicCatalog();
+
   return (
-    <MarketingShell>
-      <section className={styles.legalHero}>
-        <p className={styles.eyebrow}>MEMBERSHIP</p>
-        <h1>Choose the support you need now.</h1>
-        <p>
-          Start free, then move up when you want deeper tracking, adaptive programming, or
-          hands-on coaching. Paid prices are regional and the current local price is always shown
-          before purchase in the app.
-        </p>
-      </section>
-      <section className={styles.priceGrid} aria-label="Membership plan comparison">
-        {GM_TIERS.map((plan) => (
-          <article
-            className={`${styles.priceCard} ${plan.tier === 'gold' ? styles.priceCardFeatured : ''}`}
-            key={plan.tier}
-          >
-            <div className={styles.priceHeader}>
-              <span>{plan.tier === 'gold' ? 'Most adaptive' : 'GM membership'}</span>
-              <h2>{plan.name}</h2>
-              <p>{plan.tagline}</p>
-            </div>
-            <p className={styles.priceLabel}>
-              {plan.tier === 'starter' ? 'Free forever' : 'See regional price in app'}
-            </p>
-            <ul className={styles.featureList}>
-              {plan.features.map((feature) => (
-                <li key={feature}>{feature}</li>
-              ))}
-            </ul>
-            <a className={styles.priceAction} href="/#download">
-              {plan.tier === 'starter' ? 'Start with Starter' : `Choose ${plan.name}`}
-            </a>
-          </article>
-        ))}
-      </section>
-    </MarketingShell>
+    <Shell>
+      <PricingHero catalog={catalog} />
+      <Comparison />
+      <CardShowcase />
+      <Payments />
+      <Faq />
+      <ClosingCta />
+    </Shell>
   );
 }

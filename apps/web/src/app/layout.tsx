@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
-import { Oswald, Poppins } from 'next/font/google';
+import { IBM_Plex_Mono, Oswald, Poppins } from 'next/font/google';
 import type { ReactNode } from 'react';
 import './globals.css';
-import '@/components/landing/motion.css';
+import './marketing.css';
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://gym-xi-tawny.vercel.app';
 
@@ -45,9 +45,17 @@ const oswald = Oswald({
   display: 'swap',
 });
 
+// Mono for marketing eyebrows / microlabels only (technical-label voice).
+const plexMono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '600'],
+  variable: '--font-plexmono',
+  display: 'swap',
+});
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={`${poppins.variable} ${oswald.variable}`}>
+    <html lang="en" className={`${poppins.variable} ${oswald.variable} ${plexMono.variable}`}>
       <body>{children}</body>
     </html>
   );

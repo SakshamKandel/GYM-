@@ -1,0 +1,486 @@
+/**
+ * Marketing-site Tailwind layer (customer-facing pages only).
+ *
+ * Deliberately imports theme + utilities WITHOUT Tailwind preflight: the admin /
+ * coach / partner consoles share this root layout and must keep rendering on
+ * their own globals.css tokens. Instead, a compact reset is scoped under `.mkt`
+ * — the class the marketing <Shell> puts on its root — so Tailwind behaves
+ * fully inside marketing pages and is inert everywhere else.
+ *
+ * Brand mapping mirrors @gym/ui-tokens (Iron Dark): near-black canvas, charcoal
+ * surfaces, signal red, paper cream. Oswald = display, Poppins = body,
+ * IBM Plex Mono = eyebrows/microlabels.
+ */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+@theme {
+  /* Canvas + surfaces (dark — hero / closing bands) */
+  --color-ink: #0b0c0d;
+  --color-coal: #131416;
+  --color-charcoal: #1d1f22;
+  --color-charcoal-2: #26282c;
+  --color-charcoal-3: #2e3135;
+  --color-line: #2e3135;
+  --color-line-strong: #3b3e44;
+
+  /* Text on dark */
+  --color-snow: #f5f6f7;
+  --color-dim: #9ba0a8;
+  --color-faint: #63676e;
+
+  /* v3 "Paper & Iron" — light content surfaces (Notion-clean middle) */
+  --color-paper: #fafaf7;
+  --color-paper-2: #f2f1eb;
+  --color-mist: #e7e6df;
+  --color-mist-strong: #d8d7cf;
+  --color-gravel: #5e6168;
+  --color-gravel-faint: #9a9ca2;
+
+  /* Brand */
+  --color-red: #ff3b30;
+  --color-red-deep: #c22d24;
+  --color-red-glow: #ff7a6e;
+  --color-cream: #f4f2ed;
+  --color-cream-dim: #5c5a55;
+  --color-cream-line: #e2ded3;
+
+  /* Category / data colors (fixed app meanings) */
+  --color-blue: #4a8cff;
+  --color-orange: #ff8a34;
+  --color-gold: #ffc53d;
+  --color-water: #5ac8fa;
+  --color-mint: #34c759;
+
+  /* Type */
+  --font-display: var(--font-oswald), 'Arial Narrow', sans-serif;
+  --font-sans: var(--font-poppins), system-ui, sans-serif;
+  --font-mono: var(--font-plexmono), ui-monospace, 'Cascadia Mono', monospace;
+
+  /* Geometry (mirrors radius.block / radius.md) */
+  --radius-block: 26px;
+  --radius-inner: 16px;
+
+  /* Motion */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+
+  /* Shadows & glows */
+  --shadow-phone:
+    0 60px 120px -40px rgb(0 0 0 / 0.75), 0 24px 48px -24px rgb(0 0 0 / 0.6);
+  --shadow-pop: 0 16px 48px -16px rgb(0 0 0 / 0.55);
+  --shadow-ember: 0 8px 40px -8px rgb(255 59 48 / 0.45);
+  --shadow-ember-lg: 0 0 120px -20px rgb(255 59 48 / 0.35);
+  --shadow-glass:
+    0 1px 0 0 rgb(255 255 255 / 0.06) inset, 0 24px 64px -32px rgb(0 0 0 / 0.7);
+
+  /* v3 light-surface shadows — soft, low, neutral (never warm-gray mush) */
+  --shadow-card:
+    0 1px 2px rgb(23 24 27 / 0.05), 0 12px 32px -18px rgb(23 24 27 / 0.1);
+  --shadow-card-hover:
+    0 2px 4px rgb(23 24 27 / 0.05), 0 28px 56px -24px rgb(23 24 27 / 0.18);
+  --shadow-nav:
+    0 1px 2px rgb(23 24 27 / 0.06), 0 16px 40px -16px rgb(23 24 27 / 0.14);
+}
+
+/* ------------------------------------------------------------------ */
+/* Scoped preflight — everything below only applies inside `.mkt`.     */
+/* ------------------------------------------------------------------ */
+@layer base {
+  .mkt,
+  .mkt *,
+  .mkt *::before,
+  .mkt *::after {
+    box-sizing: border-box;
+    border: 0 solid;
+    margin: 0;
+    padding: 0;
+  }
+  .mkt {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .mkt :where(h1, h2, h3, h4, h5, h6) {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+  .mkt :where(img, video) {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+  .mkt :where(svg) {
+    display: block;
+  }
+  .mkt :where(button, input, select, textarea) {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+  }
+  .mkt :where(button, [role='button']) {
+    cursor: pointer;
+  }
+  .mkt :where(ul, ol) {
+    list-style: none;
+  }
+  .mkt :where(a) {
+    color: inherit;
+    text-decoration: none;
+  }
+  .mkt :where(:focus-visible) {
+    outline: 2px solid var(--color-red);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+  .mkt ::selection {
+    background: var(--color-red);
+    color: var(--color-ink);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Marketing motion vocabulary                                         */
+/* ------------------------------------------------------------------ */
+@layer components {
+  /* ================================================================ */
+  /* v2 "Iron & Ember" vocabulary — depth, light and glass on near-    */
+  /* black. The website deliberately breaks the mobile app's flat      */
+  /* no-glow law: ambient red light fields, glass surfaces, grain.     */
+  /* ================================================================ */
+
+  /* Ambient aurora light field for dark sections. Layered, slow-drifting
+     radial glows; place on a Section and keep content relative/z-10. */
+  .mkt-aurora::before {
+    content: '';
+    position: absolute;
+    inset: -20% -10%;
+    pointer-events: none;
+    background:
+      radial-gradient(52% 44% at 18% 8%, rgb(255 59 48 / 0.16), transparent 62%),
+      radial-gradient(44% 38% at 84% 16%, rgb(255 122 110 / 0.09), transparent 60%),
+      radial-gradient(60% 52% at 55% 108%, rgb(194 45 36 / 0.12), transparent 64%);
+    filter: blur(28px);
+    animation: mkt-drift 18s ease-in-out infinite alternate;
+  }
+  .mkt-aurora-quiet::before {
+    content: '';
+    position: absolute;
+    inset: -20% -10%;
+    pointer-events: none;
+    background:
+      radial-gradient(46% 40% at 80% 0%, rgb(255 59 48 / 0.09), transparent 60%),
+      radial-gradient(50% 44% at 8% 90%, rgb(255 122 110 / 0.05), transparent 62%);
+    filter: blur(28px);
+  }
+
+  /* Fine blueprint grid, fading out radially. */
+  .mkt-gridlines::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgb(255 255 255 / 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(255 255 255 / 0.045) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(75% 65% at 50% 30%, black 30%, transparent 100%);
+    -webkit-mask-image: radial-gradient(75% 65% at 50% 30%, black 30%, transparent 100%);
+  }
+
+  /* Film grain — kills flat-gradient banding, adds texture. */
+  .mkt-noise::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.05;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  }
+
+  /* Glass surfaces. */
+  .mkt-glass {
+    background:
+      linear-gradient(160deg, rgb(255 255 255 / 0.07), rgb(255 255 255 / 0.02) 55%);
+    border: 1px solid rgb(255 255 255 / 0.09);
+    box-shadow: var(--shadow-glass);
+    backdrop-filter: blur(14px);
+  }
+  .mkt-glass-deep {
+    background:
+      linear-gradient(160deg, rgb(255 255 255 / 0.05), rgb(0 0 0 / 0.25) 60%);
+    border: 1px solid rgb(255 255 255 / 0.07);
+    box-shadow: var(--shadow-glass);
+    backdrop-filter: blur(14px);
+  }
+
+  /* Interactive card: lift + ember edge on hover. */
+  .mkt-card-hover {
+    transition:
+      transform 0.35s var(--ease-out-quart),
+      border-color 0.35s ease,
+      box-shadow 0.35s ease;
+  }
+  .mkt-card-hover:hover {
+    transform: translateY(-6px);
+    border-color: rgb(255 59 48 / 0.35);
+    box-shadow:
+      var(--shadow-glass),
+      0 20px 60px -20px rgb(255 59 48 / 0.25);
+  }
+
+  /* Display-type gradients. */
+  .mkt-text-steel {
+    background: linear-gradient(180deg, #ffffff 20%, #b7bcc4 70%, #8b9098);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .mkt-text-ember {
+    background: linear-gradient(115deg, #ff7a6e 0%, #ff3b30 45%, #ff5a4f 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Gradient hairline divider (replaces flat border-t lines). */
+  .mkt-divider {
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(255 255 255 / 0.14) 20%,
+      rgb(255 255 255 / 0.14) 80%,
+      transparent
+    );
+  }
+
+  /* CTA shine sweep. */
+  .mkt-shine {
+    position: relative;
+    overflow: hidden;
+  }
+  .mkt-shine::after {
+    content: '';
+    position: absolute;
+    inset: -40% -120%;
+    transform: translateX(-70%) rotate(18deg);
+    background: linear-gradient(
+      100deg,
+      transparent 42%,
+      rgb(255 255 255 / 0.35) 50%,
+      transparent 58%
+    );
+    transition: transform 0.7s var(--ease-out-quart);
+    pointer-events: none;
+  }
+  .mkt-shine:hover::after {
+    transform: translateX(60%) rotate(18deg);
+  }
+
+  /* Scroll reveal: JS (Reveal component) flips `.is-in`. The hidden initial
+     state only applies when scripting is available — no-JS visitors see
+     everything. */
+  @media (scripting: enabled) {
+    .mkt-reveal {
+      opacity: 0;
+      transform: translateY(26px);
+      transition:
+        opacity 0.65s var(--ease-out-quart),
+        transform 0.65s var(--ease-out-quart);
+      transition-delay: var(--reveal-delay, 0ms);
+    }
+  }
+  .mkt-reveal.is-in {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* Oswald outline display text (marquee / watermarks). */
+  .mkt-outline-text {
+    color: transparent;
+    -webkit-text-stroke: 1.5px var(--color-line-strong);
+  }
+
+  .mkt-marquee-track {
+    animation: mkt-marquee 36s linear infinite;
+  }
+
+  /* Soft top light on dark sections — texture, not a glow blob. */
+  .mkt-toplight {
+    background-image: linear-gradient(
+      to bottom,
+      rgb(255 255 255 / 0.04),
+      transparent 240px
+    );
+  }
+
+  /* ================================================================ */
+  /* v3 "Paper & Iron" — light content surfaces between the dark hero */
+  /* and the dark closing band. Notion-clean: white cards, hairline   */
+  /* borders, low neutral shadows, red used as ONE accent.            */
+  /* ================================================================ */
+
+  /* White card on paper. Pair with rounded-block; add
+     .mkt-card-light-hover when interactive. */
+  .mkt-card-light {
+    background: #ffffff;
+    border: 1px solid var(--color-mist);
+    box-shadow: var(--shadow-card);
+  }
+  .mkt-card-light-hover {
+    transition:
+      transform 0.4s var(--ease-out-quart),
+      border-color 0.4s ease,
+      box-shadow 0.4s ease;
+  }
+  .mkt-card-light-hover:hover {
+    transform: translateY(-5px);
+    border-color: var(--color-mist-strong);
+    box-shadow: var(--shadow-card-hover);
+  }
+
+  /* Faint blueprint grid for paper sections (radially masked). */
+  .mkt-gridlines-light::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgb(23 24 27 / 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(23 24 27 / 0.05) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(75% 65% at 50% 30%, black 30%, transparent 100%);
+    -webkit-mask-image: radial-gradient(75% 65% at 50% 30%, black 30%, transparent 100%);
+  }
+
+  /* Ultra-subtle grain for paper — kills gradient banding without
+     dirtying the clean surface. */
+  .mkt-noise-light::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.025;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  }
+
+  /* Hairline on paper (centered, content-width — NOT full-bleed). */
+  .mkt-hairline {
+    height: 1px;
+    background: var(--color-mist);
+  }
+
+  /* Word-by-word headline reveal: outer masks, inner slides up
+     (driven by framer-motion — see WordStagger in motion.tsx). */
+  .mkt-word-mask {
+    display: inline-block;
+    overflow: hidden;
+    vertical-align: bottom;
+    padding-bottom: 0.08em;
+    margin-bottom: -0.08em;
+  }
+  .mkt-word-mask > span {
+    display: inline-block;
+    will-change: transform;
+  }
+
+  /* Marquee pauses on hover and fades at the edges. */
+  .mkt-marquee {
+    mask-image: linear-gradient(90deg, transparent, black 8%, black 92%, transparent);
+    -webkit-mask-image: linear-gradient(90deg, transparent, black 8%, black 92%, transparent);
+  }
+  .mkt-marquee:hover .mkt-marquee-track {
+    animation-play-state: paused;
+  }
+  /* Hide scrollbar for clean mobile screen frame replica */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@keyframes mkt-marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes mkt-scan {
+  0% {
+    transform: translateY(0);
+    opacity: 0.2;
+  }
+  12% {
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(116px);
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 0.2;
+  }
+}
+
+@keyframes mkt-drift {
+  from {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+  to {
+    transform: translate3d(2%, 2%, 0) scale(1.06);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Unlayered overrides. globals.css (console) styles h1–h4 WITHOUT a    */
+/* layer, which outranks every @layer rule above regardless of          */
+/* specificity. Re-assert the marketing type utilities unlayered,       */
+/* scoped to .mkt so the consoles keep their own heading styles.        */
+/* ------------------------------------------------------------------ */
+.mkt :where(h1, h2, h3, h4, h5, h6) {
+  font-family: inherit;
+  font-weight: inherit;
+}
+.mkt .font-display {
+  font-family: var(--font-display);
+}
+.mkt .font-sans {
+  font-family: var(--font-sans);
+}
+.mkt .font-mono {
+  font-family: var(--font-mono);
+}
+.mkt .font-medium {
+  font-weight: 500;
+}
+.mkt .font-semibold {
+  font-weight: 600;
+}
+.mkt .font-bold {
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mkt-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .mkt-marquee-track {
+    animation: none;
+  }
+  .mkt *,
+  .mkt *::before,
+  .mkt *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
