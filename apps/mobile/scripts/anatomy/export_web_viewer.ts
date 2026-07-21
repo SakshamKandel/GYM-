@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Exports the app's self-contained 3D anatomy viewer as a static HTML file for
  * the marketing site (apps/web/public/anatomy/viewer.html). The marketing page

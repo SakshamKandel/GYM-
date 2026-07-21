@@ -68,12 +68,6 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
       <Container wide>
         {/* Centered short hero */}
         <div className="mx-auto max-w-3xl text-center">
-          <Reveal>
-            <p className="mkt-glass mx-auto inline-flex items-center gap-2.5 rounded-full px-4 py-2 font-mono text-[11px] font-medium uppercase tracking-[0.2em] text-dim">
-              <span className="size-1.5 rounded-full bg-mint" />
-              Live catalog · NPR + USD
-            </p>
-          </Reveal>
           <Reveal delay={80}>
             <Display as="h1" size="xl" className="mt-6">
               <span className="mkt-text-steel">Simple,</span>
