@@ -37,45 +37,54 @@ export function PhoneFrame({
   /** Reserved for future use (e.g. hero LCP tuning). */
   priority?: boolean;
 }) {
-  void priority;
-  const outer: CSSProperties = {
-    width: PHONE_W * scale,
-    maxWidth: '100%',
-    height: PHONE_H * scale,
-    perspective: tilt === 'none' ? undefined : '2200px',
-  };
-  const device: CSSProperties = {
-    width: PHONE_W,
-    height: PHONE_H,
-    transform: `scale(${scale}) ${TILT_TRANSFORMS[tilt] === 'none' ? '' : TILT_TRANSFORMS[tilt]}`,
-    transformOrigin: tilt === 'none' ? 'top center' : 'top left',
-    transformStyle: 'preserve-3d',
-  };
+  // Desktop target dimensions
+  const desktopWidth = PHONE_W * scale;
 
   return (
-    <div style={outer} className={`relative max-w-full ${className}`} aria-hidden>
-      {/* Ember light field behind the device */}
+    <div
+      className={`relative flex max-w-full items-center justify-center ${className}`}
+      style={{
+        perspective: tilt === 'none' ? undefined : '2200px',
+      }}
+      aria-hidden
+    >
+      {/* Fluid Responsive Phone Stage */}
       <div
-        className="pointer-events-none absolute inset-0"
+        className="relative shrink-0 transition-all duration-300"
         style={{
-          background:
-            'radial-gradient(46% 42% at 50% 52%, rgb(255 59 48 / 0.32), rgb(255 59 48 / 0.08) 55%, transparent 72%)',
-          filter: 'blur(46px)',
-          transform: 'scale(1.45)',
+          width: `min(${desktopWidth}px, 72vw)`,
+          height: `calc(min(${desktopWidth}px, 72vw) * ${PHONE_H / PHONE_W})`,
         }}
-      />
-      {/* Floor glow */}
-      <div
-        className="pointer-events-none absolute bottom-[-6%] left-1/2 h-[10%] w-[120%] -translate-x-1/2"
-        style={{
-          background: 'radial-gradient(50% 100% at 50% 0%, rgb(255 59 48 / 0.25), transparent 70%)',
-          filter: 'blur(24px)',
-        }}
-      />
-      <div
-        style={device}
-        className={tilt === 'none' ? 'absolute left-1/2 top-0 -translate-x-1/2' : 'absolute left-0 top-0'}
       >
+        {/* Ember light field behind the device */}
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              'radial-gradient(46% 42% at 50% 52%, rgb(255 59 48 / 0.32), rgb(255 59 48 / 0.08) 55%, transparent 72%)',
+            filter: 'blur(36px)',
+            transform: 'scale(1.25)',
+          }}
+        />
+        {/* Floor glow */}
+        <div
+          className="pointer-events-none absolute bottom-[-6%] left-1/2 h-[10%] w-[120%] -translate-x-1/2"
+          style={{
+            background: 'radial-gradient(50% 100% at 50% 0%, rgb(255 59 48 / 0.25), transparent 70%)',
+            filter: 'blur(20px)',
+          }}
+        />
+        <div
+          className="absolute left-1/2 top-0 -translate-x-1/2 origin-top transition-transform duration-300"
+          style={{
+            width: PHONE_W,
+            height: PHONE_H,
+            transform: `scale(calc(min(${desktopWidth}px, 72vw) / ${PHONE_W})) ${
+              TILT_TRANSFORMS[tilt] === 'none' ? '' : TILT_TRANSFORMS[tilt]
+            }`,
+            transformStyle: 'preserve-3d',
+          }}
+        >
         {/* Titanium rail */}
         <div
           className="absolute inset-0 rounded-[58px] shadow-phone"
@@ -117,7 +126,8 @@ export function PhoneFrame({
         </div>
       </div>
     </div>
-  );
+  </div>
+);
 }
 
 /**
