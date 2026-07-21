@@ -40,6 +40,7 @@ export function PhoneFrame({
   void priority;
   const outer: CSSProperties = {
     width: PHONE_W * scale,
+    maxWidth: '100%',
     height: PHONE_H * scale,
     perspective: tilt === 'none' ? undefined : '2200px',
   };
@@ -52,7 +53,7 @@ export function PhoneFrame({
   };
 
   return (
-    <div style={outer} className={`relative ${className}`} aria-hidden>
+    <div style={outer} className={`relative max-w-full ${className}`} aria-hidden>
       {/* Ember light field behind the device */}
       <div
         className="pointer-events-none absolute inset-0"

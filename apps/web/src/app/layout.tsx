@@ -22,6 +22,13 @@ export const metadata: Metadata = {
     title: 'The GM Method',
     description: 'Training, food, progress, and real coaching in one fitness app.',
   },
+  icons: {
+    icon: [
+      { url: '/logo.png', type: 'image/png' },
+      { url: '/icon.svg', type: 'image/svg+xml' },
+    ],
+    apple: [{ url: '/logo.png', type: 'image/png' }],
+  },
   twitter: {
     card: 'summary',
     title: 'The GM Method',
