@@ -34,7 +34,7 @@ export const useMealCart = create<CartState>((set) => ({
       else next[meal.id] = { meal, qty };
       return { lines: next };
     }),
-  clear: () => set({ lines: {} }),
+  clear: () => set({ partnerId: null, lines: {} }),
 }));
 
 export function cartLineCount(lines: Record<string, CartLine>): number {

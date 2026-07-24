@@ -3,7 +3,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 /**
  * Billing mode switch.
  *
- * - 'preview' (default): tiers are a free preview selection — the self-serve
+ * - 'disabled' (default): paid self-serve activation is unavailable.
+ * - 'preview' (explicit non-production opt-in): tiers are a free preview selection — the self-serve
  *   POST /api/subscription/tier grants whatever the signed-in user picks
  *   (audited, expiry-free). This is the pre-store-launch behavior.
  * - 'live': money is attached. Self-serve tier writes are LOCKED to 'starter'
@@ -13,10 +14,25 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  *
  * Set BILLING_MODE=live together with REVENUECAT_WEBHOOK_AUTH before shipping
  * a build where tiers cost real money (CLAUDE.md: never trust the client for
- * paid entitlements).
+ * paid entitlements). Production never permits preview grants.
  */
-export function billingMode(): 'preview' | 'live' {
-  return process.env.BILLING_MODE === 'live' ? 'live' : 'preview';
+export type BillingMode = 'disabled' | 'preview' | 'live';
+
+interface BillingEnvironment {
+  BILLING_MODE?: string;
+  NODE_ENV?: string;
+  REVENUECAT_WEBHOOK_AUTH?: string;
+}
+
+/** Resolve billing configuration without ever defaulting to a free grant. */
+export function billingMode(env: BillingEnvironment = process.env): BillingMode {
+  if (env.BILLING_MODE === 'live') {
+    return env.REVENUECAT_WEBHOOK_AUTH?.trim() ? 'live' : 'disabled';
+  }
+  if (env.BILLING_MODE === 'preview' && env.NODE_ENV !== 'production') {
+    return 'preview';
+  }
+  return 'disabled';
 }
 
 /**

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -11,6 +11,7 @@ import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
   AppTextInput,
+  Button,
   Chip,
   enterDown,
   enterFade,
@@ -22,6 +23,7 @@ import { useRecentExercises, type RecentExercise } from '../../features/training
 import { pushPath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
 import { MUSCLE_GROUPS, searchExercises } from '../../lib/exercises';
+import { useTrainingCatalog } from '../../lib/trainingCatalog';
 import { useBottomClearance } from '../../lib/systemBars';
 
 /**
@@ -262,6 +264,7 @@ function ExerciseRow({
 }
 
 export default function ExerciseLibraryScreen() {
+  const catalogState = useTrainingCatalog();
   const insets = useSafeAreaInsets();
   // Scroll-end clearance for the list — insets.bottom lies (0) on some OEM
   // 3-button Android builds, so the last row would hide under the system bar.
@@ -284,7 +287,8 @@ export default function ExerciseLibraryScreen() {
   const [searchFocused, setSearchFocused] = useState(false);
   const recent = useRecentExercises(RECENT_LIMIT);
   const showRecent = query.trim().length === 0 && muscle === null && recent.length > 0;
-  const totalCount = useMemo(() => searchExercises({}).length, []);
+  const catalogRevision = catalogState.catalog?.revision ?? null;
+  const totalCount = catalogState.catalog?.exercises.length ?? 0;
 
   const results = useMemo(
     () =>
@@ -292,7 +296,7 @@ export default function ExerciseLibraryScreen() {
         query: query.trim() ? query : undefined,
         muscleGroup: muscle ?? undefined,
       }),
-    [query, muscle],
+    [catalogRevision, query, muscle],
   );
 
   const handlePick = (exercise: Exercise): void => {
@@ -337,6 +341,11 @@ export default function ExerciseLibraryScreen() {
                 : 'Tap to add to your workout'
               : `Library · ${totalCount} exercises`}
           </AppText>
+          {catalogState.status === 'cached' ? (
+            <AppText variant="caption" color={colors.warning}>
+              Offline catalog · last verified download
+            </AppText>
+          ) : null}
           <AppText variant="display" style={styles.title}>
             {selectMode ? (swapAt !== null ? 'Swap exercise' : 'Add exercise') : 'Exercises'}
           </AppText>
@@ -423,13 +432,41 @@ export default function ExerciseLibraryScreen() {
           contentContainerStyle={{ paddingBottom: bottomClearance + spacing.xl }}
           ListEmptyComponent={
             <Animated.View entering={enterFade(0)} style={styles.emptyWrap}>
-              <IconChip icon="search" color={colors.surface} iconColor={colors.textFaint} size={52} />
+              {catalogState.status === 'loading' || catalogState.refreshing ? (
+                <ActivityIndicator color={colors.accent} accessibilityLabel="Loading exercise catalog" />
+              ) : (
+                <IconChip
+                  icon={catalogState.status === 'authRequired' ? 'cloud-offline' : 'search'}
+                  color={colors.surface}
+                  iconColor={colors.textFaint}
+                  size={52}
+                />
+              )}
               <AppText variant="bodyBold" center style={styles.emptyTitle}>
-                No matches
+                {catalogState.status === 'authRequired'
+                  ? 'Sign in for exercises'
+                  : catalogState.status === 'error'
+                    ? 'Catalog unavailable'
+                    : catalogState.status === 'loading' || catalogState.refreshing
+                      ? 'Loading coach catalog'
+                      : totalCount === 0
+                        ? 'No exercises published'
+                        : 'No matches'}
               </AppText>
               <AppText variant="body" color={colors.textDim} center>
-                Try a different name or muscle group.
+                {catalogState.status === 'authRequired'
+                  ? 'The exercise library comes from your coach’s live catalog.'
+                  : catalogState.status === 'error'
+                    ? 'Check your connection and try again.'
+                    : totalCount === 0
+                      ? 'Ask an admin to publish the exercise catalog.'
+                      : 'Try a different name or muscle group.'}
               </AppText>
+              {catalogState.status === 'authRequired' ? (
+                <Button label="Sign in" variant="secondary" onPress={() => pushPath('/auth/sign-in')} />
+              ) : catalogState.status === 'error' ? (
+                <Button label="Try again" variant="secondary" onPress={() => void catalogState.refresh()} />
+              ) : null}
             </Animated.View>
           }
         />

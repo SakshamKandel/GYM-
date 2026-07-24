@@ -1,7 +1,26 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { describe, it } from 'node:test';
-import { verifyRevenueCatSignature } from './billing.ts';
+import { billingMode, verifyRevenueCatSignature } from './billing.ts';
+
+describe('billingMode', () => {
+  it('is disabled when configuration is absent or incomplete', () => {
+    assert.equal(billingMode({}), 'disabled');
+    assert.equal(billingMode({ BILLING_MODE: 'live' }), 'disabled');
+  });
+
+  it('enables live mode only with the mandatory webhook credential', () => {
+    assert.equal(
+      billingMode({ BILLING_MODE: 'live', REVENUECAT_WEBHOOK_AUTH: 'secret' }),
+      'live',
+    );
+  });
+
+  it('allows preview only when explicitly selected outside production', () => {
+    assert.equal(billingMode({ BILLING_MODE: 'preview', NODE_ENV: 'development' }), 'preview');
+    assert.equal(billingMode({ BILLING_MODE: 'preview', NODE_ENV: 'production' }), 'disabled');
+  });
+});
 
 describe('verifyRevenueCatSignature', () => {
   const secret = 'test-webhook-secret';

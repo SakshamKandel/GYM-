@@ -1,5 +1,5 @@
 import type { PlanWorkout } from '@gym/shared';
-import { getPlanWorkouts } from './seed/plans';
+import { ensureTrainingCatalog, getCatalogPlanWorkouts } from './trainingCatalog';
 import type { Repo } from './repo';
 
 /**
@@ -10,7 +10,8 @@ export async function getNextPlanWorkout(
   repo: Repo,
   planId: string,
 ): Promise<PlanWorkout | null> {
-  const workouts = getPlanWorkouts(planId);
+  await ensureTrainingCatalog();
+  const workouts = getCatalogPlanWorkouts(planId);
   if (workouts.length === 0) return null;
   const recents = await repo.getRecentWorkouts(20);
   const lastPlanWorkoutId = recents.find((w) => w.planWorkoutId !== null)?.planWorkoutId;

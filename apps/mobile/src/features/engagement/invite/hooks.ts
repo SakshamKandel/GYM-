@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { getReferrals, toRewardsError, type Referral } from '../../../lib/api/client';
+import { isCurrentSessionRequest } from '../../../lib/sessionRequest';
 import { useAuth } from '../../../state/auth';
 
 /**
@@ -22,10 +23,10 @@ export interface ReferralsData {
 export function useReferrals(): ReferralsData {
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
-  const [referrals, setReferrals] = useState<Referral[]>([]);
-  const [stale, setStale] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const loadedOnce = useRef(false);
+  const [snapshot, setSnapshot] = useState<{ token: string; referrals: Referral[] } | null>(null);
+  const [staleToken, setStaleToken] = useState<string | null>(null);
+  const [loadingToken, setLoadingToken] = useState<string | null>(null);
+  const requestSequence = useRef(0);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -35,37 +36,51 @@ export function useReferrals(): ReferralsData {
     };
   }, []);
 
-  // A fresh account must never see the previous account's invites.
-  useEffect(() => {
-    if (status === 'signedOut') {
-      loadedOnce.current = false;
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- resets local state when the account signs out; guarded by the status check.
-      setReferrals([]);
-    }
-  }, [status]);
-
   const reload = useCallback(() => {
     if (status !== 'signedIn' || token === null) return;
+    const request = { token, sequence: ++requestSequence.current };
     void (async () => {
-      if (!loadedOnce.current) setLoading(true);
+      setLoadingToken(token);
       try {
         const next = await getReferrals(token);
         // The session changed while the fetch was in flight (sign-out or
         // account switch) — a late response must not render the previous
         // account's invites.
         const current = useAuth.getState();
-        if (current.status !== 'signedIn' || current.token !== token) return;
-        if (!mounted.current) return;
-        setReferrals(next);
-        loadedOnce.current = true;
-        setStale(false);
+        if (
+          !mounted.current ||
+          current.status !== 'signedIn' ||
+          !isCurrentSessionRequest(request, {
+            token: current.token,
+            sequence: requestSequence.current,
+          })
+        ) return;
+        setSnapshot({ token, referrals: next });
+        setStaleToken(null);
       } catch (err) {
+        const current = useAuth.getState();
+        if (
+          !mounted.current ||
+          current.status !== 'signedIn' ||
+          !isCurrentSessionRequest(request, {
+            token: current.token,
+            sequence: requestSequence.current,
+          })
+        ) return;
         if (toRewardsError(err).code === 'unauthorized') {
           void useAuth.getState().refresh();
         }
-        if (mounted.current) setStale(true);
+        setStaleToken(token);
       } finally {
-        if (mounted.current) setLoading(false);
+        const current = useAuth.getState();
+        if (
+          mounted.current &&
+          current.status === 'signedIn' &&
+          isCurrentSessionRequest(request, {
+            token: current.token,
+            sequence: requestSequence.current,
+          })
+        ) setLoadingToken(null);
       }
     })();
   }, [status, token]);
@@ -76,5 +91,8 @@ export function useReferrals(): ReferralsData {
     }, [reload]),
   );
 
+  const referrals = snapshot?.token === token ? snapshot.referrals : [];
+  const stale = token !== null && staleToken === token;
+  const loading = token !== null && snapshot?.token !== token && loadingToken === token;
   return { referrals, stale, loading, reload };
 }

@@ -1,11 +1,12 @@
 import type { FoodItem } from '@gym/shared';
 import { KCAL_PER_G, scalePer100 } from '@gym/shared';
-import { SEED_FOODS } from '../../lib/seed/foods';
 import type { DayTotals } from './logic';
 
 /**
  * GM food suggestions — pure ranking, no React, no IO (Gold-tier feature).
- * Given what's left of today's targets, pick seed foods whose standard
+ * Given what's left of today's targets, rank foods the member has actually
+ * logged, favorited, or saved from a live provider. The caller owns IO so
+ * this module remains deterministic and testable.
  * serving fills the gap: protein-dense while protein is behind, then
  * balanced / carb options once protein is done.
  */
@@ -63,16 +64,20 @@ interface Candidate {
 }
 
 /**
- * Rank seed foods against the macros still left today.
+ * Rank the supplied real food history against the macros still left today.
  * Returns up to `count` suggestions, best first — or [] when the day
  * is essentially eaten up (< MIN_SUGGEST_KCAL left).
  */
-export function suggestFoods(remaining: DayTotals, count = 6): FoodSuggestion[] {
+export function suggestFoods(
+  foods: readonly FoodItem[],
+  remaining: DayTotals,
+  count = 6,
+): FoodSuggestion[] {
   if (remaining.kcal < MIN_SUGGEST_KCAL) return [];
   const proteinMode = remaining.protein >= PROTEIN_GAP_G;
 
   const candidates: Candidate[] = [];
-  for (const food of SEED_FOODS) {
+  for (const food of foods) {
     const grams = Math.max(5, Math.round(food.servingGrams ?? 100));
     const kcal = Math.round(scalePer100(food.kcalPer100, grams));
     // Skip portions that blow well past the remaining budget.

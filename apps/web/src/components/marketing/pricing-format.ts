@@ -11,8 +11,9 @@ export function formatPrice(amountMinor: number, currency: string): string {
 }
 
 export function priceFor(region: PublicRegionCatalog, tier: string): string {
+  if (!region.available) return 'Unavailable';
   const row = region.tiers.find((t) => t.tier === tier);
-  return row ? formatPrice(row.amountMinor, region.currency) : '—';
+  return row ? formatPrice(row.amountMinor, region.currency) : 'Unavailable';
 }
 
 export const TIER_META = [

@@ -1,11 +1,11 @@
 import { gyms } from '@gym/db';
-import { distanceKm } from '@gym/shared';
+import { distanceKm, gymPublicListResponseSchema } from '@gym/shared';
 import { and, asc, count, eq, ilike, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
-import { loadPhotosByGym, loadRatingAggregates, ratingFor } from './_lib';
+import { loadPhotosByGym, loadRatingAggregates, publicCrowdData, ratingFor } from './_lib';
 
 export const runtime = 'nodejs';
 
@@ -92,6 +92,7 @@ export async function GET(req: Request) {
             city: gyms.city,
             lat: gyms.lat,
             lng: gyms.lng,
+            crowdData: gyms.crowdData,
           })
           .from(gyms)
           .where(where)
@@ -105,6 +106,7 @@ export async function GET(req: Request) {
             city: gyms.city,
             lat: gyms.lat,
             lng: gyms.lng,
+            crowdData: gyms.crowdData,
           })
           .from(gyms)
           .where(where)
@@ -135,13 +137,35 @@ export async function GET(req: Request) {
       loadRatingAggregates(ids),
     ]);
 
-    const gymCards = paged.map((r) => ({
-      ...r,
-      photos: photosByGym.get(r.id) ?? [],
-      ...ratingFor(ratingByGym, r.id),
-    }));
+    const gymCards = paged.map((r) => {
+      const crowdData = publicCrowdData(r.crowdData);
+      return {
+        id: r.id,
+        slug: r.slug,
+        name: r.name,
+        category: r.category,
+        city: r.city,
+        lat: r.lat,
+        lng: r.lng,
+        distanceKm: r.distanceKm,
+        photos: (photosByGym.get(r.id) ?? []).map(({ deliveryUrl }) => ({ deliveryUrl })),
+        ...ratingFor(ratingByGym, r.id),
+        ...(crowdData ? { crowdData } : {}),
+      };
+    });
 
-    return json({ gyms: gymCards, total, limit, offset }, 200);
+    const response = gymPublicListResponseSchema.safeParse({
+      gyms: gymCards,
+      total: Number(total),
+      limit,
+      offset,
+    });
+    if (!response.success) {
+      console.error('API /api/gyms response validation failed:', response.error.issues);
+      return json({ error: 'internal_error' }, 500);
+    }
+
+    return json(response.data, 200);
   } catch (err) {
     console.error('API /api/gyms error:', err);
     return json({ error: 'internal_error' }, 500);

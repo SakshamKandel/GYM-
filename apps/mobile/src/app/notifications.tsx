@@ -107,7 +107,10 @@ function NotificationRowItem({
 
 export default function NotificationsScreen() {
   const token = useAuth((s) => s.token);
+  return <NotificationsSession key={token ?? 'signed-out'} token={token} />;
+}
 
+function NotificationsSession({ token }: { token: string | null }) {
   const [rows, setRows] = useState<NotificationRow[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
@@ -121,32 +124,37 @@ export default function NotificationsScreen() {
   const [prefsError, setPrefsError] = useState<string | null>(null);
 
   const listSeq = useRef(0);
+  const prefsSeq = useRef(0);
 
   const load = useCallback(async () => {
     if (!token) return;
     const seq = ++listSeq.current;
     setLoading(true);
+    setLoadingMore(false);
     setError(null);
     try {
       const page = await getNotifications(token, { limit: PAGE_SIZE });
-      if (listSeq.current !== seq) return;
+      if (listSeq.current !== seq || useAuth.getState().token !== token) return;
       setRows(page.notifications);
       setUnreadCount(page.unreadCount);
       setNextOffset(page.nextOffset);
     } catch (e) {
-      if (listSeq.current !== seq) return;
+      if (listSeq.current !== seq || useAuth.getState().token !== token) return;
       setError(toNotificationError(e).code === 'unauthorized'
         ? 'Your session expired — sign in again.'
         : "Couldn't load your notifications.");
     } finally {
-      if (listSeq.current === seq) setLoading(false);
+      if (listSeq.current === seq && useAuth.getState().token === token) setLoading(false);
     }
   }, [token]);
 
   const loadPrefs = useCallback(async () => {
     if (!token) return;
+    const seq = ++prefsSeq.current;
     try {
-      setPrefs(await getNotificationPrefs(token));
+      const next = await getNotificationPrefs(token);
+      if (prefsSeq.current !== seq || useAuth.getState().token !== token) return;
+      setPrefs(next);
     } catch {
       // Stay null — the section shows its own quiet retry line.
     }
@@ -167,15 +175,17 @@ export default function NotificationsScreen() {
 
   async function loadMore(): Promise<void> {
     if (!token || loadingMore || nextOffset === null) return;
+    const seq = listSeq.current;
     setLoadingMore(true);
     try {
       const page = await getNotifications(token, { limit: PAGE_SIZE, offset: nextOffset });
+      if (listSeq.current !== seq || useAuth.getState().token !== token) return;
       setRows((prev) => [...prev, ...page.notifications]);
       setNextOffset(page.nextOffset);
     } catch {
       // Best-effort — the "load more" row just stays tappable to retry.
     } finally {
-      setLoadingMore(false);
+      if (listSeq.current === seq && useAuth.getState().token === token) setLoadingMore(false);
     }
   }
 
@@ -215,12 +225,14 @@ export default function NotificationsScreen() {
     setPrefsError(null);
     try {
       const fresh = await putNotificationPrefs({ categories: nextCategories }, token);
+      if (useAuth.getState().token !== token) return;
       setPrefs(fresh);
     } catch {
+      if (useAuth.getState().token !== token) return;
       setPrefsError("Couldn't save — try again.");
       void loadPrefs();
     } finally {
-      setPrefsBusy(false);
+      if (useAuth.getState().token === token) setPrefsBusy(false);
     }
   }
 
@@ -233,12 +245,15 @@ export default function NotificationsScreen() {
     setPrefsBusy(true);
     setPrefsError(null);
     try {
-      setPrefs(await putNotificationPrefs(next, token));
+      const fresh = await putNotificationPrefs(next, token);
+      if (useAuth.getState().token !== token) return;
+      setPrefs(fresh);
     } catch {
+      if (useAuth.getState().token !== token) return;
       setPrefsError("Couldn't save — try again.");
       void loadPrefs();
     } finally {
-      setPrefsBusy(false);
+      if (useAuth.getState().token === token) setPrefsBusy(false);
     }
   }
 

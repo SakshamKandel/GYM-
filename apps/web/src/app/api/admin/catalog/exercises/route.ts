@@ -11,14 +11,9 @@ export const runtime = 'nodejs';
 /**
  * Admin catalog — exercise library (gap build P2-16, content_admin surface).
  *
- * IMPORTANT — this table is NOT yet read by the shipped app. The mobile Train
- * tab sources its exercise library from a bundled JSON asset
- * (apps/mobile/src/assets/data/exercises.json via apps/mobile/src/lib/exercises.ts,
- * free-exercise-db) and never queries this API or the `exercises` table. This
- * CRUD surface is a staging/authoring tool for a future mobile catalog sync
- * (see PROJECT_PLAN/gap list); edits made here do not affect what members see
- * until that sync is built. Say so plainly in the console UI — do not imply
- * changes are live. `packages/db` also has `plan_exercises.exercise_id`
+ * This table is the runtime source of truth for the authenticated member
+ * snapshot at GET /api/me/training-catalog. Saved edits reach members on
+ * their next catalog refresh. `packages/db` also has `plan_exercises.exercise_id`
  * REFERENCES exercises(id) with NO onDelete cascade, so a DELETE on an
  * exercise still referenced by a plan is rejected by Postgres — the [id]
  * route maps that FK violation to a friendly 409 instead of a raw 500.

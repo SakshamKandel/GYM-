@@ -12,7 +12,7 @@ import { getExercise } from '../../lib/exercises';
 import { logHaptic, prHaptic, successHaptic, warnHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
 import { getRepo } from '../../lib/repo';
-import { getPlanWorkout } from '../../lib/seed/plans';
+import { ensureTrainingCatalog, getCatalogPlanWorkout } from '../../lib/trainingCatalog';
 import { syncWorkouts } from '../sync/workoutSync';
 import { DEFAULT_ADHOC_SETS, DEFAULT_REST_SEC, nextIncompleteIndex } from './logic';
 import type { CustomTemplate } from './templates';
@@ -264,7 +264,9 @@ export const useSession = create<SessionState>()((set, get) => {
         }
         return;
       }
-      const pw = planWorkoutId ? getPlanWorkout(planWorkoutId) : undefined;
+      if (planWorkoutId) await ensureTrainingCatalog();
+      const pw = planWorkoutId ? getCatalogPlanWorkout(planWorkoutId) : undefined;
+      if (planWorkoutId && !pw) throw new Error('plan_workout_not_available');
       const log: Omit<WorkoutLog, 'finishedAt' | 'durationSec'> = {
         id: uid(),
         date: todayIso(),
@@ -381,7 +383,7 @@ export const useSession = create<SessionState>()((set, get) => {
         repo.getSetsForWorkout(active.id),
         repo.getWorkoutBlueprint(active.id),
       ]);
-      const pw = active.planWorkoutId ? getPlanWorkout(active.planWorkoutId) : undefined;
+      const pw = active.planWorkoutId ? getCatalogPlanWorkout(active.planWorkoutId) : undefined;
       const byExercise = new Map<string, SessionExercise>();
       if (blueprint) {
         for (const exercise of blueprint.exercises) {

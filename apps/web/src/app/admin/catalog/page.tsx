@@ -19,12 +19,8 @@ export const dynamic = 'force-dynamic';
  * /api/admin/catalog/* routes from the client component.
  *
  * Distinct from `admin/content` (WP6's plan-VIDEO library) — this page
- * manages the exercises/plans/plan_workouts/plan_exercises tables, which are
- * a staging area only: the shipped mobile app does NOT read from them yet
- * (Train tab uses a bundled free-exercise-db JSON asset; plans come from a
- * hardcoded SEED_PLANS constant in apps/mobile/src/lib/seed/plans.ts). See
- * the doc comments on /api/admin/catalog/exercises and .../plans for detail.
- * The page copy below must not claim otherwise.
+ * manages the exercises/plans/plan_workouts/plan_exercises tables published
+ * to signed-in members through GET /api/me/training-catalog.
  */
 
 async function loadExercises(): Promise<ExerciseRow[]> {
@@ -100,7 +96,7 @@ export default async function AdminCatalogPage() {
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Exercise & plan catalog"
-        subtitle="Staging area for the exercise & plan library — the shipped mobile app does not read these edits yet (it still ships a bundled exercise list and hardcoded plans). Changes here take effect once the mobile catalog sync ships. Deleting an exercise still used by a plan is blocked until it's removed from that plan."
+        subtitle="Source of truth for the member exercise and plan library. Signed-in members receive saved edits on their next catalog refresh; offline devices show their last verified download. Deleting an exercise still used by a plan is blocked until it's removed from that plan."
       />
 
       <div

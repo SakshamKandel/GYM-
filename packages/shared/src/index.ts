@@ -1,4 +1,7 @@
 export * from './types';
+export * from './schemas/trainingCatalog';
+export * from './schemas/memberDataSync';
+export * from './schemas/appleAuth';
 export * from './logic/activity';
 export * from './logic/analytics';
 export * from './logic/macros';
@@ -33,3 +36,4 @@ export * from './logic/notifications';
 export * from './logic/disputes';
 export * from './logic/geo';
 export * from './logic/accountDeletion';
+export * from './logic/trainingCatalog';

@@ -132,7 +132,13 @@ export async function POST(req: Request) {
     .limit(1);
   const region = resolveSubmissionRegion(regionHint, account?.country ?? null, method);
 
-  const { amountMinor: monthlyBase, currency } = await resolveCatalogAmount(me.id, tier, region);
+  let monthlyBase: number;
+  let currency: string;
+  try {
+    ({ amountMinor: monthlyBase, currency } = await resolveCatalogAmount(me.id, tier, region));
+  } catch {
+    return json({ error: 'catalog_unavailable' }, 503);
+  }
 
   // Receipt reuse guard: the Cloudinary uid is unguessable per-upload, but a
   // member can re-submit the SAME genuine receipt on multiple requests (after a

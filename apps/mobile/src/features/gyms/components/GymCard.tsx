@@ -2,9 +2,9 @@ import { StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import type { GymPublicCard } from '@gym/shared';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import { AppText, PressableScale, Tag } from '../../../components/ui';
-import type { GymCard as GymCardData } from '../api';
 import { pushPath } from '../nav';
 
 /**
@@ -108,7 +108,7 @@ const styles = StyleSheet.create({
   dot: { width: 3, height: 3, borderRadius: radius.full, backgroundColor: colors.textDim },
 });
 
-export function GymCard({ gym }: { gym: GymCardData }) {
+export function GymCard({ gym }: { gym: GymPublicCard }) {
   const photoUrl = gym.photos[0]?.deliveryUrl;
   const topRated = gym.rating !== null && gym.rating >= TOP_RATED_THRESHOLD;
   const initial = gym.name.trim().charAt(0).toUpperCase() || '#';
@@ -164,7 +164,7 @@ export function GymCard({ gym }: { gym: GymCardData }) {
                 }}
               />
               <AppText variant="label" color={colors.text}>
-                {gym.crowdData.percentage}% Full
+                {gym.crowdData.percentage}% occupied
               </AppText>
             </View>
           ) : null}

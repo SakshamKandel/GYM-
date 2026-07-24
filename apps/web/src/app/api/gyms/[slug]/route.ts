@@ -1,10 +1,23 @@
 import { gyms } from '@gym/db';
+import { gymPublicDetailResponseSchema } from '@gym/shared';
 import { and, eq } from 'drizzle-orm';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
-import { loadFavoritedSet, loadPhotosByGym, loadRatingAggregates, ratingFor } from '../_lib';
+import {
+  loadFavoritedSet,
+  loadPhotosByGym,
+  loadRatingAggregates,
+  publicAmenities,
+  publicCoachIds,
+  publicCrowdData,
+  publicEquipment,
+  publicHours,
+  publicPassOptions,
+  publicSocialLinks,
+  ratingFor,
+} from '../_lib';
 
 export const runtime = 'nodejs';
 
@@ -54,6 +67,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
         socialLinks: gyms.socialLinks,
         hours: gyms.hours,
         amenities: gyms.amenities,
+        equipment: gyms.equipment,
+        crowdData: gyms.crowdData,
+        passOptions: gyms.passOptions,
+        coachIds: gyms.coachIds,
         externalImageUrl: gyms.externalImageUrl,
         priceNote: gyms.priceNote,
         description: gyms.description,
@@ -80,6 +97,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
       }
     }
 
+    const crowdData = publicCrowdData(row.crowdData);
     const gym = {
       id: row.id,
       slug: row.slug,
@@ -92,9 +110,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
       lng: row.lng,
       phone: row.phone,
       website: row.website,
-      socialLinks: row.socialLinks,
-      hours: row.hours,
-      amenities: row.amenities,
+      socialLinks: publicSocialLinks(row.socialLinks),
+      hours: publicHours(row.hours),
+      amenities: publicAmenities(row.amenities),
+      equipment: publicEquipment(row.equipment),
+      passOptions: publicPassOptions(row.passOptions),
+      coachIds: publicCoachIds(row.coachIds),
+      ...(crowdData ? { crowdData } : {}),
       externalImageUrl: row.externalImageUrl,
       priceNote: row.priceNote,
       description: row.description,
@@ -103,7 +125,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
       ...ratingFor(ratingByGym, row.id),
     };
 
-    return json({ gym }, 200);
+    const response = gymPublicDetailResponseSchema.safeParse({ gym });
+    if (!response.success) {
+      console.error('API /api/gyms/[slug] response validation failed:', response.error.issues);
+      return json({ error: 'internal_error' }, 500);
+    }
+
+    return json(response.data, 200);
   } catch (err) {
     console.error('API /api/gyms/[slug] error:', err);
     return json({ error: 'internal_error' }, 500);

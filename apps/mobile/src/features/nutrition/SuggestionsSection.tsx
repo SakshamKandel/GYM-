@@ -1,11 +1,12 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { router } from 'expo-router';
-import { hasEntitlement } from '@gym/shared';
+import { router, useFocusEffect } from 'expo-router';
+import { hasEntitlement, type FoodItem } from '@gym/shared';
 import { colors, spacing, type } from '@gym/ui-tokens';
 import {
   AppText,
+  Button,
   Card,
   enterUp,
   SectionLabel,
@@ -15,7 +16,7 @@ import { todayIso } from '../../lib/dates';
 import { getRepo } from '../../lib/repo';
 import { useEffectiveTier } from '../../lib/tier';
 import { defaultMealForHour, type DayTotals } from './logic';
-import { portionHref } from './nav';
+import { portionHref, searchHref } from './nav';
 import { suggestFoods, type FoodSuggestion } from './suggestions';
 
 /**
@@ -45,6 +46,7 @@ const styles = StyleSheet.create({
   },
   kcalRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs },
   kcal: { fontFamily: type.display, fontSize: 24, lineHeight: 28, color: colors.onBlock },
+  empty: { gap: spacing.md },
 });
 
 function portionText(s: FoodSuggestion): string {
@@ -64,11 +66,43 @@ export function SuggestionsSection({ remaining, date }: Props) {
   const tier = useEffectiveTier();
   const isToday = date === todayIso();
   const unlocked = hasEntitlement({ tier }, 'food_suggestions');
+  const [foods, setFoods] = useState<FoodItem[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isToday || !unlocked) return undefined;
+      let active = true;
+      setLoaded(false);
+      void getRepo()
+        .then(async (repo) => {
+          const [favorites, recent] = await Promise.all([
+            repo.getFavoriteFoods(50),
+            repo.getRecentFoods(100),
+          ]);
+          const byId = new Map<string, FoodItem>();
+          for (const food of [...favorites, ...recent]) byId.set(food.id, food);
+          return [...byId.values()];
+        })
+        .then((items) => {
+          if (active) setFoods(items);
+        })
+        .catch(() => {
+          if (active) setFoods([]);
+        })
+        .finally(() => {
+          if (active) setLoaded(true);
+        });
+      return () => {
+        active = false;
+      };
+    }, [isToday, unlocked]),
+  );
 
   const { kcal, protein, carbs, fat } = remaining;
   const suggestions = useMemo(
-    () => (isToday && unlocked ? suggestFoods({ kcal, protein, carbs, fat }) : []),
-    [isToday, unlocked, kcal, protein, carbs, fat],
+    () => (isToday && unlocked ? suggestFoods(foods, { kcal, protein, carbs, fat }) : []),
+    [isToday, unlocked, foods, kcal, protein, carbs, fat],
   );
 
   if (!isToday) return null;
@@ -86,7 +120,27 @@ export function SuggestionsSection({ remaining, date }: Props) {
     );
   }
 
-  if (suggestions.length === 0) return null;
+  if (!loaded) return null;
+
+  if (suggestions.length === 0) {
+    return (
+      <View>
+        <SectionLabel>GM suggestions</SectionLabel>
+        <Card style={styles.empty}>
+          <AppText variant="bodyBold">Built from your real food history</AppText>
+          <AppText variant="body" color={colors.textDim}>
+            Log or favorite a few foods first. Suggestions will use those foods and your remaining
+            macros instead of a prefilled menu.
+          </AppText>
+          <Button
+            label="Find foods"
+            variant="secondary"
+            onPress={() => router.push(searchHref(defaultMealForHour(new Date().getHours()), date))}
+          />
+        </Card>
+      </View>
+    );
+  }
 
   return (
     <View>

@@ -1,7 +1,7 @@
 import * as Localization from 'expo-localization';
-import { DEFAULT_TIER_PRICES, resolveRegion, type GmTier, type Tier } from '@gym/shared';
+import { type GmTier, type Tier } from '@gym/shared';
 import { GM_TIERS, TIER_ORDER } from '@gym/shared';
-import type { CatalogTier, PriceRegion, SubscriptionCatalog } from '../../lib/api/client';
+import type { CatalogTier, SubscriptionCatalog } from '../../lib/api/client';
 
 /** Screen-side helpers for the GM Method paywall. Pure, no React. */
 
@@ -28,15 +28,14 @@ export function isUpgrade(from: Tier, to: Tier): boolean {
 // ── Regional pricing (SCALE-UP-PLAN §1.1 / §5.1) ──────────────────────────
 //
 // GM_TIERS keeps its feature copy (name/tagline/features) but is no longer the
-// price authority — the paywall reads live prices from the server catalog
-// while signed in, and falls back to the shared DEFAULT_TIER_PRICES constant
-// (resolved against a device locale hint) when signed out or offline.
+// price authority — the paywall reads validated live prices from the server.
+// Missing/offline pricing is shown as unavailable, never replaced by compiled prices.
 
 /**
  * Device country hint (ISO-3166 alpha-2), e.g. from the phone's region
- * setting — sent to the catalog endpoint and used for the offline/signed-out
- * price fallback. Never throws: an unavailable locale API resolves to
- * undefined (→ INTL fallback).
+ * setting — sent to the catalog endpoint so the backend can select its
+ * persisted regional catalog. Never throws: an unavailable locale API resolves to
+ * undefined (→ the backend selects INTL).
  */
 export function regionHint(): string | undefined {
   try {
@@ -44,11 +43,6 @@ export function regionHint(): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** The price region the offline/signed-out fallback should use. */
-export function fallbackPriceRegion(): PriceRegion {
-  return resolveRegion(regionHint());
 }
 
 // ── Tier expiry (Pack J) ──────────────────────────────────────────────────
@@ -89,17 +83,9 @@ export function tierExpiryInfo(
   };
 }
 
-/** DEFAULT_TIER_PRICES row for `tier` in the fallback region (never empty —
- * every tier has a row in every region). */
-export function fallbackTierPrice(tier: Tier): { amountMinor: number; currency: string } {
-  const region = fallbackPriceRegion();
-  const row = DEFAULT_TIER_PRICES.find((p) => p.region === region && p.tier === tier);
-  if (row) return { amountMinor: row.amountMinor, currency: row.currency };
-  return { amountMinor: 0, currency: region === 'NP' ? 'NPR' : 'USD' };
-}
-
 /** Resolved price to render for one tier card/detail sheet. */
 export interface TierPriceDisplay {
+  available: boolean;
   isFree: boolean;
   currency: string;
   /** Pre-discount catalog price, minor units. */
@@ -112,7 +98,7 @@ export interface TierPriceDisplay {
 
 /**
  * Resolve what to show for `tier`: the live catalog entry (with any active
- * discount) when `catalog` is loaded, else the offline/signed-out fallback.
+ * discount) when `catalog` is loaded, otherwise an explicit unavailable state.
  */
 export function tierPriceDisplay(
   tier: Tier,
@@ -121,6 +107,7 @@ export function tierPriceDisplay(
   const catalogTier: CatalogTier | undefined = catalog?.tiers.find((t) => t.tier === tier);
   if (catalog && catalogTier) {
     return {
+      available: true,
       isFree: catalogTier.amountMinor <= 0,
       currency: catalog.currency,
       baseMinor: catalogTier.amountMinor,
@@ -129,11 +116,11 @@ export function tierPriceDisplay(
       discountSource: catalogTier.discountSource ?? null,
     };
   }
-  const fallback = fallbackTierPrice(tier);
   return {
-    isFree: fallback.amountMinor <= 0,
-    currency: fallback.currency,
-    baseMinor: fallback.amountMinor,
+    available: false,
+    isFree: false,
+    currency: '',
+    baseMinor: 0,
     discountedMinor: null,
     discountPct: null,
     discountSource: null,

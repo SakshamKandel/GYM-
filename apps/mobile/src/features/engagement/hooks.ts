@@ -4,8 +4,9 @@ import type { PlanWorkout, PrRecord, Streak } from '@gym/shared';
 import { addDays, todayIso } from '../../lib/dates';
 import { getRepo } from '../../lib/repo';
 import { getNextPlanWorkout } from '../../lib/planProgress';
-import { getPlan } from '../../lib/seed/plans';
-import { useQuest } from '../../state/quest';
+import { getCatalogPlan } from '../../lib/trainingCatalog';
+import { questScopeId, questStateFor, useQuest } from '../../state/quest';
+import { useAuth } from '../../state/auth';
 import {
   countFinished,
   questProgress,
@@ -130,7 +131,7 @@ export function useHomeData(planId: string | null): HomeData | null {
         if (!mounted) return;
         setData({
           streak,
-          planName: planId ? (getPlan(planId)?.name ?? null) : null,
+          planName: planId ? (getCatalogPlan(planId)?.name ?? null) : null,
           nextWorkout,
           doneToday,
           weekVolumeKg,
@@ -159,15 +160,17 @@ export function useHomeData(planId: string | null): HomeData | null {
  * `useHomeData` so neither can break the other.
  */
 export function useQuestProgress(): QuestProgress | null {
-  const questStartIso = useQuest((s) => s.questStartIso);
+  const accountId = useAuth((state) => state.user?.id ?? null);
+  const scope = questScopeId(accountId);
+  const questStartIso = useQuest((state) => questStateFor(state, accountId).questStartIso);
   const ensureStarted = useQuest((s) => s.ensureStarted);
-  const [progress, setProgress] = useState<QuestProgress | null>(null);
+  const [snapshot, setSnapshot] = useState<{ scope: string; progress: QuestProgress } | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       // Anchor the window the first time the quest is ever observed.
-      ensureStarted();
-      const startIso = useQuest.getState().questStartIso;
+      if (questStartIso === null) ensureStarted(accountId);
+      const startIso = questStartIso ?? questStateFor(useQuest.getState(), accountId).questStartIso;
       if (startIso === null) return;
 
       let mounted = true;
@@ -179,13 +182,15 @@ export function useQuestProgress(): QuestProgress | null {
           (w) => w.finishedAt !== null && w.date >= startIso,
         ).length;
         if (!mounted) return;
-        setProgress(questProgress(finished, startIso, todayIso()));
+        const currentAccountId = useAuth.getState().user?.id ?? null;
+        if (questScopeId(currentAccountId) !== scope) return;
+        setSnapshot({ scope, progress: questProgress(finished, startIso, todayIso()) });
       })();
       return () => {
         mounted = false;
       };
-    }, [ensureStarted, questStartIso]),
+    }, [accountId, ensureStarted, questStartIso, scope]),
   );
 
-  return progress;
+  return snapshot?.scope === scope ? snapshot.progress : null;
 }

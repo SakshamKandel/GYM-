@@ -45,7 +45,7 @@ import { syncProfileNow } from '../lib/profileSync';
 import { patchWeeklyTarget, toGamificationError } from '../lib/api/gamification';
 import { getPublicLeaderboard, setPublicBoardHidden } from '../lib/api/social';
 import { getRepo } from '../lib/repo';
-import { SEED_PLANS } from '../lib/seed/plans';
+import { useTrainingCatalog } from '../lib/trainingCatalog';
 import { MembershipCardAny } from '../features/subscription/components/MembershipCardAny';
 import { useEffectiveTier } from '../lib/tier';
 import { useAuth } from '../state/auth';
@@ -440,6 +440,8 @@ function DeleteAccountDialog({
 }
 
 export default function SettingsScreen() {
+  const trainingCatalog = useTrainingCatalog();
+  const catalogPlans = trainingCatalog.catalog?.plans ?? [];
   const displayName = useProfile((s) => s.displayName);
   const sex = useProfile((s) => s.sex);
   const birthYear = useProfile((s) => s.birthYear);
@@ -454,8 +456,8 @@ export default function SettingsScreen() {
   // Effective tier (server-first) — Elite just swaps the Support row's copy
   // ("Priority support"); every tier may open the row (SCALE-UP-PLAN §4.4).
   const tier = useEffectiveTier();
-  const [supportUnread, setSupportUnread] = useState(0);
-  const [notifUnread, setNotifUnread] = useState(0);
+  const [supportUnreadSnapshot, setSupportUnreadSnapshot] = useState<{ token: string; count: number } | null>(null);
+  const [notifUnreadSnapshot, setNotifUnreadSnapshot] = useState<{ token: string; count: number } | null>(null);
   const daysPerWeek = useProfile((s) => s.daysPerWeek);
   const update = useProfile((s) => s.update);
 
@@ -468,6 +470,8 @@ export default function SettingsScreen() {
   // Server-authoritative tier for the identity shield — never useProfile.tier
   // (local upgrade-only mirror, known to drift above the server's value).
   const serverTier = useAuth((s) => s.user?.tier ?? 'starter');
+  const supportUnread = supportUnreadSnapshot?.token === authToken ? supportUnreadSnapshot.count : 0;
+  const notifUnread = notifUnreadSnapshot?.token === authToken ? notifUnreadSnapshot.count : 0;
 
   // Support unread badge — a plain focus fetch (SCALE-UP-PLAN §4.4),
   // independent of any other feature's poll; getSupportUnread never throws
@@ -475,10 +479,14 @@ export default function SettingsScreen() {
   useFocusEffect(
     useCallback(() => {
       if (authStatus !== 'signedIn' || authToken === null) {
-        setSupportUnread(0);
+        setSupportUnreadSnapshot(null);
         return;
       }
-      void getSupportUnread(authToken).then(setSupportUnread);
+      void getSupportUnread(authToken).then((count) => {
+        if (useAuth.getState().token === authToken) {
+          setSupportUnreadSnapshot({ token: authToken, count });
+        }
+      });
     }, [authStatus, authToken]),
   );
 
@@ -490,12 +498,20 @@ export default function SettingsScreen() {
   useFocusEffect(
     useCallback(() => {
       if (authStatus !== 'signedIn' || authToken === null) {
-        setNotifUnread(0);
+        setNotifUnreadSnapshot(null);
         return;
       }
       void getNotifications(authToken, { limit: 1 })
-        .then((page) => setNotifUnread(page.unreadCount))
-        .catch(() => setNotifUnread(0));
+        .then((page) => {
+          if (useAuth.getState().token === authToken) {
+            setNotifUnreadSnapshot({ token: authToken, count: page.unreadCount });
+          }
+        })
+        .catch(() => {
+          if (useAuth.getState().token === authToken) {
+            setNotifUnreadSnapshot({ token: authToken, count: 0 });
+          }
+        });
     }, [authStatus, authToken]),
   );
 
@@ -893,7 +909,7 @@ export default function SettingsScreen() {
 
   const signedIn = authStatus === 'signedIn' && authUser !== null;
   const nameInitial = (displayName.trim().charAt(0) || 'A').toUpperCase();
-  const currentPlan = SEED_PLANS.find((p) => p.id === planId);
+  const currentPlan = catalogPlans.find((p) => p.id === planId && p.isAvailable);
 
   return (
     <Screen scroll keyboardAware>
@@ -1168,14 +1184,15 @@ export default function SettingsScreen() {
           </PressableScale>
           {planOpen ? (
             <Animated.View entering={enterFade()}>
-              {SEED_PLANS.map((p) => (
+              {catalogPlans.map((p) => (
                 <View key={p.id}>
                   <PressableScale
                     accessibilityRole="radio"
                     accessibilityState={{ selected: planId === p.id }}
                     accessibilityLabel={`Plan: ${p.name}`}
                     onPress={() => {
-                      update({ planId: p.id });
+                      if (p.isAvailable) update({ planId: p.id });
+                      else pushPath('/subscribe');
                       setPlanOpen(false);
                     }}
                     style={styles.planOption}
@@ -1187,7 +1204,13 @@ export default function SettingsScreen() {
                       </AppText>
                     </View>
                     <Ionicons
-                      name={planId === p.id ? 'checkmark-circle' : 'ellipse-outline'}
+                      name={
+                        !p.isAvailable
+                          ? 'lock-closed'
+                          : planId === p.id
+                            ? 'checkmark-circle'
+                            : 'ellipse-outline'
+                      }
                       size={22}
                       color={planId === p.id ? colors.accent : colors.textFaint}
                     />

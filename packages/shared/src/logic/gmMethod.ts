@@ -16,8 +16,6 @@ export interface GmTier {
   tier: Tier;
   name: string;
   tagline: string;
-  /** Placeholder pricing until store products exist. 0 = free. */
-  pricePerMonthNpr: number;
   /** What this tier ADDS on top of the tier below it (plain language). */
   features: string[];
 }
@@ -28,14 +26,12 @@ export const GM_TIERS: GmTier[] = [
     tier: 'starter',
     name: 'Starter',
     tagline: 'Get moving, free forever',
-    pricePerMonthNpr: 0,
     features: ['Workout logger', 'Weight tracking & trend', '1 starter plan'],
   },
   {
     tier: 'silver',
     name: 'Silver',
     tagline: 'The full tracking system',
-    pricePerMonthNpr: 999,
     features: [
       'Full kcal & macro tracker',
       'GM food suggestions',
@@ -49,7 +45,6 @@ export const GM_TIERS: GmTier[] = [
     tier: 'gold',
     name: 'Gold',
     tagline: 'The GM Method — it adapts to you',
-    pricePerMonthNpr: 1999,
     features: [
       "Greece's signature specialized plans",
       'Adaptive progression — targets adjust to your weekly trend',
@@ -62,7 +57,6 @@ export const GM_TIERS: GmTier[] = [
     tier: 'elite',
     name: 'Elite',
     tagline: 'Coached by Greece himself',
-    pricePerMonthNpr: 4999,
     features: [
       'Everything in Gold',
       '1-on-1 coach chat',

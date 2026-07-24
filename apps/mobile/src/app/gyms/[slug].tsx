@@ -29,6 +29,7 @@ import { EnquireSheet } from '../../features/gyms/components/EnquireSheet';
 import { ReportGymSheet } from '../../features/gyms/components/ReportGymSheet';
 import { GymCrowdMeter } from '../../features/gyms/components/GymCrowdMeter';
 import { GymEquipmentList } from '../../features/gyms/components/GymEquipmentList';
+import { GymPassSheet } from '../../features/gyms/components/GymPassSheet';
 import { amenityIcon, amenityLabel } from '../../features/gyms/amenities';
 import { favoriteGym, unfavoriteGym } from '../../features/gyms/api';
 import { describeOpenState, formatShift } from '../../features/gyms/hours';
@@ -148,6 +149,12 @@ const styles = StyleSheet.create({
   mapPreview: { marginTop: spacing.md },
   skeletons: { gap: spacing.md },
   priceNote: { marginBottom: spacing.md },
+  unavailableCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  membershipActions: { gap: spacing.sm },
   reportRow: { alignItems: 'center', marginTop: spacing.sm },
   reportBtn: {
     flexDirection: 'row',
@@ -180,7 +187,11 @@ export default function GymDetailScreen() {
       ? distanceKm(memberPoint, { lat: gym.lat, lng: gym.lng })
       : null;
 
-  const openState = useMemo(() => (gym ? describeOpenState(gym.hours, now) : null), [gym, now]);
+  const hasHours = gym !== null && Object.keys(gym.hours).length > 0;
+  const openState = useMemo(
+    () => (gym && Object.keys(gym.hours).length > 0 ? describeOpenState(gym.hours, now) : null),
+    [gym, now],
+  );
   const todayIdx = useMemo(() => new Date(now.getTime() + 345 * 60_000).getUTCDay(), [now]);
 
   // ── Favorite / share / enquire / report (Pack M — fixes B15/B17) ──
@@ -189,6 +200,13 @@ export default function GymDetailScreen() {
   const [favoriteBusy, setFavoriteBusy] = useState(false);
   const [enquireOpen, setEnquireOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [passOpen, setPassOpen] = useState(false);
+
+  const canOpenDirections = Boolean(
+    gym &&
+      ((gym.lat !== null && gym.lng !== null) || gym.addressText.trim() || gym.city.trim()),
+  );
+  const hasBottomAction = Boolean(gym && (canOpenDirections || gym.phone || gym.website));
 
   // Seed local favorite state from the detail payload once per gym (not on
   // every focus refetch, so an optimistic toggle here never gets clobbered by
@@ -221,7 +239,7 @@ export default function GymDetailScreen() {
   }
 
   function shareGym(): void {
-    if (!gym) return;
+    if (!gym || !canOpenDirections) return;
     const locationBit = [gym.addressText, gym.city].filter(Boolean).join(', ');
     void Share.share({
       message: `${gym.name}${locationBit ? ` — ${locationBit}` : ''}\ngymtracker://gyms/${gym.slug}`,
@@ -261,7 +279,7 @@ export default function GymDetailScreen() {
 
   return (
     <View style={styles.root}>
-      <Screen scroll bottomInset={gym ? ACTION_BAR_SPACE : 0}>
+      <Screen scroll bottomInset={hasBottomAction ? ACTION_BAR_SPACE : 0}>
         {notFound ? (
           <>
             <View style={styles.backRow}>
@@ -368,21 +386,39 @@ export default function GymDetailScreen() {
               ) : null}
             </Animated.View>
 
-            {/* ── Live Crowd Density ── */}
-            {gym.crowdData ? (
-              <Animated.View entering={enterUp(2)}>
-                <SectionLabel>Live Crowd & Peak Hours</SectionLabel>
+            {/* ── Backend-reported crowd data ── */}
+            <Animated.View entering={enterUp(2)}>
+              <SectionLabel>Crowd & peak hours</SectionLabel>
+              {gym.crowdData ? (
                 <GymCrowdMeter crowd={gym.crowdData} />
-              </Animated.View>
-            ) : null}
+              ) : (
+                <View accessible accessibilityLabel="Crowd data unavailable">
+                  <Card padding={spacing.lg} style={styles.unavailableCard}>
+                    <Ionicons name="information-circle-outline" size={20} color={colors.textDim} />
+                    <AppText variant="body" color={colors.textDim}>
+                      Crowd data has not been provided by this gym.
+                    </AppText>
+                  </Card>
+                </View>
+              )}
+            </Animated.View>
 
             {/* ── Equipment & Zones ── */}
-            {gym.equipment && gym.equipment.length > 0 ? (
-              <Animated.View entering={enterUp(4)}>
-                <SectionLabel>Equipment & Zones</SectionLabel>
+            <Animated.View entering={enterUp(4)}>
+              <SectionLabel>Equipment & zones</SectionLabel>
+              {gym.equipment.length > 0 ? (
                 <GymEquipmentList equipment={gym.equipment} />
-              </Animated.View>
-            ) : null}
+              ) : (
+                <View accessible accessibilityLabel="Equipment details unavailable">
+                  <Card padding={spacing.lg} style={styles.unavailableCard}>
+                    <Ionicons name="information-circle-outline" size={20} color={colors.textDim} />
+                    <AppText variant="body" color={colors.textDim}>
+                      Equipment details have not been provided by this gym.
+                    </AppText>
+                  </Card>
+                </View>
+              )}
+            </Animated.View>
 
             {/* ── Amenities ── */}
             {gym.amenities.length > 0 ? (
@@ -406,40 +442,51 @@ export default function GymDetailScreen() {
             {/* ── Weekly hours ── */}
             <Animated.View entering={enterUp(6)}>
               <SectionLabel>Hours</SectionLabel>
-              <Card padding={spacing.lg}>
-                {GYM_DAY_KEYS.map((day, i) => {
-                  const shifts = gym.hours[day] ?? [];
-                  const isToday = i === todayIdx;
-                  return (
-                    <View key={day}>
-                      {i > 0 ? <Divider /> : null}
-                      <View style={styles.hoursRow}>
-                        <View style={styles.hoursDayBit}>
+              {hasHours ? (
+                <Card padding={spacing.lg}>
+                  {GYM_DAY_KEYS.map((day, i) => {
+                    const shifts = gym.hours[day] ?? [];
+                    const isToday = i === todayIdx;
+                    return (
+                      <View key={day}>
+                        {i > 0 ? <Divider /> : null}
+                        <View style={styles.hoursRow}>
+                          <View style={styles.hoursDayBit}>
+                            <AppText
+                              variant={isToday ? 'bodyBold' : 'body'}
+                              color={isToday ? colors.text : colors.textDim}
+                            >
+                              {DAY_LABEL[day]}
+                            </AppText>
+                            {isToday ? (
+                              <View style={styles.todayTag}>
+                                <Tag label="Today" variant="filled" />
+                              </View>
+                            ) : null}
+                          </View>
                           <AppText
                             variant={isToday ? 'bodyBold' : 'body'}
                             color={isToday ? colors.text : colors.textDim}
                           >
-                            {DAY_LABEL[day]}
+                            {shifts.length === 0
+                              ? 'Closed'
+                              : shifts.map((s) => formatShift(s.open, s.close)).join(', ')}
                           </AppText>
-                          {isToday ? (
-                            <View style={styles.todayTag}>
-                              <Tag label="Today" variant="filled" />
-                            </View>
-                          ) : null}
                         </View>
-                        <AppText
-                          variant={isToday ? 'bodyBold' : 'body'}
-                          color={isToday ? colors.text : colors.textDim}
-                        >
-                          {shifts.length === 0
-                            ? 'Closed'
-                            : shifts.map((s) => formatShift(s.open, s.close)).join(', ')}
-                        </AppText>
                       </View>
-                    </View>
-                  );
-                })}
-              </Card>
+                    );
+                  })}
+                </Card>
+              ) : (
+                <View accessible accessibilityLabel="Opening hours unavailable">
+                  <Card padding={spacing.lg} style={styles.unavailableCard}>
+                    <Ionicons name="information-circle-outline" size={20} color={colors.textDim} />
+                    <AppText variant="body" color={colors.textDim}>
+                      Opening hours have not been provided by this gym.
+                    </AppText>
+                  </Card>
+                </View>
+              )}
             </Animated.View>
 
             {/* ── Location ── */}
@@ -493,7 +540,22 @@ export default function GymDetailScreen() {
                   {gym.priceNote}
                 </AppText>
               ) : null}
-              <Button label="Ask about membership" variant="secondary" onPress={openEnquire} />
+              {gym.passOptions.length === 0 && !gym.priceNote ? (
+                <View accessible accessibilityLabel="Pass pricing unavailable">
+                  <Card padding={spacing.lg} style={styles.unavailableCard}>
+                    <Ionicons name="information-circle-outline" size={20} color={colors.textDim} />
+                    <AppText variant="body" color={colors.textDim}>
+                      Pass prices have not been provided by this gym.
+                    </AppText>
+                  </Card>
+                </View>
+              ) : null}
+              <View style={styles.membershipActions}>
+                {gym.passOptions.length > 0 ? (
+                  <Button label="View passes & prices" variant="secondary" onPress={() => setPassOpen(true)} />
+                ) : null}
+                <Button label="Ask about membership" variant="secondary" onPress={openEnquire} />
+              </View>
             </Animated.View>
 
             {/* ── About ── */}
@@ -534,12 +596,12 @@ export default function GymDetailScreen() {
         )}
       </Screen>
 
-      {gym ? (
+      {gym && hasBottomAction ? (
         <GymActionBar
           gymName={gym.name}
-          onDirections={openDirections}
-          onCall={gym.phone ? call : undefined}
-          onWebsite={gym.website ? openWebsite : undefined}
+          {...(canOpenDirections ? { onDirections: openDirections } : {})}
+          {...(gym.phone ? { onCall: call } : {})}
+          {...(gym.website ? { onWebsite: openWebsite } : {})}
         />
       ) : null}
 
@@ -560,6 +622,19 @@ export default function GymDetailScreen() {
             token={token}
           />
         </>
+      ) : null}
+
+      {gym && gym.passOptions.length > 0 ? (
+        <GymPassSheet
+          visible={passOpen}
+          onClose={() => setPassOpen(false)}
+          gymName={gym.name}
+          passOptions={gym.passOptions}
+          onEnquire={() => {
+            setPassOpen(false);
+            openEnquire();
+          }}
+        />
       ) : null}
     </View>
   );

@@ -1,9 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useLocalSearchParams } from 'expo-router';
 import { colors, spacing } from '@gym/ui-tokens';
-import { AppText, enterFade } from '../../components/ui';
+import { AppText, Button, enterFade } from '../../components/ui';
 import { replacePath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
 
@@ -25,13 +25,18 @@ const styles = StyleSheet.create({
 
 export default function StartWorkoutScreen() {
   const { planWorkoutId } = useLocalSearchParams<{ planWorkoutId?: string }>();
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     void (async () => {
       const id = typeof planWorkoutId === 'string' && planWorkoutId.length > 0 ? planWorkoutId : null;
-      await useSession.getState().start(id);
-      if (mounted) replacePath('/workout');
+      try {
+        await useSession.getState().start(id);
+        if (mounted) replacePath('/workout');
+      } catch {
+        if (mounted) setFailed(true);
+      }
     })();
     return () => {
       mounted = false;
@@ -41,10 +46,24 @@ export default function StartWorkoutScreen() {
   return (
     <View style={styles.root}>
       <Animated.View entering={enterFade(0)} style={styles.center}>
-        <ActivityIndicator color={colors.accent} />
-        <AppText variant="label" color={colors.textDim}>
-          Starting…
-        </AppText>
+        {failed ? (
+          <>
+            <AppText variant="bodyBold">Workout unavailable</AppText>
+            <AppText variant="body" color={colors.textDim} center>
+              This workout is no longer published for your account.
+            </AppText>
+            <Button
+              label="Back to Train"
+              variant="secondary"
+              onPress={() => replacePath('/(tabs)/train')}
+            />
+          </>
+        ) : (
+          <>
+            <ActivityIndicator color={colors.accent} />
+            <AppText variant="label" color={colors.textDim}>Starting…</AppText>
+          </>
+        )}
       </Animated.View>
     </View>
   );

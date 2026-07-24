@@ -1,20 +1,26 @@
+import { z } from 'zod';
+
 /**
  * Nearby-gyms pure logic — open-now resolution from structured weekly hours and
  * great-circle distance. No I/O (CLAUDE.md rule 10; plan §4/§8). Hours are KTM
  * wall-clock (Nepal, fixed UTC+05:45, no DST).
  */
 
-export type GymCategory = 'gym' | 'health_club' | 'studio' | 'crossfit' | 'yoga' | 'other';
-export type GymStatus = 'draft' | 'published' | 'archived';
-
-export const GYM_CATEGORIES: readonly GymCategory[] = [
+export const GYM_CATEGORIES = [
   'gym',
   'health_club',
   'studio',
   'crossfit',
   'yoga',
   'other',
-];
+] as const;
+
+export const gymCategorySchema = z.enum(GYM_CATEGORIES);
+export type GymCategory = z.infer<typeof gymCategorySchema>;
+
+export const GYM_STATUSES = ['draft', 'published', 'archived'] as const;
+export const gymStatusSchema = z.enum(GYM_STATUSES);
+export type GymStatus = z.infer<typeof gymStatusSchema>;
 
 /** Selectable amenity keys (drives the admin multi-select + mobile chips). */
 export const GYM_AMENITIES = [
@@ -38,50 +44,166 @@ export const GYM_AMENITIES = [
 
 export type GymAmenity = (typeof GYM_AMENITIES)[number];
 
-export type GymEquipmentCategory = 'free_weights' | 'cardio' | 'machines' | 'functional' | 'recovery';
+export const gymAmenitySchema = z.enum(GYM_AMENITIES);
 
-export interface GymEquipmentItem {
-  id: string;
-  name: string;
-  category: GymEquipmentCategory;
-  count?: number;
-  description?: string;
-}
+export const GYM_EQUIPMENT_CATEGORIES = [
+  'free_weights',
+  'cardio',
+  'machines',
+  'functional',
+  'recovery',
+] as const;
 
-export type GymCrowdLevel = 'quiet' | 'moderate' | 'busy' | 'packed';
+export const gymEquipmentCategorySchema = z.enum(GYM_EQUIPMENT_CATEGORIES);
+export type GymEquipmentCategory = z.infer<typeof gymEquipmentCategorySchema>;
 
-export interface GymCrowdStatus {
-  level: GymCrowdLevel;
-  percentage: number; // 0 - 100
-  hourlyOccupancy?: number[]; // 24 values representing occupancy % throughout the day
-  peakHoursText?: string;
-}
+export const gymEquipmentItemSchema = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    name: z.string().trim().min(1).max(200),
+    category: gymEquipmentCategorySchema,
+    count: z.number().int().positive().max(10_000).optional(),
+    description: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+export type GymEquipmentItem = z.infer<typeof gymEquipmentItemSchema>;
 
-export type GymPassType = 'day_pass' | 'weekly_pass' | 'monthly' | 'annual';
+export const GYM_CROWD_LEVELS = ['quiet', 'moderate', 'busy', 'packed'] as const;
+export const gymCrowdLevelSchema = z.enum(GYM_CROWD_LEVELS);
+export type GymCrowdLevel = z.infer<typeof gymCrowdLevelSchema>;
 
-export interface GymPassOption {
-  id: string;
-  type: GymPassType;
-  title: string;
-  priceMinor: number;
-  currency: 'NPR' | 'USD';
-  features: string[];
-  isPopular?: boolean;
-}
+export const gymCrowdStatusSchema = z
+  .object({
+    level: gymCrowdLevelSchema,
+    percentage: z.number().min(0).max(100),
+    hourlyOccupancy: z.array(z.number().min(0).max(100)).length(24).optional(),
+    peakHoursText: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+export type GymCrowdStatus = z.infer<typeof gymCrowdStatusSchema>;
+
+export const GYM_PASS_TYPES = ['day_pass', 'weekly_pass', 'monthly', 'annual'] as const;
+export const gymPassTypeSchema = z.enum(GYM_PASS_TYPES);
+export type GymPassType = z.infer<typeof gymPassTypeSchema>;
+
+export const gymPassOptionSchema = z
+  .object({
+    id: z.string().trim().min(1).max(120),
+    type: gymPassTypeSchema,
+    title: z.string().trim().min(1).max(200),
+    priceMinor: z.number().int().nonnegative(),
+    currency: z.enum(['NPR', 'USD']),
+    features: z.array(z.string().trim().min(1).max(200)).max(20),
+    isPopular: z.boolean().optional(),
+  })
+  .strict();
+export type GymPassOption = z.infer<typeof gymPassOptionSchema>;
 
 
 /** Weekday keys, index 0=Sunday … 6=Saturday (matches Date.getUTCDay). */
 export const GYM_DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
 export type GymDayKey = (typeof GYM_DAY_KEYS)[number];
 
+const HH_MM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 /** One open→close shift (HH:MM 24h, KTM local). */
-export interface GymHoursShift {
-  open: string;
-  close: string;
-}
+export const gymHoursShiftSchema = z
+  .object({
+    open: z.string().regex(HH_MM_PATTERN),
+    close: z.string().regex(HH_MM_PATTERN),
+  })
+  .strict();
+export type GymHoursShift = z.infer<typeof gymHoursShiftSchema>;
 
 /** Structured weekly hours — per-day shift list. A missing/empty day = closed. */
-export type GymWeeklyHours = Partial<Record<GymDayKey, GymHoursShift[]>>;
+export const gymWeeklyHoursSchema = z
+  .object({
+    sun: z.array(gymHoursShiftSchema).max(6).optional(),
+    mon: z.array(gymHoursShiftSchema).max(6).optional(),
+    tue: z.array(gymHoursShiftSchema).max(6).optional(),
+    wed: z.array(gymHoursShiftSchema).max(6).optional(),
+    thu: z.array(gymHoursShiftSchema).max(6).optional(),
+    fri: z.array(gymHoursShiftSchema).max(6).optional(),
+    sat: z.array(gymHoursShiftSchema).max(6).optional(),
+  })
+  .strict();
+export type GymWeeklyHours = z.infer<typeof gymWeeklyHoursSchema>;
+
+export const gymSocialLinkSchema = z
+  .object({
+    platform: z.string().trim().min(1).max(40),
+    url: z.string().trim().url().max(500),
+  })
+  .strict();
+export type GymSocialLink = z.infer<typeof gymSocialLinkSchema>;
+
+export const gymPublicPhotoSchema = z
+  .object({ deliveryUrl: z.string().trim().url().max(2_000) })
+  .strict();
+
+/** Public list card. Optional enrichment exists only when the DB supplied it. */
+export const gymPublicCardSchema = z
+  .object({
+    id: z.string().min(1),
+    slug: z.string().min(1),
+    name: z.string().min(1),
+    category: gymCategorySchema,
+    city: z.string(),
+    lat: z.number().min(-90).max(90).nullable(),
+    lng: z.number().min(-180).max(180).nullable(),
+    rating: z.number().min(0).max(5).nullable(),
+    reviewCount: z.number().int().nonnegative().nullable(),
+    photos: z.array(gymPublicPhotoSchema),
+    distanceKm: z.number().nonnegative().nullable(),
+    crowdData: gymCrowdStatusSchema.optional(),
+  })
+  .strict();
+export type GymPublicCard = z.infer<typeof gymPublicCardSchema>;
+
+export const gymPublicListResponseSchema = z
+  .object({
+    gyms: z.array(gymPublicCardSchema),
+    total: z.number().int().nonnegative(),
+    limit: z.number().int().positive(),
+    offset: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/** Public detail. Empty arrays mean the operator has not supplied that data. */
+export const gymPublicDetailSchema = z
+  .object({
+    id: z.string().min(1),
+    slug: z.string().min(1),
+    name: z.string().min(1),
+    category: gymCategorySchema,
+    addressText: z.string(),
+    city: z.string(),
+    district: z.string(),
+    lat: z.number().min(-90).max(90).nullable(),
+    lng: z.number().min(-180).max(180).nullable(),
+    phone: z.string(),
+    website: z.string().trim().url().max(500).nullable(),
+    socialLinks: z.array(gymSocialLinkSchema),
+    hours: gymWeeklyHoursSchema,
+    amenities: z.array(gymAmenitySchema),
+    equipment: z.array(gymEquipmentItemSchema),
+    crowdData: gymCrowdStatusSchema.optional(),
+    passOptions: z.array(gymPassOptionSchema),
+    coachIds: z.array(z.string().min(1)),
+    externalImageUrl: z.string().trim().url().max(2_000).nullable(),
+    priceNote: z.string(),
+    description: z.string(),
+    rating: z.number().min(0).max(5).nullable(),
+    reviewCount: z.number().int().nonnegative().nullable(),
+    photos: z.array(gymPublicPhotoSchema.extend({ id: z.string().min(1) })),
+    isFavorited: z.boolean(),
+  })
+  .strict();
+export type GymPublicDetail = z.infer<typeof gymPublicDetailSchema>;
+
+export const gymPublicDetailResponseSchema = z
+  .object({ gym: gymPublicDetailSchema })
+  .strict();
 
 const KTM_OFFSET_MS = 345 * 60_000;
 

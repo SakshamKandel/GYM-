@@ -1,5 +1,14 @@
 import { gyms } from '@gym/db';
-import { GYM_AMENITIES, GYM_CATEGORIES, GYM_DAY_KEYS, type GymAmenity, type GymCategory } from '@gym/shared';
+import {
+  GYM_AMENITIES,
+  GYM_CATEGORIES,
+  GYM_DAY_KEYS,
+  gymCrowdStatusSchema,
+  gymEquipmentItemSchema,
+  gymPassOptionSchema,
+  type GymAmenity,
+  type GymCategory,
+} from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
@@ -52,6 +61,10 @@ const patchSchema = z
     socialLinks: z.array(socialLinkSchema).max(10).optional(),
     hours: hoursSchema.optional(),
     amenities: z.array(amenitySchema).max(GYM_AMENITIES.length).optional(),
+    equipment: z.array(gymEquipmentItemSchema).max(200).optional(),
+    crowdData: gymCrowdStatusSchema.nullable().optional(),
+    passOptions: z.array(gymPassOptionSchema).max(40).optional(),
+    coachIds: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
     externalImageUrl: z.string().trim().url().max(2000).nullable().optional(),
     priceNote: z.string().trim().max(300).optional(),
     description: z.string().trim().max(4000).optional(),

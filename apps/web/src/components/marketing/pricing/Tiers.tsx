@@ -136,7 +136,7 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
                     <span className="font-display text-[40px] font-medium leading-none">
                       {price}
                     </span>
-                    {price !== 'Free' ? (
+                    {!['Free', 'Unavailable'].includes(price) ? (
                       <span
                         className={`font-mono text-[11px] uppercase tracking-[0.14em] ${
                           highlight ? 'text-cream-dim' : 'text-faint'
@@ -164,14 +164,20 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
                   </ul>
 
                   <div className="mt-auto pt-8">
-                    <PillLink
-                      href="/download"
-                      small
-                      variant={highlight ? 'inkOnCream' : 'ghost'}
-                      className="w-full"
-                    >
-                      {details.cta}
-                    </PillLink>
+                    {regionCatalog.available ? (
+                      <PillLink
+                        href="/download"
+                        small
+                        variant={highlight ? 'inkOnCream' : 'ghost'}
+                        className="w-full"
+                      >
+                        {details.cta}
+                      </PillLink>
+                    ) : (
+                      <span role="status" className="block text-center text-sm font-semibold">
+                        Pricing temporarily unavailable
+                      </span>
+                    )}
                   </div>
                 </div>
               </Reveal>

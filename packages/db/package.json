@@ -10,8 +10,8 @@
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
     "seed:exercises": "pnpm dlx tsx src/seed/exercises.ts",
+    "seed:training-catalog": "pnpm dlx tsx src/seed/trainingCatalog.ts",
     "seed:demo-coach": "pnpm dlx tsx src/seed-demo-coach.ts",
-    "seed:wave-gym": "pnpm dlx tsx src/seed-wave-gym.ts",
     "seed:live-demo": "pnpm dlx tsx src/seed-live-demo.ts"
   },
   "dependencies": {

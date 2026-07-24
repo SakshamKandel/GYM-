@@ -62,6 +62,31 @@ export interface Plan {
   description: string;
 }
 
+/**
+ * Member-facing projection of an admin-authored plan. Locked plans retain
+ * metadata for the picker, but the API omits their workout structure.
+ */
+export interface TrainingCatalogPlan extends Plan {
+  isBranded: boolean;
+  isAvailable: boolean;
+  workouts: PlanWorkout[];
+}
+
+/** A validated snapshot of Neon training content returned to the mobile app. */
+export interface TrainingCatalog {
+  /** Stable hash of the content and the requesting member's availability view. */
+  revision: string;
+  generatedAt: string;
+  plans: TrainingCatalogPlan[];
+  exercises: Exercise[];
+}
+
+/** Account-scoped offline snapshot. `fetchedAt` is always shown as cache age. */
+export interface TrainingCatalogCache {
+  catalog: TrainingCatalog;
+  fetchedAt: string;
+}
+
 export interface SetLog {
   id: string;
   workoutLogId: string;

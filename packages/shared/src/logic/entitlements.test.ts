@@ -50,8 +50,9 @@ describe('effectiveTier', () => {
     assert.equal(effectiveTier('elite', '2026-01-01T00:00:00.000Z', NOW), 'starter');
   });
 
-  it('unparseable expiry string fails OPEN to the stored tier', () => {
-    assert.equal(effectiveTier('elite', 'not-a-date', NOW), 'elite');
+  it('unparseable expiry fails closed to starter', () => {
+    assert.equal(effectiveTier('elite', 'not-a-date', NOW), 'starter');
+    assert.equal(effectiveTier('elite', new Date('not-a-date'), NOW), 'starter');
   });
 
   it('an expired elite genuinely loses the elite entitlement downstream', () => {

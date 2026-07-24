@@ -17,6 +17,7 @@ import {
   Tag,
 } from '../../components/ui';
 import { allExercises, MUSCLE_GROUPS } from '../../lib/exercises';
+import { useTrainingCatalog } from '../../lib/trainingCatalog';
 import { tapHaptic } from '../../lib/haptics';
 import {
   MUSCLE_LABELS,
@@ -125,6 +126,7 @@ function Bullet({ text, tone }: { text: string; tone: 'tip' | 'mistake' }) {
 }
 
 export function AnatomyExplorer({ initialMuscle }: { initialMuscle: MuscleGroup }) {
+  useTrainingCatalog();
   const [selected, setSelected] = useState<MuscleGroup>(initialMuscle);
   const [side, setSide] = useState<MuscleMapSide>(PREFERRED_SIDE[initialMuscle]);
 

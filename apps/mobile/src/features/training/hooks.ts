@@ -1,17 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
-import { detectPlateau, hasEntitlement } from '@gym/shared';
+import { detectPlateau } from '@gym/shared';
 import type { Exercise, PlanWorkout, PlateauVerdict, Tier, WorkoutLog } from '@gym/shared';
 import { getPlanVideo } from '../../lib/api/client';
 import { addDays, todayIso } from '../../lib/dates';
 import { getExercise } from '../../lib/exercises';
 import { getNextPlanWorkout } from '../../lib/planProgress';
+import { ensureTrainingCatalog } from '../../lib/trainingCatalog';
 import { getRepo } from '../../lib/repo';
 import type { AnalyticsSet } from '../../lib/repo/types';
-import { getGreeceVideo } from '../../lib/seed/greeceVideos';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
-import { useEffectiveTier } from '../../lib/tier';
 
 /** Small data hooks — refresh on focus so tabs update after logging. */
 
@@ -32,6 +31,7 @@ export function useTrainData(planId: string): TrainData {
     useCallback(() => {
       let mounted = true;
       void (async () => {
+        await ensureTrainingCatalog();
         const repo = await getRepo();
         const [nextWorkout, activeWorkout] = await Promise.all([
           getNextPlanWorkout(repo, planId),
@@ -174,6 +174,7 @@ export function useRecentExercises(limit: number): RecentExercise[] {
       void (async () => {
         const repo = await getRepo();
         const today = todayIso();
+        await ensureTrainingCatalog();
         const [ids, windowSets] = await Promise.all([
           repo.getRecentExerciseIds(limit),
           repo.getSetsBetween(addDays(today, -RECENT_CAPTION_WINDOW_DAYS), today),
@@ -202,63 +203,45 @@ export function useRecentExercises(limit: number): RecentExercise[] {
 
 /**
  * Resolved coach-video state for an exercise. The API is the source of truth
- * for a signed, per-tier-gated stream; the bundled `greeceVideos` seed is kept
- * as a graceful fallback for ONE release so playback never hard-breaks before
- * the video host is wired up.
+ * for a signed, per-tier-gated stream. No bundled URL can bypass the backend.
  *
- *  - 'loading'  → still resolving (only the API path is async; seed is sync).
+ *  - 'loading'  → still resolving.
  *  - 'ready'    → play `url` (signed, disposable) with `label`.
  *  - 'locked'   → the caller should render the paywall/upgrade affordance for
  *                 `requiredTier`.
- *  - 'none'     → no video from the API and no seed clip; render nothing/tease.
+ *  - 'none'     → no real video is available; render nothing/tease.
  */
 export type PlanVideoState =
   | { status: 'loading' }
-  | { status: 'ready'; url: string; label: string; source: 'api' | 'seed' }
+  | { status: 'ready'; url: string; label: string; source: 'api' }
   | { status: 'locked'; requiredTier: Tier }
   | { status: 'none' };
 
 /**
  * Resolve the best available coach video for an exercise.
  *
- * Signed in → asks the gated playback API first. A 200 plays the signed url;
- * a 403 surfaces a locked state (paywall). Any other outcome (no video, keys
- * unconfigured, expired session, offline) falls back to the local seed via
- * getGreeceVideo — so nothing breaks if the host isn't set up yet.
- *
- * Signed out (no token) → skips the API and uses the seed directly.
+ * Signed in → asks the gated playback API. A 200 plays the signed URL; a 403
+ * surfaces a locked state. Missing configuration/content remains unavailable
+ * instead of substituting compiled data. Signed-out members receive no URL.
  *
  * The signed url is short-lived and re-fetched whenever the exercise or the
  * session token changes; it is never cached beyond this hook's state.
  */
 export function usePlanVideo(exerciseId: string): PlanVideoState {
   const token = useAuth((s) => s.token);
-  const tier = useEffectiveTier();
   const [state, setState] = useState<PlanVideoState>({ status: 'loading' });
 
   useEffect(() => {
     let mounted = true;
-
-    // Seed fallback (sync): the bundled clip, gated by the SAME entitlement the
-    // screen used before the API existed — the demo is a signature_plans (Gold+)
-    // perk, so a lower tier still gets the locked teaser, never the raw video.
-    const seedState = (): PlanVideoState => {
-      const seed = getGreeceVideo(exerciseId);
-      if (!seed) return { status: 'none' };
-      if (!hasEntitlement({ tier }, 'signature_plans')) {
-        return { status: 'locked', requiredTier: 'gold' };
-      }
-      return { status: 'ready', url: seed.url, label: seed.label ?? "Greece's demo", source: 'seed' };
-    };
 
     if (!exerciseId) {
       setState({ status: 'none' });
       return;
     }
 
-    // Signed out — no session token to gate against, so go straight to seed.
+    // Signed out — never expose a playback URL outside server entitlement checks.
     if (!token) {
-      setState(seedState());
+      setState({ status: 'none' });
       return;
     }
 
@@ -273,12 +256,10 @@ export function usePlanVideo(exerciseId: string): PlanVideoState {
         case 'locked':
           setState({ status: 'locked', requiredTier: result.requiredTier });
           break;
-        // No ready video, provider unconfigured, or unreachable — degrade to
-        // the bundled seed for this release so the demo still plays if hosted.
         case 'not_found':
         case 'not_configured':
         case 'unavailable':
-          setState(seedState());
+          setState({ status: 'none' });
           break;
       }
     })();
@@ -286,7 +267,7 @@ export function usePlanVideo(exerciseId: string): PlanVideoState {
     return () => {
       mounted = false;
     };
-  }, [exerciseId, token, tier]);
+  }, [exerciseId, token]);
 
   return state;
 }

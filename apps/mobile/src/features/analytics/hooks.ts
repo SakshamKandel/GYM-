@@ -21,6 +21,7 @@ import {
 import { addDays, lastNDays, todayIso } from '../../lib/dates';
 import { getExercise } from '../../lib/exercises';
 import { getRepo } from '../../lib/repo';
+import { ensureTrainingCatalog } from '../../lib/trainingCatalog';
 import { useProfile } from '../../state/profile';
 import { useEffectiveTier } from '../../lib/tier';
 import {
@@ -106,6 +107,7 @@ export function useAnalytics(reloadKey = 0): AnalyticsState {
       let mounted = true;
       void (async () => {
         try {
+          await ensureTrainingCatalog();
           const repo = await getRepo();
           const today = todayIso();
           const currentWeekStart = weekStartIso(today);

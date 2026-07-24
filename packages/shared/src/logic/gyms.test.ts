@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { distanceKm, isOpenNow, type GymWeeklyHours } from './gyms.ts';
+import {
+  distanceKm,
+  gymCrowdStatusSchema,
+  gymPassOptionSchema,
+  gymPublicCardSchema,
+  gymPublicDetailResponseSchema,
+  isOpenNow,
+  type GymWeeklyHours,
+} from './gyms.ts';
 
 function ktm(y: number, mo: number, da: number, hh: number, mm = 0): Date {
   return new Date(Date.UTC(y, mo - 1, da, hh, mm) - 345 * 60_000);
@@ -67,5 +75,106 @@ describe('distanceKm', () => {
     const a = { lat: 27.7, lng: 85.3 };
     const b = { lat: 27.71, lng: 85.33 };
     assert.ok(Math.abs(distanceKm(a, b) - distanceKm(b, a)) < 1e-9);
+  });
+});
+
+describe('public gym authenticity schemas', () => {
+  const baseCard = {
+    id: 'gym-1',
+    slug: 'real-gym',
+    name: 'Real Gym',
+    category: 'gym' as const,
+    city: 'Lalitpur',
+    lat: null,
+    lng: null,
+    rating: null,
+    reviewCount: null,
+    photos: [],
+    distanceKm: null,
+  };
+
+  it('keeps unavailable list enrichment absent instead of manufacturing values', () => {
+    const parsed = gymPublicCardSchema.parse(baseCard);
+    assert.equal('crowdData' in parsed, false);
+    assert.equal('equipment' in parsed, false);
+    assert.equal('dayPassPriceMinor' in parsed, false);
+    assert.equal(parsed.lat, null);
+    assert.equal(parsed.lng, null);
+  });
+
+  it('accepts and preserves a complete backend crowd profile', () => {
+    const crowdData = {
+      level: 'busy' as const,
+      percentage: 72,
+      hourlyOccupancy: Array.from({ length: 24 }, (_, hour) => hour * 3),
+      peakHoursText: 'Reported busiest from 5 PM to 7 PM',
+    };
+    const parsed = gymPublicCardSchema.parse({ ...baseCard, crowdData });
+    assert.deepEqual(parsed.crowdData, crowdData);
+  });
+
+  it('rejects invented-looking defaults and malformed crowd profiles', () => {
+    assert.equal(gymCrowdStatusSchema.safeParse({ level: 'moderate', percentage: 101 }).success, false);
+    assert.equal(
+      gymCrowdStatusSchema.safeParse({
+        level: 'quiet',
+        percentage: 20,
+        hourlyOccupancy: Array.from({ length: 23 }, () => 20),
+      }).success,
+      false,
+    );
+    assert.equal(gymCrowdStatusSchema.safeParse({ percentage: 45 }).success, false);
+  });
+
+  it('requires backend pass prices, currency, and features to be valid', () => {
+    const pass = {
+      id: 'day-1',
+      type: 'day_pass' as const,
+      title: 'Day pass',
+      priceMinor: 75_000,
+      currency: 'NPR' as const,
+      features: ['Gym floor access'],
+    };
+    assert.deepEqual(gymPassOptionSchema.parse(pass), pass);
+    assert.equal(gymPassOptionSchema.safeParse({ ...pass, priceMinor: -1 }).success, false);
+    assert.equal(gymPassOptionSchema.safeParse({ ...pass, currency: 'EUR' }).success, false);
+  });
+
+  it('represents missing detail enrichment with empty arrays and nullable coordinates', () => {
+    const response = gymPublicDetailResponseSchema.parse({
+      gym: {
+        id: baseCard.id,
+        slug: baseCard.slug,
+        name: baseCard.name,
+        category: baseCard.category,
+        city: baseCard.city,
+        lat: baseCard.lat,
+        lng: baseCard.lng,
+        rating: baseCard.rating,
+        reviewCount: baseCard.reviewCount,
+        addressText: '',
+        district: '',
+        phone: '',
+        website: null,
+        socialLinks: [],
+        hours: {},
+        amenities: [],
+        equipment: [],
+        passOptions: [],
+        coachIds: [],
+        externalImageUrl: null,
+        priceNote: '',
+        description: '',
+        photos: [{ id: 'photo-1', deliveryUrl: 'https://images.example.com/gym.jpg' }],
+        isFavorited: false,
+      },
+    });
+
+    assert.deepEqual(response.gym.equipment, []);
+    assert.deepEqual(response.gym.passOptions, []);
+    assert.equal(response.gym.photos[0]?.id, 'photo-1');
+    assert.equal(response.gym.crowdData, undefined);
+    assert.equal(response.gym.lat, null);
+    assert.equal(response.gym.lng, null);
   });
 });

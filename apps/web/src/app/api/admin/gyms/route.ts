@@ -1,5 +1,14 @@
 import { gymPhotos, gyms } from '@gym/db';
-import { GYM_AMENITIES, GYM_CATEGORIES, GYM_DAY_KEYS, type GymAmenity, type GymCategory } from '@gym/shared';
+import {
+  GYM_AMENITIES,
+  GYM_CATEGORIES,
+  GYM_DAY_KEYS,
+  gymCrowdStatusSchema,
+  gymEquipmentItemSchema,
+  gymPassOptionSchema,
+  type GymAmenity,
+  type GymCategory,
+} from '@gym/shared';
 import { asc, count } from 'drizzle-orm';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
@@ -71,6 +80,10 @@ const createSchema = z.object({
   socialLinks: z.array(socialLinkSchema).max(10).default([]),
   hours: hoursSchema.default({}),
   amenities: z.array(amenitySchema).max(GYM_AMENITIES.length).default([]),
+  equipment: z.array(gymEquipmentItemSchema).max(200).default([]),
+  crowdData: gymCrowdStatusSchema.nullable().optional(),
+  passOptions: z.array(gymPassOptionSchema).max(40).default([]),
+  coachIds: z.array(z.string().trim().min(1).max(200)).max(100).default([]),
   externalImageUrl: z.string().trim().url().max(2000).nullable().optional(),
   priceNote: z.string().trim().max(300).default(''),
   description: z.string().trim().max(4000).default(''),
@@ -119,6 +132,7 @@ export async function POST(req: Request) {
     lat: rest.lat ?? null,
     lng: rest.lng ?? null,
     website: rest.website || null,
+    crowdData: rest.crowdData ?? null,
     externalImageUrl: rest.externalImageUrl || null,
     status: 'draft' as const,
     verifiedByAdmin: false,

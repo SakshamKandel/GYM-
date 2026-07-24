@@ -17,6 +17,7 @@ import { AppText, AppTextInput, enterUp, PressableScale } from '../../../compone
 import { addDays, posterDate, toIsoDate, todayIso } from '../../../lib/dates';
 import { successHaptic } from '../../../lib/haptics';
 import type { CoachMessage, CoachThreadKind } from '../../../lib/api/client';
+import { useAuth } from '../../../state/auth';
 import { isTypingMessage, useCoachThread } from '../useCoachThread';
 import { MessageBubble } from './MessageBubble';
 
@@ -150,7 +151,17 @@ function DayDivider({ iso }: { iso: string }) {
   );
 }
 
-export function CoachThread({
+/**
+ * Remount the composer with the session. This clears unsent draft text and all
+ * child refs synchronously on an account switch, while useCoachThread guards
+ * the asynchronous server state itself.
+ */
+export function CoachThread(props: Props) {
+  const sessionKey = useAuth((state) => state.token ?? 'signed-out');
+  return <CoachThreadSession key={sessionKey} {...props} />;
+}
+
+function CoachThreadSession({
   kind,
   emptyTitle,
   emptyBody,

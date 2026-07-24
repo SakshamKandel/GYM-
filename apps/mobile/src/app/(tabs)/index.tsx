@@ -58,7 +58,7 @@ import { useMyCoach } from '../../features/mentorship/hooks';
 import { useHomeData, useQuestProgress, type DoneToday } from '../../features/engagement/hooks';
 import { avatarLetter, formatCompact, greetingForHour, toHref } from '../../features/engagement/logic';
 import { useWeeklyStreak } from '../../features/streak/hooks';
-import { useQuest } from '../../state/quest';
+import { questStateFor, useQuest } from '../../state/quest';
 import { WeeklyActivityStrip } from '../../components/home/WeeklyActivityStrip';
 import { QuickActionsRow } from '../../components/home/QuickActionsRow';
 import { NutritionHomeCard } from '../../components/home/NutritionHomeCard';
@@ -426,13 +426,14 @@ export default function HomeScreen() {
   // never useProfile.tier (local upgrade-only mirror, known to drift above
   // the server's value, which would route downgraded users into a dead-end).
   const serverTier = useAuth((s) => s.user?.tier ?? 'starter');
+  const accountId = useAuth((s) => s.user?.id ?? null);
   const targets = useProfile((s) => s.targets);
   const nutrition = useNutritionDay(todayIso());
   const totals = sumDayTotals(nutrition.logs);
   const data = useHomeData(planId);
   const weeklyStreak = useWeeklyStreak();
   const quest = useQuestProgress();
-  const questDismissed = useQuest((s) => s.dismissed);
+  const questDismissed = useQuest((state) => questStateFor(state, accountId).dismissed);
 
   const activeDates = useMemo(() => {
     const set = new Set<string>();

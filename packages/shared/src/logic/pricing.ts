@@ -1,5 +1,3 @@
-import type { Tier } from '../types';
-
 /**
  * Regional pricing — the shared price catalog, discount math, and money
  * formatting used by the subscription catalog endpoint, the paywall, and the
@@ -7,42 +5,13 @@ import type { Tier } from '../types';
  * always integer minor units (paisa/cents) + an ISO-ish currency code string
  * — never floats (SCALE-UP-PLAN §6 rule 5).
  *
- * SCALE-UP-PLAN §1.1: two price regions. `NP` gets the NPR catalog,
- * everything else clamps to `INTL` (USD). Seeded once into the DB
- * `tier_prices` table from DEFAULT_TIER_PRICES; the DB table is the live
- * source of truth thereafter (admin-editable) with these constants as
- * fallback.
+ * SCALE-UP-PLAN §1.1: two price regions. `NP` gets the persisted NPR catalog
+ * and everything else clamps to the persisted `INTL` catalog. Prices are
+ * deliberately absent here: `tier_prices` is the only source of truth, and
+ * incomplete configuration must surface as unavailable.
  */
 
 export type PriceRegion = 'NP' | 'INTL';
-
-export interface TierPrice {
-  region: PriceRegion;
-  tier: Tier;
-  /** Integer minor units (paisa for NPR, cents for USD). */
-  amountMinor: number;
-  /** ISO-ish currency code, e.g. 'NPR' | 'USD'. */
-  currency: string;
-}
-
-/**
- * SCALE-UP-PLAN §1.1 table, in minor units:
- *   tier    | NP (NPR/mo, paisa) | INTL (USD/mo, cents)
- *   starter | 0                  | 0
- *   silver  | 49900              | 499
- *   gold    | 99900              | 999
- *   elite   | 299900             | 2999
- */
-export const DEFAULT_TIER_PRICES: TierPrice[] = [
-  { region: 'NP', tier: 'starter', amountMinor: 0, currency: 'NPR' },
-  { region: 'NP', tier: 'silver', amountMinor: 49900, currency: 'NPR' },
-  { region: 'NP', tier: 'gold', amountMinor: 99900, currency: 'NPR' },
-  { region: 'NP', tier: 'elite', amountMinor: 299900, currency: 'NPR' },
-  { region: 'INTL', tier: 'starter', amountMinor: 0, currency: 'USD' },
-  { region: 'INTL', tier: 'silver', amountMinor: 499, currency: 'USD' },
-  { region: 'INTL', tier: 'gold', amountMinor: 999, currency: 'USD' },
-  { region: 'INTL', tier: 'elite', amountMinor: 2999, currency: 'USD' },
-];
 
 /**
  * Clamp a client-supplied country hint (ISO-3166 alpha-2, e.g. from

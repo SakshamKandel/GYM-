@@ -262,7 +262,7 @@ export const subscriptions = pgTable('subscriptions', {
   expiresAt: timestamp('expires_at', { withTimezone: true }),
 });
 
-/** Email/password + Google accounts (auth lives in apps/web API routes). */
+/** Email/password + Google/Apple accounts (auth lives in apps/web API routes). */
 export const accounts = pgTable('accounts', {
   id: text('id')
     .primaryKey()
@@ -270,6 +270,7 @@ export const accounts = pgTable('accounts', {
   email: text('email').notNull().unique(), // stored lowercase
   passwordHash: text('password_hash'), // 'scrypt$<saltHex>$<hashHex>' — null for Google-only accounts
   googleSub: text('google_sub').unique(), // Google OIDC subject id — null for password accounts
+  appleSub: text('apple_sub').unique(), // stable Apple subject — never email-derived
   displayName: text('display_name').notNull().default(''),
   tier: text('tier', { enum: ['starter', 'silver', 'gold', 'elite'] })
     .notNull()
@@ -319,6 +320,182 @@ export const accounts = pgTable('accounts', {
   // scan (§7.4-P2). Partial → only rows with a set expiry are indexed.
   index('accounts_tier_expires').on(t.tierExpiresAt).where(sql`${t.tierExpiresAt} is not null`),
 ]);
+
+/**
+ * Short-lived, one-use Sign in with Apple challenges. The raw nonce is sent to
+ * Apple and the mobile client; only its SHA-256 digest is stored. Atomic
+ * consumption prevents a captured identity token from minting a second app
+ * session, including when requests land on different serverless instances.
+ */
+export const appleAuthNonces = pgTable(
+  'apple_auth_nonces',
+  {
+    nonceHash: text('nonce_hash').primaryKey(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('apple_auth_nonces_expires').on(t.expiresAt)],
+);
+
+/**
+ * Account-owned member logs replicated from the offline mobile repository.
+ *
+ * `client_changed_at + mutation_id` is the deterministic LWW version. A
+ * replayed mutation therefore cannot overwrite a newer device edit.
+ * `updated_at` is stamped by the API only when the winning value changes and
+ * is the authoritative download cursor. Deleted rows remain as tombstones so
+ * an offline device cannot resurrect a record on a later retry.
+ */
+export const memberWeightLogs = pgTable(
+  'member_weight_logs',
+  {
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    id: text('id').notNull(),
+    date: date('date').notNull(),
+    kg: doublePrecision('kg').notNull(),
+    clientChangedAt: timestamp('client_changed_at', { withTimezone: true }).notNull(),
+    mutationId: text('mutation_id').notNull(),
+    deleted: boolean('deleted').notNull().default(false),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.date] }),
+    uniqueIndex('member_weight_logs_account_mutation').on(t.accountId, t.mutationId),
+    index('member_weight_logs_account_updated').on(t.accountId, t.updatedAt, t.date),
+  ],
+);
+
+export const memberMeasurements = pgTable(
+  'member_measurements',
+  {
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    id: text('id').notNull(),
+    date: date('date').notNull(),
+    waistCm: doublePrecision('waist_cm'),
+    chestCm: doublePrecision('chest_cm'),
+    armCm: doublePrecision('arm_cm'),
+    hipCm: doublePrecision('hip_cm'),
+    thighCm: doublePrecision('thigh_cm'),
+    clientChangedAt: timestamp('client_changed_at', { withTimezone: true }).notNull(),
+    mutationId: text('mutation_id').notNull(),
+    deleted: boolean('deleted').notNull().default(false),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.id] }),
+    uniqueIndex('member_measurements_account_mutation').on(t.accountId, t.mutationId),
+    index('member_measurements_account_updated').on(t.accountId, t.updatedAt, t.id),
+  ],
+);
+
+/** Member-authored foods only. OFF/USDA rows remain replaceable device caches. */
+export const memberFoods = pgTable(
+  'member_foods',
+  {
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    id: text('id').notNull(),
+    name: text('name').notNull(),
+    brand: text('brand'),
+    source: text('source', { enum: ['custom'] }).notNull().default('custom'),
+    barcode: text('barcode'),
+    kcalPer100: doublePrecision('kcal_per_100').notNull(),
+    proteinPer100: doublePrecision('protein_per_100').notNull(),
+    carbsPer100: doublePrecision('carbs_per_100').notNull(),
+    fatPer100: doublePrecision('fat_per_100').notNull(),
+    servingGrams: doublePrecision('serving_grams'),
+    servingLabel: text('serving_label'),
+    fiberPer100: doublePrecision('fiber_per_100'),
+    sugarPer100: doublePrecision('sugar_per_100'),
+    sodiumPer100: doublePrecision('sodium_per_100'),
+    nutriScore: text('nutri_score', { enum: ['a', 'b', 'c', 'd', 'e'] }),
+    novaGroup: integer('nova_group'),
+    clientChangedAt: timestamp('client_changed_at', { withTimezone: true }).notNull(),
+    mutationId: text('mutation_id').notNull(),
+    deleted: boolean('deleted').notNull().default(false),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.id] }),
+    uniqueIndex('member_foods_account_mutation').on(t.accountId, t.mutationId),
+    index('member_foods_account_updated').on(t.accountId, t.updatedAt, t.id),
+  ],
+);
+
+export const memberFoodLogs = pgTable(
+  'member_food_logs',
+  {
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    id: text('id').notNull(),
+    date: date('date').notNull(),
+    meal: text('meal', { enum: ['breakfast', 'lunch', 'dinner', 'snacks'] }).notNull(),
+    foodId: text('food_id').notNull(),
+    foodName: text('food_name').notNull(),
+    grams: doublePrecision('grams').notNull(),
+    kcal: doublePrecision('kcal').notNull(),
+    protein: doublePrecision('protein').notNull(),
+    carbs: doublePrecision('carbs').notNull(),
+    fat: doublePrecision('fat').notNull(),
+    clientChangedAt: timestamp('client_changed_at', { withTimezone: true }).notNull(),
+    mutationId: text('mutation_id').notNull(),
+    deleted: boolean('deleted').notNull().default(false),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.id] }),
+    uniqueIndex('member_food_logs_account_mutation').on(t.accountId, t.mutationId),
+    index('member_food_logs_account_updated').on(t.accountId, t.updatedAt, t.id),
+    index('member_food_logs_account_date').on(t.accountId, t.date),
+  ],
+);
+
+export const memberWaterLogs = pgTable(
+  'member_water_logs',
+  {
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    date: date('date').notNull(),
+    ml: integer('ml').notNull().default(0),
+    clientChangedAt: timestamp('client_changed_at', { withTimezone: true }).notNull(),
+    mutationId: text('mutation_id').notNull(),
+    deleted: boolean('deleted').notNull().default(false),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.date] }),
+    uniqueIndex('member_water_logs_account_mutation').on(t.accountId, t.mutationId),
+    index('member_water_logs_account_updated').on(t.accountId, t.updatedAt, t.date),
+  ],
+);
+
+export const memberStepLogs = pgTable(
+  'member_step_logs',
+  {
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    date: date('date').notNull(),
+    steps: integer('steps').notNull().default(0),
+    clientChangedAt: timestamp('client_changed_at', { withTimezone: true }).notNull(),
+    mutationId: text('mutation_id').notNull(),
+    deleted: boolean('deleted').notNull().default(false),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.accountId, t.date] }),
+    uniqueIndex('member_step_logs_account_mutation').on(t.accountId, t.mutationId),
+    index('member_step_logs_account_updated').on(t.accountId, t.updatedAt, t.date),
+  ],
+);
 
 /** Opaque 64-char hex session tokens, 30-day expiry. */
 export const sessions = pgTable(
@@ -1328,8 +1505,8 @@ export const revenuecatEvents = pgTable('revenuecat_events', {
 
 /**
  * Admin-editable regional pricing catalog. GET /api/subscription/catalog
- * resolves a region then reads the (region, tier) row here, falling back to
- * DEFAULT_TIER_PRICES in @gym/shared when no row exists yet (pre-seed safe).
+ * resolves a region then reads the complete persisted catalog here. Missing
+ * rows make paid checkout unavailable; runtime prices are never fabricated.
  * Amounts are minor units (paisa/cents) — see logic/pricing.ts.
  */
 export const tierPrices = pgTable(
@@ -2209,23 +2386,21 @@ export interface MealMacrosSnapshot {
   sugarG?: number;
 }
 
-/** A social profile link on a gym listing. */
-export interface GymSocialLink {
+/** Gym JSON column metadata. Public validation and shared mobile types live in
+ * @gym/shared; these local structural shapes only parameterize Drizzle JSON. */
+interface GymSocialLink {
   platform: string;
   url: string;
 }
 
-/** One open→close shift on a gym's weekly hours (HH:MM 24h, KTM local). */
-export interface GymHoursShift {
+interface GymHoursShift {
   open: string;
   close: string;
 }
 
-/** Structured weekly hours: per-weekday-key list of shifts (empty = closed). */
-export type GymWeeklyHours = Partial<Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat', GymHoursShift[]>>;
+type GymWeeklyHours = Partial<Record<'sun' | 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat', GymHoursShift[]>>;
 
-/** An equipment item at a gym listing. */
-export interface GymEquipmentItem {
+interface GymEquipmentItem {
   id: string;
   name: string;
   category: 'free_weights' | 'cardio' | 'machines' | 'functional' | 'recovery';
@@ -2233,16 +2408,14 @@ export interface GymEquipmentItem {
   description?: string;
 }
 
-/** Live crowd density level and peak hours metadata. */
-export interface GymCrowdStatus {
+interface GymCrowdStatus {
   level: 'quiet' | 'moderate' | 'busy' | 'packed';
   percentage: number;
   hourlyOccupancy?: number[];
   peakHoursText?: string;
 }
 
-/** Day pass or membership pricing option. */
-export interface GymPassOption {
+interface GymPassOption {
   id: string;
   type: 'day_pass' | 'weekly_pass' | 'monthly' | 'annual';
   title: string;

@@ -2,6 +2,7 @@ import { accounts, referrals } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { canCreateSession } from '@/lib/accountStatus';
 import { createSession } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { allowedGoogleClientIds, verifyGoogleIdToken } from '@/lib/google';
@@ -70,6 +71,7 @@ const publicColumns = {
   displayName: accounts.displayName,
   tier: accounts.tier,
   tierExpiresAt: accounts.tierExpiresAt,
+  status: accounts.status,
 };
 
 export function OPTIONS() {
@@ -117,7 +119,11 @@ export async function POST(req: Request) {
   if (!user) {
     const existing = (
       await db
-        .select({ id: accounts.id, passwordHash: accounts.passwordHash })
+        .select({
+          id: accounts.id,
+          passwordHash: accounts.passwordHash,
+          status: accounts.status,
+        })
         .from(accounts)
         .where(eq(accounts.email, identity.email))
         .limit(1)
@@ -133,6 +139,9 @@ export async function POST(req: Request) {
       if (!parsed.data.password) return json({ error: 'link_required' }, 409);
       const passwordOk = await verifyPassword(parsed.data.password, existing.passwordHash);
       if (!passwordOk) return json({ error: 'bad_credentials' }, 401);
+      if (!canCreateSession(existing.status)) {
+        return json({ error: 'bad_credentials' }, 401);
+      }
       // Password proven — link this Google subject to the account for good.
       try {
         user = (
@@ -194,7 +203,9 @@ export async function POST(req: Request) {
     }
   }
 
-  if (!user) return json({ error: 'bad_credentials' }, 401);
+  if (!user || !canCreateSession(user.status)) {
+    return json({ error: 'bad_credentials' }, 401);
+  }
 
   if (createdNewAccount) {
     await wireReferralsForNewAccount(user.id, user.email);
@@ -203,7 +214,7 @@ export async function POST(req: Request) {
   const token = await createSession(user.id);
   // Strip the internal expiry column and return the EFFECTIVE tier (a lapsed
   // paid tier signs in as 'starter', matching userForToken — no cron).
-  const { tierExpiresAt, ...publicUser } = user;
+  const { tierExpiresAt, status: _status, ...publicUser } = user;
   return json(
     {
       token,

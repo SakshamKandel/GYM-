@@ -1,5 +1,4 @@
 import { tierPrices } from '@gym/db';
-import { DEFAULT_TIER_PRICES } from '@gym/shared';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -16,11 +15,7 @@ export const dynamic = 'force-dynamic';
  * layout hides the nav link for anyone else; re-checked here to fail safe.
  */
 
-/**
- * Merges the live tier_prices table over DEFAULT_TIER_PRICES so every
- * (region, tier) combo always has a value even before the catalog has been
- * edited or seeded — mirrors the fallback GET /api/subscription/catalog uses.
- */
+/** Load only persisted prices; missing cells stay blank for an admin to fill. */
 async function loadPrices(): Promise<PriceCell[]> {
   const db = getDb();
   const rows = await db
@@ -32,19 +27,12 @@ async function loadPrices(): Promise<PriceCell[]> {
     })
     .from(tierPrices);
 
-  const merged = new Map<string, PriceCell>();
-  for (const d of DEFAULT_TIER_PRICES) {
-    merged.set(`${d.region}-${d.tier}`, { ...d });
-  }
-  for (const r of rows) {
-    merged.set(`${r.region}-${r.tier}`, {
-      region: r.region as PriceCell['region'],
-      tier: r.tier as PriceCell['tier'],
-      amountMinor: r.amountMinor,
-      currency: r.currency,
-    });
-  }
-  return Array.from(merged.values());
+  return rows.map((r) => ({
+    region: r.region as PriceCell['region'],
+    tier: r.tier as PriceCell['tier'],
+    amountMinor: r.amountMinor,
+    currency: r.currency,
+  }));
 }
 
 export default async function AdminPricingPage() {

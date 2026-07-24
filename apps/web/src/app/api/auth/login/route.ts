@@ -2,6 +2,7 @@ import { accounts } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { canCreateSession } from '@/lib/accountStatus';
 import { createSession } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
@@ -48,6 +49,7 @@ export async function POST(req: Request) {
         tier: accounts.tier,
         tierExpiresAt: accounts.tierExpiresAt,
         passwordHash: accounts.passwordHash,
+        status: accounts.status,
       })
       .from(accounts)
       .where(eq(accounts.email, email))
@@ -59,7 +61,12 @@ export async function POST(req: Request) {
     const account = rows[0];
     const passwordHash = account?.passwordHash ?? DUMMY_PASSWORD_HASH;
     const passwordOk = await verifyPassword(parsed.data.password, passwordHash);
-    if (!account || account.passwordHash === null || !passwordOk) {
+    if (
+      !account ||
+      account.passwordHash === null ||
+      !passwordOk ||
+      !canCreateSession(account.status)
+    ) {
       return json({ error: 'bad_credentials' }, 401);
     }
 

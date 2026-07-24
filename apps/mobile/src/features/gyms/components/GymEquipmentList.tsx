@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import type { GymEquipmentItem } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import type { GymEquipmentCategory } from '@gym/shared';
 import { AppText, Chip, PressableScale } from '../../../components/ui';
-import type { GymEquipmentItem } from '../api';
 
 const CATEGORY_LABELS: Record<GymEquipmentCategory, string> = {
   free_weights: 'Free Weights',

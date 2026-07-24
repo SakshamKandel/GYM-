@@ -101,6 +101,15 @@ const styles = StyleSheet.create({
   retryText: { flex: 1 },
   list: { gap: spacing.md },
   mapList: { gap: spacing.md },
+  mapUnavailable: {
+    minHeight: 120,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    padding: spacing.lg,
+  },
   skeletons: { gap: spacing.md },
   savedBtn: {
     width: touch.min,
@@ -174,7 +183,7 @@ export default function GymsTabScreen() {
           accessibilityLabel="A bright modern gym interior"
           chip={{ label: 'Discover' }}
           title="Find a gym near you"
-          caption="Hours, amenities, and day passes in one place."
+          caption="Verified hours, amenities, and contact details in one place."
           style={styles.banner}
         />
       </Animated.View>
@@ -277,15 +286,28 @@ export default function GymsTabScreen() {
           <Animated.View entering={enterUp(0)} style={styles.mapList}>
             {filtered.map((gym) => (
               <Card key={gym.id} padding={spacing.md} style={{ gap: spacing.sm }}>
-                <MapPreview
-                  lat={gym.lat ?? 27.7172}
-                  lng={gym.lng ?? 85.324}
-                  city={gym.city}
-                  gymName={gym.name}
-                  height={180}
-                  onPress={() => pushPath(`/gyms/${gym.slug}`)}
-                  accessibilityLabel={`Map preview of ${gym.name}'s location. Tap for directions`}
-                />
+                {gym.lat !== null && gym.lng !== null ? (
+                  <MapPreview
+                    lat={gym.lat}
+                    lng={gym.lng}
+                    city={gym.city}
+                    gymName={gym.name}
+                    height={180}
+                    onPress={() => pushPath(`/gyms/${gym.slug}`)}
+                    accessibilityLabel={`Map preview of ${gym.name}'s location. Tap for details`}
+                  />
+                ) : (
+                  <View
+                    style={styles.mapUnavailable}
+                    accessible
+                    accessibilityLabel={`Map location unavailable for ${gym.name}`}
+                  >
+                    <Ionicons name="map-outline" size={24} color={colors.textDim} />
+                    <AppText variant="body" color={colors.textDim} center>
+                      Map location unavailable for this gym.
+                    </AppText>
+                  </View>
+                )}
                 <GymCard gym={gym} />
               </Card>
             ))}

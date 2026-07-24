@@ -1,5 +1,19 @@
 import { gymFavorites, gymPhotos, gymReviews, gyms } from '@gym/db';
-import { partnerRatingAggregate } from '@gym/shared';
+import {
+  GYM_AMENITIES,
+  gymCrowdStatusSchema,
+  gymEquipmentItemSchema,
+  gymPassOptionSchema,
+  gymSocialLinkSchema,
+  gymWeeklyHoursSchema,
+  partnerRatingAggregate,
+  type GymAmenity,
+  type GymCrowdStatus,
+  type GymEquipmentItem,
+  type GymPassOption,
+  type GymSocialLink,
+  type GymWeeklyHours,
+} from '@gym/shared';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { getDb } from '@/lib/db';
 
@@ -56,21 +70,71 @@ export function ratingFor(agg: Map<string, GymRatingAgg>, gymId: string): GymRat
 /** Cover photos per gym id, sorted by `sortOrder` (ascending). */
 export async function loadPhotosByGym(
   gymIds: string[],
-): Promise<Map<string, { deliveryUrl: string }[]>> {
-  const out = new Map<string, { deliveryUrl: string }[]>();
+): Promise<Map<string, { id: string; deliveryUrl: string }[]>> {
+  const out = new Map<string, { id: string; deliveryUrl: string }[]>();
   if (gymIds.length === 0) return out;
 
   const rows = await getDb()
-    .select({ gymId: gymPhotos.gymId, deliveryUrl: gymPhotos.deliveryUrl, sortOrder: gymPhotos.sortOrder })
+    .select({ id: gymPhotos.id, gymId: gymPhotos.gymId, deliveryUrl: gymPhotos.deliveryUrl, sortOrder: gymPhotos.sortOrder })
     .from(gymPhotos)
     .where(inArray(gymPhotos.gymId, gymIds))
     .orderBy(asc(gymPhotos.sortOrder));
   for (const p of rows) {
     const list = out.get(p.gymId) ?? [];
-    list.push({ deliveryUrl: p.deliveryUrl });
+    list.push({ id: p.id, deliveryUrl: p.deliveryUrl });
     out.set(p.gymId, list);
   }
   return out;
+}
+
+/** Invalid operator-authored JSON is treated as unavailable, never replaced
+ * with plausible-looking client data. Valid items are preserved verbatim. */
+export function publicEquipment(value: unknown): GymEquipmentItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const parsed = gymEquipmentItemSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+export function publicCrowdData(value: unknown): GymCrowdStatus | undefined {
+  const parsed = gymCrowdStatusSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function publicPassOptions(value: unknown): GymPassOption[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const parsed = gymPassOptionSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+export function publicSocialLinks(value: unknown): GymSocialLink[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const parsed = gymSocialLinkSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+export function publicHours(value: unknown): GymWeeklyHours {
+  const parsed = gymWeeklyHoursSchema.safeParse(value);
+  return parsed.success ? parsed.data : {};
+}
+
+const KNOWN_AMENITIES = new Set<string>(GYM_AMENITIES);
+
+export function publicAmenities(value: unknown): GymAmenity[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is GymAmenity => typeof item === 'string' && KNOWN_AMENITIES.has(item),
+  );
+}
+
+export function publicCoachIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
 }
 
 /** Which of `gymIds` the given account has favorited. Empty set for a signed-

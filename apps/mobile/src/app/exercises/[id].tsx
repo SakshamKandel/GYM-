@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,6 +9,7 @@ import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
   Card,
+  EmptyState,
   enterDown,
   enterUp,
   IconChip,
@@ -23,17 +24,10 @@ import { ExerciseVideo } from '../../features/training/components/ExerciseVideo'
 import { useExerciseHistory, usePlanVideo } from '../../features/training/hooks';
 import { formatWeightNumber } from '../../features/training/logic';
 import { getExercise } from '../../lib/exercises';
+import { isExerciseInCatalogPlan, useTrainingCatalog } from '../../lib/trainingCatalog';
 import { isMuscleGroup } from '../../lib/muscleMap';
-import { SEED_PLAN_WORKOUTS } from '../../lib/seed/plans';
 import { posterDate } from '../../lib/dates';
 import { useProfile } from '../../state/profile';
-
-/** Exercise ids that appear in any seed plan — only these tease "coming soon". */
-const SEED_EXERCISE_IDS: ReadonlySet<string> = new Set(
-  Object.values(SEED_PLAN_WORKOUTS)
-    .flat()
-    .flatMap((w) => w.exercises.map((e) => e.exerciseId)),
-);
 
 /**
  * Exercise detail: image (tap swaps angle), facts, steps, personal history.
@@ -221,6 +215,7 @@ function MetaPill({ label }: { label: string }) {
 }
 
 export default function ExerciseDetailScreen() {
+  const catalogState = useTrainingCatalog();
   const { id } = useLocalSearchParams<{ id: string }>();
   const exerciseId = typeof id === 'string' ? id : '';
   const exercise = getExercise(exerciseId);
@@ -245,9 +240,30 @@ export default function ExerciseDetailScreen() {
             <Ionicons name="chevron-back" size={22} color={colors.text} />
           </PressableScale>
         </View>
-        <AppText variant="body" color={colors.textDim}>
-          Exercise not found.
-        </AppText>
+        {catalogState.status === 'loading' || catalogState.refreshing ? (
+          <View style={styles.lockedCard}>
+            <ActivityIndicator color={colors.accent} accessibilityLabel="Loading exercise" />
+            <AppText variant="body" color={colors.textDim}>Loading coach catalog…</AppText>
+          </View>
+        ) : catalogState.status === 'authRequired' ? (
+          <EmptyState
+            icon="cloud-offline-outline"
+            title="Sign in for exercises"
+            body="Exercise details come from your coach’s live catalog."
+            actionLabel="Sign in"
+            onAction={() => router.push('/auth/sign-in' as Href)}
+          />
+        ) : catalogState.status === 'error' ? (
+          <EmptyState
+            icon="refresh-outline"
+            title="Catalog unavailable"
+            body="Check your connection and try again."
+            actionLabel="Try again"
+            onAction={() => void catalogState.refresh()}
+          />
+        ) : (
+          <AppText variant="body" color={colors.textDim}>Exercise not found.</AppText>
+        )}
       </Screen>
     );
   }
@@ -262,10 +278,9 @@ export default function ExerciseDetailScreen() {
   const anatomyMuscle = isMuscleGroup(exercise.muscleGroup) ? exercise.muscleGroup : null;
 
   // Greece's coach demo. The gated playback API is the source of truth (it mints
-  // a signed, per-tier stream); usePlanVideo falls back to the bundled seed clip
-  // when the host isn't wired up yet. 'ready' → play, 'locked' → paywall teaser
-  // for the required tier, otherwise a quiet "coming soon" for seed exercises.
-  const isSeedExercise = SEED_EXERCISE_IDS.has(exerciseId);
+  // a signed, per-tier stream). 'ready' → play, 'locked' → paywall teaser for
+  // the required tier, otherwise an honest "coming soon" for plan exercises.
+  const isPlanExercise = isExerciseInCatalogPlan(exerciseId);
   const posterUri = images[0];
   // Local const so the null-check narrows into the rep-max map callback below.
   const bestE1RmKg = history.bestE1RmKg;
@@ -388,7 +403,7 @@ export default function ExerciseDetailScreen() {
             <Tag label={lockedTierLabel} variant="filled" />
           </PressableScale>
         </Animated.View>
-      ) : isSeedExercise ? (
+      ) : isPlanExercise ? (
         <Animated.View entering={enterUp(2)} style={styles.pillRow}>
           <View style={styles.comingSoonChip}>
             <AppText variant="caption" color={colors.textDim}>

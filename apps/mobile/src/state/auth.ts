@@ -22,6 +22,7 @@ import {
   type AuthUser,
 } from '../lib/api/client';
 import { signOutGoogle } from '../features/auth/components/NativeGoogleSignIn';
+import { useMealCart } from '../features/meals/cartStore';
 import { getMeStaff, type StaffIdentity, type StaffRole } from '../features/staff/api';
 import { DEFAULT_PROFILE_FIELDS, DEFAULT_TARGETS, useProfile } from './profile';
 
@@ -307,6 +308,10 @@ function clearAccountState(): void {
   const { clearServerSuggestions } =
     require('../features/progression/hooks') as typeof import('../features/progression/hooks');
   clearServerSuggestions();
+  // The meal cart is intentionally ephemeral and has no account owner stamp.
+  // Clear both its lines and partner whenever a session leaves or switches so
+  // another member can never inherit a previous member's pending order.
+  useMealCart.getState().clear();
 }
 
 async function leaveAccountRepository(

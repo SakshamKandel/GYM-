@@ -1,5 +1,5 @@
 import { tierPrices } from '@gym/db';
-import { DEFAULT_TIER_PRICES, type PriceRegion, type Tier } from '@gym/shared';
+import { TIER_ORDER, type PriceRegion, type Tier } from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { getDb } from '@/lib/db';
 
@@ -9,9 +9,9 @@ import { getDb } from '@/lib/db';
  * Same source of truth as GET /api/subscription/catalog — the admin-editable
  * tier_prices table — but read for BOTH regions at once so the pricing UI can
  * offer an instant NPR/USD toggle, and with none of the account-scoped parts
- * (no discounts, no region persistence, no billing mode). Every failure mode
- * (no DATABASE_URL at build time, Neon unreachable, empty table) falls back to
- * DEFAULT_TIER_PRICES so the marketing pages always render complete prices.
+ * (no discounts, no region persistence, no billing mode). An incomplete or
+ * unreachable catalog is explicitly unavailable; compiled prices are never
+ * presented as live data.
  */
 
 export interface PublicTierPrice {
@@ -22,22 +22,23 @@ export interface PublicTierPrice {
 export interface PublicRegionCatalog {
   currency: string;
   tiers: PublicTierPrice[];
+  available: boolean;
 }
 
 export type PublicCatalog = Record<PriceRegion, PublicRegionCatalog>;
 
 const REGIONS: PriceRegion[] = ['NP', 'INTL'];
 
-function defaultsFor(region: PriceRegion): PublicRegionCatalog {
-  const rows = DEFAULT_TIER_PRICES.filter((p) => p.region === region);
+function unavailableRegion(region: PriceRegion): PublicRegionCatalog {
   return {
-    currency: rows[0]?.currency ?? (region === 'NP' ? 'NPR' : 'USD'),
-    tiers: rows.map((p) => ({ tier: p.tier, amountMinor: p.amountMinor })),
+    currency: region === 'NP' ? 'NPR' : 'USD',
+    tiers: [],
+    available: false,
   };
 }
 
-export function fallbackCatalog(): PublicCatalog {
-  return { NP: defaultsFor('NP'), INTL: defaultsFor('INTL') };
+export function unavailableCatalog(): PublicCatalog {
+  return { NP: unavailableRegion('NP'), INTL: unavailableRegion('INTL') };
 }
 
 export async function loadPublicCatalog(): Promise<PublicCatalog> {
@@ -53,20 +54,23 @@ export async function loadPublicCatalog(): Promise<PublicCatalog> {
       .from(tierPrices)
       .where(eq(tierPrices.active, true));
 
-    const catalog = fallbackCatalog();
+    const catalog = unavailableCatalog();
     for (const region of REGIONS) {
       const byTier = new Map(rows.filter((r) => r.region === region).map((r) => [r.tier, r]));
+      const ordered = TIER_ORDER.map((tier) => byTier.get(tier));
+      if (ordered.some((row) => row === undefined)) continue;
+      const complete = ordered.filter((row): row is NonNullable<typeof row> => row !== undefined);
+      const currencies = new Set(complete.map((row) => row.currency));
+      if (currencies.size !== 1) continue;
       catalog[region] = {
-        currency: byTier.values().next().value?.currency ?? catalog[region].currency,
-        tiers: catalog[region].tiers.map((fallback) => {
-          const live = byTier.get(fallback.tier);
-          return live ? { tier: live.tier, amountMinor: live.amountMinor } : fallback;
-        }),
+        currency: complete[0]!.currency,
+        tiers: complete.map((row) => ({ tier: row.tier, amountMinor: row.amountMinor })),
+        available: true,
       };
     }
     return catalog;
   } catch {
     // Marketing pages must never 500 over pricing — ship the shared defaults.
-    return fallbackCatalog();
+    return unavailableCatalog();
   }
 }

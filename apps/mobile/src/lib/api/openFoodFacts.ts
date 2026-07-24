@@ -1,24 +1,24 @@
 import { Platform } from 'react-native';
 import { z } from 'zod';
 import type { FoodItem, NutriScore } from '@gym/shared';
+import { BASE_URL } from './client';
 
 /**
- * Free public food APIs — no paid keys (verified 2026-07-03).
+ * Live public food APIs — no bundled/demo records.
  *
  * Search strategy:
  *  - Native app → Open Food Facts search-a-licious (best coverage, no key,
  *    no CORS restrictions outside browsers).
- *  - Web (and OFF failure fallback) → USDA FoodData Central. OFF's search
- *    hosts don't send CORS headers, so browsers can't call them; USDA does.
- *    DEMO_KEY works out of the box (rate-limited) — set
- *    EXPO_PUBLIC_USDA_API_KEY for a free personal key (https://fdc.nal.usda.gov/api-key-signup).
+ *  - Web → the app API's CORS-safe Open Food Facts proxy.
+ *  - USDA is an optional secondary provider only when an explicit
+ *    EXPO_PUBLIC_USDA_API_KEY is configured.
  *  - Barcode → OFF v2 product endpoint (CORS-enabled, works everywhere).
  *
  * Every payload is zod-validated at the boundary (CLAUDE.md rule 8).
  */
 
 const USER_AGENT = 'GymTracker/0.1 (contact: nlooptech@gmail.com)';
-const USDA_KEY = process.env.EXPO_PUBLIC_USDA_API_KEY ?? 'DEMO_KEY';
+const USDA_KEY = process.env.EXPO_PUBLIC_USDA_API_KEY?.trim() || null;
 
 const nutrimentsSchema = z
   .object({
@@ -119,6 +119,18 @@ async function searchOpenFoodFacts(query: string, signal?: AbortSignal): Promise
     .filter((f): f is FoodItem => f !== null);
 }
 
+/** Same live provider through the app API, used by browsers to avoid CORS. */
+async function searchOpenFoodFactsProxy(
+  query: string,
+  signal?: AbortSignal,
+): Promise<FoodItem[]> {
+  const url = `${BASE_URL}/api/foods/search?q=${encodeURIComponent(query)}`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
+  if (!res.ok) throw new Error(`Food search failed (${res.status})`);
+  const parsed = searchResponseSchema.parse(await res.json());
+  return parsed.hits.map(toFoodItem).filter((food): food is FoodItem => food !== null);
+}
+
 // ── USDA FoodData Central ─────────────────────────────────────
 
 const usdaNutrientSchema = z
@@ -189,6 +201,7 @@ function usdaToFoodItem(f: z.infer<typeof usdaFoodSchema>): FoodItem | null {
 }
 
 async function searchUsda(query: string, signal?: AbortSignal): Promise<FoodItem[]> {
+  if (!USDA_KEY) throw new Error('USDA search is not configured');
   const url =
     `https://api.nal.usda.gov/fdc/v1/foods/search?api_key=${USDA_KEY}` +
     `&query=${encodeURIComponent(query)}&pageSize=25&dataType=Foundation,SR%20Legacy,Branded`;
@@ -201,19 +214,35 @@ async function searchUsda(query: string, signal?: AbortSignal): Promise<FoodItem
 }
 
 /**
- * Unified food search: browsers can't reach OFF's search host (no CORS
- * headers), so web goes straight to USDA; native tries OFF first and falls
- * back to USDA if OFF is down.
+ * Unified food search: browsers use the app API's OFF proxy; native tries OFF
+ * directly first, then the proxy. USDA is used only with an explicit key.
  */
 export async function searchFoods(query: string, signal?: AbortSignal): Promise<FoodItem[]> {
-  if (Platform.OS === 'web') return searchUsda(query, signal);
+  let providerError: unknown = null;
   try {
-    const results = await searchOpenFoodFacts(query, signal);
-    if (results.length > 0) return results;
+    const results =
+      Platform.OS === 'web'
+        ? await searchOpenFoodFactsProxy(query, signal)
+        : await searchOpenFoodFacts(query, signal);
+    if (results.length > 0 || !USDA_KEY) return results;
   } catch (err) {
     if (signal?.aborted) throw err;
+    providerError = err;
   }
-  return searchUsda(query, signal);
+
+  // Native can retry the same live provider through our CORS-safe API before
+  // using an explicitly configured USDA key.
+  if (Platform.OS !== 'web') {
+    try {
+      const proxied = await searchOpenFoodFactsProxy(query, signal);
+      if (proxied.length > 0 || !USDA_KEY) return proxied;
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      providerError = err;
+    }
+  }
+  if (USDA_KEY) return searchUsda(query, signal);
+  throw providerError instanceof Error ? providerError : new Error('Food search unavailable');
 }
 
 export async function lookupBarcode(barcode: string): Promise<FoodItem | null> {

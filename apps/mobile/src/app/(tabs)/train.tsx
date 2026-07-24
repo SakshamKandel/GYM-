@@ -1,9 +1,10 @@
 import { ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import type { GoalType, Plan, PlanWorkout } from '@gym/shared';
+import { selectTrainingPlan } from '@gym/shared';
+import type { GoalType, PlanWorkout, TrainingCatalogPlan } from '@gym/shared';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
-import { useRef, useState, type ComponentProps } from 'react';
+import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
   AppText,
   Button,
@@ -33,13 +34,10 @@ import { pushPath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
 import { useTemplates, type CustomTemplate } from '../../features/training/templates';
 import type { CoachWorkoutRow } from '../../lib/api/client';
-import { allExercises } from '../../lib/exercises';
-import { getPlan, getPlanWorkouts, SEED_PLANS } from '../../lib/seed/plans';
+import { useTrainingCatalog } from '../../lib/trainingCatalog';
 import { useProfile } from '../../state/profile';
 
 /** Train tab — red hero block (next/active workout), plan rotation, saved templates, library, plan switcher. */
-
-const FALLBACK_PLAN_ID = 'muscle-ppl';
 
 const GOAL_ICONS: Record<GoalType, ComponentProps<typeof Ionicons>['name']> = {
   strength: 'barbell',
@@ -143,17 +141,25 @@ function MetaChip({ label }: { label: string }) {
   );
 }
 
-function PlanPill({ plan, selected, onPress }: { plan: Plan; selected: boolean; onPress: () => void }) {
+function PlanPill({
+  plan,
+  selected,
+  onPress,
+}: {
+  plan: TrainingCatalogPlan;
+  selected: boolean;
+  onPress: () => void;
+}) {
   const ink = selected ? colors.onBlock : colors.textDim;
   return (
     <PressableScale
       accessibilityRole="button"
-      accessibilityLabel={`${plan.name} plan, ${plan.daysPerWeek} days a week`}
+      accessibilityLabel={`${plan.name} plan, ${plan.daysPerWeek} days a week${plan.isAvailable ? '' : ', upgrade required'}`}
       accessibilityState={{ selected }}
       onPress={onPress}
       style={[styles.planPill, selected && styles.planPillSelected]}
     >
-      <Ionicons name={GOAL_ICONS[plan.goalType]} size={16} color={ink} />
+      <Ionicons name={plan.isAvailable ? GOAL_ICONS[plan.goalType] : 'lock-closed'} size={16} color={ink} />
       <AppText style={styles.planPillLabel} color={ink} tabular={false} numberOfLines={1}>
         {plan.name}
       </AppText>
@@ -163,16 +169,27 @@ function PlanPill({ plan, selected, onPress }: { plan: Plan; selected: boolean; 
 
 export default function TrainScreen() {
   const storedPlanId = useProfile((s) => s.planId);
-  // Fall back on null OR an id we don't know (older/foreign onboarding data).
-  const planId = storedPlanId && getPlan(storedPlanId) ? storedPlanId : FALLBACK_PLAN_ID;
+  const goalType = useProfile((s) => s.goalType);
+  const daysPerWeek = useProfile((s) => s.daysPerWeek);
   const update = useProfile((s) => s.update);
+  const catalogState = useTrainingCatalog();
+  const plans = catalogState.catalog?.plans ?? [];
+  const storedPlan = storedPlanId ? plans.find((item) => item.id === storedPlanId) : undefined;
+  const plan =
+    storedPlan?.isAvailable && storedPlan.workouts.length > 0
+      ? storedPlan
+      : selectTrainingPlan(plans, goalType ?? 'muscle', daysPerWeek);
+  const planId = plan?.id ?? '';
   const { nextWorkout, activeWorkout, loaded } = useTrainData(planId);
   const templates = useTemplates((s) => s.templates);
   const coachWorkoutsSection = useCoachWorkouts();
 
-  const plan = getPlan(planId);
-  const workouts = getPlanWorkouts(planId);
-  const exerciseCount = allExercises().length;
+  const workouts = plan?.workouts ?? [];
+  const exerciseCount = catalogState.catalog?.exercises.length ?? 0;
+
+  useEffect(() => {
+    if (plan && plan.id !== storedPlanId) update({ planId: plan.id });
+  }, [plan, storedPlanId, update]);
   const initialMuscleFocus = muscleFocusForWorkout(nextWorkout);
   const trainStatus = activeWorkout ? 'ACTIVE' : nextWorkout ? `DAY ${nextWorkout.day}` : 'FREESTYLE';
   const trainDescription = activeWorkout
@@ -261,6 +278,11 @@ export default function TrainScreen() {
         <AppText variant="body" color={colors.textDim} style={styles.description}>
           {trainDescription}
         </AppText>
+        {catalogState.status === 'cached' ? (
+          <AppText variant="caption" color={colors.warning} style={styles.description}>
+            Offline catalog · showing the last verified download
+          </AppText>
+        ) : null}
       </Animated.View>
 
       {/* Hero: a full-bleed training photo (bundled stock set, picked by the
@@ -269,7 +291,34 @@ export default function TrainScreen() {
           stays ≥4.5:1 inside the scrim. Resume if a session is live,
           otherwise the next plan workout. */}
       <Animated.View entering={enterUp(0)}>
-        {activeWorkout ? (
+        {catalogState.status === 'authRequired' ? (
+          <EmptyState
+            icon="cloud-offline-outline"
+            title="Sign in for training plans"
+            body="Plans and exercises are published from your coach's live catalog."
+            actionLabel="Sign in"
+            onAction={() => pushPath('/auth/sign-in')}
+            style={styles.hero}
+          />
+        ) : catalogState.status === 'error' && !catalogState.catalog ? (
+          <EmptyState
+            icon="refresh-outline"
+            title="Catalog unavailable"
+            body="Check your connection and try loading the coach catalog again."
+            actionLabel="Try again"
+            onAction={() => void catalogState.refresh()}
+            style={styles.hero}
+          />
+        ) : catalogState.status === 'ready' && !plan ? (
+          <EmptyState
+            icon="barbell-outline"
+            title="No published plan yet"
+            body="Your coach has not published an available plan for this account."
+            actionLabel="Refresh"
+            onAction={() => void catalogState.refresh()}
+            style={styles.hero}
+          />
+        ) : activeWorkout ? (
           <PhotoHero
             source={trainHeroImage(initialMuscleFocus, true)}
             height={HERO_PHOTO_HEIGHT}
@@ -459,12 +508,15 @@ export default function TrainScreen() {
       <Animated.View entering={enterUp(Math.min(tail + 4, 8))}>
         <SectionLabel>Plans</SectionLabel>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.planPills}>
-          {SEED_PLANS.map((p) => (
+          {plans.map((p) => (
             <PlanPill
               key={p.id}
               plan={p}
               selected={p.id === planId}
-              onPress={() => update({ planId: p.id })}
+              onPress={() => {
+                if (p.isAvailable) update({ planId: p.id });
+                else pushPath('/subscribe');
+              }}
             />
           ))}
         </ScrollView>

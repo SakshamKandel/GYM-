@@ -65,7 +65,7 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
     for (const region of REGIONS) {
       for (const tier of EDITABLE_TIERS) {
         const cell = byKey.get(key(region.key, tier));
-        init[key(region.key, tier)] = toMajorInput(cell?.amountMinor ?? 0);
+        init[key(region.key, tier)] = cell ? toMajorInput(cell.amountMinor) : '';
       }
     }
     return init;
@@ -87,7 +87,7 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
     for (const region of REGIONS) {
       for (const tier of EDITABLE_TIERS) {
         const cell = byKey.get(key(region.key, tier));
-        const original = toMajorInput(cell?.amountMinor ?? 0);
+        const original = cell ? toMajorInput(cell.amountMinor) : '';
         if (edits[key(region.key, tier)] !== original) return true;
       }
     }
@@ -106,7 +106,8 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
     for (const region of REGIONS) {
       for (const tier of EDITABLE_TIERS) {
         const k = key(region.key, tier);
-        const original = toMajorInput(byKey.get(k)?.amountMinor ?? 0);
+        const existing = byKey.get(k);
+        const original = existing ? toMajorInput(existing.amountMinor) : '';
         if (edits[k] === original) continue;
         const minor = toMinor(edits[k]);
         if (minor === null) {

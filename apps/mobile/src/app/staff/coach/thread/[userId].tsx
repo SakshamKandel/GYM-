@@ -24,6 +24,7 @@ import {
 } from '../../../../components/ui';
 import { addDays, posterDate, toIsoDate, todayIso } from '../../../../lib/dates';
 import { successHaptic } from '../../../../lib/haptics';
+import { isCurrentSessionRequest } from '../../../../lib/sessionRequest';
 import { useBottomClearance } from '../../../../lib/systemBars';
 import { useAuth } from '../../../../state/auth';
 import {
@@ -175,9 +176,31 @@ function Bubble({
   );
 }
 
+type CoachThreadRouteParams = {
+  userId: string;
+  name?: string;
+  tier?: string;
+};
+
 export default function CoachThreadScreen() {
   const token = useAuth((s) => s.token);
-  const params = useLocalSearchParams<{ userId: string; name?: string; tier?: string }>();
+  const params = useLocalSearchParams<CoachThreadRouteParams>();
+  return (
+    <CoachThreadSession
+      key={`${token ?? 'signed-out'}:${params.userId ?? ''}`}
+      token={token}
+      params={params}
+    />
+  );
+}
+
+function CoachThreadSession({
+  token,
+  params,
+}: {
+  token: string | null;
+  params: CoachThreadRouteParams;
+}) {
   const userId = params.userId;
   const insets = useSafeAreaInsets();
   // Composer clearance above the SYSTEM nav area — some OEM 3-button builds
@@ -206,6 +229,8 @@ export default function CoachThreadScreen() {
 
   const listRef = useRef<FlatList<CoachThreadMessage>>(null);
   const pendingSeq = useRef(0);
+  const loadSequence = useRef(0);
+  const sendSequence = useRef(0);
 
   const scrollToEnd = useCallback(() => {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
@@ -217,8 +242,15 @@ export default function CoachThreadScreen() {
       setLoading(false);
       return;
     }
+    const request = { token, sequence: ++loadSequence.current };
     try {
       const thread = await getCoachThread(userId, token);
+      if (
+        !isCurrentSessionRequest(request, {
+          token: useAuth.getState().token,
+          sequence: loadSequence.current,
+        })
+      ) return;
       setMessages(thread);
       setLoadError(null);
       // Mark read now that the thread is visible (F2: GET is read-only, this
@@ -226,9 +258,20 @@ export default function CoachThreadScreen() {
       // showing and never surfaces its own error.
       void markCoachThreadRead(userId, token).catch(() => {});
     } catch (err) {
+      if (
+        !isCurrentSessionRequest(request, {
+          token: useAuth.getState().token,
+          sequence: loadSequence.current,
+        })
+      ) return;
       setLoadError(toStaffError(err).code);
     } finally {
-      setLoading(false);
+      if (
+        isCurrentSessionRequest(request, {
+          token: useAuth.getState().token,
+          sequence: loadSequence.current,
+        })
+      ) setLoading(false);
     }
   }, [token, userId]);
 
@@ -244,7 +287,7 @@ export default function CoachThreadScreen() {
     let cancelled = false;
     void getCoachInbox(token)
       .then((rows) => {
-        if (cancelled) return;
+        if (cancelled || useAuth.getState().token !== token) return;
         const row = rows.find((r) => r.id === userId);
         if (!row) return;
         setLiveName(row.displayName.trim() || null);
@@ -275,6 +318,7 @@ export default function CoachThreadScreen() {
     // success we swap it for the server-confirmed row; on failure we pull it
     // back out and restore the draft so nothing looks lost or double-sent.
     const tempId = `pending-${(pendingSeq.current += 1)}`;
+    const request = { token, sequence: ++sendSequence.current };
     const optimistic: CoachThreadMessage = {
       id: tempId,
       kind: 'text',
@@ -289,10 +333,22 @@ export default function CoachThreadScreen() {
     void (async () => {
       try {
         const saved = await replyToClient(userId, body, token);
+        if (
+          !isCurrentSessionRequest(request, {
+            token: useAuth.getState().token,
+            sequence: sendSequence.current,
+          })
+        ) return;
         successHaptic();
         // Swap the optimistic bubble for the server-confirmed row.
         setMessages((prev) => prev.map((m) => (m.id === tempId ? saved : m)));
       } catch (err) {
+        if (
+          !isCurrentSessionRequest(request, {
+            token: useAuth.getState().token,
+            sequence: sendSequence.current,
+          })
+        ) return;
         setSendError(toStaffError(err).code);
         setMessages((prev) => prev.filter((m) => m.id !== tempId));
         setDraft((d) => (d.length === 0 ? body : d)); // restore if still empty
@@ -302,7 +358,7 @@ export default function CoachThreadScreen() {
       setSending(false);
       // Background refetch for read state + any client messages that arrived —
       // non-fatal since the reply already shows.
-      void load();
+      if (useAuth.getState().token === token) void load();
     })();
   }, [draft, sending, token, userId, load]);
 

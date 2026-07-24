@@ -3,6 +3,7 @@ import { useFocusEffect } from 'expo-router';
 import type { Measurement, PrRecord, WeightLog } from '@gym/shared';
 import { getExercise } from '../../lib/exercises';
 import { getRepo } from '../../lib/repo';
+import { ensureTrainingCatalog } from '../../lib/trainingCatalog';
 import { bestE1Rm } from './logic';
 
 /** Focus-refreshing data hooks for the Progress tab (null = still loading). */
@@ -43,6 +44,7 @@ export function useStrength(): StrengthData | null {
     useCallback(() => {
       let mounted = true;
       void (async () => {
+        await ensureTrainingCatalog();
         const repo = await getRepo();
         const [ids, prs] = await Promise.all([repo.getRecentExerciseIds(10), repo.getPrRecords(15)]);
         const histories = await Promise.all(ids.map((id) => repo.getE1RmHistory(id, 30)));

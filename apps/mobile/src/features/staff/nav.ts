@@ -28,7 +28,7 @@ export const STAFF_ROUTES = {
   /** Coach inbox — the caller's assigned client roster. */
   coachInbox: '/staff/coach',
   /** One client's coach_chat thread. Pass the client's user id. */
-  coachThread: (userId: string): string => `/staff/coach/${userId}`,
+  coachThread: (userId: string): string => `/staff/coach/thread/${encodeURIComponent(userId)}`,
   /** The signed-in coach's own editable profile card. */
   coachProfile: '/staff/coach/profile',
   /** The coach's plan-video library (view counts + tier). */

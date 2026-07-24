@@ -79,7 +79,11 @@ function Body({ detail }: { detail: TierDetail }) {
       ) : null}
 
       <View style={styles.priceRow}>
-        {price.isFree ? (
+        {!price.available ? (
+          <AppText variant="bodyBold" color={colors.textDim}>
+            Live price unavailable
+          </AppText>
+        ) : price.isFree ? (
           <AppText style={styles.priceNumber} numberOfLines={1}>
             Free
           </AppText>

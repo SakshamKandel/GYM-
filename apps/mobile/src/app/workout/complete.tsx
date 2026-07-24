@@ -39,7 +39,7 @@ import { PrUpgradeCard } from '../../features/subscription/PrUpgradeCard';
 import { posterDate } from '../../lib/dates';
 import { successHaptic } from '../../lib/haptics';
 import { getRepo } from '../../lib/repo';
-import { getPlanWorkout } from '../../lib/seed/plans';
+import { getCatalogPlanWorkout } from '../../lib/trainingCatalog';
 import { useProfile } from '../../state/profile';
 import { useEffectiveTier } from '../../lib/tier';
 
@@ -276,7 +276,7 @@ export default function WorkoutCompleteScreen() {
   };
 
   const saveAsTemplate = (): void => {
-    const pw = workout?.planWorkoutId ? (getPlanWorkout(workout.planWorkoutId) ?? null) : null;
+    const pw = workout?.planWorkoutId ? (getCatalogPlanWorkout(workout.planWorkoutId) ?? null) : null;
     useTemplates.getState().saveTemplate(templateName, templateExercisesFromSets(sets, pw));
     setTemplateSaved(true);
     setSaveOpen(false);

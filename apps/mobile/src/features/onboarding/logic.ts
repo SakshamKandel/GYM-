@@ -79,18 +79,6 @@ export const BIRTH_YEAR = { default: 1995, min: 1930, max: 2015 } as const;
 export const HEIGHT_CM = { default: 172, min: 120, max: 220 } as const;
 export const DAYS_PER_WEEK = { default: 3, min: 2, max: 6 } as const;
 
-/** Goal → seeded starter plan (ids from src/lib/seed/plans.ts). */
-export function planIdForGoal(goal: GoalType): string {
-  switch (goal) {
-    case 'fat_loss':
-      return 'fatloss-full';
-    case 'muscle':
-      return 'muscle-ppl';
-    case 'strength':
-      return 'strength-531';
-  }
-}
-
 /** Coarse age: current year minus birth year (good enough for BMR). */
 export function ageFromBirthYear(
   birthYear: number,

@@ -236,7 +236,11 @@ export function TierCard({
 
       <View style={styles.priceRow}>
         <View style={styles.priceLeft}>
-          {price.isFree ? (
+          {!price.available ? (
+            <AppText style={[styles.priceUnavailable, { color: metal.ink }]} numberOfLines={2}>
+              Price unavailable
+            </AppText>
+          ) : price.isFree ? (
             <AppText style={[styles.priceNumber, { color: metal.ink }]} numberOfLines={1}>
               Free
             </AppText>
@@ -319,6 +323,7 @@ export function TierCard({
           <Button
             label={`Choose ${gmTier.name}`}
             variant={isRecommended ? 'primary' : 'onBlock'}
+            disabled={!price.available && gmTier.tier !== 'starter'}
             onPress={() => onChoose(gmTier.tier)}
             style={darkFace && !isRecommended ? [styles.darkCta, { borderColor: metal.sheen }] : undefined}
           />
@@ -404,6 +409,11 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   strike: { textDecorationLine: 'line-through' },
+  priceUnavailable: {
+    fontFamily: type.bodySemiBold,
+    fontSize: 16,
+    lineHeight: 24,
+  },
   discountTagRow: { flexDirection: 'row', marginTop: spacing.xs },
 
   monogram: {

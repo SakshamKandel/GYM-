@@ -9,12 +9,6 @@ describe('GM_TIERS', () => {
       TIER_ORDER,
     );
   });
-  it('starter is free and prices climb strictly', () => {
-    assert.equal(GM_TIERS[0]!.pricePerMonthNpr, 0);
-    for (let i = 1; i < GM_TIERS.length; i++) {
-      assert.ok(GM_TIERS[i]!.pricePerMonthNpr > GM_TIERS[i - 1]!.pricePerMonthNpr);
-    }
-  });
   it('every tier sells at least one feature', () => {
     for (const t of GM_TIERS) assert.ok(t.features.length > 0);
   });

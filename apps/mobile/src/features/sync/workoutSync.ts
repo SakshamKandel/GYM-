@@ -11,6 +11,7 @@ import {
   SyncApiError,
   type SyncWorkoutPayload,
 } from './api';
+import { decideInvalidWorkoutBatch } from './queuePolicy';
 
 /**
  * One-way, append-only workout backup: finished workouts flow from the local
@@ -24,9 +25,9 @@ import {
  *     whose response was lost is harmlessly re-sent on the next trigger.
  *  3. Every failure is swallowed — sync is invisible to the workout UI and
  *     simply retries on the next trigger (finish() / app start).
- *  4. A workout the server's validator will never accept (400) is skipped
- *     after being isolated into its own batch, so one poisoned row can never
- *     wedge the queue for everything logged after it.
+ *  4. A workout the server's validator will never accept (400) is quarantined
+ *     after being isolated. It stays local and is explicitly marked failed,
+ *     never falsely marked as backed up, so it cannot wedge later rows.
  */
 
 // Server-side per-field caps (see /api/sync/workouts zod schema). Payloads are
@@ -194,8 +195,8 @@ export async function syncWorkouts(): Promise<void> {
 
       // Poison-pill escape: a 400 means the validator will never accept this
       // body, so retrying it forever would silently block every workout logged
-      // after it. Isolate the oldest workout; if it 400s alone, mark it synced
-      // locally (skipped — the row stays on-device) and move on.
+      // after it. Isolate the oldest workout; if it 400s alone, quarantine it
+      // locally (the row stays on-device and is NOT recorded as synced).
       let toSend = batch;
       let syncedIds: string[] | null = null;
       while (syncedIds === null) {
@@ -203,15 +204,21 @@ export async function syncWorkouts(): Promise<void> {
           syncedIds = await postWorkoutBatch(auth.token, toSend);
         } catch (err) {
           if (!(err instanceof SyncApiError) || err.code !== 'invalid') throw err;
-          if (toSend.length > 1) {
-            toSend = toSend.slice(0, 1);
+          const decision = decideInvalidWorkoutBatch(toSend.map((workout) => workout.id));
+          if (decision.kind === 'isolate') {
+            toSend = toSend.filter((workout) => workout.id === decision.retryWorkoutId);
             continue;
           }
-          await repo.markWorkoutsSynced([toSend[0]!.id], nowIso());
+          if (decision.kind === 'stop') return;
+          await repo.markWorkoutSyncFailed({
+            workoutId: decision.workoutId,
+            code: 'invalid_payload',
+            failedAt: nowIso(),
+          });
           break;
         }
       }
-      if (syncedIds === null) continue; // poison skipped — drain the rest
+      if (syncedIds === null) continue; // poison quarantined — drain the rest
 
       // Trust the intersection only: mark local rows synced when the server
       // explicitly confirmed THAT id (rule 11 — never assume, never delete).

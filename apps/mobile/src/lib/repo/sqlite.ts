@@ -1,24 +1,39 @@
 import * as SQLite from 'expo-sqlite';
 import { randomUUID } from 'expo-crypto';
-import { epley1Rm } from '@gym/shared';
+import {
+  compareMemberDataVersions,
+  EMPTY_MEMBER_DATA_SYNC_CURSOR,
+  epley1Rm,
+  memberDataMutationSchema,
+  memberDataRecordId,
+  memberDataSyncCursorSchema,
+  trainingCatalogCacheSchema,
+} from '@gym/shared';
 import type {
   DailyMacros,
   FoodItem,
   FoodLog,
   Measurement,
+  MemberDataChange,
+  MemberDataMutation,
+  MemberDataRecord,
+  MemberDataSyncCursor,
   PrRecord,
   SetLog,
   Streak,
+  TrainingCatalogCache,
   WeightLog,
   WorkoutLog,
 } from '@gym/shared';
 import {
   assertAnonymousOwnerId,
   assertUsableOwnerId,
+  isAnonymousOwnerId,
   LEGACY_QUARANTINE_OWNER_ID,
   ownerIdForAnonymousSession,
 } from './ownership';
-import type { AnalyticsSet, Repo, RepoStore } from './types';
+import { notifyMemberDataChanged } from './memberDataTrigger';
+import type { AnalyticsSet, Repo, RepoStore, WorkoutSyncFailure } from './types';
 import { parseWorkoutBlueprintJson, serializeWorkoutBlueprint } from './workoutBlueprint';
 
 /** Offline-first native store (CLAUDE.md rule 5): every write lands here first. */
@@ -28,10 +43,13 @@ PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS repo_meta (
   key TEXT PRIMARY KEY, value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS training_catalog_cache (
+  owner_id TEXT PRIMARY KEY, catalog_json TEXT NOT NULL, fetched_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS workout_logs (
   owner_id TEXT NOT NULL, id TEXT NOT NULL, date TEXT NOT NULL, plan_workout_id TEXT,
   name TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, duration_sec INTEGER,
-  synced_at TEXT, PRIMARY KEY (owner_id, id)
+  synced_at TEXT, sync_error TEXT, sync_failed_at TEXT, PRIMARY KEY (owner_id, id)
 );
 CREATE TABLE IF NOT EXISTS workout_session_blueprints (
   owner_id TEXT NOT NULL, workout_log_id TEXT NOT NULL, blueprint_json TEXT NOT NULL,
@@ -85,6 +103,16 @@ CREATE TABLE IF NOT EXISTS streaks (
 CREATE TABLE IF NOT EXISTS food_favorites (
   owner_id TEXT NOT NULL, food_id TEXT NOT NULL, created_at TEXT NOT NULL,
   PRIMARY KEY (owner_id, food_id)
+);
+CREATE TABLE IF NOT EXISTS member_data_mutations (
+  owner_id TEXT NOT NULL, entity TEXT NOT NULL, record_id TEXT NOT NULL,
+  mutation_id TEXT NOT NULL, changed_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+  record_json TEXT NOT NULL, PRIMARY KEY (owner_id, entity, record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_member_data_mutations_owner_changed
+  ON member_data_mutations(owner_id, changed_at, mutation_id);
+CREATE TABLE IF NOT EXISTS member_data_sync_state (
+  owner_id TEXT PRIMARY KEY, cursor_json TEXT NOT NULL
 );
 `;
 
@@ -153,6 +181,15 @@ interface FoodLogRow {
   carbs: number;
   fat: number;
   logged_at: string;
+}
+
+interface MemberDataMutationRow {
+  entity: string;
+  record_id: string;
+  mutation_id: string;
+  changed_at: string;
+  deleted: number;
+  record_json: string;
 }
 
 function toWorkout(r: WorkoutRow): WorkoutLog {
@@ -226,6 +263,211 @@ function toFoodLog(r: FoodLogRow): FoodLog {
   };
 }
 
+function memberDataMutationFromRow(row: MemberDataMutationRow): MemberDataMutation | null {
+  try {
+    const parsed = memberDataMutationSchema.safeParse({
+      mutationId: row.mutation_id,
+      changedAt: row.changed_at,
+      deleted: row.deleted === 1,
+      record: JSON.parse(row.record_json) as unknown,
+    });
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function queueMemberDataMutation(
+  transaction: SQLite.SQLiteDatabase,
+  ownerId: string,
+  record: MemberDataRecord,
+  deleted = false,
+): Promise<void> {
+  if (isAnonymousOwnerId(ownerId)) return;
+  const mutation = memberDataMutationSchema.parse({
+    mutationId: randomUUID(),
+    changedAt: new Date().toISOString(),
+    deleted,
+    record,
+  });
+  await transaction.runAsync(
+    `INSERT INTO member_data_mutations
+       (owner_id, entity, record_id, mutation_id, changed_at, deleted, record_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(owner_id, entity, record_id) DO UPDATE SET
+       mutation_id=excluded.mutation_id, changed_at=excluded.changed_at,
+       deleted=excluded.deleted, record_json=excluded.record_json`,
+    ownerId,
+    record.entity,
+    memberDataRecordId(record),
+    mutation.mutationId,
+    mutation.changedAt,
+    mutation.deleted ? 1 : 0,
+    JSON.stringify(mutation.record),
+  );
+}
+
+async function applyMemberDataChange(
+  transaction: SQLite.SQLiteDatabase,
+  ownerId: string,
+  item: MemberDataChange,
+): Promise<void> {
+  const { record } = item;
+  switch (record.entity) {
+    case 'weight':
+      if (item.deleted) {
+        await transaction.runAsync(
+          'DELETE FROM weight_logs WHERE owner_id = ? AND date = ?',
+          ownerId,
+          record.value.date,
+        );
+      } else {
+        await transaction.runAsync(
+          `INSERT INTO weight_logs (owner_id, id, date, kg) VALUES (?,?,?,?)
+           ON CONFLICT(owner_id, date) DO UPDATE SET id=excluded.id, kg=excluded.kg`,
+          ownerId,
+          record.value.id,
+          record.value.date,
+          record.value.kg,
+        );
+      }
+      return;
+    case 'measurement':
+      if (item.deleted) {
+        await transaction.runAsync(
+          'DELETE FROM measurements WHERE owner_id = ? AND id = ?',
+          ownerId,
+          record.value.id,
+        );
+      } else {
+        await transaction.runAsync(
+          `INSERT INTO measurements
+             (owner_id,id,date,waist_cm,chest_cm,arm_cm,hip_cm,thigh_cm)
+           VALUES (?,?,?,?,?,?,?,?)
+           ON CONFLICT(owner_id,id) DO UPDATE SET date=excluded.date,
+             waist_cm=excluded.waist_cm, chest_cm=excluded.chest_cm,
+             arm_cm=excluded.arm_cm, hip_cm=excluded.hip_cm, thigh_cm=excluded.thigh_cm`,
+          ownerId,
+          record.value.id,
+          record.value.date,
+          record.value.waistCm,
+          record.value.chestCm,
+          record.value.armCm,
+          record.value.hipCm,
+          record.value.thighCm,
+        );
+      }
+      return;
+    case 'food':
+      if (item.deleted) {
+        await transaction.runAsync(
+          'DELETE FROM foods WHERE owner_id = ? AND id = ?',
+          ownerId,
+          record.value.id,
+        );
+      } else {
+        const value = record.value;
+        await transaction.runAsync(
+          `INSERT INTO foods
+             (owner_id,id,name,brand,source,barcode,kcal_per_100,protein_per_100,
+              carbs_per_100,fat_per_100,serving_grams,serving_label,fiber_per_100,
+              sugar_per_100,sodium_per_100,nutri_score,nova_group)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(owner_id,id) DO UPDATE SET name=excluded.name,brand=excluded.brand,
+             source=excluded.source,barcode=excluded.barcode,kcal_per_100=excluded.kcal_per_100,
+             protein_per_100=excluded.protein_per_100,carbs_per_100=excluded.carbs_per_100,
+             fat_per_100=excluded.fat_per_100,serving_grams=excluded.serving_grams,
+             serving_label=excluded.serving_label,fiber_per_100=excluded.fiber_per_100,
+             sugar_per_100=excluded.sugar_per_100,sodium_per_100=excluded.sodium_per_100,
+             nutri_score=excluded.nutri_score,nova_group=excluded.nova_group`,
+          ownerId,
+          value.id,
+          value.name,
+          value.brand,
+          value.source,
+          value.barcode,
+          value.kcalPer100,
+          value.proteinPer100,
+          value.carbsPer100,
+          value.fatPer100,
+          value.servingGrams,
+          value.servingLabel,
+          value.fiberPer100 ?? null,
+          value.sugarPer100 ?? null,
+          value.sodiumPer100 ?? null,
+          value.nutriScore ?? null,
+          value.novaGroup ?? null,
+        );
+      }
+      return;
+    case 'foodLog':
+      if (item.deleted) {
+        await transaction.runAsync(
+          'DELETE FROM food_logs WHERE owner_id = ? AND id = ?',
+          ownerId,
+          record.value.id,
+        );
+      } else {
+        const value = record.value;
+        await transaction.runAsync(
+          `INSERT INTO food_logs
+             (owner_id,id,date,meal,food_id,food_name,grams,kcal,protein,carbs,fat,logged_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(owner_id,id) DO UPDATE SET date=excluded.date,meal=excluded.meal,
+             food_id=excluded.food_id,food_name=excluded.food_name,grams=excluded.grams,
+             kcal=excluded.kcal,protein=excluded.protein,carbs=excluded.carbs,
+             fat=excluded.fat,logged_at=excluded.logged_at`,
+          ownerId,
+          value.id,
+          value.date,
+          value.meal,
+          value.foodId,
+          value.foodName,
+          value.grams,
+          value.kcal,
+          value.protein,
+          value.carbs,
+          value.fat,
+          item.changedAt,
+        );
+      }
+      return;
+    case 'water':
+      if (item.deleted) {
+        await transaction.runAsync(
+          'DELETE FROM water_logs WHERE owner_id = ? AND date = ?',
+          ownerId,
+          record.value.date,
+        );
+      } else {
+        await transaction.runAsync(
+          `INSERT INTO water_logs (owner_id,date,ml) VALUES (?,?,?)
+           ON CONFLICT(owner_id,date) DO UPDATE SET ml=excluded.ml`,
+          ownerId,
+          record.value.date,
+          record.value.ml,
+        );
+      }
+      return;
+    case 'steps':
+      if (item.deleted) {
+        await transaction.runAsync(
+          'DELETE FROM step_logs WHERE owner_id = ? AND date = ?',
+          ownerId,
+          record.value.date,
+        );
+      } else {
+        await transaction.runAsync(
+          `INSERT INTO step_logs (owner_id,date,steps) VALUES (?,?,?)
+           ON CONFLICT(owner_id,date) DO UPDATE SET steps=excluded.steps`,
+          ownerId,
+          record.value.date,
+          record.value.steps,
+        );
+      }
+  }
+}
+
 async function tableHasOwnerColumn(
   db: SQLite.SQLiteDatabase,
   table: string,
@@ -248,11 +490,13 @@ async function migrateOwnerScope(db: SQLite.SQLiteDatabase): Promise<void> {
       CREATE TABLE workout_logs_owner_v2 (
         owner_id TEXT NOT NULL, id TEXT NOT NULL, date TEXT NOT NULL, plan_workout_id TEXT,
         name TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, duration_sec INTEGER,
-        synced_at TEXT, PRIMARY KEY (owner_id, id)
+        synced_at TEXT, sync_error TEXT, sync_failed_at TEXT, PRIMARY KEY (owner_id, id)
       );
       INSERT INTO workout_logs_owner_v2
-        (owner_id, id, date, plan_workout_id, name, started_at, finished_at, duration_sec, synced_at)
-      SELECT '${legacy}', id, date, plan_workout_id, name, started_at, finished_at, duration_sec, synced_at
+        (owner_id, id, date, plan_workout_id, name, started_at, finished_at, duration_sec,
+         synced_at, sync_error, sync_failed_at)
+      SELECT '${legacy}', id, date, plan_workout_id, name, started_at, finished_at, duration_sec,
+        synced_at, sync_error, sync_failed_at
       FROM workout_logs;
       DROP TABLE workout_logs;
       ALTER TABLE workout_logs_owner_v2 RENAME TO workout_logs;
@@ -425,6 +669,12 @@ export async function createSqliteRepo(): Promise<RepoStore> {
   if (!workoutCols.some((c) => c.name === 'synced_at')) {
     await db.execAsync('ALTER TABLE workout_logs ADD COLUMN synced_at TEXT');
   }
+  if (!workoutCols.some((c) => c.name === 'sync_error')) {
+    await db.execAsync('ALTER TABLE workout_logs ADD COLUMN sync_error TEXT');
+  }
+  if (!workoutCols.some((c) => c.name === 'sync_failed_at')) {
+    await db.execAsync('ALTER TABLE workout_logs ADD COLUMN sync_failed_at TEXT');
+  }
 
   // Food-quality columns (Nutri-Score / NOVA / fiber / sugar / sodium) landed
   // after launch — older installs' foods table lacks them.
@@ -445,6 +695,35 @@ export async function createSqliteRepo(): Promise<RepoStore> {
   function createScoped(ownerId: string): Repo {
     assertUsableOwnerId(ownerId);
     return {
+    async getTrainingCatalogCache() {
+      const row = await db.getFirstAsync<{ catalog_json: string; fetched_at: string }>(
+        'SELECT catalog_json, fetched_at FROM training_catalog_cache WHERE owner_id = ?',
+        ownerId,
+      );
+      if (!row) return null;
+      try {
+        const parsed = trainingCatalogCacheSchema.safeParse({
+          catalog: JSON.parse(row.catalog_json) as unknown,
+          fetchedAt: row.fetched_at,
+        });
+        return parsed.success ? parsed.data : null;
+      } catch {
+        return null;
+      }
+    },
+    async saveTrainingCatalogCache(cache: TrainingCatalogCache) {
+      const validated = trainingCatalogCacheSchema.parse(cache);
+      await db.runAsync(
+        `INSERT INTO training_catalog_cache (owner_id, catalog_json, fetched_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(owner_id) DO UPDATE SET catalog_json = excluded.catalog_json,
+           fetched_at = excluded.fetched_at`,
+        ownerId,
+        JSON.stringify(validated.catalog),
+        validated.fetchedAt,
+      );
+    },
+
     // ── Workouts ────────────────────────────────────────────
     async startWorkout(w, blueprint) {
       await db.withExclusiveTransactionAsync(async (transaction) => {
@@ -691,6 +970,7 @@ export async function createSqliteRepo(): Promise<RepoStore> {
       const workouts = await db.getAllAsync<WorkoutRow>(
         `SELECT * FROM workout_logs
          WHERE owner_id = ? AND finished_at IS NOT NULL AND synced_at IS NULL
+           AND sync_error IS NULL
          ORDER BY started_at ASC LIMIT ?`,
         ownerId, limit,
       );
@@ -709,18 +989,133 @@ export async function createSqliteRepo(): Promise<RepoStore> {
       if (ids.length === 0) return;
       const placeholders = ids.map(() => '?').join(',');
       await db.runAsync(
-        `UPDATE workout_logs SET synced_at = ? WHERE owner_id = ? AND id IN (${placeholders})`,
+        `UPDATE workout_logs SET synced_at = ?, sync_error = NULL, sync_failed_at = NULL
+         WHERE owner_id = ? AND id IN (${placeholders})`,
         syncedAt, ownerId, ...ids,
       );
     },
+    async markWorkoutSyncFailed(failure) {
+      await db.runAsync(
+        `UPDATE workout_logs SET sync_error = ?, sync_failed_at = ?
+         WHERE owner_id = ? AND id = ? AND synced_at IS NULL`,
+        failure.code,
+        failure.failedAt,
+        ownerId,
+        failure.workoutId,
+      );
+    },
+    async getWorkoutSyncFailures(limit) {
+      const rows = await db.getAllAsync<{
+        workout_id: string;
+        code: string;
+        failed_at: string;
+      }>(
+        `SELECT id AS workout_id, sync_error AS code, sync_failed_at AS failed_at
+         FROM workout_logs
+         WHERE owner_id = ? AND sync_error IS NOT NULL AND sync_failed_at IS NOT NULL
+         ORDER BY sync_failed_at DESC LIMIT ?`,
+        ownerId,
+        limit,
+      );
+      return rows
+        .filter((row) => row.code === 'invalid_payload')
+        .map(
+          (row): WorkoutSyncFailure => ({
+            workoutId: row.workout_id,
+            code: 'invalid_payload',
+            failedAt: row.failed_at,
+          }),
+        );
+    },
 
     // ── Body ────────────────────────────────────────────────
-    async upsertWeight(w) {
-      await db.runAsync(
-        `INSERT INTO weight_logs (owner_id, id, date, kg) VALUES (?,?,?,?)
-         ON CONFLICT(owner_id, date) DO UPDATE SET id = excluded.id, kg = excluded.kg`,
-        ownerId, w.id, w.date, w.kg,
+    async getPendingMemberDataMutations(limit) {
+      const rows = await db.getAllAsync<MemberDataMutationRow>(
+        `SELECT entity, record_id, mutation_id, changed_at, deleted, record_json
+         FROM member_data_mutations WHERE owner_id = ?
+         ORDER BY changed_at ASC, mutation_id ASC LIMIT ?`,
+        ownerId,
+        limit,
       );
+      return rows
+        .map(memberDataMutationFromRow)
+        .filter((mutation): mutation is MemberDataMutation => mutation !== null);
+    },
+    async getMemberDataSyncCursor() {
+      const row = await db.getFirstAsync<{ cursor_json: string }>(
+        'SELECT cursor_json FROM member_data_sync_state WHERE owner_id = ?',
+        ownerId,
+      );
+      if (!row) return { ...EMPTY_MEMBER_DATA_SYNC_CURSOR };
+      try {
+        const parsed = memberDataSyncCursorSchema.safeParse(JSON.parse(row.cursor_json) as unknown);
+        return parsed.success ? parsed.data : { ...EMPTY_MEMBER_DATA_SYNC_CURSOR };
+      } catch {
+        return { ...EMPTY_MEMBER_DATA_SYNC_CURSOR };
+      }
+    },
+    async applyMemberDataSyncResponse(response) {
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        const pendingRows = await transaction.getAllAsync<MemberDataMutationRow>(
+          `SELECT entity, record_id, mutation_id, changed_at, deleted, record_json
+           FROM member_data_mutations WHERE owner_id = ?`,
+          ownerId,
+        );
+        const pendingByKey = new Map<string, MemberDataMutation>();
+        for (const row of pendingRows) {
+          const pending = memberDataMutationFromRow(row);
+          if (pending) pendingByKey.set(`${row.entity}:${row.record_id}`, pending);
+        }
+
+        if (response.acknowledgedMutationIds.length > 0) {
+          const placeholders = response.acknowledgedMutationIds.map(() => '?').join(',');
+          await transaction.runAsync(
+            `DELETE FROM member_data_mutations
+             WHERE owner_id = ? AND mutation_id IN (${placeholders})`,
+            ownerId,
+            ...response.acknowledgedMutationIds,
+          );
+        }
+
+        for (const item of response.changes) {
+          const recordId = memberDataRecordId(item.record);
+          const key = `${item.record.entity}:${recordId}`;
+          const pending = pendingByKey.get(key);
+          if (pending && compareMemberDataVersions(pending, item) > 0) continue;
+          await applyMemberDataChange(transaction, ownerId, item);
+          if (pending) {
+            await transaction.runAsync(
+              `DELETE FROM member_data_mutations
+               WHERE owner_id = ? AND entity = ? AND record_id = ?`,
+              ownerId,
+              item.record.entity,
+              recordId,
+            );
+          }
+        }
+
+        await transaction.runAsync(
+          `INSERT INTO member_data_sync_state (owner_id, cursor_json) VALUES (?, ?)
+           ON CONFLICT(owner_id) DO UPDATE SET cursor_json=excluded.cursor_json`,
+          ownerId,
+          JSON.stringify(response.cursor),
+        );
+      });
+    },
+
+    async upsertWeight(w) {
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          `INSERT INTO weight_logs (owner_id, id, date, kg) VALUES (?,?,?,?)
+           ON CONFLICT(owner_id, date) DO UPDATE SET id = excluded.id, kg = excluded.kg`,
+          ownerId,
+          w.id,
+          w.date,
+          w.kg,
+        );
+        await queueMemberDataMutation(transaction, ownerId, { entity: 'weight', value: w });
+      });
+      notifyMemberDataChanged();
     },
     async getWeights(limitDays) {
       const rows = await db.getAllAsync<{ id: string; date: string; kg: number }>(
@@ -730,12 +1125,26 @@ export async function createSqliteRepo(): Promise<RepoStore> {
       return rows.reverse().map((r): WeightLog => ({ id: r.id, date: r.date, kg: r.kg }));
     },
     async addMeasurement(m) {
-      await db.runAsync(
-        `INSERT INTO measurements
-         (owner_id, id, date, waist_cm, chest_cm, arm_cm, hip_cm, thigh_cm)
-         VALUES (?,?,?,?,?,?,?,?)`,
-        ownerId, m.id, m.date, m.waistCm, m.chestCm, m.armCm, m.hipCm, m.thighCm,
-      );
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          `INSERT INTO measurements
+           (owner_id, id, date, waist_cm, chest_cm, arm_cm, hip_cm, thigh_cm)
+           VALUES (?,?,?,?,?,?,?,?)`,
+          ownerId,
+          m.id,
+          m.date,
+          m.waistCm,
+          m.chestCm,
+          m.armCm,
+          m.hipCm,
+          m.thighCm,
+        );
+        await queueMemberDataMutation(transaction, ownerId, {
+          entity: 'measurement',
+          value: m,
+        });
+      });
+      notifyMemberDataChanged();
     },
     async getMeasurements(limit) {
       const rows = await db.getAllAsync<{
@@ -763,13 +1172,27 @@ export async function createSqliteRepo(): Promise<RepoStore> {
 
     // ── Food ────────────────────────────────────────────────
     async logFood(f) {
-      await db.runAsync(
-        `INSERT INTO food_logs
-         (owner_id, id, date, meal, food_id, food_name, grams, kcal, protein, carbs, fat, logged_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-        ownerId, f.id, f.date, f.meal, f.foodId, f.foodName, f.grams,
-        f.kcal, f.protein, f.carbs, f.fat, new Date().toISOString(),
-      );
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          `INSERT INTO food_logs
+           (owner_id, id, date, meal, food_id, food_name, grams, kcal, protein, carbs, fat, logged_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          ownerId,
+          f.id,
+          f.date,
+          f.meal,
+          f.foodId,
+          f.foodName,
+          f.grams,
+          f.kcal,
+          f.protein,
+          f.carbs,
+          f.fat,
+          new Date().toISOString(),
+        );
+        await queueMemberDataMutation(transaction, ownerId, { entity: 'foodLog', value: f });
+      });
+      notifyMemberDataChanged();
     },
     async logFoodBatch(logs) {
       if (logs.length === 0) return;
@@ -786,11 +1209,37 @@ export async function createSqliteRepo(): Promise<RepoStore> {
             ownerId, f.id, f.date, f.meal, f.foodId, f.foodName, f.grams,
             f.kcal, f.protein, f.carbs, f.fat, loggedAt,
           );
+          await queueMemberDataMutation(transaction, ownerId, {
+            entity: 'foodLog',
+            value: f,
+          });
         }
       });
+      notifyMemberDataChanged();
     },
     async deleteFoodLog(id) {
-      await db.runAsync('DELETE FROM food_logs WHERE owner_id = ? AND id = ?', ownerId, id);
+      let found = false;
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        const row = await transaction.getFirstAsync<FoodLogRow>(
+          'SELECT * FROM food_logs WHERE owner_id = ? AND id = ?',
+          ownerId,
+          id,
+        );
+        if (!row) return;
+        found = true;
+        await transaction.runAsync(
+          'DELETE FROM food_logs WHERE owner_id = ? AND id = ?',
+          ownerId,
+          id,
+        );
+        await queueMemberDataMutation(
+          transaction,
+          ownerId,
+          { entity: 'foodLog', value: toFoodLog(row) },
+          true,
+        );
+      });
+      if (found) notifyMemberDataChanged();
     },
     async getFoodLogs(date) {
       const rows = await db.getAllAsync<FoodLogRow>(
@@ -833,23 +1282,45 @@ export async function createSqliteRepo(): Promise<RepoStore> {
       return out;
     },
     async saveFood(item) {
-      await db.runAsync(
-        `INSERT INTO foods (owner_id, id, name, brand, source, barcode, kcal_per_100, protein_per_100, carbs_per_100, fat_per_100, serving_grams, serving_label,
-           fiber_per_100, sugar_per_100, sodium_per_100, nutri_score, nova_group)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-         ON CONFLICT(owner_id, id) DO UPDATE SET name=excluded.name, brand=excluded.brand,
-           kcal_per_100=excluded.kcal_per_100, protein_per_100=excluded.protein_per_100,
-           carbs_per_100=excluded.carbs_per_100, fat_per_100=excluded.fat_per_100,
-           serving_grams=excluded.serving_grams, serving_label=excluded.serving_label,
-           fiber_per_100=excluded.fiber_per_100, sugar_per_100=excluded.sugar_per_100,
-           sodium_per_100=excluded.sodium_per_100, nutri_score=excluded.nutri_score,
-           nova_group=excluded.nova_group`,
-        ownerId, item.id, item.name, item.brand, item.source, item.barcode,
-        item.kcalPer100, item.proteinPer100, item.carbsPer100, item.fatPer100,
-        item.servingGrams, item.servingLabel,
-        item.fiberPer100 ?? null, item.sugarPer100 ?? null, item.sodiumPer100 ?? null,
-        item.nutriScore ?? null, item.novaGroup ?? null,
-      );
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          `INSERT INTO foods (owner_id, id, name, brand, source, barcode, kcal_per_100, protein_per_100, carbs_per_100, fat_per_100, serving_grams, serving_label,
+             fiber_per_100, sugar_per_100, sodium_per_100, nutri_score, nova_group)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(owner_id, id) DO UPDATE SET name=excluded.name, brand=excluded.brand,
+             source=excluded.source, barcode=excluded.barcode,
+             kcal_per_100=excluded.kcal_per_100, protein_per_100=excluded.protein_per_100,
+             carbs_per_100=excluded.carbs_per_100, fat_per_100=excluded.fat_per_100,
+             serving_grams=excluded.serving_grams, serving_label=excluded.serving_label,
+             fiber_per_100=excluded.fiber_per_100, sugar_per_100=excluded.sugar_per_100,
+             sodium_per_100=excluded.sodium_per_100, nutri_score=excluded.nutri_score,
+             nova_group=excluded.nova_group`,
+          ownerId,
+          item.id,
+          item.name,
+          item.brand,
+          item.source,
+          item.barcode,
+          item.kcalPer100,
+          item.proteinPer100,
+          item.carbsPer100,
+          item.fatPer100,
+          item.servingGrams,
+          item.servingLabel,
+          item.fiberPer100 ?? null,
+          item.sugarPer100 ?? null,
+          item.sodiumPer100 ?? null,
+          item.nutriScore ?? null,
+          item.novaGroup ?? null,
+        );
+        if (item.source === 'custom') {
+          await queueMemberDataMutation(transaction, ownerId, {
+            entity: 'food',
+            value: item,
+          });
+        }
+      });
+      if (item.source === 'custom') notifyMemberDataChanged();
     },
     async getFoodByBarcode(barcode) {
       const r = await db.getFirstAsync<FoodRow>(
@@ -924,15 +1395,29 @@ export async function createSqliteRepo(): Promise<RepoStore> {
       return r?.ml ?? 0;
     },
     async addWater(date, deltaMl) {
-      await db.runAsync(
-        `INSERT INTO water_logs (owner_id, date, ml) VALUES (?, ?, MAX(0, ?))
-         ON CONFLICT(owner_id, date) DO UPDATE SET ml = MAX(0, water_logs.ml + ?)`,
-        ownerId, date, deltaMl, deltaMl,
-      );
-      const r = await db.getFirstAsync<{ ml: number }>(
-        'SELECT ml FROM water_logs WHERE owner_id = ? AND date = ?', ownerId, date,
-      );
-      return r?.ml ?? 0;
+      let nextMl = 0;
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          `INSERT INTO water_logs (owner_id, date, ml) VALUES (?, ?, MAX(0, ?))
+           ON CONFLICT(owner_id, date) DO UPDATE SET ml = MAX(0, water_logs.ml + ?)`,
+          ownerId,
+          date,
+          deltaMl,
+          deltaMl,
+        );
+        const row = await transaction.getFirstAsync<{ ml: number }>(
+          'SELECT ml FROM water_logs WHERE owner_id = ? AND date = ?',
+          ownerId,
+          date,
+        );
+        nextMl = row?.ml ?? 0;
+        await queueMemberDataMutation(transaction, ownerId, {
+          entity: 'water',
+          value: { date, ml: nextMl },
+        });
+      });
+      notifyMemberDataChanged();
+      return nextMl;
     },
 
     // ── Steps ───────────────────────────────────────────────
@@ -943,22 +1428,46 @@ export async function createSqliteRepo(): Promise<RepoStore> {
       return r?.steps ?? 0;
     },
     async setSteps(date, steps) {
-      await db.runAsync(
-        `INSERT INTO step_logs (owner_id, date, steps) VALUES (?, ?, MAX(0, ?))
-         ON CONFLICT(owner_id, date) DO UPDATE SET steps = MAX(0, excluded.steps)`,
-        ownerId, date, steps,
-      );
+      const nextSteps = Math.max(0, steps);
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          `INSERT INTO step_logs (owner_id, date, steps) VALUES (?, ?, ?)
+           ON CONFLICT(owner_id, date) DO UPDATE SET steps = excluded.steps`,
+          ownerId,
+          date,
+          nextSteps,
+        );
+        await queueMemberDataMutation(transaction, ownerId, {
+          entity: 'steps',
+          value: { date, steps: nextSteps },
+        });
+      });
+      notifyMemberDataChanged();
     },
     async addSteps(date, delta) {
-      await db.runAsync(
-        `INSERT INTO step_logs (owner_id, date, steps) VALUES (?, ?, MAX(0, ?))
-         ON CONFLICT(owner_id, date) DO UPDATE SET steps = MAX(0, step_logs.steps + ?)`,
-        ownerId, date, delta, delta,
-      );
-      const r = await db.getFirstAsync<{ steps: number }>(
-        'SELECT steps FROM step_logs WHERE owner_id = ? AND date = ?', ownerId, date,
-      );
-      return r?.steps ?? 0;
+      let nextSteps = 0;
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync(
+          `INSERT INTO step_logs (owner_id, date, steps) VALUES (?, ?, MAX(0, ?))
+           ON CONFLICT(owner_id, date) DO UPDATE SET steps = MAX(0, step_logs.steps + ?)`,
+          ownerId,
+          date,
+          delta,
+          delta,
+        );
+        const row = await transaction.getFirstAsync<{ steps: number }>(
+          'SELECT steps FROM step_logs WHERE owner_id = ? AND date = ?',
+          ownerId,
+          date,
+        );
+        nextSteps = row?.steps ?? 0;
+        await queueMemberDataMutation(transaction, ownerId, {
+          entity: 'steps',
+          value: { date, steps: nextSteps },
+        });
+      });
+      notifyMemberDataChanged();
+      return nextSteps;
     },
     async getStepsBetween(startDate, endDate) {
       return db.getAllAsync<{ date: string; steps: number }>(
@@ -1019,6 +1528,9 @@ export async function createSqliteRepo(): Promise<RepoStore> {
     async deleteOwnerData(ownerId) {
       assertUsableOwnerId(ownerId);
       await db.withExclusiveTransactionAsync(async (transaction) => {
+        await transaction.runAsync('DELETE FROM training_catalog_cache WHERE owner_id = ?', ownerId);
+        await transaction.runAsync('DELETE FROM member_data_mutations WHERE owner_id = ?', ownerId);
+        await transaction.runAsync('DELETE FROM member_data_sync_state WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM set_logs WHERE owner_id = ?', ownerId);
         await transaction.runAsync(
           'DELETE FROM workout_session_blueprints WHERE owner_id = ?', ownerId,

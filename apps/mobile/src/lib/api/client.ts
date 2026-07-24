@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import {
   ACCOUNT_DELETION_BLOCKER_CODES,
+  trainingCatalogSchema,
   type AccountDeletionImpact,
   type Tier,
+  type TrainingCatalog,
 } from '@gym/shared';
 
 /**
@@ -69,6 +71,29 @@ export class ApiError extends Error {
 /** Narrow an unknown thrown value to ApiError (anything else = network). */
 export function toApiError(err: unknown): ApiError {
   return err instanceof ApiError ? err : new ApiError('network');
+}
+
+/** Authenticated Neon-backed plan and exercise snapshot for member training. */
+export async function getTrainingCatalog(token: string): Promise<TrainingCatalog> {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(`${BASE_URL}/api/me/training-catalog`, {
+      method: 'GET',
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw new ApiError('network');
+  }
+  if (response.status === 401) throw new ApiError('unauthorized');
+  if (!response.ok) throw new ApiError('network');
+  try {
+    const parsed = trainingCatalogSchema.safeParse(await response.json());
+    if (!parsed.success) throw new ApiError('network', 'invalid training catalog');
+    return parsed.data;
+  } catch (error: unknown) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError('network', 'invalid training catalog');
+  }
 }
 
 // ── Schemas ───────────────────────────────────────────────────
@@ -604,16 +629,22 @@ export async function unregisterPushToken(token: string, authToken: string): Pro
 }
 
 // ════════════════════════════════════════════════════════════════
-// Elite coach messaging (see COACH API CONTRACT)
+// Human coach/support messaging (see COACH API CONTRACT)
 // Two async threads per account, split by `kind`. Same philosophy as
 // the rest of this client: zod at the boundary, typed error codes, and
 // network failures NEVER block the UI (the thread keeps its last-known
-// state and retries quietly). 'forbidden' means the account isn't Elite.
+// state and retries quietly). `coach_unavailable` means no active persisted
+// human coach assignment owns the member's coach thread.
 // ════════════════════════════════════════════════════════════════
 
 export type CoachThreadKind = 'coach_chat' | 'support';
 
-export type CoachErrorCode = 'forbidden' | 'invalid' | 'unauthorized' | 'network';
+export type CoachErrorCode =
+  | 'coach_unavailable'
+  | 'forbidden'
+  | 'invalid'
+  | 'unauthorized'
+  | 'network';
 
 export class CoachApiError extends Error {
   readonly code: CoachErrorCode;
@@ -659,8 +690,6 @@ interface CoachRequestOptions {
   path: string;
   token: string;
   body?: Record<string, unknown>;
-  /** Override for endpoints whose server legitimately works longer than the default. */
-  timeoutMs?: number;
 }
 
 /** Coach request; resolves with parsed JSON of a 2xx response. */
@@ -675,7 +704,7 @@ async function coachRequest(opts: CoachRequestOptions): Promise<unknown> {
         ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    }, opts.timeoutMs);
+    });
   } catch {
     throw new CoachApiError('network', "Can't reach the server");
   }
@@ -692,7 +721,10 @@ async function coachRequest(opts: CoachRequestOptions): Promise<unknown> {
     res.status === 401 ? 'unauthorized' : res.status === 403 ? 'forbidden' : 'network';
   try {
     const parsed = errorBodySchema.safeParse(await res.json());
-    if (parsed.success && parsed.data.error === 'invalid') code = 'invalid';
+    if (parsed.success) {
+      if (parsed.data.error === 'invalid') code = 'invalid';
+      if (parsed.data.error === 'coach_unavailable') code = 'coach_unavailable';
+    }
   } catch {
     // Body wasn't JSON — keep the status-derived code.
   }
@@ -719,10 +751,9 @@ export async function getCoachMessages(
 }
 
 /**
- * Send a message. ELITE ONLY — throws CoachApiError 'forbidden' for any lower
- * tier. The coach reply is generated SERVER-SIDE in Greece's voice (the Groq
- * key never ships in the app). Returns the inserted [userMessage, coachReply]
- * pair so the UI can reconcile its optimistic append with the server's rows.
+ * Send a persisted human-owned message. Coach chat requires an active coach
+ * assignment and throws `coach_unavailable` otherwise; support routes to the
+ * staff inbox. Returns only rows that the server actually inserted.
  */
 export async function sendCoachMessage(
   kind: CoachThreadKind,
@@ -734,9 +765,6 @@ export async function sendCoachMessage(
     path: '/api/coach/messages',
     token,
     body: { kind, body },
-    // The server runs an LLM round trip before responding — the default 10s
-    // deadline would abort sends the server has already persisted.
-    timeoutMs: 30_000,
   });
   return parseCoach(coachMessagesSchema, data).messages;
 }
@@ -771,8 +799,8 @@ export async function getAiTip(messages: AiTipMessage[], token: string): Promise
 // GET /api/plan-videos/[exerciseId] mints a short-lived signed HLS url for
 // the exercise's coach video, gated per-tier SERVER-SIDE. The signed url is
 // disposable (~2h TTL) — fetch it per playback, never cache/persist it. The
-// providerVideoId is never returned. On 503/network the caller falls back to
-// the bundled greeceVideos seed so playback never hard-breaks for one release.
+// providerVideoId is never returned. Missing configuration/content remains
+// unavailable; the client never substitutes a compiled playback URL.
 // ════════════════════════════════════════════════════════════════
 
 /**
@@ -782,9 +810,9 @@ export async function getAiTip(messages: AiTipMessage[], token: string): Promise
  *
  *  - 'ok'             → play `url` (title/tierRequired for the caption/label).
  *  - 'locked'         → 403; show the "unlock with <requiredTier>" affordance.
- *  - 'not_found'      → no ready video for this exercise (fall back to seed).
- *  - 'not_configured' → provider keys absent (503); fall back to seed.
- *  - 'unavailable'    → 401/network/malformed; fall back to seed.
+ *  - 'not_found'      → no ready video for this exercise.
+ *  - 'not_configured' → provider keys absent (503).
+ *  - 'unavailable'    → 401/network/malformed.
  */
 export type PlanVideoResult =
   | { kind: 'ok'; url: string; title: string; tierRequired: Tier }
@@ -807,8 +835,8 @@ const planVideoLockedSchema = z.object({
 /**
  * Fetch the signed playback url for an exercise's coach video.
  *
- * NEVER throws — every failure resolves to a fallback-triggering variant so
- * the video path degrades to the bundled seed instead of crashing the screen.
+ * NEVER throws — every failure resolves to an explicit unavailable variant so
+ * the video path remains unavailable instead of crashing the screen.
  * Only the 200 (playable) and 403 (locked → paywall) outcomes carry data.
  */
 export async function getPlanVideo(exerciseId: string, token: string): Promise<PlanVideoResult> {
@@ -837,14 +865,14 @@ export async function getPlanVideo(exerciseId: string, token: string): Promise<P
       const parsed = planVideoLockedSchema.safeParse(await res.json());
       if (parsed.success) return { kind: 'locked', requiredTier: parsed.data.requiredTier };
     } catch {
-      // Body wasn't JSON — treat as unavailable so we fall back to the seed.
+      // Body wasn't JSON — treat as unavailable.
     }
     return { kind: 'unavailable' };
   }
 
   if (res.status === 404) return { kind: 'not_found' };
   if (res.status === 503) return { kind: 'not_configured' };
-  // 401 (expired session) and anything else → fall back to the local seed.
+  // 401 (expired session) and anything else → unavailable.
   return { kind: 'unavailable' };
 }
 
@@ -1049,7 +1077,7 @@ const catalogSchema = z.object({
    * (B23 flicker + Pack J honest INTL affordance). Optional/defaulted so an
    * older server response still parses (absent → treated as 'preview').
    */
-  billingMode: z.enum(['preview', 'live']).optional(),
+  billingMode: z.enum(['disabled', 'preview', 'live']),
 });
 export type SubscriptionCatalog = z.infer<typeof catalogSchema>;
 

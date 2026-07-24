@@ -14,7 +14,8 @@ import { useBottomClearance } from '../../../lib/systemBars';
  */
 
 interface Props {
-  onDirections: () => void;
+  /** Omit when neither coordinates nor an address are available. */
+  onDirections?: () => void;
   /** Omit to hide the Call button (no phone on file). */
   onCall?: () => void;
   /** Omit to hide the Website button (no website on file). */
@@ -93,17 +94,19 @@ export function GymActionBar({ onDirections, onCall, onWebsite, gymName }: Props
           </PressableScale>
         ) : null}
 
-        <PressableScale
-          accessibilityRole="button"
-          accessibilityLabel={`Get directions to ${gymName}`}
-          onPress={onDirections}
-          style={[styles.btn, styles.primary]}
-        >
-          <Ionicons name="navigate" size={18} color={colors.onBlock} />
-          <AppText variant="label" color={colors.onBlock}>
-            Directions
-          </AppText>
-        </PressableScale>
+        {onDirections ? (
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={`Get directions to ${gymName}`}
+            onPress={onDirections}
+            style={[styles.btn, styles.primary]}
+          >
+            <Ionicons name="navigate" size={18} color={colors.onBlock} />
+            <AppText variant="label" color={colors.onBlock}>
+              Directions
+            </AppText>
+          </PressableScale>
+        ) : null}
       </View>
     </View>
   );

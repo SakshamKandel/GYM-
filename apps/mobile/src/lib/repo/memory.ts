@@ -1,14 +1,27 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { randomUUID } from 'expo-crypto';
-import { epley1Rm } from '@gym/shared';
+import {
+  compareMemberDataVersions,
+  EMPTY_MEMBER_DATA_SYNC_CURSOR,
+  epley1Rm,
+  memberDataRecordId,
+  memberDataSyncCursorSchema,
+  memberDataMutationSchema,
+  trainingCatalogCacheSchema,
+} from '@gym/shared';
 import type {
   DailyMacros,
   FoodItem,
   FoodLog,
   Measurement,
+  MemberDataChange,
+  MemberDataMutation,
+  MemberDataRecord,
+  MemberDataSyncCursor,
   PrRecord,
   SetLog,
   Streak,
+  TrainingCatalogCache,
   WeightLog,
   WorkoutSessionBlueprint,
   WorkoutLog,
@@ -19,7 +32,8 @@ import {
   isAnonymousOwnerId,
   ownerIdForAnonymousSession,
 } from './ownership';
-import type { AnalyticsSet, Repo, RepoStore } from './types';
+import { notifyMemberDataChanged } from './memberDataTrigger';
+import type { AnalyticsSet, Repo, RepoStore, WorkoutSyncFailure } from './types';
 
 /**
  * Web/QA implementation — same contract as SQLite, backed by an in-memory
@@ -28,6 +42,7 @@ import type { AnalyticsSet, Repo, RepoStore } from './types';
  */
 
 interface OwnerMemoryState {
+  trainingCatalog: TrainingCatalogCache | null;
   workouts: WorkoutLog[];
   sets: (SetLog & { date?: string })[];
   weights: WeightLog[];
@@ -41,8 +56,13 @@ interface OwnerMemoryState {
   streak: Streak;
   /** Ids of workouts already backed up to the server (mirrors sqlite synced_at). */
   syncedWorkoutIds: string[];
+  /** Permanently rejected rows stay local but no longer wedge the pending queue. */
+  failedWorkoutSyncs: Record<string, WorkoutSyncFailure>;
   /** Restart metadata for active sessions only, keyed by local workout id. */
   workoutBlueprints: Record<string, WorkoutSessionBlueprint>;
+  /** One latest local mutation per entity/key; replacing a row coalesces retries. */
+  memberDataMutations: Record<string, MemberDataMutation>;
+  memberDataCursor: MemberDataSyncCursor;
 }
 
 interface MemoryStoreState {
@@ -57,6 +77,7 @@ const LEGACY_QUARANTINE_KEY = 'gym-tracker-db-legacy-quarantine-v1';
 
 function emptyOwnerState(): OwnerMemoryState {
   return {
+    trainingCatalog: null,
     workouts: [],
     sets: [],
     weights: [],
@@ -68,11 +89,18 @@ function emptyOwnerState(): OwnerMemoryState {
     steps: {},
     streak: { current: 0, best: 0, lastWorkoutDate: null },
     syncedWorkoutIds: [],
+    failedWorkoutSyncs: {},
     workoutBlueprints: {},
+    memberDataMutations: {},
+    memberDataCursor: { ...EMPTY_MEMBER_DATA_SYNC_CURSOR },
   };
 }
 
-function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): Repo {
+function createScopedMemoryRepo(
+  state: OwnerMemoryState,
+  persist: () => void,
+  ownerId: string,
+): Repo {
   /* Owner state and persistence are supplied by the versioned store below. */
   function workoutDate(workoutLogId: string): string {
     return state.workouts.find((w) => w.id === workoutLogId)?.date ?? '';
@@ -82,7 +110,90 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
     return new Set(state.workouts.filter((w) => w.finishedAt !== null).map((w) => w.id));
   }
 
+  const syncEnabled = !isAnonymousOwnerId(ownerId);
+
+  function mutationKey(record: MemberDataRecord): string {
+    return `${record.entity}:${memberDataRecordId(record)}`;
+  }
+
+  function queueMemberData(record: MemberDataRecord, deleted = false): void {
+    if (!syncEnabled) return;
+    const parsed = memberDataMutationSchema.parse({
+      mutationId: randomUUID(),
+      changedAt: new Date().toISOString(),
+      deleted,
+      record,
+    });
+    state.memberDataMutations[mutationKey(record)] = parsed;
+  }
+
+  function applyMemberDataChange(item: MemberDataChange): void {
+    const { record } = item;
+    switch (record.entity) {
+      case 'weight': {
+        const index = state.weights.findIndex((entry) => entry.date === record.value.date);
+        if (item.deleted) {
+          if (index >= 0) state.weights.splice(index, 1);
+        } else if (index >= 0) {
+          state.weights[index] = record.value;
+        } else {
+          state.weights.push(record.value);
+        }
+        return;
+      }
+      case 'measurement': {
+        const index = state.measurements.findIndex((entry) => entry.id === record.value.id);
+        if (item.deleted) {
+          if (index >= 0) state.measurements.splice(index, 1);
+        } else if (index >= 0) {
+          state.measurements[index] = record.value;
+        } else {
+          state.measurements.push(record.value);
+        }
+        return;
+      }
+      case 'food': {
+        const index = state.foods.findIndex((entry) => entry.id === record.value.id);
+        if (item.deleted) {
+          if (index >= 0) state.foods.splice(index, 1);
+        } else if (index >= 0) {
+          state.foods[index] = record.value;
+        } else {
+          state.foods.push(record.value);
+        }
+        return;
+      }
+      case 'foodLog': {
+        const index = state.foodLogs.findIndex((entry) => entry.id === record.value.id);
+        if (item.deleted) {
+          if (index >= 0) state.foodLogs.splice(index, 1);
+        } else {
+          const next = { ...record.value, loggedAt: item.changedAt };
+          if (index >= 0) state.foodLogs[index] = next;
+          else state.foodLogs.push(next);
+        }
+        return;
+      }
+      case 'water':
+        if (item.deleted) delete state.water[record.value.date];
+        else state.water[record.value.date] = record.value.ml;
+        return;
+      case 'steps':
+        if (item.deleted) delete state.steps[record.value.date];
+        else state.steps[record.value.date] = record.value.steps;
+    }
+  }
+
   return {
+    async getTrainingCatalogCache() {
+      const parsed = trainingCatalogCacheSchema.safeParse(state.trainingCatalog);
+      return parsed.success ? parsed.data : null;
+    },
+    async saveTrainingCatalogCache(cache) {
+      state.trainingCatalog = trainingCatalogCacheSchema.parse(cache);
+      persist();
+    },
+
     // ── Workouts ────────────────────────────────────────────
     async startWorkout(w, blueprint) {
       state.workouts.push({ ...w, finishedAt: null, durationSec: null });
@@ -110,6 +221,7 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
     async deleteWorkout(id) {
       state.workouts = state.workouts.filter((w) => w.id !== id);
       state.sets = state.sets.filter((s) => s.workoutLogId !== id);
+      delete state.failedWorkoutSyncs[id];
       delete state.workoutBlueprints[id];
       persist();
     },
@@ -258,7 +370,10 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
     async getUnsyncedFinishedWorkouts(limit) {
       const synced = new Set(state.syncedWorkoutIds);
       return state.workouts
-        .filter((w) => w.finishedAt !== null && !synced.has(w.id))
+        .filter(
+          (w) =>
+            w.finishedAt !== null && !synced.has(w.id) && !(w.id in state.failedWorkoutSyncs),
+        )
         .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
         .slice(0, limit)
         .map((workout) => ({
@@ -270,8 +385,47 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
     },
     async markWorkoutsSynced(ids, _syncedAt) {
       const synced = new Set(state.syncedWorkoutIds);
-      for (const id of ids) synced.add(id);
+      for (const id of ids) {
+        synced.add(id);
+        delete state.failedWorkoutSyncs[id];
+      }
       state.syncedWorkoutIds = [...synced];
+      persist();
+    },
+    async markWorkoutSyncFailed(failure) {
+      state.failedWorkoutSyncs[failure.workoutId] = failure;
+      persist();
+    },
+    async getWorkoutSyncFailures(limit) {
+      return Object.values(state.failedWorkoutSyncs)
+        .sort((a, b) => b.failedAt.localeCompare(a.failedAt))
+        .slice(0, limit);
+    },
+
+    async getPendingMemberDataMutations(limit) {
+      return Object.values(state.memberDataMutations)
+        .sort(
+          (a, b) =>
+            a.changedAt.localeCompare(b.changedAt) || a.mutationId.localeCompare(b.mutationId),
+        )
+        .slice(0, limit);
+    },
+    async getMemberDataSyncCursor() {
+      return state.memberDataCursor;
+    },
+    async applyMemberDataSyncResponse(response) {
+      const acknowledged = new Set(response.acknowledgedMutationIds);
+      for (const [key, pending] of Object.entries(state.memberDataMutations)) {
+        if (acknowledged.has(pending.mutationId)) delete state.memberDataMutations[key];
+      }
+      for (const item of response.changes) {
+        const key = mutationKey(item.record);
+        const pending = state.memberDataMutations[key];
+        if (pending && compareMemberDataVersions(pending, item) > 0) continue;
+        if (pending) delete state.memberDataMutations[key];
+        applyMemberDataChange(item);
+      }
+      state.memberDataCursor = response.cursor;
       persist();
     },
 
@@ -280,14 +434,18 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
       const i = state.weights.findIndex((x) => x.date === w.date);
       if (i >= 0) state.weights[i] = { ...state.weights[i]!, kg: w.kg };
       else state.weights.push(w);
+      queueMemberData({ entity: 'weight', value: w });
       persist();
+      notifyMemberDataChanged();
     },
     async getWeights(limitDays) {
       return [...state.weights].sort((a, b) => a.date.localeCompare(b.date)).slice(-limitDays);
     },
     async addMeasurement(m) {
       state.measurements.push(m);
+      queueMemberData({ entity: 'measurement', value: m });
       persist();
+      notifyMemberDataChanged();
     },
     async getMeasurements(limit) {
       // Insertion-index tiebreak mirrors sqlite's `date DESC, rowid DESC`:
@@ -302,7 +460,9 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
     // ── Food ────────────────────────────────────────────────
     async logFood(f) {
       state.foodLogs.push({ ...f, loggedAt: new Date().toISOString() });
+      queueMemberData({ entity: 'foodLog', value: f });
       persist();
+      notifyMemberDataChanged();
     },
     async logFoodBatch(logs) {
       if (logs.length === 0) return;
@@ -311,11 +471,19 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
       // transactional guarantee for B19.
       const loggedAt = new Date().toISOString();
       state.foodLogs.push(...logs.map((f) => ({ ...f, loggedAt })));
+      for (const log of logs) queueMemberData({ entity: 'foodLog', value: log });
       persist();
+      notifyMemberDataChanged();
     },
     async deleteFoodLog(id) {
+      const existing = state.foodLogs.find((entry) => entry.id === id);
       state.foodLogs = state.foodLogs.filter((f) => f.id !== id);
+      if (existing) {
+        const { loggedAt: _loggedAt, ...value } = existing;
+        queueMemberData({ entity: 'foodLog', value }, true);
+      }
       persist();
+      if (existing) notifyMemberDataChanged();
     },
     async getFoodLogs(date) {
       return state.foodLogs
@@ -357,7 +525,9 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
       const i = state.foods.findIndex((f) => f.id === item.id);
       if (i >= 0) state.foods[i] = item;
       else state.foods.push(item);
+      if (item.source === 'custom') queueMemberData({ entity: 'food', value: item });
       persist();
+      if (item.source === 'custom') notifyMemberDataChanged();
     },
     async getFoodByBarcode(barcode) {
       return state.foods.find((f) => f.barcode === barcode) ?? null;
@@ -414,7 +584,9 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
     },
     async addWater(date, deltaMl) {
       state.water[date] = Math.max(0, (state.water[date] ?? 0) + deltaMl);
+      queueMemberData({ entity: 'water', value: { date, ml: state.water[date] ?? 0 } });
       persist();
+      notifyMemberDataChanged();
       return state.water[date] ?? 0;
     },
 
@@ -424,11 +596,15 @@ function createScopedMemoryRepo(state: OwnerMemoryState, persist: () => void): R
     },
     async setSteps(date, steps) {
       state.steps[date] = Math.max(0, steps);
+      queueMemberData({ entity: 'steps', value: { date, steps: state.steps[date] ?? 0 } });
       persist();
+      notifyMemberDataChanged();
     },
     async addSteps(date, delta) {
       state.steps[date] = Math.max(0, (state.steps[date] ?? 0) + delta);
+      queueMemberData({ entity: 'steps', value: { date, steps: state.steps[date] ?? 0 } });
       persist();
+      notifyMemberDataChanged();
       return state.steps[date] ?? 0;
     },
     async getStepsBetween(startDate, endDate) {
@@ -486,6 +662,8 @@ export async function createMemoryRepo(): Promise<RepoStore> {
         store = parsed;
         // v2 stores created before active-session blueprints remain compatible.
         for (const owner of Object.values(store.owners)) {
+          const cachedCatalog = trainingCatalogCacheSchema.safeParse(owner.trainingCatalog);
+          owner.trainingCatalog = cachedCatalog.success ? cachedCatalog.data : null;
           if (
             typeof owner.workoutBlueprints !== 'object' ||
             owner.workoutBlueprints === null ||
@@ -501,6 +679,31 @@ export async function createMemoryRepo(): Promise<RepoStore> {
           ) {
             owner.favoriteFoodIds = {};
           }
+          if (
+            typeof owner.failedWorkoutSyncs !== 'object' ||
+            owner.failedWorkoutSyncs === null ||
+            Array.isArray(owner.failedWorkoutSyncs)
+          ) {
+            owner.failedWorkoutSyncs = {};
+          }
+          if (
+            typeof owner.memberDataMutations !== 'object' ||
+            owner.memberDataMutations === null ||
+            Array.isArray(owner.memberDataMutations)
+          ) {
+            owner.memberDataMutations = {};
+          } else {
+            const validMutations: Record<string, MemberDataMutation> = {};
+            for (const [key, value] of Object.entries(owner.memberDataMutations)) {
+              const parsedMutation = memberDataMutationSchema.safeParse(value);
+              if (parsedMutation.success) validMutations[key] = parsedMutation.data;
+            }
+            owner.memberDataMutations = validMutations;
+          }
+          const parsedCursor = memberDataSyncCursorSchema.safeParse(owner.memberDataCursor);
+          owner.memberDataCursor = parsedCursor.success
+            ? parsedCursor.data
+            : { ...EMPTY_MEMBER_DATA_SYNC_CURSOR };
         }
       }
     }
@@ -546,7 +749,7 @@ export async function createMemoryRepo(): Promise<RepoStore> {
       assertUsableOwnerId(ownerId);
       const cached = repos.get(ownerId);
       if (cached) return cached;
-      const repo = createScopedMemoryRepo(ownerState(ownerId), persist);
+      const repo = createScopedMemoryRepo(ownerState(ownerId), persist, ownerId);
       repos.set(ownerId, repo);
       return repo;
     },

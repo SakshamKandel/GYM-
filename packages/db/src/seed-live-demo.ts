@@ -4,7 +4,6 @@ import { createDb } from './index';
 import {
   accounts,
   admins,
-  gyms,
   mealAvailability,
   mealDeliveryConfig,
   mealPartners,
@@ -12,19 +11,11 @@ import {
 } from './schema';
 
 /**
- * Make the member-facing Gyms + Meals surfaces show real content:
+ * Make the member-facing Meals surface show demo content. Gym listings are
+ * intentionally excluded: only operator-verified records may be created and
+ * published through the admin workflow.
  *
- * 1. Publishes the Wave Health Club listing seeded earlier as a draft, using
- *    publicly sourced facts (ProLinkNepal business listing, 2026-07-18:
- *    Wave Hospitality complex, Dhapasi Marga, Basundhara-3, Kathmandu —
- *    health club + swimming pool + restaurant + bakery). Coordinates are the
- *    OSM/Nominatim centroid for the Basundhara suburb (27.74224, 85.33262)
- *    — area-level, close enough for distance display; an admin can drop the
- *    exact pin from /admin/gyms. Unknown facts (phone, hours, prices) stay
- *    empty rather than fabricated. Only touches the row while it is still a
- *    'draft' — never clobbers admin edits.
- *
- * 2. Creates the "Lean Kitchen" demo meal partner (display-only account, no
+ * Creates the "Lean Kitchen" demo meal partner (display-only account, no
  *    password — portal sign-in gets real credentials via /admin/partners)
  *    with an 8-meal macro-tagged menu available every day for both windows,
  *    plus the delivery-config singleton. Idempotent throughout.
@@ -34,7 +25,6 @@ import {
 
 config({ path: '../../.env' });
 
-const GYM_SLUG = 'wave-health-club-ktm';
 const KITCHEN_EMAIL = 'demo.kitchen@gymapp.local';
 const KITCHEN_NAME = 'Lean Kitchen';
 
@@ -110,31 +100,7 @@ async function main(): Promise<void> {
   }
   const db = createDb(databaseUrl);
 
-  // ---- 1. Publish Wave Health Club (only while still a draft) ----
-  const updated = await db
-    .update(gyms)
-    .set({
-      addressText: 'Dhapasi Marga, Basundhara-3',
-      city: 'Kathmandu',
-      district: 'Kathmandu',
-      lat: 27.74224,
-      lng: 85.33262,
-      description:
-        'Health club inside the Wave Hospitality complex in Basundhara — gym floor with a swimming pool, in-house restaurant and bakery.',
-      amenities: ['Swimming pool', 'Cardio zone', 'Strength training', 'Restaurant', 'Bakery', 'Parking'],
-      status: 'published',
-      verifiedByAdmin: true,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(gyms.slug, GYM_SLUG), eq(gyms.status, 'draft')))
-    .returning({ id: gyms.id });
-  console.log(
-    updated.length > 0
-      ? `published gym "${GYM_SLUG}" (${updated[0]!.id})`
-      : `gym "${GYM_SLUG}" not in draft state — left untouched`,
-  );
-
-  // ---- 2. Demo kitchen partner account (display-only, no password) ----
+  // ---- Demo kitchen partner account (display-only, no password) ----
   let kitchenAccountId: string;
   const existingAccount = await db
     .select({ id: accounts.id })

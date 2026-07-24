@@ -1,9 +1,8 @@
 import { StyleSheet, View } from 'react-native';
-import Animated from 'react-native-reanimated';
-import { colors, radius, spacing, touch } from '@gym/ui-tokens';
+import { colors, radius, spacing } from '@gym/ui-tokens';
 import { Ionicons } from '@expo/vector-icons';
+import type { GymCrowdStatus } from '@gym/shared';
 import { AppText, Card } from '../../../components/ui';
-import type { GymCrowdStatus } from '../api';
 
 const LEVEL_COLORS: Record<string, string> = {
   quiet: colors.success,
@@ -12,11 +11,11 @@ const LEVEL_COLORS: Record<string, string> = {
   packed: colors.accent,
 };
 
-const LEVEL_LABELS: Record<string, string> = {
-  quiet: 'Quiet • Optimal training time',
-  moderate: 'Moderate • Good equipment availability',
-  busy: 'Busy • Peak training hours',
-  packed: 'Packed • High wait times',
+const LEVEL_LABELS: Record<GymCrowdStatus['level'], string> = {
+  quiet: 'Quiet',
+  moderate: 'Moderate',
+  busy: 'Busy',
+  packed: 'Packed',
 };
 
 const styles = StyleSheet.create({
@@ -86,15 +85,8 @@ const styles = StyleSheet.create({
 export function GymCrowdMeter({ crowd }: { crowd: GymCrowdStatus }) {
   const currentHour = new Date().getHours();
   const levelColor = LEVEL_COLORS[crowd.level] ?? colors.warning;
-  const levelText = LEVEL_LABELS[crowd.level] ?? 'Moderate occupancy';
-
-  // 24-hour occupancy fallback array
-  const occupancy =
-    crowd.hourlyOccupancy && crowd.hourlyOccupancy.length === 24
-      ? crowd.hourlyOccupancy
-      : Array.from({ length: 24 }, (_, i) =>
-          i >= 7 && i <= 9 ? 80 : i >= 17 && i <= 20 ? 88 : i >= 11 && i <= 14 ? 50 : 25,
-        );
+  const levelText = LEVEL_LABELS[crowd.level];
+  const occupancy = crowd.hourlyOccupancy;
 
   return (
     <Card padding={spacing.lg} style={styles.container}>
@@ -108,57 +100,59 @@ export function GymCrowdMeter({ crowd }: { crowd: GymCrowdStatus }) {
         </View>
         <View style={styles.percentageBadge}>
           <AppText variant="label" color={levelColor}>
-            {crowd.percentage}% Full
+            {crowd.percentage}% occupied
           </AppText>
         </View>
       </View>
 
-      {/* 24-Hour Peak Hours Visualizer */}
-      <View style={styles.chartContainer}>
-        <View style={styles.barsRow}>
-          {occupancy.map((val, idx) => {
-            const isCurrent = idx === currentHour;
-            const barHeight = Math.max(12, (val / 100) * 44);
-            const barColor =
-              val > 75 ? colors.accent : val > 50 ? colors.warning : colors.success;
+      {/* Never synthesize an hourly curve: render only a complete backend profile. */}
+      {occupancy ? (
+        <View style={styles.chartContainer} accessible accessibilityLabel="Reported hourly occupancy">
+          <View style={styles.barsRow}>
+            {occupancy.map((val, idx) => {
+              const isCurrent = idx === currentHour;
+              const barHeight = (val / 100) * 44;
+              const barColor =
+                val > 75 ? colors.accent : val > 50 ? colors.warning : colors.success;
 
-            return (
-              <View key={idx} style={styles.barCol}>
-                <View style={[styles.barTrack, { height: 44 }]}>
-                  <View
-                    style={[
-                      styles.barFill,
-                      {
-                        height: barHeight,
-                        backgroundColor: isCurrent ? colors.text : barColor,
-                        opacity: isCurrent ? 1 : 0.65,
-                      },
-                    ]}
-                  />
+              return (
+                <View key={idx} style={styles.barCol}>
+                  <View style={[styles.barTrack, { height: 44 }]}>
+                    <View
+                      style={[
+                        styles.barFill,
+                        {
+                          height: barHeight,
+                          backgroundColor: isCurrent ? colors.text : barColor,
+                          opacity: isCurrent ? 1 : 0.65,
+                        },
+                      ]}
+                    />
+                  </View>
                 </View>
-              </View>
-            );
-          })}
-        </View>
+              );
+            })}
+          </View>
 
-        <View style={styles.hourLabelsRow}>
-          <AppText variant="caption" color={colors.textDim}>
-            12 AM
-          </AppText>
-          <AppText variant="caption" color={colors.textDim}>
-            6 AM
-          </AppText>
-          <AppText variant="caption" color={colors.textDim}>
-            12 PM
-          </AppText>
-          <AppText variant="caption" color={colors.textDim}>
-            6 PM
-          </AppText>
-          <AppText variant="caption" color={colors.textDim}>
-            11 PM
-          </AppText>
+          <View style={styles.hourLabelsRow}>
+            <AppText variant="caption" color={colors.textDim}>
+              12 AM
+            </AppText>
+            <AppText variant="caption" color={colors.textDim}>
+              6 AM
+            </AppText>
+            <AppText variant="caption" color={colors.textDim}>
+              12 PM
+            </AppText>
+            <AppText variant="caption" color={colors.textDim}>
+              6 PM
+            </AppText>
+            <AppText variant="caption" color={colors.textDim}>
+              11 PM
+            </AppText>
+          </View>
         </View>
-      </View>
+      ) : null}
 
       {crowd.peakHoursText ? (
         <View style={styles.peakFooter}>

@@ -1,5 +1,4 @@
 import { tierPrices } from '@gym/db';
-import { DEFAULT_TIER_PRICES } from '@gym/shared';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -12,10 +11,8 @@ export const runtime = 'nodejs';
  * Admin console — the regional pricing editor (SCALE-UP-PLAN §1.1 / §4.1).
  * Backs the same `tier_prices` table GET /api/subscription/catalog reads.
  *
- *  - GET → every (region, tier) combination (all 8: 2 regions × 4 tiers),
- *    merging in DEFAULT_TIER_PRICES for any pair not yet written to the DB
- *    (defaults show as `active: true`, matching the catalog route's own
- *    fallback behavior) — so the editor always renders a complete grid.
+ *  - GET → persisted regional prices only. Missing cells remain blank in the
+ *    editor until an authorized admin supplies them.
  *  - PUT {prices:[{region, tier, amountMinor}]} → upserts each (region, tier)
  *    row. `currency` is DERIVED server-side from `region` (NP → NPR,
  *    INTL → USD) — never client-supplied, so a request can't mismatch a
@@ -69,19 +66,7 @@ export async function GET(req: Request) {
     })
     .from(tierPrices);
 
-  const byKey = new Map(rows.map((r) => [`${r.region}:${r.tier}`, r]));
-  const prices = DEFAULT_TIER_PRICES.map(
-    (d) =>
-      byKey.get(`${d.region}:${d.tier}`) ?? {
-        region: d.region,
-        tier: d.tier,
-        amountMinor: d.amountMinor,
-        currency: d.currency,
-        active: true,
-      },
-  );
-
-  return json({ prices }, 200);
+  return json({ prices: rows }, 200);
 }
 
 export async function PUT(req: Request) {

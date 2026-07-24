@@ -3,7 +3,7 @@ import { suggestProgression } from '@gym/shared';
 import { addDays, todayIso } from '../../lib/dates';
 import { uid } from '../../lib/id';
 import { getRepoForAccount } from '../../lib/repo';
-import { getPlanWorkout } from '../../lib/seed/plans';
+import { getCatalogPlanWorkout } from '../../lib/trainingCatalog';
 import { useAuth } from '../../state/auth';
 import {
   MAX_SUGGESTIONS_PER_POST,
@@ -70,7 +70,7 @@ export async function submitSuggestionsForWorkouts(
     // exerciseId → engine meta + source workout; later workouts overwrite earlier.
     const byExercise = new Map<string, { exercise: EngineExercise; sourceWorkoutId: string }>();
     for (const w of workouts) {
-      const plan = w.planWorkoutId ? getPlanWorkout(w.planWorkoutId) : undefined;
+      const plan = w.planWorkoutId ? getCatalogPlanWorkout(w.planWorkoutId) : undefined;
       const sets = await repo.getSetsForWorkout(w.id);
       for (const s of sets) {
         const repRange =

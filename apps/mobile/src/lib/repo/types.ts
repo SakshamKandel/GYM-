@@ -2,10 +2,14 @@ import type {
   DailyMacros,
   FoodItem,
   FoodLog,
+  MemberDataMutation,
+  MemberDataSyncCursor,
+  MemberDataSyncResponse,
   Measurement,
   PrRecord,
   SetLog,
   Streak,
+  TrainingCatalogCache,
   WeightLog,
   WorkoutSessionBlueprint,
   WorkoutLog,
@@ -23,12 +27,24 @@ export interface AnalyticsSet {
   workoutDate: string;
 }
 
+/** A local workout the backend rejected permanently; retained for repair/export. */
+export interface WorkoutSyncFailure {
+  workoutId: string;
+  code: 'invalid_payload';
+  failedAt: string;
+}
+
 /**
  * Local persistence contract. All feature code talks to THIS interface —
  * native uses SQLite, web QA uses the AsyncStorage-backed memory impl.
  * Everything is async and must resolve fast (<100ms perceived).
  */
 export interface Repo {
+  /** Last account-scoped, schema-validated Neon catalog snapshot. */
+  getTrainingCatalogCache(): Promise<TrainingCatalogCache | null>;
+  /** Replace the snapshot only after a successful validated API response. */
+  saveTrainingCatalogCache(cache: TrainingCatalogCache): Promise<void>;
+
   // ── Workouts ────────────────────────────────────────────────
   startWorkout(
     w: Omit<WorkoutLog, 'finishedAt' | 'durationSec'>,
@@ -72,6 +88,18 @@ export interface Repo {
   getUnsyncedFinishedWorkouts(limit: number): Promise<{ workout: WorkoutLog; sets: SetLog[] }[]>;
   /** Stamp workouts synced — call ONLY after the server confirmed the batch. */
   markWorkoutsSynced(ids: string[], syncedAt: string): Promise<void>;
+  /** Quarantine a permanently invalid row without pretending it reached the server. */
+  markWorkoutSyncFailed(failure: WorkoutSyncFailure): Promise<void>;
+  /** Recent quarantined rows for diagnostics/support; data remains fully local. */
+  getWorkoutSyncFailures(limit: number): Promise<WorkoutSyncFailure[]>;
+
+  // â”€â”€ Member data sync (two-way, deterministic LWW) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  /** Oldest account-owned local mutations waiting for server acknowledgement. */
+  getPendingMemberDataMutations(limit: number): Promise<MemberDataMutation[]>;
+  /** Per-entity authoritative server cursor; empty on a fresh install/account. */
+  getMemberDataSyncCursor(): Promise<MemberDataSyncCursor>;
+  /** Atomically merge a validated page, acknowledge matching queue rows, and advance cursors. */
+  applyMemberDataSyncResponse(response: MemberDataSyncResponse): Promise<void>;
 
   // ── Body ────────────────────────────────────────────────────
   upsertWeight(w: WeightLog): Promise<void>;

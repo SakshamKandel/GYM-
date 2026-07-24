@@ -8,7 +8,8 @@ import {
   cancelFirstWorkoutsReminder,
   scheduleFirstWorkoutsReminder,
 } from '../../../lib/notifications';
-import { useQuest } from '../../../state/quest';
+import { questScopeId, questStateFor, useQuest } from '../../../state/quest';
+import { useAuth } from '../../../state/auth';
 import { toHref } from '../logic';
 import type { QuestProgress } from '../logic';
 
@@ -59,24 +60,31 @@ function coachLine(done: number): string {
 }
 
 export function FirstWorkoutsQuest({ progress }: { progress: QuestProgress }) {
-  const reminderScheduled = useQuest((s) => s.reminderScheduled);
+  const accountId = useAuth((state) => state.user?.id ?? null);
+  const scope = questScopeId(accountId);
+  const reminderScheduled = useQuest((state) => questStateFor(state, accountId).reminderScheduled);
   const setReminderScheduled = useQuest((s) => s.setReminderScheduled);
   const setDismissed = useQuest((s) => s.setDismissed);
 
   const { done, goal, complete } = progress;
 
   // Schedule the single nudge once (only while still working toward the goal).
+  const askedScopeRef = useRef<string | null>(null);
   const askedRef = useRef(false);
   useEffect(() => {
+    if (askedScopeRef.current !== scope) {
+      askedScopeRef.current = scope;
+      askedRef.current = false;
+    }
     if (complete || reminderScheduled || askedRef.current) return;
     askedRef.current = true;
     void (async () => {
       await scheduleFirstWorkoutsReminder(REMINDER_DAYS, REMINDER_TITLE, REMINDER_BODY);
       // Mark scheduled whether or not permission was granted, so we prompt at
       // most once — a declined user is never re-nagged for permission.
-      setReminderScheduled(true);
+      setReminderScheduled(accountId, true);
     })();
-  }, [complete, reminderScheduled, setReminderScheduled]);
+  }, [accountId, complete, reminderScheduled, scope, setReminderScheduled]);
 
   // Once complete, cancel any pending reminder — the nudge is no longer needed.
   useEffect(() => {
@@ -88,8 +96,8 @@ export function FirstWorkoutsQuest({ progress }: { progress: QuestProgress }) {
   }, []);
 
   const dismiss = useCallback(() => {
-    setDismissed(true);
-  }, [setDismissed]);
+    setDismissed(accountId, true);
+  }, [accountId, setDismissed]);
 
   return (
     <View

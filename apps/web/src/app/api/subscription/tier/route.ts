@@ -21,9 +21,9 @@ export const runtime = 'nodejs';
  * mirrored onto the profile blob, and the Greece elite auto-assignment stays
  * in sync.
  *
- * Billing (lib/billing.ts): in 'preview' mode (default, no store accounts
- * yet) tiers are a free preview selection and this endpoint grants what the
- * user picks. In 'live' mode (BILLING_MODE=live) money is attached: this
+ * Billing (lib/billing.ts): paid activation is disabled by default. An
+ * explicitly configured non-production 'preview' mode can grant a test tier.
+ * In 'live' mode (BILLING_MODE=live + webhook secret) money is attached: this
  * endpoint only accepts 'starter' (downgrade/cancel) and returns 402
  * { error: 'billing_required' } for paid tiers — those are granted solely by
  * the verified RevenueCat webhook (/api/subscription/revenuecat). The mobile
@@ -72,8 +72,11 @@ export async function POST(req: Request) {
 
   // Live billing: paid tiers come only from verified store receipts (the
   // RevenueCat webhook). Self-serve keeps exactly one power — cancel.
-  if (billingMode() === 'live' && tier !== 'starter') {
-    return json({ error: 'billing_required' }, 402);
+  const mode = billingMode();
+  if (tier !== 'starter' && mode !== 'preview') {
+    return mode === 'live'
+      ? json({ error: 'billing_required' }, 402)
+      : json({ error: 'billing_unavailable' }, 503);
   }
 
   // Cancel / downgrade with PERIOD-END semantics (Pack J). A member cancelling a

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
+import { isCurrentSessionRequest } from '../../lib/sessionRequest';
+import { useAuth } from '../../state/auth';
 import {
   fetchMealMenu,
   fetchMealPartners,
@@ -40,22 +42,35 @@ interface ListState<T> {
 }
 
 function useLoadOnFocus<T>(token: string | null, fetcher: (token: string) => Promise<T[]>): ListState<T> {
-  const [data, setData] = useState<T[] | null>(null);
-  const [error, setError] = useState(false);
+  const [snapshot, setSnapshot] = useState<{ token: string; data: T[] } | null>(null);
+  const [errorToken, setErrorToken] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
   const reload = useCallback(() => {
     if (!token) return;
+    const request = { token, sequence: ++requestSequence.current };
     void (async () => {
       try {
         const next = await fetcher(token);
-        setData(next);
-        setError(false);
+        if (
+          !isCurrentSessionRequest(request, {
+            token: useAuth.getState().token,
+            sequence: requestSequence.current,
+          })
+        ) return;
+        setSnapshot({ token, data: next });
+        setErrorToken(null);
       } catch {
-        setError(true);
+        if (
+          !isCurrentSessionRequest(request, {
+            token: useAuth.getState().token,
+            sequence: requestSequence.current,
+          })
+        ) return;
+        setErrorToken(token);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [fetcher, token]);
 
   useFocusEffect(
     useCallback(() => {
@@ -64,11 +79,13 @@ function useLoadOnFocus<T>(token: string | null, fetcher: (token: string) => Pro
   );
 
   const retry = useCallback(() => {
-    setError(false);
+    setErrorToken(null);
     reload();
   }, [reload]);
 
-  return { data: token ? data : null, loading: !!token && data === null && !error, error, reload, retry };
+  const data = token !== null && snapshot?.token === token ? snapshot.data : null;
+  const error = token !== null && errorToken === token;
+  return { data, loading: token !== null && data === null && !error, error, reload, retry };
 }
 
 export function useMealPartners(token: string | null): ListState<MealPartner> {
@@ -91,7 +108,6 @@ export function useMealMenu(
         if (!partnerId) return Promise.resolve([]);
         return fetchMealMenu(t, partnerId, { goal, diet, date, window });
       },
-      // eslint-disable-next-line react-hooks/exhaustive-deps
       [partnerId, goal, diet, date, window],
     ),
   );
@@ -151,31 +167,35 @@ export function useMealQuote(
   // Stringified inputs — a stable dependency that only changes when the cart,
   // address, or slot actually change (the object identity changes every render).
   const key = token && input ? JSON.stringify(input) : null;
+  const scope = token && key ? `${token}\u0000${key}` : null;
+  const [stateScope, setStateScope] = useState<string | null>(null);
   // Monotonic request id so a slow in-flight quote can't overwrite a newer one.
   const seqRef = useRef(0);
 
   useEffect(() => {
     if (!token || !input || !key) {
       seqRef.current += 1;
+      setStateScope(null);
       setStatus('idle');
       setQuote(null);
       setErrorCode(null);
       setErrorDetails(null);
       return;
     }
-    const seq = ++seqRef.current;
+    const request = { token, sequence: ++seqRef.current };
+    setStateScope(scope);
     setStatus('loading');
     const timer = setTimeout(() => {
       void (async () => {
         try {
           const next = await fetchMealQuote(token, input);
-          if (seqRef.current !== seq) return;
+          if (!isCurrentSessionRequest(request, { token: useAuth.getState().token, sequence: seqRef.current })) return;
           setQuote(next);
           setStatus('ready');
           setErrorCode(null);
           setErrorDetails(null);
         } catch (err) {
-          if (seqRef.current !== seq) return;
+          if (!isCurrentSessionRequest(request, { token: useAuth.getState().token, sequence: seqRef.current })) return;
           const apiErr = toMealsError(err);
           setStatus('error');
           setErrorCode(apiErr.code);
@@ -185,8 +205,16 @@ export function useMealQuote(
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, key]);
+  }, [token, key, scope]);
 
+  if (stateScope !== scope) {
+    return {
+      quote: null,
+      status: scope === null ? 'idle' : 'loading',
+      errorCode: null,
+      errorDetails: null,
+    };
+  }
   return { quote, status, errorCode, errorDetails };
 }
 
@@ -204,28 +232,32 @@ export function useMealSubscriptionEditQuote(
   const [status, setStatus] = useState<MealQuoteStatus>('idle');
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const key = token && subscriptionId && input ? JSON.stringify(input) : null;
+  const scope = token && subscriptionId && key ? `${token}\u0000${subscriptionId}\u0000${key}` : null;
+  const [stateScope, setStateScope] = useState<string | null>(null);
   const seqRef = useRef(0);
 
   useEffect(() => {
     if (!token || !subscriptionId || !input || !key) {
       seqRef.current += 1;
+      setStateScope(null);
       setStatus('idle');
       setQuote(null);
       setErrorCode(null);
       return;
     }
-    const seq = ++seqRef.current;
+    const request = { token, sequence: ++seqRef.current };
+    setStateScope(scope);
     setStatus('loading');
     setErrorCode(null);
     const timer = setTimeout(() => {
       void (async () => {
         try {
           const next = await quoteMealSubscriptionEdit(token, subscriptionId, input);
-          if (seqRef.current !== seq) return;
+          if (!isCurrentSessionRequest(request, { token: useAuth.getState().token, sequence: seqRef.current })) return;
           setQuote(next);
           setStatus('ready');
         } catch (error) {
-          if (seqRef.current !== seq) return;
+          if (!isCurrentSessionRequest(request, { token: useAuth.getState().token, sequence: seqRef.current })) return;
           setQuote(null);
           setErrorCode(toMealsError(error).code);
           setStatus('error');
@@ -234,7 +266,10 @@ export function useMealSubscriptionEditQuote(
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, subscriptionId, key]);
+  }, [token, subscriptionId, key, scope]);
 
+  if (stateScope !== scope) {
+    return { quote: null, status: scope === null ? 'idle' : 'loading', errorCode: null };
+  }
   return { quote, status, errorCode };
 }

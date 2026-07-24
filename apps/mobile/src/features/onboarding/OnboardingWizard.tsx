@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import Animated from 'react-native-reanimated';
 import type { UnitPref } from '@gym/shared';
-import { inputToKg } from '@gym/shared';
+import { inputToKg, selectTrainingPlan } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
@@ -30,7 +30,7 @@ import { resetStackTo } from '../../lib/nav';
 import { registerForPushNotificationsAsync } from '../../lib/notifications';
 import { syncProfileNow } from '../../lib/profileSync';
 import { getRepo } from '../../lib/repo';
-import { getPlan } from '../../lib/seed/plans';
+import { useTrainingCatalog } from '../../lib/trainingCatalog';
 import { useProfile } from '../../state/profile';
 import { requestHealthConnectPermission, requestStepPermission } from '../activity/pedometer';
 import { CountUpStat } from './components/CountUpStat';
@@ -44,7 +44,6 @@ import {
   formatWeightValue,
   GOAL_OPTIONS,
   HEIGHT_CM,
-  planIdForGoal,
   SEX_OPTIONS,
   TOTAL_STEPS,
   UNIT_OPTIONS,
@@ -109,6 +108,12 @@ export function OnboardingWizard() {
   const [permissionsBusy, setPermissionsBusy] = useState(false);
   const update = useProfile((s) => s.update);
   const completeOnboarding = useProfile((s) => s.completeOnboarding);
+  const catalogState = useTrainingCatalog();
+  const suggestedPlan = selectTrainingPlan(
+    catalogState.catalog?.plans ?? [],
+    draft.goal ?? 'muscle',
+    draft.daysPerWeek,
+  );
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
@@ -199,7 +204,6 @@ export function OnboardingWizard() {
     try {
       const kg = inputToKg(draft.weightInput, draft.unitPref);
       const targets = draftTargets(draft);
-      const planId = planIdForGoal(draft.goal ?? 'muscle');
       // Persist the starting weight FIRST — the onboarded flag must only flip
       // once the SQLite write succeeds, or a failure here would strand the user
       // in an onboarded-but-empty state with no way back to this screen.
@@ -216,7 +220,7 @@ export function OnboardingWizard() {
         activityLevel: draft.activity,
         daysPerWeek: draft.daysPerWeek,
       });
-      completeOnboarding({ targets, planId });
+      completeOnboarding({ targets, planId: suggestedPlan?.id ?? null });
       // Push the freshly-onboarded profile to Neon immediately — don't rely on
       // the 3s debounce, which a quick app-close could miss (that's how an
       // account ends up onboarded locally but empty on the server). No-op when
@@ -382,7 +386,7 @@ export function OnboardingWizard() {
         );
       default: {
         const targets = draftTargets(draft);
-        const plan = getPlan(planIdForGoal(draft.goal ?? 'muscle'));
+        const plan = suggestedPlan;
         return (
           <View>
             {/* The screen's ONE red hero block: kcal count-up + macro
@@ -411,7 +415,18 @@ export function OnboardingWizard() {
                   {plan.description}
                 </AppText>
               </View>
-            ) : null}
+            ) : (
+              <View style={styles.planBlock}>
+                <AppText variant="label">Live plan matching</AppText>
+                <AppText variant="body" color={colors.textDim}>
+                  {catalogState.status === 'authRequired'
+                    ? 'Sign in from Train and your coach’s live catalog will match a plan to this goal.'
+                    : catalogState.status === 'error'
+                      ? 'The coach catalog is offline. Your goal is saved and a plan will be matched when it reconnects.'
+                      : 'Looking for the closest published plan for your goal…'}
+                </AppText>
+              </View>
+            )}
           </View>
         );
       }

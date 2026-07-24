@@ -19,6 +19,7 @@ import { registerPushRefresh } from '../features/realtime/pushRefresh';
 import { AppLock } from '../features/security/AppLock';
 import { AppStartupScreen } from '../components/experience/AppStartupScreen';
 import { syncWorkouts } from '../features/sync/workoutSync';
+import { startMemberDataSync, syncMemberData } from '../features/sync/memberDataSync';
 import {
   registerForPushNotificationsAsync,
   setupNotifications,
@@ -59,10 +60,17 @@ export default function RootLayout() {
   // Re-validate the server session whenever the app returns to the foreground.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void useAuth.getState().refresh();
+      if (state === 'active') {
+        void useAuth.getState().refresh();
+        void syncMemberData();
+      }
     });
     return () => sub.remove();
   }, []);
+
+  // Repository writes call this post-commit hook; transport stays entirely
+  // outside the <100ms offline-first write path.
+  useEffect(() => startMemberDataSync(), []);
 
   // Keep the cloud profile backup current while signed in.
   useEffect(() => {
@@ -91,6 +99,7 @@ export default function RootLayout() {
       // rehydration and no-op on every cold start, leaving offline workouts
       // stuck until the next finish(). This also covers fresh sign-ins.
       void syncWorkouts();
+      void syncMemberData();
       void hydrateCheckIns();
       // Push→refresh listeners (coach review / check-in reply pushes trigger
       // an immediate store re-fetch). Registers once; later calls no-op.

@@ -79,7 +79,7 @@ export async function GET(req: Request) {
       lat: g.lat,
       lng: g.lng,
       distanceKm: null as number | null,
-      photos: photosByGym.get(g.id) ?? [],
+      photos: (photosByGym.get(g.id) ?? []).map(({ deliveryUrl }) => ({ deliveryUrl })),
       ...ratingFor(ratingByGym, g.id),
       unavailable: !(g.status === 'published' && g.verifiedByAdmin),
       savedAt: savedAtByGym.get(g.id)?.toISOString() ?? null,

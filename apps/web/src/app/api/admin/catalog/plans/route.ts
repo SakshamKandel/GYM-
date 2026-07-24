@@ -13,13 +13,10 @@ export const runtime = 'nodejs';
  * surface). Plans are DB-backed (packages/db/src/schema.ts `plans` +
  * `plan_workouts` + `plan_exercises`).
  *
- * IMPORTANT — this table is NOT yet read by the shipped app. The mobile
- * plan browser sources its plans from a hardcoded constant
- * (apps/mobile/src/lib/seed/plans.ts SEED_PLANS / SEED_PLAN_WORKOUTS,
- * getPlan()/getPlanWorkouts()) and never queries this API or the `plans`
- * table. This CRUD surface is a staging/authoring tool for a future mobile
- * catalog sync (see PROJECT_PLAN/gap list); edits made here do not affect
- * what members see until that sync is built. Nested workout/exercise
+ * This table is the runtime source of truth for the authenticated member
+ * snapshot at GET /api/me/training-catalog. Saved edits reach members on
+ * their next catalog refresh; offline devices identify the cached snapshot.
+ * Nested workout/exercise
  * structure is edited as a whole via PATCH /api/admin/catalog/plans/[id]
  * (see that route's doc) rather than a sprawling set of per-workout/per-
  * exercise routes — a plan's structure is small (a handful of workouts × a

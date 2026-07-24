@@ -22,6 +22,20 @@
       "when": 1784478600000,
       "tag": "0002_private_image_upload_claims",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784678400000,
+      "tag": "0003_gym_authenticity_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784682000000,
+      "tag": "0004_apple_auth",
+      "breakpoints": true
     }
   ]
 }

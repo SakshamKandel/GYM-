@@ -1,12 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import {
-  DEFAULT_TIER_PRICES,
-  applyDiscount,
-  formatMoney,
-  resolveRegion,
-  type PriceRegion,
-} from './pricing.ts';
+import { applyDiscount, formatMoney, resolveRegion } from './pricing.ts';
 
 describe('resolveRegion', () => {
   it('NP (any case, trimmed) resolves to the Nepal catalog', () => {
@@ -26,36 +20,6 @@ describe('resolveRegion', () => {
     assert.equal(resolveRegion(null), 'INTL');
     assert.equal(resolveRegion(undefined), 'INTL');
     assert.equal(resolveRegion(''), 'INTL');
-  });
-});
-
-describe('DEFAULT_TIER_PRICES', () => {
-  it('has exactly one row per region×tier and matches the §1.1 table', () => {
-    assert.equal(DEFAULT_TIER_PRICES.length, 8);
-
-    const byKey = new Map(DEFAULT_TIER_PRICES.map((p) => [`${p.region}:${p.tier}`, p]));
-    assert.equal(byKey.size, 8); // no duplicate region×tier rows
-
-    assert.equal(byKey.get('NP:starter')?.amountMinor, 0);
-    assert.equal(byKey.get('NP:silver')?.amountMinor, 49900);
-    assert.equal(byKey.get('NP:gold')?.amountMinor, 99900);
-    assert.equal(byKey.get('NP:elite')?.amountMinor, 299900);
-    for (const tier of ['starter', 'silver', 'gold', 'elite'] as const) {
-      assert.equal(byKey.get(`NP:${tier}`)?.currency, 'NPR');
-    }
-
-    assert.equal(byKey.get('INTL:starter')?.amountMinor, 0);
-    assert.equal(byKey.get('INTL:silver')?.amountMinor, 499);
-    assert.equal(byKey.get('INTL:gold')?.amountMinor, 999);
-    assert.equal(byKey.get('INTL:elite')?.amountMinor, 2999);
-    for (const tier of ['starter', 'silver', 'gold', 'elite'] as const) {
-      assert.equal(byKey.get(`INTL:${tier}`)?.currency, 'USD');
-    }
-  });
-
-  it('every region is a valid PriceRegion', () => {
-    const regions: PriceRegion[] = ['NP', 'INTL'];
-    for (const p of DEFAULT_TIER_PRICES) assert.ok(regions.includes(p.region));
   });
 });
 

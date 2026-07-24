@@ -132,13 +132,13 @@ function RetryLine({ message, onRetry }: { message: string; onRetry: () => void 
   );
 }
 
-function NotSyncedBanner() {
+function CatalogSyncBanner() {
   return (
     <View style={styles.banner}>
       <Ionicons name="information-circle-outline" size={18} color={colors.textDim} />
       <AppText variant="caption" color={colors.textDim} style={styles.bannerText}>
-        Staging only — the app still reads its exercise/plan library from the bundled catalog.
-        Edits here don’t change what members see yet.
+        Live catalog — signed-in members receive saved edits on their next refresh. Offline
+        devices keep their last verified download.
       </AppText>
     </View>
   );
@@ -806,7 +806,7 @@ export default function AdminCatalogScreen() {
   return (
     <Screen scroll keyboardAware>
       <BackRow onBack={goBack} />
-      <NotSyncedBanner />
+      <CatalogSyncBanner />
 
       <View style={styles.chipRow}>
         <Chip label="Exercises" selected={tab === 'exercises'} onPress={() => setTab('exercises')} />

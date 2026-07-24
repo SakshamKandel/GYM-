@@ -8,6 +8,7 @@ import {
   type CoachMessage,
   type CoachThreadKind,
 } from '../../lib/api/client';
+import { isCurrentSessionRequest } from '../../lib/sessionRequest';
 import { useAuth } from '../../state/auth';
 
 /**
@@ -63,7 +64,7 @@ export interface CoachThread {
   /** Returns true on success. Never throws — errors surface as `sendError`. */
   send: (body: string) => Promise<boolean>;
   /** Last send failure code, or null. Cleared on the next successful send. */
-  sendError: 'forbidden' | 'network' | null;
+  sendError: 'coach_unavailable' | 'forbidden' | 'network' | null;
 }
 
 function isOptimistic(m: CoachMessage): boolean {
@@ -91,13 +92,22 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
   const [stale, setStale] = useState(false);
   const [sending, setSending] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [sendError, setSendError] = useState<'forbidden' | 'network' | null>(null);
+  const [sendError, setSendError] = useState<
+    'coach_unavailable' | 'forbidden' | 'network' | null
+  >(null);
+  // Every local snapshot is fingerprinted to the bearer token that produced
+  // it. A different account renders an empty thread immediately, before the
+  // focus effect has a chance to start its first request.
+  const [stateToken, setStateToken] = useState<string | null>(null);
+  const stateTokenRef = useRef<string | null>(null);
+  const loadSequence = useRef(0);
+  const sendSequence = useRef(0);
   // Whether a send yields an instant coach reply. Starts true so the classic
   // AI (Greece / Elite concierge) case shows the typing bubble; a send that
   // comes back with no coach row (human coach owns the reply, or non-Elite
   // support) flips this off so we stop faking an instant answer. Reset per
   // account below alongside the thread.
-  const [instantReply, setInstantReply] = useState(true);
+  const [instantReply, setInstantReply] = useState(false);
 
   const mounted = useRef(true);
   useEffect(() => {
@@ -107,23 +117,35 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
     };
   }, []);
 
-  // A fresh account must never inherit the previous account's thread.
   const loadedFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (status === 'signedOut') {
-      setMessages([]);
-      setInstantReply(true);
-      loadedFor.current = null;
-    }
-  }, [status]);
 
   const reload = useCallback(() => {
     if (status !== 'signedIn' || token === null) return;
+    if (stateTokenRef.current !== token) {
+      stateTokenRef.current = token;
+      setStateToken(token);
+      setMessages([]);
+      setInstantReply(false);
+      setStale(false);
+      setSending(false);
+      setGenerating(false);
+      setSendError(null);
+      loadedFor.current = null;
+    }
+    const request = { token, sequence: ++loadSequence.current };
     void (async () => {
       if (loadedFor.current !== token) setLoading(true);
       try {
         const next = await getCoachMessages(kind, token);
-        if (!mounted.current) return;
+        const current = useAuth.getState();
+        if (
+          !mounted.current ||
+          current.status !== 'signedIn' ||
+          !isCurrentSessionRequest(request, {
+            token: current.token,
+            sequence: loadSequence.current,
+          })
+        ) return;
         // Keep any still-in-flight optimistic bubbles ahead of the server set.
         // The transient "typing" bubble is UI-only and must never survive a
         // reload, so it's excluded here.
@@ -144,12 +166,29 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         loadedFor.current = token;
         setStale(false);
       } catch (err) {
+        const current = useAuth.getState();
+        if (
+          !mounted.current ||
+          current.status !== 'signedIn' ||
+          !isCurrentSessionRequest(request, {
+            token: current.token,
+            sequence: loadSequence.current,
+          })
+        ) return;
         if (toCoachError(err).code === 'unauthorized') {
           void useAuth.getState().refresh();
         }
-        if (mounted.current) setStale(true);
+        setStale(true);
       } finally {
-        if (mounted.current) setLoading(false);
+        const current = useAuth.getState();
+        if (
+          mounted.current &&
+          current.status === 'signedIn' &&
+          isCurrentSessionRequest(request, {
+            token: current.token,
+            sequence: loadSequence.current,
+          })
+        ) setLoading(false);
       }
     })();
   }, [kind, status, token]);
@@ -196,6 +235,18 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
       const body = raw.trim();
       if (body.length === 0 || token === null || status !== 'signedIn') return false;
 
+      const ownsState = stateTokenRef.current === token;
+      if (!ownsState) {
+        stateTokenRef.current = token;
+        setStateToken(token);
+        setMessages([]);
+        setInstantReply(false);
+        setStale(false);
+        setSendError(null);
+        loadedFor.current = null;
+      }
+      const request = { token, sequence: ++sendSequence.current };
+
       const now = Date.now();
       const optimistic: CoachMessage = {
         id: `${OPTIMISTIC_PREFIX}${now}`,
@@ -218,7 +269,7 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         createdAt: new Date(now + 1).toISOString(),
         readByUser: true,
       };
-      const showTyping = instantReply;
+      const showTyping = ownsState ? instantReply : false;
       setMessages((prev) =>
         showTyping ? [...prev, optimistic, typing] : [...prev, optimistic],
       );
@@ -231,7 +282,15 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         // (the Groq key lives on the server). The typing bubble shows until it
         // responds with the real [user, coachReply] pair.
         const inserted = await sendCoachMessage(kind, body, token);
-        if (mounted.current) {
+        const current = useAuth.getState();
+        if (
+          mounted.current &&
+          current.status === 'signedIn' &&
+          isCurrentSessionRequest(request, {
+            token: current.token,
+            sequence: sendSequence.current,
+          })
+        ) {
           // Learn whether this thread actually returns an instant coach reply,
           // so the next send suppresses (or keeps) the typing bubble honestly.
           setInstantReply(inserted.some((m) => m.sender === 'coach'));
@@ -251,17 +310,39 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         return true;
       } catch (err) {
         const code = toCoachError(err).code;
-        if (mounted.current) {
+        const current = useAuth.getState();
+        if (
+          mounted.current &&
+          current.status === 'signedIn' &&
+          isCurrentSessionRequest(request, {
+            token: current.token,
+            sequence: sendSequence.current,
+          })
+        ) {
           // Roll the optimistic + typing bubbles back — the send didn't land.
           setMessages((prev) =>
             prev.filter((m) => m.id !== optimistic.id && m.id !== typing.id),
           );
-          setSendError(code === 'forbidden' ? 'forbidden' : 'network');
+          setSendError(
+            code === 'coach_unavailable'
+              ? 'coach_unavailable'
+              : code === 'forbidden'
+                ? 'forbidden'
+                : 'network',
+          );
           if (code === 'unauthorized') void useAuth.getState().refresh();
         }
         return false;
       } finally {
-        if (mounted.current) {
+        const current = useAuth.getState();
+        if (
+          mounted.current &&
+          current.status === 'signedIn' &&
+          isCurrentSessionRequest(request, {
+            token: current.token,
+            sequence: sendSequence.current,
+          })
+        ) {
           setSending(false);
           setGenerating(false);
         }
@@ -270,5 +351,15 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
     [instantReply, kind, status, token],
   );
 
-  return { messages, loading, stale, sending, generating, reload, send, sendError };
+  const ownsState = token !== null && stateToken === token;
+  return {
+    messages: ownsState ? messages : [],
+    loading: ownsState ? loading : status === 'signedIn' && token !== null,
+    stale: ownsState ? stale : false,
+    sending: ownsState ? sending : false,
+    generating: ownsState ? generating : false,
+    reload,
+    send,
+    sendError: ownsState ? sendError : null,
+  };
 }

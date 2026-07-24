@@ -9,7 +9,6 @@ import {
 } from '@gym/db';
 import {
   applyDiscount,
-  DEFAULT_TIER_PRICES,
   resolveRegion,
   type PriceRegion,
   type Tier,
@@ -196,8 +195,7 @@ export async function grantDiscount(args: GrantDiscountArgs): Promise<string> {
 /**
  * Resolves the base (pre-discount) catalog price for `tier` in the region
  * associated with `accountId` (accounts.country → resolveRegion → 'INTL'
- * fallback): an active tier_prices row if one exists, else the shared
- * DEFAULT_TIER_PRICES constant. Used by purchase-settlement call sites
+ * fallback): an active tier_prices row must exist. Used by purchase-settlement call sites
  * (subscription/tier preview grants, the RevenueCat webhook) to get an
  * amountMinor for settlePromoOnPurchase's commission math when there is no
  * verified real sale price to read — preview mode has none, and RevenueCat's
@@ -236,11 +234,7 @@ export async function resolveCatalogAmount(
     )
     .limit(1);
   if (row) return row;
-
-  const fallback = DEFAULT_TIER_PRICES.find((p) => p.region === region && p.tier === tier);
-  return fallback
-    ? { amountMinor: fallback.amountMinor, currency: fallback.currency }
-    : { amountMinor: 0, currency: region === 'NP' ? 'NPR' : 'USD' };
+  throw new Error('catalog_price_unavailable');
 }
 
 export type SettleMode = 'preview' | 'live' | 'manual';

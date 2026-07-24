@@ -64,7 +64,7 @@ export interface ProfileState {
   update: (patch: Partial<ProfileData>) => void;
   completeOnboarding: (final: {
     targets: Targets;
-    planId: string;
+    planId: string | null;
   }) => void;
   /**
    * Sign-out: drop account-derived identity (name shown on the profile card,

@@ -1,4 +1,4 @@
-import type { Tier } from '../types';
+import type { Tier, TrainingCatalogPlan } from '../types';
 
 /**
  * Tier gating goes through THIS function only (CLAUDE.md rule 4).
@@ -32,7 +32,11 @@ export type Feature =
   | 'form_checks'
   | 'custom_meal_plan'
   | 'coach_workouts'
-  | 'coach_diet';
+  | 'coach_diet'
+  | 'training_plans_starter'
+  | 'training_plans_silver'
+  | 'training_plans_gold'
+  | 'training_plans_elite';
 
 const TIER_RANK: Record<Tier, number> = { starter: 0, silver: 1, gold: 2, elite: 3 };
 
@@ -52,6 +56,10 @@ const FEATURE_MIN_TIER: Record<Feature, Tier> = {
   custom_meal_plan: 'elite',
   coach_workouts: 'silver',
   coach_diet: 'gold',
+  training_plans_starter: 'starter',
+  training_plans_silver: 'silver',
+  training_plans_gold: 'gold',
+  training_plans_elite: 'elite',
 };
 
 export function hasEntitlement(user: { tier: Tier }, feature: Feature): boolean {
@@ -64,6 +72,27 @@ export function minTierFor(feature: Feature): Tier {
 
 export function compareTiers(a: Tier, b: Tier): number {
   return TIER_RANK[a] - TIER_RANK[b];
+}
+
+/** Map data-driven plan requirements into the single entitlement gate. */
+export function trainingPlanFeature(tierRequired: Tier): Feature {
+  switch (tierRequired) {
+    case 'starter':
+      return 'training_plans_starter';
+    case 'silver':
+      return 'training_plans_silver';
+    case 'gold':
+      return 'training_plans_gold';
+    case 'elite':
+      return 'training_plans_elite';
+  }
+}
+
+export function canAccessTrainingPlan(
+  user: { tier: Tier },
+  plan: Pick<TrainingCatalogPlan, 'tierRequired'>,
+): boolean {
+  return hasEntitlement(user, trainingPlanFeature(plan.tierRequired));
 }
 
 /**
@@ -83,8 +112,8 @@ export function compareTiers(a: Tier, b: Tier): number {
  *    (expiry is inclusive of its final instant).
  *
  * `expiresAt` accepts a Date, an ISO string, or null (the shape Drizzle/JSON
- * hands back); an unparseable string is treated as no-expiry (fail OPEN to the
- * stored tier — a bad timestamp must not silently strip a paying member).
+ * hands back). An invalid timestamp fails closed to Starter: malformed billing
+ * state must never grant paid entitlements.
  */
 export function effectiveTier(
   tier: Tier,
@@ -94,6 +123,6 @@ export function effectiveTier(
   if (tier === 'starter') return 'starter';
   if (expiresAt === null || expiresAt === undefined) return tier;
   const expiryMs = expiresAt instanceof Date ? expiresAt.getTime() : Date.parse(expiresAt);
-  if (Number.isNaN(expiryMs)) return tier; // unparseable → fail open to stored tier
+  if (Number.isNaN(expiryMs)) return 'starter';
   return expiryMs < now.getTime() ? 'starter' : tier;
 }

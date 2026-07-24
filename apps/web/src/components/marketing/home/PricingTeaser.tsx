@@ -112,7 +112,7 @@ export function PricingTeaser({ catalog }: { catalog: PublicCatalog }) {
                       <span className="font-display text-4xl font-extrabold tracking-tight">
                         {priceFor(regionCatalog, t.tier)}
                       </span>
-                      {priceFor(regionCatalog, t.tier) !== 'Free' ? (
+                      {!['Free', 'Unavailable'].includes(priceFor(regionCatalog, t.tier)) ? (
                         <span className={`ml-2 font-mono text-[11.5px] uppercase tracking-wider ${isGold ? 'text-faint' : 'text-gravel'}`}>
                           / month
                         </span>
@@ -135,13 +135,19 @@ export function PricingTeaser({ catalog }: { catalog: PublicCatalog }) {
                   </div>
 
                   <div className="mt-8 pt-4">
-                    <PillLink
-                      href={t.tier === 'starter' ? '/download' : '/pricing'}
-                      variant={isGold ? 'red' : 'outline'}
-                      className="w-full justify-center"
-                    >
-                      {t.tier === 'starter' ? 'Get Started Free' : 'Choose ' + t.name}
-                    </PillLink>
+                    {regionCatalog.available ? (
+                      <PillLink
+                        href={t.tier === 'starter' ? '/download' : '/pricing'}
+                        variant={isGold ? 'red' : 'outline'}
+                        className="w-full justify-center"
+                      >
+                        {t.tier === 'starter' ? 'Get Started Free' : 'Choose ' + t.name}
+                      </PillLink>
+                    ) : (
+                      <span role="status" className="block text-center text-sm font-semibold">
+                        Pricing temporarily unavailable
+                      </span>
+                    )}
                   </div>
                 </div>
               </StaggerItem>

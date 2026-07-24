@@ -64,18 +64,18 @@ import { TierDetailSheet, type TierDetail } from './TierDetailSheet';
  * ever.
  *
  * Pricing (SCALE-UP-PLAN §1.1/§4.1/§5.1): live regional prices + any active
- * discount come from GET /api/subscription/catalog while signed in; signed
- * out (or offline) falls back to the shared DEFAULT_TIER_PRICES constant
- * resolved against a device locale hint. GM_TIERS keeps its feature copy —
- * price is no longer read from it.
+ * discount come from GET /api/subscription/catalog while signed in. Signed-out,
+ * offline, or incomplete catalogs show pricing as unavailable. GM_TIERS keeps
+ * feature copy only; price is never read from compiled data.
  *
  * A promo code can be redeemed inline (refetches the catalog on success).
  * Nepal-region accounts additionally see a manual eSewa/Khalti/bank payment
  * flow: pick a plan + duration, attach a receipt photo, submit for admin
  * review — the amount is always computed server-side from the live catalog.
  *
- * Until store billing ships, choosing a plan applies the tier locally so
- * every gated screen can be previewed.
+ * A paid tier is applied optimistically only when the server explicitly
+ * advertises non-production preview mode; otherwise the real store/manual
+ * payment path is required.
  */
 
 export function SubscribeScreen() {
@@ -122,8 +122,8 @@ export function SubscribeScreen() {
       const result = await getSubscriptionCatalog(token, regionHint());
       setCatalog(result);
     } catch {
-      // Keep the last-known catalog — tier cards fall back to the shared
-      // DEFAULT_TIER_PRICES constant when there's nothing loaded yet.
+      // Keep the last validated catalog for this account; when none exists the
+      // tier cards render an explicit unavailable state.
     }
   }, [status, token]);
 
@@ -188,12 +188,26 @@ export function SubscribeScreen() {
     // Paid pick while the server runs LIVE billing → the self-serve endpoint
     // 402s every paid tier. Pre-detect it (B23): show the honest affordance
     // instead of optimistically applying then reverting on the rejection.
-    if (status === 'signedIn' && catalog?.billingMode === 'live') {
+    if (status !== 'signedIn' || !token) {
+      warnHaptic();
+      setPlanError('Sign in to view live pricing and choose a plan.');
+      return;
+    }
+
+    if (!catalog) {
+      warnHaptic();
+      setPlanError('Live pricing is unavailable. Check your connection and try again.');
+      return;
+    }
+
+    if (catalog.billingMode !== 'preview') {
       warnHaptic();
       setPlanError(
         catalog.region === 'NP'
           ? 'Pay for this plan with eSewa or Khalti below, then upload your receipt for review.'
-          : 'This plan is available through the app store — in-app purchase arrives with the store release.',
+          : catalog.billingMode === 'live'
+            ? 'This plan must be purchased through the app store.'
+            : 'Purchases are temporarily unavailable on this server.',
       );
       return;
     }
@@ -202,7 +216,8 @@ export function SubscribeScreen() {
   }
 
   /**
-   * Apply a tier change against the server (or local preview when signed out).
+   * Apply a tier change after `choose` verifies the server-advertised billing
+   * mode. A paid choice still rolls back unless the API confirms it.
    * Paid picks apply optimistically for instant UI and roll back on failure; a
    * cancel waits for the server so the period-end date is authoritative.
    */
@@ -219,14 +234,12 @@ export function SubscribeScreen() {
       successHaptic();
     }
 
-    // Signed out → local-only preview. A signed-out "cancel" just drops the
-    // local preview tier to starter; there's no server window to honor.
+    // Defensive auth re-check in case the account signed out between the tap
+    // and this call. Never keep an unconfirmed local tier.
     if (status !== 'signedIn' || !token) {
-      if (!optimistic) {
-        update({ tier: 'starter' });
-        syncProfileNow();
-        setPreviewActive(false);
-      }
+      if (optimistic && useProfile.getState().tier === tier) update({ tier: previousTier });
+      setPreviewActive(false);
+      setPlanError('Sign in to change your plan.');
       return;
     }
 
@@ -256,8 +269,8 @@ export function SubscribeScreen() {
         }
         setPreviewActive(false);
         setPlanError(
-          toApiError(err).code === 'billing_required'
-            ? 'Paid plans are activated through the app store purchase — the free preview is closed on this server.'
+          ['billing_required', 'billing_unavailable'].includes(toApiError(err).code)
+            ? 'Paid plan activation is unavailable here. Use the configured store or manual-payment flow.'
             : "Couldn't update your plan on the server — check your connection and try again.",
         );
         warnHaptic();

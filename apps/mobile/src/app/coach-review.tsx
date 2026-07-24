@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { starsSchema } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
+import { z } from 'zod';
 import {
   AppText,
   AppTextInput,
@@ -28,6 +30,13 @@ const REQUEST_TIMEOUT_MS = 10_000;
 
 type LoadState = 'loading' | 'ready' | 'error';
 type SubmitState = 'idle' | 'submitting' | 'done' | 'error';
+
+const coachReviewSchema = z.object({
+  stars: starsSchema,
+  note: z.string(),
+  createdAt: z.string(),
+});
+const coachReviewResponseSchema = z.object({ review: coachReviewSchema.nullable() });
 
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
@@ -71,20 +80,23 @@ function StarPicker({
 }
 
 export default function CoachReviewScreen() {
+  const token = useAuth((state) => state.token);
+  return <CoachReviewSession key={token ?? 'signed-out'} token={token} />;
+}
+
+function CoachReviewSession({ token }: { token: string | null }) {
   const { coachId, coachName } = useLocalSearchParams<{ coachId?: string; coachName?: string }>();
-  const token = useAuth((s) => s.token);
   const name = coachName || 'your coach';
 
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [stars, setStars] = useState(0);
   const [note, setNote] = useState('');
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const invalidRequest = !token || typeof coachId !== 'string' || !coachId;
 
   useEffect(() => {
-    if (!token || typeof coachId !== 'string' || !coachId) {
-      setLoadState('error');
-      return;
-    }
+    if (invalidRequest) return;
     let active = true;
     void (async () => {
       try {
@@ -92,21 +104,23 @@ export default function CoachReviewScreen() {
           headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
         });
         if (!res.ok) throw new Error('load_failed');
-        const body = (await res.json()) as { review: { stars: number; note: string } | null };
-        if (!active) return;
+        const parsed = coachReviewResponseSchema.safeParse(await res.json());
+        if (!parsed.success) throw new Error('invalid_response');
+        if (!active || useAuth.getState().token !== token) return;
+        const body = parsed.data;
         if (body.review) {
           setStars(body.review.stars);
           setNote(body.review.note);
         }
         setLoadState('ready');
       } catch {
-        if (active) setLoadState('ready'); // a fresh (unrated) form is still usable offline-first
+        if (active && useAuth.getState().token === token) setLoadState('error');
       }
     })();
     return () => {
       active = false;
     };
-  }, [token, coachId]);
+  }, [token, coachId, invalidRequest, loadAttempt]);
 
   async function submit(): Promise<void> {
     if (!token || typeof coachId !== 'string' || !coachId || stars < 1 || submitState === 'submitting') return;
@@ -122,23 +136,47 @@ export default function CoachReviewScreen() {
         body: JSON.stringify({ stars, note: note.trim() || undefined }),
       });
       if (!res.ok) throw new Error('submit_failed');
+      const parsed = coachReviewResponseSchema.safeParse(await res.json());
+      if (!parsed.success) throw new Error('invalid_response');
+      if (useAuth.getState().token !== token) return;
       successHaptic();
       setSubmitState('done');
     } catch {
+      if (useAuth.getState().token !== token) return;
       warnHaptic();
       setSubmitState('error');
     }
   }
 
-  if (loadState === 'error' || typeof coachId !== 'string' || !coachId) {
+  if (loadState === 'error' || invalidRequest) {
     return (
       <Screen scroll>
         <ScreenHeader title="Rate your coach" />
         <EmptyState
           icon="alert-circle-outline"
           title="Can't rate this coach"
-          body="Sign in and try again from your coach chat."
+          body={
+            invalidRequest
+              ? 'Sign in and try again from your coach chat.'
+              : "Couldn't load your existing rating. Check your connection and try again."
+          }
+          actionLabel={invalidRequest ? undefined : 'Try again'}
+          onAction={invalidRequest ? undefined : () => {
+            setLoadState('loading');
+            setLoadAttempt((attempt) => attempt + 1);
+          }}
         />
+      </Screen>
+    );
+  }
+
+  if (loadState === 'loading') {
+    return (
+      <Screen scroll>
+        <ScreenHeader title="Rate your coach" />
+        <View style={styles.loading} accessibilityLabel="Loading your coach rating">
+          <ActivityIndicator color={colors.accent} />
+        </View>
       </Screen>
     );
   }
@@ -204,4 +242,5 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   noteInput: { minHeight: 100, paddingTop: spacing.md, textAlignVertical: 'top' },
+  loading: { minHeight: 160, alignItems: 'center', justifyContent: 'center' },
 });
