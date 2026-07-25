@@ -3,17 +3,17 @@
   "dialect": "postgresql",
   "entries": [
     {
-      "idx": 0,
-      "version": "7",
-      "when": 1784968426488,
-      "tag": "0000_friendly_kate_bishop",
-      "breakpoints": true
-    },
-    {
       "idx": 1,
       "version": "7",
       "when": 1784968438622,
       "tag": "0001_live_delta",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784971746429,
+      "tag": "0002_perf_indexes",
       "breakpoints": true
     }
   ]

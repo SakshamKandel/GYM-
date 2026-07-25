@@ -1,3 +1,9 @@
+import {
+  memberDataEntitySchema,
+  type MemberDataCursorPoint,
+  type MemberDataSyncCursor,
+  type MemberDataSyncResponse,
+} from '@gym/shared';
 import { getRepoForAccount } from '../../lib/repo';
 import { registerMemberDataSyncTrigger } from '../../lib/repo/memberDataTrigger';
 import { useAuth } from '../../state/auth';
@@ -8,6 +14,27 @@ const MAX_PAGES_PER_RUN = 25;
 
 const inFlightAccounts = new Set<string>();
 const rerunAccounts = new Set<string>();
+
+function samePoint(a: MemberDataCursorPoint | null, b: MemberDataCursorPoint | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.serverUpdatedAt === b.serverUpdatedAt && a.recordId === b.recordId;
+}
+
+/**
+ * True when a page moved nothing at all: no cursor advanced, nothing was
+ * acknowledged and nothing came back to apply.
+ *
+ * Asking again can only produce the same empty page, so the run stops here
+ * instead of spending its remaining passes on it and then scheduling another
+ * run straight after. That keeps a server stuck saying "there is more" while
+ * sending none of it from turning this into an endless round of requests.
+ */
+function madeNoProgress(sent: MemberDataSyncCursor, response: MemberDataSyncResponse): boolean {
+  if (response.acknowledgedMutationIds.length > 0 || response.changes.length > 0) return false;
+  return memberDataEntitySchema.options.every((entity) =>
+    samePoint(sent[entity], response.cursor[entity]),
+  );
+}
 
 /**
  * Install the repository's post-commit callback. The callback merely starts a
@@ -53,6 +80,7 @@ export async function syncMemberData(): Promise<void> {
 
       const remaining = await repo.getPendingMemberDataMutations(1);
       if (!response.hasMore && remaining.length === 0) return;
+      if (madeNoProgress(cursor, response)) return;
     }
     // A bounded run cannot monopolize the JS thread. Schedule another pass for
     // very large restores/backlogs without blocking the screen that started it.

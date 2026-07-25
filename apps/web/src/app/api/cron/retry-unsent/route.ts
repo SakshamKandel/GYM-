@@ -4,6 +4,12 @@ import { json } from '@/lib/http';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// One scan is up to 500 rows of awaited dispatches, which does not fit in the
+// seconds a serverless function gets by default — and a run killed part way
+// through leaves notifications stamped as attempted that were never actually
+// pushed (see the note on /api/cron/tick). Vercel clamps this to the plan's max.
+export const maxDuration = 300;
+
 /**
  * Vercel Cron → retry-unsent reconcile (Pack B / E2 durable outbox). Re-dispatches
  * inbox rows whose push never landed (`sentAt IS NULL`) within the recent window,

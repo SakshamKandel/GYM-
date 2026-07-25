@@ -12,9 +12,10 @@ import { CORS_HEADERS } from './http';
  *
  * `rateLimitShared()` is the durable version for the routes where the ceiling
  * has to actually hold. When a Redis REST store is configured it counts in that
- * store, so every instance shares one budget; with no store configured it
- * delegates straight to `rateLimit()`, so local development and any un-migrated
- * route behave exactly as before. It is async, which is why it is a separate
+ * store, so every instance shares one budget; with no store configured — and
+ * whenever the store is too slow or unreachable — it delegates straight to
+ * `rateLimit()`, so local development and any un-migrated route behave exactly
+ * as before. It is async, which is why it is a separate
  * export rather than a change to `rateLimit()` — that one is called from ~50
  * places and must keep its synchronous signature.
  *
@@ -145,11 +146,31 @@ function sharedStore(): SharedStore | null {
   return { url, token };
 }
 
-/** One Upstash-style REST pipeline call. Throws on any transport/protocol problem. */
+/**
+ * How long the shared store may hold up ONE limiter check, counted across both
+ * commands a check can issue rather than per request, so the worst case a
+ * caller waits is this budget and not a multiple of it.
+ *
+ * It is deliberately short. `rateLimitShared` is the FIRST await on every
+ * credential path (sign-in, registration, staff login, password reset), so this
+ * number is the delay a member would feel on the way to signing in if the store
+ * ever stopped answering. A healthy Redis REST round trip is single-digit
+ * milliseconds, so anything past a second is already an outage, not slowness.
+ */
+const STORE_BUDGET_MS = 1_000;
+
+/**
+ * One Upstash-style REST pipeline call, abandoned once `deadline` passes.
+ * Throws on any transport/protocol problem, including the timeout — the caller
+ * treats every throw the same way (see `rateLimitShared`).
+ */
 async function pipeline(
   store: SharedStore,
   commands: readonly (readonly (string | number)[])[],
+  deadline: number,
 ): Promise<unknown[]> {
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) throw new Error('rate-limit store ran out of time');
   const res = await fetch(`${store.url}/pipeline`, {
     method: 'POST',
     headers: {
@@ -158,6 +179,10 @@ async function pipeline(
     },
     body: JSON.stringify(commands),
     cache: 'no-store',
+    // Without this the fetch has NO timeout of its own: a store that accepts
+    // the connection and then stalls would hang sign-in for as long as the
+    // platform allows the request to live.
+    signal: AbortSignal.timeout(remainingMs),
   });
   if (!res.ok) throw new Error(`rate-limit store responded ${res.status}`);
   const body: unknown = await res.json();
@@ -187,9 +212,16 @@ function integerAt(entries: readonly unknown[], index: number): number {
  * instances cannot each hand out a fresh budget.
  *
  * Fixed window rather than sliding: the window index is baked into the key, so
- * the counter rolls over on its own even if the expiry command is lost. If the
- * store is unreachable we log and fall back to the in-memory limiter rather
- * than locking every caller out of sign-in during a store outage.
+ * the counter rolls over on its own even if the expiry command is lost.
+ *
+ * IT FAILS OPEN, ON PURPOSE. A store that is unreachable, slow, or answering
+ * nonsense costs us the SHARED ceiling, not the ability to sign in: we log,
+ * then hand the check to the in-memory limiter, which still damps abuse per
+ * instance. Failing closed would turn one dependency's bad afternoon into a
+ * total lockout of sign-in, registration and password reset for everyone, which
+ * is a far worse outcome than a temporarily looser limit. `STORE_BUDGET_MS`
+ * caps how long that decision may take, so a store that hangs degrades the
+ * protection quickly instead of dragging every credential request down with it.
  */
 export async function rateLimitShared(args: RateLimitArgs): Promise<NextResponse | null> {
   const store = sharedStore();
@@ -199,22 +231,36 @@ export async function rateLimitShared(args: RateLimitArgs): Promise<NextResponse
   const subject = args.accountId ? `acct:${args.accountId}` : `ip:${args.ip ?? 'unknown'}`;
   const windowIndex = Math.floor(Date.now() / windowMs);
   const key = `rl:${args.route}|${subject}|${windowIndex}`;
+  const deadline = Date.now() + STORE_BUDGET_MS;
 
   let count: number;
   let ttlMs: number;
   try {
-    const entries = await pipeline(store, [
-      ['INCR', key],
-      ['PTTL', key],
-    ]);
+    const entries = await pipeline(
+      store,
+      [
+        ['INCR', key],
+        ['PTTL', key],
+      ],
+      deadline,
+    );
     count = integerAt(entries, 0);
     ttlMs = integerAt(entries, 1);
     // -1 = key with no expiry (we just created it), -2 = already gone.
     if (ttlMs < 0) {
-      await pipeline(store, [['PEXPIRE', key, windowMs]]);
+      // Best effort, and separately caught: the count is already known and the
+      // window index is baked into the key, so a lost expiry only leaves one
+      // key behind for the store to evict. It must not discard a real count.
+      try {
+        await pipeline(store, [['PEXPIRE', key, windowMs]], deadline);
+      } catch (err) {
+        console.error(`[rateLimit] could not set expiry for ${args.route}:`, err);
+      }
       ttlMs = windowMs;
     }
   } catch (err) {
+    // FAIL OPEN — see the note above. Timeout, outage or garbage response, the
+    // answer is the same: keep the door open and count per instance instead.
     console.error(
       `[rateLimit] shared store unavailable for ${args.route}; counting per-instance instead:`,
       err,

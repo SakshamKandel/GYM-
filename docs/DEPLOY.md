@@ -51,9 +51,9 @@ copy that file when setting up a new environment, and keep the two in step.
 | `CLOUDINARY_URL_SIGNING_KEY` | ✅ **load-bearing since 2026-07-12** | Signs `authenticated`-delivery images. Payment receipts (`GET /api/admin/payment-requests`) and progress photos (`/api/me/photos`, `/api/coach/clients/[userId]/photos`) are stored as Cloudinary `authenticated` assets; each GET mints a signed URL per row via `signedImageUrl()`. **Missing → those reads 503 `{error:'image_not_configured'}`** even though uploads still succeed, so an admin cannot see the receipt they are approving money against. Since 2026-07-25 `isImageConfigured()` counts this key, so the admin Configuration card and the startup log report photos as turned off instead of claiming they work |
 | `VIDEO_PROVIDER` | optional | `cloudinary` (auto-selected when `CLOUDINARY_*` present) or `cf_stream` |
 | `CF_STREAM_ACCOUNT_ID` / `_API_TOKEN` / `_KEY_ID` / `_JWK` | optional | Only for `VIDEO_PROVIDER=cf_stream`; all four required together. Any missing → coaches cannot publish or play plan videos |
-| `BILLING_MODE` | ✅ to sell plans | `disabled` (default, no paid activation), `preview` (non-production only: tiers are a free selection), `live` (paid tiers only via the RevenueCat webhook). Unset → nobody can buy a plan |
-| `REVENUECAT_WEBHOOK_AUTH` | ✅ with `BILLING_MODE=live` | Exact `Authorization` header value the store webhook must send. **Missing → billing silently falls back to `disabled`**, so purchases in the stores never grant a tier |
-| `REVENUECAT_WEBHOOK_SIGNATURE_SECRET` | optional | HMAC secret for RevenueCat's signature header. Unset → the webhook is accepted on the `Authorization` header alone |
+| `BILLING_MODE` | ✅ to sell plans | `disabled` (default, no paid activation), `preview` (non-production only: tiers are a free selection), `live` (paid tiers only via the RevenueCat webhook). Unset → nobody can buy a plan. **`live` needs BOTH RevenueCat webhook variables below; with either one missing the server reports `disabled`** rather than pretending to sell |
+| `REVENUECAT_WEBHOOK_AUTH` | ✅ with `BILLING_MODE=live` | Exact `Authorization` header value the store webhook must send. **Missing → billing falls back to `disabled`**, so purchases in the stores never grant a tier. It is not silent: the boot log names it (see the startup self-check below) |
+| `REVENUECAT_WEBHOOK_SIGNATURE_SECRET` | ✅ with `BILLING_MODE=live` | RevenueCat → the webhook you created → **Authorization header is not enough**: copy the signing secret too. `POST /api/subscription/revenuecat` rejects with 401 every event it cannot verify, so this is as load-bearing as `REVENUECAT_WEBHOOK_AUTH`. **Missing → billing falls back to `disabled`** exactly as above, and the boot log names it. Both must be set together before `live` means anything |
 | `CRON_SECRET` | ✅ for reminders | Shared secret Vercel Cron sends as `Authorization: Bearer <value>`. **Missing → every `/api/cron/*` route fails closed with 500** and no scheduled job runs |
 | `NOTIFICATIONS_CRON_ENABLED` | ✅ for reminders | Master switch, must be exactly `true`. Anything else → the tick returns `{skipped:"disabled"}`, so renewal notices, payment reminders and come-back nudges are never sent |
 | `GROQ_API_KEY` | ✅ for the AI coach tip | The only AI surface in the product. Unset → `/api/ai/tip` answers `not_configured` and both cards fall back to their quiet empty state. Nothing else breaks |
@@ -72,7 +72,11 @@ copy that file when setting up a new environment, and keep the two in step.
 
 **Startup self-check:** in production `apps/web/src/instrumentation.ts` logs one
 `[startup]` line per missing capability (billing, images, video, cron) into the
-Vercel logs at boot. It names variables only, never values, and never throws —
+Vercel logs at boot. Billing gets the sharper wording of the two: setting
+`BILLING_MODE=live` without both RevenueCat webhook variables logs which one is
+missing and says plainly that nobody gets the membership they paid for. Grep the
+first minute of a deploy's logs for `[startup]` before announcing a launch. It
+names variables only, never values, and never throws —
 the marketing site and free tier stay up regardless. The same booleans render as
 a "Configuration" card on `/admin` (super/main admins) and are readable at
 `GET /api/admin/system/config`.
@@ -115,9 +119,16 @@ otherwise (there is never a button that cannot finish):
 1. the device is an iPhone or an Android phone (the web build never sells),
 2. the build carries the RevenueCat public key for that platform (§1),
 3. the RevenueCat SDK started for the signed-in account,
-4. the server reports `BILLING_MODE=live` **and** `REVENUECAT_WEBHOOK_AUTH` is
-   set, so a purchase can actually be honoured,
+4. the server reports billing as `live`, which needs `BILLING_MODE=live`
+   **and both** `REVENUECAT_WEBHOOK_AUTH` and
+   `REVENUECAT_WEBHOOK_SIGNATURE_SECRET`, so a purchase can actually be
+   honoured,
 5. the store has at least one product on sale for that membership.
+
+Point 4 is deliberately all-or-nothing. The webhook refuses any event it cannot
+verify, so a deployment with the signature secret missing would take real money
+and grant nothing. Rather than let that happen the server reports `disabled`,
+the button never appears, and the boot log says which variable is missing.
 
 Until then the paywall behaves exactly as it does today, and the manual receipt
 rail (§4) keeps working either way, including alongside the stores.
@@ -151,8 +162,10 @@ charged.
    credentials it needs (App Store Connect API key / Play service account), the
    entitlements and offerings above, the public API keys for §1, and a webhook
    pointing at `https://<domain>/api/subscription/revenuecat` with the
-   `Authorization` header value set to `REVENUECAT_WEBHOOK_AUTH` (and the
-   signature secret if `REVENUECAT_WEBHOOK_SIGNATURE_SECRET` is set).
+   `Authorization` header value set to `REVENUECAT_WEBHOOK_AUTH`. Copy that
+   webhook's signing secret into `REVENUECAT_WEBHOOK_SIGNATURE_SECRET` at the
+   same time: the route verifies the signature on every event and 401s without
+   it, so the two values are one step, not two.
 4. **A native build**: `pnpm install` first (the dependency is declared in
    `apps/mobile/package.json` but not installed), then
    `eas build --profile production`. Purchases cannot work in Expo Go: it has no

@@ -7,6 +7,7 @@ import {
   memberWeightLogs,
 } from '@gym/db';
 import {
+  memberDataChangeSchema,
   memberDataRecordId,
   memberDataSyncRequestSchema,
   memberDataSyncResponseSchema,
@@ -16,6 +17,7 @@ import {
   type MemberDataMutation,
   type MemberDataRecord,
   type MemberDataSyncCursor,
+  type MemberDataSyncResponse,
 } from '@gym/shared';
 import { and, asc, eq, inArray, or, sql, type Column } from 'drizzle-orm';
 import { bearerToken, userForToken } from '@/lib/auth';
@@ -479,6 +481,60 @@ async function resolvedSubmittedChanges(
   ];
 }
 
+/** Field paths and reason codes only — never the member's own values. */
+function issueTrail(error: { issues: { path: (string | number)[]; code: string }[] }) {
+  return error.issues.map((issue) => `${issue.path.join('.') || '(root)'}:${issue.code}`);
+}
+
+const MAX_LOGGED_BAD_ROWS = 5;
+
+/**
+ * Keep the rows the shared contract accepts and drop the ones it rejects.
+ *
+ * Every change carries a mutation id, a timestamp and a record that the device
+ * re-validates with this same schema, so one row in a shape the contract
+ * forbids used to take the whole response down with it. That is the worst
+ * possible blast radius: the member's acknowledgements never come back, so
+ * writes they made offline are pushed again forever and never drain, and all
+ * six cursors freeze until somebody happens to rewrite the offending row.
+ *
+ * One unreadable row missing its trip is a far smaller failure, so it is
+ * logged (account, entity, key and the failing field paths — never the
+ * member's own text) and skipped. Pagination is unaffected because the cursor
+ * is taken from the raw page, and the row rejoins the pull the moment anything
+ * writes it back in a valid shape.
+ */
+function readableChanges(accountId: string, items: MemberDataChange[]): MemberDataChange[] {
+  const kept: MemberDataChange[] = [];
+  const skipped: { entity: MemberDataEntity; recordId: string; issues: string[] }[] = [];
+  for (const item of items) {
+    const parsed = memberDataChangeSchema.safeParse(item);
+    if (parsed.success) {
+      kept.push(parsed.data);
+      continue;
+    }
+    if (skipped.length < MAX_LOGGED_BAD_ROWS) {
+      skipped.push({
+        entity: item.record.entity,
+        recordId: memberDataRecordId(item.record),
+        issues: issueTrail(parsed.error),
+      });
+    }
+  }
+  const skippedCount = items.length - kept.length;
+  // One line per page, not per row: a member with a lot of damaged rows should
+  // not be able to flood the log.
+  if (skippedCount > 0) {
+    console.error('[sync/member-data] skipped rows the sync contract rejects', {
+      accountId,
+      skippedCount,
+      keptCount: kept.length,
+      sample: skipped,
+    });
+  }
+  return kept;
+}
+
 export function OPTIONS() {
   return preflight();
 }
@@ -540,10 +596,10 @@ export async function POST(req: Request) {
     byRecord.set(`${item.record.entity}:${memberDataRecordId(item.record)}`, item);
   }
 
-  const response = memberDataSyncResponseSchema.parse({
+  const response: MemberDataSyncResponse = {
     ok: true,
     acknowledgedMutationIds: mutations.map((mutation) => mutation.mutationId),
-    changes: [...byRecord.values()],
+    changes: readableChanges(user.id, [...byRecord.values()]),
     cursor: nextCursor,
     hasMore:
       weight.hasMore ||
@@ -552,6 +608,28 @@ export async function POST(req: Request) {
       foodLog.hasMore ||
       water.hasMore ||
       steps.hasMore,
+  };
+
+  const validated = memberDataSyncResponseSchema.safeParse(response);
+  if (validated.success) return json(validated.data, 200);
+
+  // Every part above is individually validated, so reaching here means
+  // something structural is wrong. Still answer, and answer with the
+  // acknowledgements: a member whose queue can never drain is a much worse
+  // outcome than a member who waits one more trigger for their pull. Their own
+  // cursor goes straight back so this page is retried rather than skipped.
+  console.error('[sync/member-data] response failed its own contract', {
+    accountId: user.id,
+    issues: issueTrail(validated.error),
   });
-  return json(response, 200);
+  return json(
+    {
+      ok: true,
+      acknowledgedMutationIds: response.acknowledgedMutationIds,
+      changes: [],
+      cursor,
+      hasMore: false,
+    } satisfies MemberDataSyncResponse,
+    200,
+  );
 }

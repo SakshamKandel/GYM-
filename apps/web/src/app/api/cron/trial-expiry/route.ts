@@ -4,6 +4,12 @@ import { json } from '@/lib/http';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// One scan is up to 500 rows of awaited dispatches, which does not fit in the
+// seconds a serverless function gets by default — and a run killed part way
+// through leaves notifications stamped as attempted that were never actually
+// pushed (see the note on /api/cron/tick). Vercel clamps this to the plan's max.
+export const maxDuration = 300;
+
 /**
  * Vercel Cron → trial-expiry scan (Pack B / WP-2). Guarded by CRON_SECRET
  * (fail-closed, §7.2-S4) and gated by NOTIFICATIONS_CRON_ENABLED (ships dark,

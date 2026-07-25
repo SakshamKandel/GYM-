@@ -1,0 +1,3 @@
+CREATE INDEX "coach_messages_support_unread" ON "coach_messages" USING btree ("account_id") WHERE "coach_messages"."kind" = 'support' and "coach_messages"."sender" = 'user' and "coach_messages"."read_by_coach" = false;--> statement-breakpoint
+CREATE INDEX "meal_orders_pending_cutoff" ON "meal_orders" USING btree ("cutoff_at") WHERE "meal_orders"."status" = 'pending';--> statement-breakpoint
+CREATE INDEX "meal_orders_pending_placed" ON "meal_orders" USING btree ("placed_at") WHERE "meal_orders"."status" = 'pending';

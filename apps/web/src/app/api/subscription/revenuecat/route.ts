@@ -17,6 +17,12 @@ export const runtime = 'nodejs';
  * on, not a check to quietly drop. Event ids dedupe every entitlement event,
  * while event timestamps prevent delayed delivery from replacing newer
  * subscription state.
+ *
+ * That requirement is enforced in three places so an operator can never end up
+ * selling into a rejecting endpoint: billingMode() will not report 'live'
+ * without the secret (so the app hides the purchase button), instrumentation.ts
+ * names it in the boot log, and this route rejects. docs/DEPLOY.md lists it as
+ * required alongside REVENUECAT_WEBHOOK_AUTH. Change one, change all four.
  */
 
 const PAID_TIERS = ['elite', 'gold', 'silver'] as const satisfies readonly Tier[];
@@ -65,10 +71,12 @@ export async function POST(req: Request) {
   }
 
   // Fail closed on a missing secret. verifyRevenueCatSignature() returns true
-  // when it has nothing to verify against, which is the right default for a
-  // helper but the wrong one here — it would turn an unset env var into an
-  // unauthenticated path that writes paid tiers. The secret itself is never
-  // logged, only the fact that it is absent.
+  // when handed nothing to compare against, so reading the env var here rather
+  // than letting the helper default is what stops an unset variable becoming an
+  // unsigned path that writes paid tiers. Reaching this branch means billing was
+  // switched to live without the secret, which billingMode() and the startup log
+  // both already refuse, so it should be unreachable in a correct deployment.
+  // The secret itself is never logged, only the fact that it is absent.
   const signatureSecret = process.env.REVENUECAT_WEBHOOK_SIGNATURE_SECRET?.trim();
   if (!signatureSecret) {
     console.error(

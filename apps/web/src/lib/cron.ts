@@ -19,7 +19,12 @@ import {
 import { getDb } from './db';
 import { json } from './http';
 import { advanceOrderStatus } from './meals';
-import { notify, redispatch } from './notify';
+import {
+  createNotifyRecipientCache,
+  notify,
+  redispatch,
+  resolveStaffRecipients,
+} from './notify';
 
 /**
  * lib/cron.ts — the scheduled/async notification class (Pack B / WP-2). The
@@ -73,11 +78,15 @@ const PENDING_EXPIRY_GRACE_MS = 2 * HOUR_MS;
 const PENDING_ESCALATION_MS = 2 * HOUR_MS;
 
 /**
- * Anti-join horizon for the escalation notice. An order can only stay `pending`
- * until its cutoff + grace, so a week is far wider than any live candidate and
- * keeps the correlated lookup off the full notifications history.
+ * The dedupe key the staff escalation notice is stored under, minus the
+ * recipient suffix `notify()` appends to every fan-out key.
+ *
+ * MUST stay byte-identical to
+ * `cronDedupeKey('order_placed_partner', 'staff', 'order_waiting:' + orderId)`
+ * — the escalation anti-join rebuilds this key in SQL to look each order up in
+ * the `notifications_dedupe` unique index.
  */
-const ESCALATION_LOOKBACK_MS = 7 * DAY_MS;
+const ESCALATION_KEY_PREFIX = 'order_placed_partner:staff:order_waiting:';
 
 /** Persisted on the order (and shown in both consoles) when the sweep cancels it. */
 const PENDING_EXPIRY_REASON = 'The restaurant did not confirm this order in time.';
@@ -452,12 +461,24 @@ export async function runDay2Reengage(now: Date = new Date()): Promise<CronResul
  *     pass 1 did not (or could not) cancel nudges the restaurant again and tells
  *     staff, so someone can phone the kitchen while the order can still be
  *     saved. Idempotency + forward progress come from the per-order `dedupeKey`
- *     and the anti-join against it (same shape as cycle-dunning).
+ *     and the anti-join against it (an equality lookup on the same unique index
+ *     that enforces it, same shape as cycle-dunning).
+ *
+ * Both passes read `meal_orders` through the `meal_orders_pending_*` partial
+ * indexes — pending orders are a sliver of the table, and each pass's sort key
+ * is that index's key, so neither pass ever scans or sorts order history.
  */
 export async function runStaleOrders(now: Date = new Date()): Promise<CronResult> {
   const startedAt = Date.now();
   const db = getDb();
   const expiryCutoff = new Date(now.getTime() - PENDING_EXPIRY_GRACE_MS);
+
+  // The staff fan-out set is resolved ONCE for the whole run and handed to every
+  // notify() below. Without it each of the (up to 2 × BATCH) staff notifications
+  // in this sweep re-reads the whole `admins` + `admin_permission_overrides`
+  // tables to compute an answer that is identical every time.
+  const recipients = createNotifyRecipientCache();
+  const escalationStaff = await resolveStaffRecipients('orders.review', recipients);
 
   // --- Pass 1: cancel orders the restaurant never confirmed -----------------
   const expired = await db
@@ -533,13 +554,40 @@ export async function runStaleOrders(now: Date = new Date()): Promise<CronResult
       // A fan-out key is namespaced per recipient by notify(), so the literal
       // 'staff' segment is only there to keep this key distinct from the
       // partner's above.
-      { dedupeKey: cronDedupeKey('order_cancelled_partner', 'staff', `order_expired:${row.id}`) },
+      {
+        dedupeKey: cronDedupeKey('order_cancelled_partner', 'staff', `order_expired:${row.id}`),
+        recipients,
+      },
     );
   }
 
   // --- Pass 2: escalate orders that are still waiting on the restaurant -----
   const escalateBefore = new Date(now.getTime() - PENDING_ESCALATION_MS);
-  const escalationSince = new Date(now.getTime() - ESCALATION_LOOKBACK_MS);
+  // Forward progress: drop orders staff were already told about. The stored key
+  // is the escalation key with the recipient appended, and the recipients are
+  // exactly the set resolved above, so each candidate key can be spelled out in
+  // full and looked up by EQUALITY in the `notifications_dedupe` unique index.
+  //
+  // This used to be `starts_with(dedupe_key, <prefix built from the order id>)`.
+  // A function call over a computed prefix is opaque to the planner, so it could
+  // use no index at all: every candidate order re-read the entire notifications
+  // table, i.e. the whole history of every push the product has ever sent.
+  //
+  // There is no time window on the lookup any more. The dedupe unique has no
+  // expiry, so a key found at ANY age already means `notify` would refuse to
+  // send again; a window only let long-dead orders back into the candidate set
+  // to be re-selected forever, crowding out the tail they were sorted behind.
+  //
+  // Empty set = nobody holds `orders.review`, so there is nobody to escalate to
+  // and no key to match. Every candidate then stays in the set: the partner
+  // nudge is still deduped per order, so this costs a repeated no-op scan, never
+  // a repeated notification.
+  const alreadyEscalated = or(
+    ...escalationStaff.map(
+      (accountId) =>
+        sql`${notifications.dedupeKey} = ${ESCALATION_KEY_PREFIX} || ${mealOrders.id} || ':' || ${accountId}`,
+    ),
+  );
   const waiting = await db
     .select({
       id: mealOrders.id,
@@ -560,21 +608,9 @@ export async function runStaleOrders(now: Date = new Date()): Promise<CronResult
           gt(mealOrders.cutoffAt, expiryCutoff),
           notInArray(mealOrders.paymentStatus, ['unpaid', 'refunded']),
         ),
-        // Forward progress: drop orders staff were already told about. The
-        // stored key carries a per-recipient suffix (fan-out targets are
-        // namespaced), so this matches on the prefix. `starts_with` is used
-        // rather than LIKE so an id can never be read as a wildcard.
-        notExists(
-          db
-            .select({ one: sql`1` })
-            .from(notifications)
-            .where(
-              and(
-                gt(notifications.createdAt, escalationSince),
-                sql`starts_with(${notifications.dedupeKey}, 'order_placed_partner:staff:order_waiting:' || ${mealOrders.id} || ':')`,
-              ),
-            ),
-        ),
+        alreadyEscalated
+          ? notExists(db.select({ one: sql`1` }).from(notifications).where(alreadyEscalated))
+          : undefined,
       ),
     )
     .orderBy(asc(mealOrders.placedAt))
@@ -603,8 +639,11 @@ export async function runStaleOrders(now: Date = new Date()): Promise<CronResult
         body: `Order ${code} for ${slot} on ${row.deliveryDate} is still unconfirmed by the restaurant. Worth a call.`,
         data: { type: 'order', id: row.id },
       },
-      // MUST stay byte-identical to the prefix the anti-join above tests.
-      { dedupeKey: cronDedupeKey('order_placed_partner', 'staff', `order_waiting:${row.id}`) },
+      // MUST stay byte-identical to the key the anti-join above rebuilds.
+      {
+        dedupeKey: cronDedupeKey('order_placed_partner', 'staff', `order_waiting:${row.id}`),
+        recipients,
+      },
     );
   }
 

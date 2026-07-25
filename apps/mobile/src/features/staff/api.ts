@@ -37,6 +37,11 @@ import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
  *   'cannot_revoke_self' → 400 (self-lockout guard on revoke)
  *   'full'         → 409 {error:'full'} (accepting a mentorship request would
  *                    exceed the coach's roster capacity)
+ *   'tier_required' → 409 {error:'tier_required', requiredTier} (assigning a
+ *                    workout or diet plan to a client whose plan does not
+ *                    include it — a business rule, NOT a failure, so screens
+ *                    must name the plan via `.requiredTier` rather than show
+ *                    connection copy)
  *   'confirm_required' → 409 {error:'confirm_required', preview} (payment
  *                    approval would shorten a permanent tier or downgrade a
  *                    higher active one — re-POST decidePaymentRequest with
@@ -70,6 +75,7 @@ export type StaffErrorCode =
   | 'cannot_target_self'
   | 'cannot_revoke_self'
   | 'full'
+  | 'tier_required'
   | 'confirm_required'
   | 'already_refunded'
   | 'not_approved'
@@ -87,11 +93,17 @@ export type StaffErrorCode =
 
 export class StaffApiError extends Error {
   readonly code: StaffErrorCode;
+  /**
+   * Only carried by 'tier_required': the plan the client must be on. Lets a
+   * screen name it in plain words instead of falling back to generic copy.
+   */
+  readonly requiredTier: Tier | null;
 
-  constructor(code: StaffErrorCode, message?: string) {
+  constructor(code: StaffErrorCode, message?: string, requiredTier: Tier | null = null) {
     super(message ?? code);
     this.name = 'StaffApiError';
     this.code = code;
+    this.requiredTier = requiredTier;
   }
 }
 
@@ -173,6 +185,7 @@ const BODY_ERROR_CODES: Partial<Record<string, StaffErrorCode>> = {
   cannot_target_self: 'cannot_target_self',
   cannot_revoke_self: 'cannot_revoke_self',
   full: 'full',
+  tier_required: 'tier_required',
   already_pending: 'already_pending',
   not_an_upgrade: 'not_an_upgrade',
   confirm_required: 'confirm_required',
@@ -217,17 +230,22 @@ async function staffRequest(opts: StaffRequestOptions): Promise<unknown> {
 
   // A recognised {error:'…'} body (rank/self guards) beats the bare status.
   let bodyCode: StaffErrorCode | undefined;
+  let requiredTier: Tier | null = null;
   try {
     const body = (await res.json()) as unknown;
     if (body && typeof body === 'object') {
       const err = (body as { error?: unknown }).error;
       if (typeof err === 'string') bodyCode = BODY_ERROR_CODES[err];
+      // Detail that goes with 'tier_required'. Optional on purpose: an older
+      // server that omits it still gets the right code, just softer copy.
+      const tier = tierSchema.safeParse((body as { requiredTier?: unknown }).requiredTier);
+      if (tier.success) requiredTier = tier.data;
     }
   } catch {
     // Non-JSON error body — the status code is all we have.
   }
 
-  throw new StaffApiError(bodyCode ?? statusToCode(res.status));
+  throw new StaffApiError(bodyCode ?? statusToCode(res.status), undefined, requiredTier);
 }
 
 /** Validate a payload; a malformed body is indistinguishable from a bad server. */
@@ -712,6 +730,10 @@ const clientWorkoutEnvelope = z.object({ workout: clientWorkoutSchema });
  * POST /api/coach/clients/[userId]/workouts → assigns a new workout to one of
  * the caller's OWN clients; returns the fresh row. The client gets a
  * best-effort push.
+ *
+ * 'tier_required' (with `.requiredTier`) when the client's plan does not
+ * include coach workouts. The server refuses rather than store something the
+ * member would never be shown, so the screen must say which plan they need.
  */
 export async function createClientWorkout(
   userId: string,
@@ -853,6 +875,10 @@ const clientDietPlanEnvelope = z.object({ plan: clientDietPlanSchema });
  * POST /api/coach/clients/[userId]/diet-plans → assigns a new diet plan to
  * one of the caller's OWN clients; returns the fresh row. The client gets a
  * best-effort push.
+ *
+ * 'tier_required' (with `.requiredTier`) when the client's plan does not
+ * include coach diet plans. The server refuses rather than store something the
+ * member would never be shown, so the screen must say which plan they need.
  */
 export async function createClientDietPlan(
   userId: string,

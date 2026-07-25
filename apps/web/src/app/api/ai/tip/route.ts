@@ -2,12 +2,15 @@ import {
   aiTipRequestSchema,
   checkAiTipGoalSafety,
   displayWeight,
+  inputToKg,
   sanitizeAiTipText,
   unitLabel,
   type AiTipContext,
   type AiTipKind,
+  type AiTipRequest,
   type AiTipStatus,
 } from '@gym/shared';
+import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { groqComplete, isGroqConfigured } from '@/lib/groq';
 import { json, preflight, readJson } from '@/lib/http';
@@ -30,6 +33,12 @@ export const runtime = 'nodejs';
  *  - A goal weight that implies an unhealthy body mass index for the stored
  *    height is answered with fixed copy from packages/shared, with NO model
  *    call at all.
+ *
+ * TWO REQUEST SHAPES ARE ACCEPTED. The current one is above; the older
+ * `{ messages }` shape that shipped apps still send is read too and mapped onto
+ * the same context (see "The shape apps in the wild still send" below). Both
+ * end up in exactly the same closed path, and the response is unchanged for
+ * both, so a phone that never updates keeps its tip card working.
  *
  * Generation runs with the server's GROQ_API_KEY so no key ships in the app.
  * Auth-gated, per-minute limited AND daily-quota limited, with a short output
@@ -188,6 +197,136 @@ function tipResponse(text: string | null, status: AiTipStatus) {
   return json({ text, status }, 200);
 }
 
+// ── The shape apps in the wild still send ────────────────────────
+
+/**
+ * Before the closed payload above, the app posted a small chat transcript:
+ * `{ messages: [{ role, content }] }`, where the content was a sentence the
+ * SCREEN had assembled out of the member's own numbers. Builds that do this are
+ * installed on real phones and cannot be recalled, so this route still accepts
+ * them: rejecting the old shape left the tip card permanently blank for anyone
+ * who had not updated.
+ *
+ * Those sentences came from two fixed templates, so the numbers are read back
+ * out of them with narrow patterns and poured into the same context object a
+ * current app sends. Nothing else in the message travels any further: the
+ * prompt is still composed here, from validated numbers only, so an old client
+ * gets exactly the same closed treatment as a new one. Anything a pattern does
+ * not match is simply left unknown, which the prompt builder already handles.
+ */
+const legacyMessageSchema = z.object({
+  role: z.enum(['system', 'user', 'assistant']),
+  content: z.string().trim().min(1).max(2000),
+});
+
+const legacyRequestSchema = z.object({
+  messages: z.array(legacyMessageSchema).min(1).max(8),
+});
+
+/** A number in one of the old sentences, or null when it was not written. */
+function firstNumber(text: string, pattern: RegExp): number | null {
+  const found = pattern.exec(text);
+  const raw = found?.[1];
+  if (raw === undefined) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** The unit the old sentence spelled next to its weights. Defaults to kg. */
+function legacyUnit(text: string): 'kg' | 'lb' {
+  return /\b\d+(?:\.\d+)?\s*lb\b/i.test(text) ? 'lb' : 'kg';
+}
+
+function legacyGoalType(text: string): AiTipContext['goalType'] {
+  const found = /goal:\s*(fat_loss|muscle|strength)/i.exec(text);
+  const raw = found?.[1]?.toLowerCase();
+  if (raw === 'fat_loss' || raw === 'muscle' || raw === 'strength') return raw;
+  return null;
+}
+
+function legacyDirection(text: string): AiTipContext['trendDirection'] {
+  const found = /\((up|down|flat)\)/i.exec(text);
+  const raw = found?.[1]?.toLowerCase();
+  if (raw === 'up' || raw === 'down' || raw === 'flat') return raw;
+  return null;
+}
+
+/** Weights were written in the member's own unit; storage is always kg. */
+function legacyWeightKg(text: string, pattern: RegExp, unit: 'kg' | 'lb'): number | null {
+  const value = firstNumber(text, pattern);
+  return value === null ? null : inputToKg(value, unit);
+}
+
+const EMPTY_CONTEXT: AiTipContext = {
+  goalType: null,
+  unitPref: 'kg',
+  bodyweightKg: null,
+  goalWeightKg: null,
+  heightCm: null,
+  trendDirection: null,
+  ratePerWeekKg: null,
+  sessionsThisWeek: null,
+  streakWeeks: null,
+  daysSinceLastSession: null,
+  weekVolumeKg: null,
+  personalBestsLast30Days: null,
+  trainedToday: null,
+};
+
+/** Turn an old chat-shaped request into the payload the rest of this file wants. */
+function fromLegacyRequest(messages: { role: string; content: string }[]): AiTipRequest | null {
+  const text = messages.map((m) => m.content).join('\n');
+  const unitPref = legacyUnit(text);
+
+  // The Progress card asked about the weight trend; Home asked for everything
+  // else. Its sentence is the only one that mentions a trend weight or rate.
+  const kind: AiTipKind = /trend weight|kg\/week|weight-management/i.test(text) ? 'weight' : 'home';
+
+  const context: AiTipContext = {
+    ...EMPTY_CONTEXT,
+    unitPref,
+    goalType: legacyGoalType(text),
+    bodyweightKg:
+      legacyWeightKg(text, /bodyweight is\s*(\d+(?:\.\d+)?)/i, unitPref) ??
+      legacyWeightKg(text, /trend weight:\s*(\d+(?:\.\d+)?)/i, unitPref),
+    goalWeightKg:
+      legacyWeightKg(text, /goal weight:\s*(\d+(?:\.\d+)?)/i, unitPref) ??
+      // "Target weight" was always written in kg, whatever the member reads in.
+      firstNumber(text, /target weight:\s*(\d+(?:\.\d+)?)\s*kg/i),
+    // The rate was always written in kg per week, in both templates.
+    ratePerWeekKg: firstNumber(text, /rate:\s*(-?\d+(?:\.\d+)?)\s*kg\/week/i),
+    trendDirection: legacyDirection(text),
+    sessionsThisWeek: firstNumber(text, /this week:\s*(\d+)\s*sessions?/i),
+    streakWeeks: firstNumber(text, /(\d+)-week streak/i),
+  };
+
+  // The old client asked for a fresh angle by appending "variety #N" to its own
+  // prompt. Carry the count over so "New tip" still turns up something new.
+  const variety = firstNumber(text, /variety #(\d+)/i);
+
+  const mapped = aiTipRequestSchema.safeParse({
+    kind,
+    context,
+    variety: variety === null ? 0 : variety,
+  });
+  return mapped.success ? mapped.data : null;
+}
+
+/**
+ * Read the body in either shape. The current payload is tried first; a body
+ * that is not it falls through to the old chat shape. Null means neither, which
+ * is the only case that still answers 400.
+ */
+function readRequest(body: unknown): AiTipRequest | null {
+  const current = aiTipRequestSchema.safeParse(body);
+  if (current.success) return current.data;
+
+  const legacy = legacyRequestSchema.safeParse(body);
+  if (legacy.success) return fromLegacyRequest(legacy.data.messages);
+
+  return null;
+}
+
 export function OPTIONS() {
   return preflight();
 }
@@ -207,9 +346,9 @@ export async function POST(req: Request) {
   });
   if (perMinute) return perMinute;
 
-  const parsed = aiTipRequestSchema.safeParse(await readJson(req));
-  if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { kind, context, variety } = parsed.data;
+  const parsed = readRequest(await readJson(req));
+  if (parsed === null) return json({ error: 'invalid' }, 400);
+  const { kind, context, variety } = parsed;
 
   // Safety first, and before the daily quota: this answer costs nothing and a
   // member who trips it should not lose their budget over it.

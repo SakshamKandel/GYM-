@@ -9,10 +9,27 @@ describe('billingMode', () => {
     assert.equal(billingMode({ BILLING_MODE: 'live' }), 'disabled');
   });
 
-  it('enables live mode only with the mandatory webhook credential', () => {
+  it('enables live mode only with both mandatory webhook credentials', () => {
+    assert.equal(
+      billingMode({
+        BILLING_MODE: 'live',
+        REVENUECAT_WEBHOOK_AUTH: 'secret',
+        REVENUECAT_WEBHOOK_SIGNATURE_SECRET: 'signing-secret',
+      }),
+      'live',
+    );
+  });
+
+  // The webhook 401s every event it cannot verify, so 'live' without the
+  // signing secret would take real money and grant nothing.
+  it('stays disabled in live mode when the signing secret is missing', () => {
     assert.equal(
       billingMode({ BILLING_MODE: 'live', REVENUECAT_WEBHOOK_AUTH: 'secret' }),
-      'live',
+      'disabled',
+    );
+    assert.equal(
+      billingMode({ BILLING_MODE: 'live', REVENUECAT_WEBHOOK_SIGNATURE_SECRET: 'signing-secret' }),
+      'disabled',
     );
   });
 

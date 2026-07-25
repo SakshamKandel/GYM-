@@ -17,6 +17,7 @@ import {
   Tag,
 } from '../../components/ui';
 import { successHaptic } from '../../lib/haptics';
+import { tierName } from '../../lib/tier';
 import {
   createClientDietPlan,
   deleteClientDietPlan,
@@ -28,7 +29,7 @@ import {
   type DietPlanItem,
   type DietPlanMealInput,
   type MealKind,
-  type StaffErrorCode,
+  type StaffApiError,
 } from './api';
 
 /**
@@ -63,8 +64,15 @@ function nextKey(): string {
   return `diet_draft_${draftKeySeed}`;
 }
 
-function errorLine(code: StaffErrorCode): string {
-  switch (code) {
+/**
+ * Plain words for a failed write. 'tier_required' is the one that is not a
+ * failure at all: coach diet plans are a paid benefit, so a client below the
+ * floor is a deliberate rule the coach can act on (ask them to upgrade). It
+ * used to fall through to the connection line, which sent coaches chasing a
+ * network problem that was never there. Mirrors the web coach console.
+ */
+function errorLine(err: StaffApiError): string {
+  switch (err.code) {
     case 'unauthorized':
       return 'Your session expired. Sign in again.';
     case 'forbidden':
@@ -73,6 +81,10 @@ function errorLine(code: StaffErrorCode): string {
       return 'That diet plan no longer exists.';
     case 'invalid':
       return 'That change was rejected. Check the details and retry.';
+    case 'tier_required':
+      return err.requiredTier
+        ? `This client needs the ${tierName(err.requiredTier)} plan or higher before they can be given a diet plan.`
+        : 'This client is on a plan that does not include coach diet plans yet.';
     default:
       return "Couldn't reach the server. Check your connection and retry.";
   }
@@ -137,7 +149,7 @@ export function DietPlanSection({ userId, token }: { userId: string; token: stri
     try {
       setPlans(await getClientDietPlans(userId, token));
     } catch (err) {
-      setError(errorLine(toStaffError(err).code));
+      setError(errorLine(toStaffError(err)));
     } finally {
       setLoading(false);
     }
@@ -235,7 +247,7 @@ export function DietPlanSection({ userId, token }: { userId: string; token: stri
       setSheetOpen(false);
       await load();
     } catch (err) {
-      setFormError(errorLine(toStaffError(err).code));
+      setFormError(errorLine(toStaffError(err)));
     } finally {
       setSaving(false);
     }
@@ -253,7 +265,7 @@ export function DietPlanSection({ userId, token }: { userId: string; token: stri
         );
         await load();
       } catch (err) {
-        setMutationError(errorLine(toStaffError(err).code));
+        setMutationError(errorLine(toStaffError(err)));
       } finally {
         setBusyId(null);
       }
@@ -270,7 +282,7 @@ export function DietPlanSection({ userId, token }: { userId: string; token: stri
       await deleteClientDietPlan(target.id, token);
       await load();
     } catch (err) {
-      setMutationError(errorLine(toStaffError(err).code));
+      setMutationError(errorLine(toStaffError(err)));
     } finally {
       setBusyId(null);
     }

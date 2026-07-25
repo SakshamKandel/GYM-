@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { z } from 'zod';
 import {
+  Button,
   type Column,
   DataTable,
+  EmptyState,
   SkeletonRows,
   StatTile,
   TextField,
@@ -23,6 +25,14 @@ import { DownloadCsv } from '../../_components/DownloadCsv';
  * day, the delivered/refused split, and the running lifetime balance still owed
  * to that partner. The CSV button hands the same date to the route's existing
  * `format=csv` branch, so the download always matches what's on screen.
+ *
+ * This is a finance screen, so the ONE rule the state machine below exists to
+ * enforce is that a figure on screen is always the figure the server returned
+ * for the date in the picker. A single `board` union makes the alternatives
+ * unrepresentable: numbers live only inside `{ kind: 'ready' }`, so a failed or
+ * in-flight load cannot leave the previous day's cash totals sitting under a new
+ * date, and a failure cannot fall back to zeroes that read like a quiet day.
+ * A failure states that it failed and offers to try again.
  */
 
 const rowSchema = z.object({
@@ -105,15 +115,28 @@ const COLUMNS: Column<ReconRow>[] = [
   },
 ];
 
+/**
+ * Every state the board can be in. There is deliberately no "stale data plus an
+ * error banner" arm: numbers exist only on `ready`.
+ */
+type BoardState =
+  | { kind: 'needs_date' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; data: ReconResponse }
+  | { kind: 'failed'; message: string };
+
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
 export function ReconciliationBoard({ initialDate }: { initialDate: string }) {
   const [date, setDate] = useState(initialDate);
-  const [data, setData] = useState<ReconResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Bumped by "Try again" so the same date re-runs the effect.
+  const [attempt, setAttempt] = useState(0);
+  const [board, setBoard] = useState<BoardState>(
+    DATE_PATTERN.test(initialDate) ? { kind: 'loading' } : { kind: 'needs_date' },
+  );
 
   const load = useCallback(async (forDate: string, signal: AbortSignal) => {
-    setLoading(true);
-    setError(null);
+    setBoard({ kind: 'loading' });
     try {
       const res = await fetch(
         `/api/admin/reconciliation?date=${encodeURIComponent(forDate)}`,
@@ -121,40 +144,44 @@ export function ReconciliationBoard({ initialDate }: { initialDate: string }) {
       );
       if (signal.aborted) return;
       if (!res.ok) {
-        setError(
-          res.status === 403
-            ? 'You are not allowed to view reconciliation.'
-            : 'Could not load this day. Try again.',
-        );
-        setLoading(false);
+        setBoard({
+          kind: 'failed',
+          message:
+            res.status === 403
+              ? 'You do not have access to the daily partner totals.'
+              : "We could not load this day's totals.",
+        });
         return;
       }
       const parsed = responseSchema.safeParse(await res.json());
       if (signal.aborted) return;
       if (!parsed.success) {
-        setError('Unexpected response from the server.');
-        setLoading(false);
+        setBoard({ kind: 'failed', message: "We could not read this day's totals." });
         return;
       }
-      setData(parsed.data);
-      setLoading(false);
+      setBoard({ kind: 'ready', data: parsed.data });
     } catch {
       if (signal.aborted) return;
-      setError('Could not reach us just now. Try again.');
-      setLoading(false);
+      setBoard({ kind: 'failed', message: 'We could not reach the server just now.' });
     }
   }, []);
 
   useEffect(() => {
-    // A half-typed date ("2026-0") must not fire a request the route will 400.
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    // A half-typed or cleared date must not fire a request the route will 400 —
+    // and must not leave the day before it on screen either.
+    if (!DATE_PATTERN.test(date)) {
+      setBoard({ kind: 'needs_date' });
+      return;
+    }
     const controller = new AbortController();
     void load(date, controller.signal);
     return () => controller.abort();
-  }, [date, load]);
+  }, [date, attempt, load]);
 
-  const rows = data?.partners ?? [];
-  const currencyTotals = useMemo(() => totalsByCurrency(data?.partners ?? []), [data]);
+  const currencyTotals = useMemo(
+    () => (board.kind === 'ready' ? totalsByCurrency(board.data.partners) : []),
+    [board],
+  );
   const exportHref = `/api/admin/reconciliation?date=${encodeURIComponent(date)}&format=csv`;
 
   return (
@@ -171,57 +198,78 @@ export function ReconciliationBoard({ initialDate }: { initialDate: string }) {
             />
           </div>
         }
-        right={<DownloadCsv href={exportHref} label="Download CSV" />}
+        // The download is the same day the route just returned, so it is only
+        // offered once that day is actually on screen.
+        right={
+          board.kind === 'ready' ? <DownloadCsv href={exportHref} label="Download CSV" /> : null
+        }
       />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-          gap: 14,
-        }}
-      >
-        <StatTile label="Delivered" value={data?.totals.delivered ?? 0} />
-        <StatTile label="Refused" value={data?.totals.refused ?? 0} />
-        {currencyTotals.map((t) => (
-          <StatTile
-            key={`cod-${t.currency}`}
-            label={`Cash collected (${t.currency})`}
-            value={formatMoney(t.codCollectedMinor, t.currency)}
-          />
-        ))}
-        {currencyTotals.map((t) => (
-          <StatTile
-            key={`digital-${t.currency}`}
-            label={`Digital held (${t.currency})`}
-            value={formatMoney(t.digitalHeldMinor, t.currency)}
-          />
-        ))}
-        {currencyTotals.map((t) => (
-          <StatTile
-            key={`owed-${t.currency}`}
-            label={`Owed to partners (${t.currency})`}
-            value={formatMoney(t.owedMinor, t.currency)}
-          />
-        ))}
-      </div>
+      {board.kind === 'ready' ? (
+        <>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+              gap: 14,
+            }}
+          >
+            <StatTile label="Delivered" value={board.data.totals.delivered} />
+            <StatTile label="Refused" value={board.data.totals.refused} />
+            {currencyTotals.map((t) => (
+              <StatTile
+                key={`cod-${t.currency}`}
+                label={`Cash collected (${t.currency})`}
+                value={formatMoney(t.codCollectedMinor, t.currency)}
+              />
+            ))}
+            {currencyTotals.map((t) => (
+              <StatTile
+                key={`digital-${t.currency}`}
+                label={`Digital held (${t.currency})`}
+                value={formatMoney(t.digitalHeldMinor, t.currency)}
+              />
+            ))}
+            {currencyTotals.map((t) => (
+              <StatTile
+                key={`owed-${t.currency}`}
+                label={`Owed to partners (${t.currency})`}
+                value={formatMoney(t.owedMinor, t.currency)}
+              />
+            ))}
+          </div>
 
-      {error ? (
-        <div role="alert" style={{ color: 'var(--gt-danger)', fontSize: 13 }}>
-          {error}
-        </div>
+          <DataTable
+            columns={COLUMNS}
+            rows={board.data.partners}
+            rowKey={(r) => r.partnerId}
+            empty="No partner activity on this day."
+          />
+        </>
       ) : null}
 
-      {loading && data === null ? (
-        <SkeletonRows rows={4} cols={6} />
-      ) : (
-        <DataTable
-          columns={COLUMNS}
-          rows={rows}
-          rowKey={(r) => r.partnerId}
-          empty="No partner activity on this day."
+      {board.kind === 'loading' ? <SkeletonRows rows={4} cols={6} /> : null}
+
+      {board.kind === 'needs_date' ? (
+        <EmptyState
+          title="Pick a delivery date"
+          description="Choose the day you want to settle and the partner totals will load."
         />
-      )}
+      ) : null}
+
+      {board.kind === 'failed' ? (
+        <div role="alert">
+          <EmptyState
+            title={board.message}
+            description="Nothing is shown here rather than figures that might belong to another day. Try again in a moment."
+            action={
+              <Button variant="primary" onClick={() => setAttempt((n) => n + 1)}>
+                Try again
+              </Button>
+            }
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

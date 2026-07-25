@@ -86,6 +86,35 @@ export type NotifyTarget =
   | { role: 'staff'; permission: Permission }
   | { partnerId: string };
 
+/**
+ * Memo of the recipient sets a single caller resolves more than once.
+ *
+ * A `{role:'staff'}` fan-out costs two full-table reads (`admins` +
+ * `admin_permission_overrides`) to answer a question whose answer cannot change
+ * mid-loop in any way worth chasing. One-off route senders pay that once and
+ * never notice, but a cron sweep fans out per ROW: the stale-orders run alone
+ * can send a thousand staff notifications in one tick, i.e. two thousand reads
+ * of the same two tables for the same answer.
+ *
+ * Hand one cache to every `notify()` call in a run and the set is resolved once.
+ * The memo holds the in-flight promise (not just the result) so concurrent
+ * senders share a single read, and drops it again if that read fails, so one
+ * blip cannot poison the rest of the run.
+ *
+ * Deliberately NOT a module-level/global cache: staleness is bounded by the
+ * lifetime of the object, so a permission change is picked up by the very next
+ * run rather than whenever some process-wide timer happens to expire.
+ */
+export interface NotifyRecipientCache {
+  /** permission → the staff account ids holding it. */
+  staff: Map<Permission, Promise<string[]>>;
+}
+
+/** A fresh, empty {@link NotifyRecipientCache} — one per cron run / batch. */
+export function createNotifyRecipientCache(): NotifyRecipientCache {
+  return { staff: new Map() };
+}
+
 /** Optional delivery controls. */
 export interface NotifyOptions {
   /**
@@ -94,6 +123,11 @@ export interface NotifyOptions {
    * partial unique. Build with `cronDedupeKey(event, accountId, scope)`.
    */
   dedupeKey?: string;
+  /**
+   * Optional per-run recipient memo (see {@link NotifyRecipientCache}). Omitted
+   * = resolve fresh, exactly as before.
+   */
+  recipients?: NotifyRecipientCache;
 }
 
 /** Is per-account preference + quiet-hours gating enforced? (default: yes). */
@@ -149,6 +183,9 @@ async function loadPrefs(accountId: string): Promise<NotificationPrefs | null> {
  * rules exactly: super_admin AND main_admin are safety-floored (they hold every
  * permission and can never be stripped), everyone else is the preset ± overrides.
  * Staff counts are small, so this is two bounded queries, not N.
+ *
+ * Small, but two FULL table reads all the same — go through
+ * {@link resolveStaffRecipients} with a cache when fanning out in a loop.
  */
 async function staffAccountIdsWithPermission(perm: Permission): Promise<string[]> {
   const db = getDb();
@@ -187,8 +224,33 @@ async function staffAccountIdsWithPermission(perm: Permission): Promise<string[]
   return out;
 }
 
+/**
+ * Every staff account holding `permission`, reading through `cache` when one is
+ * supplied. Exported because a caller that fans out per row usually also needs
+ * the set itself (e.g. to build the dedupe keys it later anti-joins on), and it
+ * must be the SAME set the notifications were addressed to.
+ */
+export async function resolveStaffRecipients(
+  permission: Permission,
+  cache?: NotifyRecipientCache,
+): Promise<string[]> {
+  if (!cache) return staffAccountIdsWithPermission(permission);
+  const memo = cache.staff.get(permission);
+  if (memo) return memo;
+  const pending = staffAccountIdsWithPermission(permission).catch((err: unknown) => {
+    // A failed read must not be remembered — the next sender retries it.
+    cache.staff.delete(permission);
+    throw err;
+  });
+  cache.staff.set(permission, pending);
+  return pending;
+}
+
 /** Resolve a target to the concrete set of recipient account ids. */
-async function resolveRecipients(target: NotifyTarget): Promise<string[]> {
+async function resolveRecipients(
+  target: NotifyTarget,
+  cache?: NotifyRecipientCache,
+): Promise<string[]> {
   if ('accountId' in target) return [target.accountId];
   if ('partnerId' in target) {
     const rows = await getDb()
@@ -199,7 +261,7 @@ async function resolveRecipients(target: NotifyTarget): Promise<string[]> {
     const accountId = rows[0]?.accountId;
     return accountId ? [accountId] : [];
   }
-  return staffAccountIdsWithPermission(target.permission);
+  return resolveStaffRecipients(target.permission, cache);
 }
 
 /**
@@ -335,7 +397,7 @@ export async function notify(
     // Every fan-out shape is namespaced unconditionally, at any cardinality.
     const namespacePerRecipient = !('accountId' in target);
 
-    const recipients = await resolveRecipients(target);
+    const recipients = await resolveRecipients(target, options?.recipients);
     if (recipients.length === 0) return;
 
     for (const accountId of recipients) {

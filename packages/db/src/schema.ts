@@ -733,7 +733,20 @@ export const coachMessages = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     readByUser: boolean('read_by_user').notNull().default(false),
   },
-  (t) => [index('coach_messages_account_kind_created').on(t.accountId, t.kind, t.createdAt)],
+  (t) => [
+    index('coach_messages_account_kind_created').on(t.accountId, t.kind, t.createdAt),
+    // The support queue's "waiting on staff" set: every unread member message in
+    // a support thread. Read by the console nav badge on EVERY admin page render
+    // (countUnreadSupportThreads), by the ops overview tile and by the inbox's
+    // per-thread unread subquery — none of which the account-leading index above
+    // can serve, so all three were scanning the whole message table. Partial +
+    // account-keyed, so the badge's COUNT(DISTINCT account_id) is an index-only
+    // scan over the handful of rows that actually qualify, and clearing a thread
+    // removes its rows from the index entirely.
+    index('coach_messages_support_unread')
+      .on(t.accountId)
+      .where(sql`${t.kind} = 'support' and ${t.sender} = 'user' and ${t.readByCoach} = false`),
+  ],
 );
 
 /**
@@ -2349,6 +2362,18 @@ export const mealOrders = pgTable(
     index('meal_orders_subscription')
       .on(t.subscriptionId)
       .where(sql`${t.subscriptionId} IS NOT NULL`),
+    // The stale-orders sweep (apps/web/src/lib/cron.ts), both passes. Pending is
+    // a sliver of this table and shrinks as orders are confirmed, so the partial
+    // predicate is what keeps these tiny; the key is each pass's ORDER BY, so
+    // the LIMIT stops the scan instead of sorting every order ever placed.
+    // Pass 1: unconfirmed past its cutoff, oldest cutoff first.
+    index('meal_orders_pending_cutoff')
+      .on(t.cutoffAt)
+      .where(sql`${t.status} = 'pending'`),
+    // Pass 2: still waiting on the restaurant, longest-waiting first.
+    index('meal_orders_pending_placed')
+      .on(t.placedAt)
+      .where(sql`${t.status} = 'pending'`),
   ],
 );
 

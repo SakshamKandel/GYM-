@@ -12,9 +12,17 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  *   RevenueCat webhooks (/api/subscription/revenuecat), which carry the
  *   provider-verified entitlement + expiry.
  *
- * Set BILLING_MODE=live together with REVENUECAT_WEBHOOK_AUTH before shipping
- * a build where tiers cost real money (CLAUDE.md: never trust the client for
- * paid entitlements). Production never permits preview grants.
+ * Set BILLING_MODE=live together with BOTH REVENUECAT_WEBHOOK_AUTH and
+ * REVENUECAT_WEBHOOK_SIGNATURE_SECRET before shipping a build where tiers cost
+ * real money (CLAUDE.md: never trust the client for paid entitlements).
+ * Production never permits preview grants.
+ *
+ * Why the signature secret counts here: /api/subscription/revenuecat rejects
+ * every event it cannot verify, so without that secret a 'live' deployment
+ * takes real store payments and grants nothing. Reporting 'disabled' instead
+ * keeps the contradiction visible (the paywall hides the purchase button, the
+ * admin Configuration card and the boot log both say paid plans are off)
+ * rather than surfacing it as a member who paid and got no membership.
  */
 export type BillingMode = 'disabled' | 'preview' | 'live';
 
@@ -22,12 +30,19 @@ interface BillingEnvironment {
   BILLING_MODE?: string;
   NODE_ENV?: string;
   REVENUECAT_WEBHOOK_AUTH?: string;
+  REVENUECAT_WEBHOOK_SIGNATURE_SECRET?: string;
 }
+
+/** Every variable 'live' mode needs before a store purchase can be honoured. */
+export const LIVE_BILLING_VARS = [
+  'REVENUECAT_WEBHOOK_AUTH',
+  'REVENUECAT_WEBHOOK_SIGNATURE_SECRET',
+] as const satisfies readonly (keyof BillingEnvironment)[];
 
 /** Resolve billing configuration without ever defaulting to a free grant. */
 export function billingMode(env: BillingEnvironment = process.env): BillingMode {
   if (env.BILLING_MODE === 'live') {
-    return env.REVENUECAT_WEBHOOK_AUTH?.trim() ? 'live' : 'disabled';
+    return LIVE_BILLING_VARS.every((name) => env[name]?.trim()) ? 'live' : 'disabled';
   }
   if (env.BILLING_MODE === 'preview' && env.NODE_ENV !== 'production') {
     return 'preview';
@@ -56,9 +71,13 @@ interface RevenueCatSignatureOptions {
 }
 
 /**
- * Verifies RevenueCat's optional HMAC signature over `timestamp.rawBody`.
- * Authorization remains mandatory; this becomes a second check whenever
- * REVENUECAT_WEBHOOK_SIGNATURE_SECRET is configured.
+ * Verifies RevenueCat's HMAC signature over `timestamp.rawBody`.
+ *
+ * Handed no secret this returns true, because it has nothing to compare
+ * against. That is NOT permission to run live billing unsigned: callers on the
+ * money path must reject a missing secret themselves before they get here, the
+ * way /api/subscription/revenuecat does, and billingMode() refuses to report
+ * 'live' until REVENUECAT_WEBHOOK_SIGNATURE_SECRET is set.
  */
 export function verifyRevenueCatSignature(
   rawBody: string,

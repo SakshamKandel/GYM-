@@ -36,6 +36,14 @@ export const runtime = 'nodejs';
  *                           LWW working as designed, and re-adding the food on
  *                           the phone mints a fresh id anyway.)
  *
+ * The mutation id must be a BARE uuid, with no prefix or other decoration:
+ * memberDataMutationSchema (and therefore every change the sync route returns)
+ * validates it as `z.string().uuid()` on both ends of the wire. A decorated id
+ * fails that check, and one rejected row fails the whole sync page — pull,
+ * acknowledgements and all six cursors — for that member. Provenance is not
+ * lost by keeping it bare: the audit row below records who removed which food,
+ * and carries this exact mutation id so the tombstone can be traced back.
+ *
  * Past food logs are unaffected: member_food_logs denormalises foodName and the
  * macros at log time, so a member's diary history stays intact and correct.
  *
@@ -93,13 +101,16 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   if (row.deleted) return json({ ok: true }, 200);
 
   const now = new Date();
+  // Must be fresh: member_foods_account_mutation is UNIQUE per account. Must
+  // also be a bare uuid — see the header note; the sync contract rejects
+  // anything else and one bad row breaks the member's whole sync.
+  const mutationId = crypto.randomUUID();
   await db
     .update(memberFoods)
     .set({
       deleted: true,
       clientChangedAt: now,
-      // Must be fresh: member_foods_account_mutation is UNIQUE per account.
-      mutationId: `moderation-${crypto.randomUUID()}`,
+      mutationId,
       updatedAt: now,
     })
     .where(and(eq(memberFoods.accountId, row.accountId), eq(memberFoods.id, row.id)));
@@ -110,7 +121,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     'moderation.custom_food.remove',
     'account',
     row.accountId,
-    { foodId: row.id, name: row.name, brand: row.brand },
+    { foodId: row.id, name: row.name, brand: row.brand, mutationId },
     ip,
   );
 

@@ -4,21 +4,20 @@ import {
   type NotificationEvent,
   type NotificationPrefs,
 } from '@gym/shared';
-import { cert, getApps, initializeApp, type App, type ServiceAccount } from 'firebase-admin/app';
-import { getMessaging } from 'firebase-admin/messaging';
-import { and, asc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { auditIp, logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { ktmMinuteOfDay } from '@/lib/notify';
+import { isFcmConfigured, sendPushToTokens } from '@/lib/push';
 
 export const runtime = 'nodejs';
 // Raise the Vercel serverless ceiling for this route: a large fan-out writes
-// many chunked inbox inserts and issues many 500-token FCM batches, and MUST
-// finish inside one invocation so the post-send audit row is always reached (a
-// mid-fan-out timeout would deliver real pushes but leave zero trace). Vercel
-// clamps this to the plan's max.
+// many chunked inbox inserts and hands thousands of addresses to the push
+// senders, and MUST finish inside one invocation so the post-send audit row is
+// always reached (a mid-fan-out timeout would deliver real pushes but leave
+// zero trace). Vercel clamps this to the plan's max.
 export const maxDuration = 300;
 
 /**
@@ -27,17 +26,22 @@ export const maxDuration = 300;
  *  - POST → announce to every account matching an optional { tier, country }
  *           filter. Each recipient gets the SAME treatment notify() gives a
  *           single account: the shared prefs/quiet-hours decision, a durable
- *           inbox row, then the push. Fans out over device_push_tokens in
- *           batches (FCM multicast caps at 500 tokens per call), prunes tokens
- *           FCM reports dead, and writes ONE audit row carrying the tallies.
+ *           inbox row, then the push. Devices are loaded in bulk and handed to
+ *           lib/push's sendPushToTokens, which writes ONE audit row's worth of
+ *           tallies back here.
  *
  * Gated on the effective `broadcast.send` permission (role preset plus explicit
  * account overrides) through the same fail-closed guard as every admin API.
  *
- * Fan-out is implemented here (not via lib/push's per-account sender) because a
- * broadcast addresses tokens in bulk. It reuses an already-initialized
- * firebase-admin app when present, else initializes from
- * FIREBASE_SERVICE_ACCOUNT_B64; when that credential is absent it returns 503
+ * DELIVERY IS NOT IMPLEMENTED HERE. lib/push owns the one routing rule in the
+ * app: an Android address goes to Firebase Cloud Messaging, an iPhone's Expo
+ * address goes to Expo, and only the service that owns an address may declare
+ * it dead. A second sender that only spoke FCM would have every iPhone rejected
+ * as invalid and then deleted, so one broadcast would silence exactly the
+ * members it was aimed at. lib/push also owns the batching and the bounded
+ * concurrency, so a large fan-out still lands inside the serverless budget.
+ *
+ * When the Firebase credential is absent the route returns 503
  * push_not_configured so the operator gets an honest signal instead of a silent
  * no-op.
  *
@@ -73,10 +77,7 @@ const BROADCAST_EVENT: NotificationEvent = 'broadcast';
  */
 const BROADCAST_DATA = { type: 'broadcast' } as const;
 
-/** FCM multicast hard limit per call. */
-const FCM_MULTICAST_BATCH = 500;
-
-/** Rows per inbox insert / stale-token delete — keeps bind parameters bounded. */
+/** Rows per inbox insert — keeps bind parameters bounded. */
 const INBOX_INSERT_CHUNK = 500;
 
 /**
@@ -96,9 +97,6 @@ const MAX_BROADCAST_RECIPIENTS = 20_000;
  */
 const MAX_BROADCAST_TOKENS = 20_000;
 
-/** How many 500-token FCM batches to dispatch concurrently (bounds wall-clock). */
-const SEND_CONCURRENCY = 8;
-
 /** Is per-account preference + quiet-hours gating enforced? (default: yes.) */
 function prefsEnforced(): boolean {
   return process.env.NOTIF_PREFS_ENFORCED !== 'false';
@@ -109,34 +107,6 @@ function chunked<T>(items: readonly T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
-}
-
-/**
- * Resolve a firebase-admin App, reusing one another module already initialized
- * (lib/push) so we never double-init. Returns null when the credential env is
- * absent or malformed — the caller 503s.
- */
-function resolveFirebaseApp(): App | null {
-  const existing = getApps()[0];
-  if (existing) return existing;
-  const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_B64;
-  if (!b64) return null;
-  try {
-    const raw = JSON.parse(Buffer.from(b64, 'base64').toString('utf8')) as {
-      project_id: string;
-      client_email: string;
-      private_key: string;
-    };
-    const serviceAccount: ServiceAccount = {
-      projectId: raw.project_id,
-      clientEmail: raw.client_email,
-      privateKey: raw.private_key,
-    };
-    return initializeApp({ credential: cert(serviceAccount) });
-  } catch (err) {
-    console.error('[broadcast] firebase init failed', err);
-    return null;
-  }
 }
 
 export function OPTIONS() {
@@ -151,8 +121,9 @@ export async function POST(req: Request) {
   if (!parsed.success) return json({ error: 'invalid' }, 400);
   const { title, body, tier, country } = parsed.data;
 
-  const app = resolveFirebaseApp();
-  if (!app) return json({ error: 'push_not_configured' }, 503);
+  // Same singleton lib/push sends with, so there is exactly one Firebase app in
+  // the process and exactly one place that decides an address is dead.
+  if (!isFcmConfigured()) return json({ error: 'push_not_configured' }, 503);
 
   const db = getDb();
 
@@ -298,73 +269,27 @@ export async function POST(req: Request) {
     .filter((t): t is string => typeof t === 'string' && t.length > 0);
 
   // ── 6. Bulk push ───────────────────────────────────────────────
-  // Split into ≤500-token batches, then dispatch up to SEND_CONCURRENCY of them
-  // at a time. Bounded concurrency keeps the total fan-out well inside the
-  // serverless budget (vs. one slow sequential await chain) so the audit row is
-  // always reached; the cap above guarantees a finite batch count.
-  const batches = chunked(tokens, FCM_MULTICAST_BATCH);
-
-  let delivered = 0;
-  let failed = 0;
-  const staleTokens: string[] = [];
-  const messaging = getMessaging(app);
-
-  let cursor = 0;
-  const sendBatch = async (): Promise<void> => {
-    // `batches[cursor++]` reads-and-increments with no intervening await, so the
-    // single-threaded event loop hands each worker a distinct batch.
-    while (cursor < batches.length) {
-      const batch = batches[cursor++]!;
-      try {
-        const res = await messaging.sendEachForMulticast({
-          tokens: batch,
-          notification: { title, body },
-          // `event` rides alongside `type` exactly as notify() sends it, so the
-          // mobile deep-link switch and the notification center key on the same
-          // fields whichever path delivered the message.
-          data: { ...BROADCAST_DATA, event: BROADCAST_EVENT },
-          android: { priority: 'high', notification: { channelId: 'default', sound: 'default' } },
-        });
-        delivered += res.successCount;
-        failed += res.failureCount;
-        res.responses.forEach((r, idx) => {
-          if (r.success) return;
-          const code = r.error?.code;
-          if (
-            code === 'messaging/registration-token-not-registered' ||
-            code === 'messaging/invalid-registration-token' ||
-            code === 'messaging/invalid-argument'
-          ) {
-            const stale = batch[idx];
-            if (stale) staleTokens.push(stale);
-          }
-        });
-      } catch (err) {
-        console.error('[broadcast] batch send failed', err);
-        failed += batch.length;
-      }
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(SEND_CONCURRENCY, batches.length) }, () => sendBatch()),
-  );
-
-  if (staleTokens.length > 0) {
-    try {
-      // Chunked: a single delete with 20k bind parameters can blow the statement
-      // limit on a large fan-out.
-      for (const ids of chunked(staleTokens, INBOX_INSERT_CHUNK)) {
-        await db.delete(devicePushTokens).where(inArray(devicePushTokens.token, ids));
-      }
-    } catch (err) {
-      console.error('[broadcast] stale-token prune failed', err);
-    }
-  }
+  // Hand the whole list to the shared sender. It classifies each address, sends
+  // Android over FCM multicast and iPhones over Expo, batches both legs through
+  // one bounded pool so the fan-out stays inside the serverless budget, and
+  // removes only the addresses the service that owns them called dead.
+  const push = await sendPushToTokens(tokens, {
+    title,
+    body,
+    // `event` rides alongside `type` exactly as notify() sends it, so the
+    // mobile deep-link switch and the notification center key on the same
+    // fields whichever path delivered the message.
+    data: { ...BROADCAST_DATA, event: BROADCAST_EVENT },
+  });
 
   // One audit row per broadcast, carrying the recipient count (P0-4 / §4.12).
-  // `recipients` = inbox rows written (the durable reach); `devices` = tokens the
-  // push actually went to. The prefs/quiet-hours tallies are additive keys the
-  // history view ignores until it wants them.
+  // `recipients` = inbox rows written (the durable reach); `devices` = the
+  // addresses a push service actually took on, so `delivered + failed` adds up
+  // and no device is booked as a failure it never had a chance at. `unreachable`
+  // is the leftover addresses from old app builds that no service here speaks
+  // to; they are dropped, not counted as people who missed the message. The
+  // prefs/quiet-hours tallies are additive keys the history view ignores until
+  // it wants them.
   await logAudit(
     principal,
     'broadcast.send',
@@ -375,13 +300,14 @@ export async function POST(req: Request) {
       tier: tier ?? null,
       country: countryCode ?? null,
       recipients: inboxWritten,
-      devices: tokens.length,
-      delivered,
-      failed,
+      devices: push.attempted,
+      delivered: push.delivered,
+      failed: push.failed,
       truncated,
       suppressed,
       quietHours: quietHeld,
       inboxFailed,
+      unreachable: push.unreachable,
     },
     auditIp(req),
   );
@@ -390,12 +316,13 @@ export async function POST(req: Request) {
     {
       ok: true,
       recipients: inboxWritten,
-      devices: tokens.length,
-      delivered,
-      failed,
+      devices: push.attempted,
+      delivered: push.delivered,
+      failed: push.failed,
       truncated,
       suppressed,
       quietHours: quietHeld,
+      unreachable: push.unreachable,
     },
     200,
   );

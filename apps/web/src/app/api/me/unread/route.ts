@@ -13,10 +13,14 @@ export const runtime = 'nodejs';
  *  - support:   coach-sender coach_messages(kind='support') not readByUser.
  *  - coachChat: coach-sender coach_messages(kind='coach_chat') not readByUser.
  *
- * `buddy` is a retired key held at a constant 0: the Buddy feature was deleted
- * end-to-end, so there is nothing left to count, but the key stays in the
- * payload because shipped mobile builds read this endpoint and dropping a key
- * from a live response is a breaking change for them.
+ * `buddy` is a retired key, now always an empty list. The Buddy feature was
+ * deleted end-to-end so there is nothing left to count, but the key keeps both
+ * its place AND its type: it has always been a sparse list of
+ * `{ linkId, count }` rows, and a live response is no place to change what a
+ * field is. Checked before writing this: every mobile build ever released reads
+ * this endpoint through `z.object({ support: z.number() })`
+ * (features/support/api.ts), which ignores `buddy` entirely — so the empty list
+ * costs nothing and is what anything older would expect to find.
  */
 
 export function OPTIONS() {
@@ -58,7 +62,7 @@ export async function GET(req: Request) {
     {
       support: supportRows[0]?.n ?? 0,
       coachChat: coachChatRows[0]?.n ?? 0,
-      buddy: 0,
+      buddy: [] as { linkId: string; count: number }[],
     },
     200,
   );

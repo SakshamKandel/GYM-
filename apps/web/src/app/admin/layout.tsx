@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
 import { ConsoleShell, type NavGroup } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
-import { countUnreadSupportThreads } from '@/lib/supportThreads';
+import { countUnreadSupportThreadsCached } from '@/lib/supportThreads';
 
 export const runtime = 'nodejs';
 export const metadata: Metadata = {
@@ -227,11 +227,14 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   // Unread-support signal for the nav pill + the TopBar bell dot. Only queried
   // for viewers who can actually open the inbox. This layout wraps EVERY admin
   // page, so a transient DB hiccup must degrade to "no badge" rather than
-  // erroring the whole console out from under an unrelated page.
+  // erroring the whole console out from under an unrelated page — and for the
+  // same reason it reads the CACHED count: a queue depth on the chrome of a
+  // pricing page does not need to be recomputed for that page view (see
+  // countUnreadSupportThreadsCached). /admin/support itself is always exact.
   let supportUnread = 0;
   if (canSupport) {
     try {
-      supportUnread = await countUnreadSupportThreads();
+      supportUnread = await countUnreadSupportThreadsCached();
     } catch {
       supportUnread = 0;
     }

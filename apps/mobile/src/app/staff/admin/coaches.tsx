@@ -80,6 +80,7 @@ const ERR_TEXT: Record<StaffErrorCode, string> = {
   cannot_revoke_self: "You can't revoke your own access.",
   full: "That coach's roster is at capacity.",
   conflict: 'That conflicts with the current state.',
+  tier_required: "This member's membership doesn't include that yet.",
   account_deletion_blocked: 'Account deletion is blocked by active or retained dependencies.',
   private_asset_cleanup_pending: 'Private asset cleanup is still pending.',
   account_deletion_conflict: 'The account changed while deletion was starting.',

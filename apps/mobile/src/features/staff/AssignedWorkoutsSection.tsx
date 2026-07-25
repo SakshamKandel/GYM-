@@ -22,6 +22,7 @@ import {
 import { reserveImageUpload, toApiError, uploadImageAsset } from '../../lib/api/client';
 import { searchExercises } from '../../lib/exercises';
 import { successHaptic } from '../../lib/haptics';
+import { tierName } from '../../lib/tier';
 import {
   createClientWorkout,
   deleteClientWorkout,
@@ -29,7 +30,7 @@ import {
   toStaffError,
   updateClientWorkout,
   type ClientWorkout,
-  type StaffErrorCode,
+  type StaffApiError,
   type WorkoutItemInput,
 } from './api';
 
@@ -54,8 +55,15 @@ function nextKey(): string {
   return `draft_${draftKeySeed}`;
 }
 
-function errorLine(code: StaffErrorCode): string {
-  switch (code) {
+/**
+ * Plain words for a failed write. 'tier_required' is the one that is not a
+ * failure at all: coach workouts are a paid benefit, so a client below the
+ * floor is a deliberate rule the coach can act on (ask them to upgrade). It
+ * used to fall through to the connection line, which sent coaches chasing a
+ * network problem that was never there. Mirrors the web coach console.
+ */
+function errorLine(err: StaffApiError): string {
+  switch (err.code) {
     case 'unauthorized':
       return 'Your session expired. Sign in again.';
     case 'forbidden':
@@ -64,6 +72,10 @@ function errorLine(code: StaffErrorCode): string {
       return 'That workout no longer exists.';
     case 'invalid':
       return 'That change was rejected. Check the details and retry.';
+    case 'tier_required':
+      return err.requiredTier
+        ? `This client needs the ${tierName(err.requiredTier)} plan or higher before they can be given a workout.`
+        : 'This client is on a plan that does not include coach workouts yet.';
     default:
       return "Couldn't reach the server. Check your connection and retry.";
   }
@@ -115,7 +127,7 @@ export function AssignedWorkoutsSection({
     try {
       setWorkouts(await getClientWorkouts(userId, token));
     } catch (err) {
-      setError(errorLine(toStaffError(err).code));
+      setError(errorLine(toStaffError(err)));
     } finally {
       setLoading(false);
     }
@@ -275,7 +287,7 @@ export function AssignedWorkoutsSection({
       setSheetOpen(false);
       await load();
     } catch (err) {
-      setFormError(errorLine(toStaffError(err).code));
+      setFormError(errorLine(toStaffError(err)));
     } finally {
       setSaving(false);
     }
@@ -289,7 +301,7 @@ export function AssignedWorkoutsSection({
         await updateClientWorkout(w.id, { status: w.status === 'active' ? 'archived' : 'active' }, token);
         await load();
       } catch (err) {
-        setMutationError(errorLine(toStaffError(err).code));
+        setMutationError(errorLine(toStaffError(err)));
       } finally {
         setBusyId(null);
       }
@@ -320,7 +332,7 @@ export function AssignedWorkoutsSection({
         }
         await load();
       } catch (err) {
-        setMutationError(errorLine(toStaffError(err).code));
+        setMutationError(errorLine(toStaffError(err)));
         // Refresh regardless so any partial/rolled-back state is reconciled
         // with what the server actually has, rather than trusting local state.
         await load();
@@ -340,7 +352,7 @@ export function AssignedWorkoutsSection({
       await deleteClientWorkout(target.id, token);
       await load();
     } catch (err) {
-      setMutationError(errorLine(toStaffError(err).code));
+      setMutationError(errorLine(toStaffError(err)));
     } finally {
       setBusyId(null);
     }

@@ -1,9 +1,10 @@
 import { accounts, devicePushTokens } from '@gym/db';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { classifyPushToken } from '@/lib/push';
 
 export const runtime = 'nodejs';
 
@@ -11,18 +12,26 @@ export const runtime = 'nodejs';
  * Broadcast AUDIENCE PREVIEW (P1-4 — "no audience-size preview").
  *
  * POST /api/admin/broadcast/preview { tier?, country? } → { recipients, devices,
- * truncated } WITHOUT sending anything. Lets the composer show how many members
- * (and devices) an announcement will reach before the operator commits to an
- * irreversible fan-out.
+ * unreachable, truncated } WITHOUT sending anything. Lets the composer show how
+ * many members (and devices) an announcement will reach before the operator
+ * commits to an irreversible fan-out.
  *
  * The audience math MUST mirror POST /api/admin/broadcast exactly, or the
  * preview would lie:
  *   - active accounts only,
  *   - EFFECTIVE tier (a lapsed paid tier collapses to 'starter'),
  *   - case-insensitive ISO-3166 alpha-2 country,
- *   - recipients = distinct accounts that have at least one registered device
- *     (a member with no device receives nothing, so is not a recipient),
- *   - devices = registered push tokens.
+ *   - the same device query, ordering and per-send cap,
+ *   - devices = registered addresses a push service can actually reach. The
+ *     table still holds raw Apple device tokens from app builds made before the
+ *     switch to Expo, and the send drops those instead of delivering to them, so
+ *     counting them here would promise a reach that never arrives. They come
+ *     back separately as `unreachable`.
+ *   - recipients = distinct accounts holding at least one reachable device (a
+ *     member with no device receives nothing, so is not a recipient).
+ *
+ * Reachability is decided by lib/push's classifyPushToken — the SAME function
+ * the send routes with — so the two can never drift apart.
  *
  * Gated on the same fail-closed `broadcast.send` permission as the send route —
  * previewing an audience reveals membership counts, so it is not a weaker grant.
@@ -72,20 +81,34 @@ export async function POST(req: Request) {
   const countryCode = country?.toUpperCase();
   if (countryCode) filters.push(sql`upper(${accounts.country}) = ${countryCode}`);
 
+  // The send's own device query, ordering and cap. Reading the addresses (not a
+  // COUNT) is what lets the same classifier decide reachability here and there;
+  // the cap keeps it bounded, and the send already reads exactly this much.
   const rows = await db
-    .select({
-      devices: sql<number>`count(${devicePushTokens.token})`,
-      recipients: sql<number>`count(distinct ${devicePushTokens.accountId})`,
-    })
+    .select({ token: devicePushTokens.token, accountId: devicePushTokens.accountId })
     .from(devicePushTokens)
     .innerJoin(accounts, eq(accounts.id, devicePushTokens.accountId))
-    .where(and(...filters));
+    .where(and(...filters))
+    .orderBy(asc(devicePushTokens.accountId))
+    .limit(MAX_BROADCAST_TOKENS + 1);
 
-  const devices = Number(rows[0]?.devices ?? 0);
-  const recipients = Number(rows[0]?.recipients ?? 0);
+  const truncated = rows.length > MAX_BROADCAST_TOKENS;
+  const usable = truncated ? rows.slice(0, MAX_BROADCAST_TOKENS) : rows;
 
-  return json(
-    { recipients, devices, truncated: devices > MAX_BROADCAST_TOKENS },
-    200,
-  );
+  const reachableAccounts = new Set<string>();
+  let devices = 0;
+  let unreachable = 0;
+  for (const row of usable) {
+    if (typeof row.token !== 'string' || row.token.length === 0) continue;
+    // 'unknown' counts as reachable: it goes to FCM on the send, exactly as an
+    // unrecognised-but-live Android address should.
+    if (classifyPushToken(row.token) === 'apns') {
+      unreachable += 1;
+      continue;
+    }
+    devices += 1;
+    reachableAccounts.add(row.accountId);
+  }
+
+  return json({ recipients: reachableAccounts.size, devices, unreachable, truncated }, 200);
 }

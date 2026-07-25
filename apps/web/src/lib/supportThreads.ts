@@ -187,6 +187,10 @@ export async function loadSupportThreads(
  * Resolved threads are counted too: reopening is a staff action, so a member
  * replying to a closed ticket leaves it 'resolved' — filtering those out would
  * silently swallow exactly the follow-up this badge exists to surface.
+ *
+ * The predicate is served by the `coach_messages_support_unread` partial index
+ * (packages/db) — unindexed it was a full scan of every message ever sent, on a
+ * table that only ever grows.
  */
 export async function countUnreadSupportThreads(): Promise<number> {
   const db = getDb();
@@ -201,4 +205,42 @@ export async function countUnreadSupportThreads(): Promise<number> {
       ),
     );
   return Number(rows[0]?.n ?? 0);
+}
+
+/** How long the nav badge may lag the real count. */
+const UNREAD_BADGE_TTL_MS = 30_000;
+
+let unreadBadge: { at: number; value: number } | null = null;
+let unreadBadgeInFlight: Promise<number> | null = null;
+
+/**
+ * {@link countUnreadSupportThreads} for the console CHROME — the sidebar pill
+ * and the TopBar bell dot, which the admin layout renders on every single page.
+ *
+ * The layout wraps every admin route, so the exact count was being recomputed
+ * for a staffer clicking through pricing, gyms or the audit log — none of which
+ * are the support inbox. The number is the same for every viewer (it is a
+ * queue depth, not personal data), so one short-lived result is shared by all
+ * of them: a badge that is up to {@link UNREAD_BADGE_TTL_MS} behind is worth
+ * far more than a query per page view. Concurrent renders share the in-flight
+ * read rather than each starting their own, and a failed read is not cached, so
+ * the next render simply tries again.
+ *
+ * The inbox itself never reads this — /admin/support loads real threads, so the
+ * page a staffer opens to act on the queue is always exact.
+ */
+export async function countUnreadSupportThreadsCached(): Promise<number> {
+  const cached = unreadBadge;
+  if (cached && Date.now() - cached.at < UNREAD_BADGE_TTL_MS) return cached.value;
+  if (!unreadBadgeInFlight) {
+    unreadBadgeInFlight = countUnreadSupportThreads()
+      .then((value) => {
+        unreadBadge = { at: Date.now(), value };
+        return value;
+      })
+      .finally(() => {
+        unreadBadgeInFlight = null;
+      });
+  }
+  return unreadBadgeInFlight;
 }

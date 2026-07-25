@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { atomicAdvanceOrderSql } from './advanceSql.ts';
+import { codDeliveredBackfillSql, codDeliveredPreviewSql } from './codBackfillSql.ts';
 import { guardedMealPatchSql } from './menuSubscriptionSafety.ts';
 import { guardedOrderItemInsertSql } from './orderItemsSql.ts';
 import { pgIntArray, pgTextArray } from './pgArray.ts';
@@ -11,10 +12,10 @@ import { pgIntArray, pgTextArray } from './pgArray.ts';
  * These are money-path invariants, so they are asserted on the SQL the builders
  * emit rather than on a live database: the guards ARE the WHERE clauses.
  *
- * NOTE: the web test script currently globs `src/lib/*.test.ts` only — widen it
- * to `src/lib/**\/*.test.ts` for this file to run in CI. Every module reachable
- * from here must spell its relative imports with an explicit `.ts` extension:
- * node's type-stripping ESM loader needs full specifiers.
+ * NOTE: every module reachable from here must spell its relative imports with an
+ * explicit `.ts` extension — node's type-stripping ESM loader needs full
+ * specifiers. The web test script globs `src/lib/**\/*.test.ts`; it used to glob
+ * `src/lib/*.test.ts`, which silently skipped this whole file.
  */
 
 const dialect = new PgDialect();
@@ -116,6 +117,67 @@ test('the line-item backfill is conditional in SQL', () => {
     }),
   );
   assert.ok(query.includes('where not exists ( select 1 from meal_order_items'));
+});
+
+test('delivering a cash order closes its payment in the same statement', () => {
+  // The forward half of the same invariant the backfill below closes for orders
+  // delivered before this existed: for cash the money changes hands at the door.
+  const query = render(
+    atomicAdvanceOrderSql({
+      ...baseAdvance,
+      expectedStatus: 'out_for_delivery',
+      toStatus: 'delivered',
+      actor: 'partner',
+    }),
+  );
+  assert.ok(query.includes("when payment_method = 'cod' and payment_status = 'unpaid' then 'paid'"));
+  assert.ok(query.includes('else payment_status end'));
+
+  // Nothing else in the machine touches payment on the way through.
+  const confirmed = render(
+    atomicAdvanceOrderSql({ ...baseAdvance, expectedStatus: 'pending', toStatus: 'confirmed' }),
+  );
+  assert.ok(!confirmed.includes('payment_status ='));
+});
+
+test('the cash backfill only closes delivered cash orders that are still unpaid', () => {
+  const query = render(codDeliveredBackfillSql());
+  assert.ok(query.includes("set payment_status = 'paid'"));
+  assert.ok(query.includes("status = 'delivered'"));
+  assert.ok(query.includes("payment_method = 'cod'"));
+  assert.ok(query.includes("payment_status = 'unpaid'"));
+  // A digital order's paid flip belongs to receipt approval, never to this.
+  assert.ok(!query.includes('esewa'));
+  assert.ok(!query.includes('khalti'));
+  // The order's own status, and the version the tip CAS rides on, are untouched.
+  assert.ok(!query.includes('set status'));
+  assert.ok(!query.includes('status_version'));
+});
+
+test('the cash backfill counts exactly the rows it writes', () => {
+  const whereClause = (query: string): string => {
+    const at = query.indexOf(' where ');
+    assert.ok(at > -1, 'expected a where clause');
+    return query.slice(at + ' where '.length).split(' returning ')[0].split(' group by ')[0];
+  };
+  assert.equal(
+    whereClause(render(codDeliveredPreviewSql())),
+    whereClause(render(codDeliveredBackfillSql())),
+  );
+
+  const scoped = { before: '2026-07-01' };
+  const scopedPreview = whereClause(render(codDeliveredPreviewSql(scoped)));
+  assert.ok(scopedPreview.includes('delivery_date < $1::date'));
+  assert.equal(scopedPreview, whereClause(render(codDeliveredBackfillSql(scoped))));
+  assert.deepEqual(dialect.sqlToQuery(codDeliveredBackfillSql(scoped)).params, ['2026-07-01']);
+});
+
+test('re-running the cash backfill is a no-op, because paid rows no longer match', () => {
+  // The predicate is the idempotency: there is no marker column to forget.
+  const query = render(codDeliveredBackfillSql());
+  const target = query.slice(query.indexOf(' where '));
+  assert.ok(target.includes("payment_status = 'unpaid'"));
+  assert.ok(!target.includes("payment_status = 'paid'"));
 });
 
 test('arrays bind as one array parameter, not a row constructor', () => {

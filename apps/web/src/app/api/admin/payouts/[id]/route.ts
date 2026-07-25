@@ -1,10 +1,4 @@
-import {
-  coachPayoutRequests,
-  mealPartners,
-  partnerPayoutRequests,
-  partnerWalletLedger,
-  walletLedger,
-} from '@gym/db';
+import { coachPayoutRequests, mealPartners, partnerPayoutRequests } from '@gym/db';
 import { and, eq } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
@@ -15,6 +9,7 @@ import { notify } from '@/lib/notify';
 import { coachWalletBalances } from '@/lib/promoEconomy';
 import { clientIp } from '@/lib/rateLimit';
 import { loadPartnerHeld } from '@/app/partner/_data';
+import { coachPayoutLedgerInsertSql, partnerPayoutLedgerInsertSql } from '../_ledgerSql';
 
 export const runtime = 'nodejs';
 
@@ -28,11 +23,13 @@ export const runtime = 'nodejs';
  *        time snapshot) — a request no longer covered 409s;
  *      * CAS pending→approved (the WHERE status='pending' write is the commit
  *        point);
- *      * posts the negative wallet-ledger payout entry, idempotently keyed
- *        (sourceType='payout', sourceId=requestId) via the unique
- *        (source_type, source_id) index — so a retry after a partial failure
- *        (CAS flipped, ledger insert crashed) repairs itself without double-
- *        debiting. disbursementRef is REQUIRED.
+ *      * posts the decrementing wallet-ledger payout entry in the SAME
+ *        transaction, conditional on the request reading 'approved' (../_ledgerSql)
+ *        and idempotently keyed (sourceType='payout', sourceId=requestId) via the
+ *        unique (source_type, source_id) index — so a retry after a partial
+ *        failure (CAS flipped, ledger insert crashed) repairs itself without
+ *        double-debiting, and losing the CAS to a concurrent rejection debits
+ *        nothing at all. disbursementRef is REQUIRED.
  *  - POST {action:'reject', scope?, note?}: CAS pending→rejected, freeing the
  *    one-pending slot so the earner can file again. No ledger movement.
  *
@@ -137,17 +134,17 @@ async function decideCoach(
   const disbursementRef = body.action === 'approve' ? body.disbursementRef : '';
 
   // The decrementing payout ledger row (coach `wallet_ledger` is a plain SUM, so
-  // payouts are stored NEGATIVE). Idempotent via unique (source_type, source_id).
-  const ledgerValues = {
-    coachId: request.coachId,
-    type: 'payout' as const,
+  // payouts are stored NEGATIVE). Idempotent via unique (source_type, source_id),
+  // and conditional on the request actually reading 'approved' — see ../_ledgerSql.
+  const ledgerRow = coachPayoutLedgerInsertSql({
+    rowId: crypto.randomUUID(),
+    requestId: request.id,
+    earnerId: request.coachId,
     amountMinor: -Math.abs(request.amountMinor),
     currency: request.currency,
-    sourceType: 'payout',
-    sourceId: request.id,
     note: body.action === 'approve' ? body.disbursementRef : null,
     createdBy: principal.id,
-  };
+  });
 
   let flipped = false;
   if (request.status === 'pending') {
@@ -160,7 +157,10 @@ async function decideCoach(
     // ATOMIC approve: CAS flip + decrementing payout row commit together in one
     // transaction (neon-http `db.batch`). A mid-tx failure rolls back to 'pending'
     // with no ledger row — never the split state that frees the one-pending slot
-    // while the balance was never debited (§7.1 WP-5).
+    // while the balance was never debited (§7.1 WP-5). The insert carries its own
+    // `where exists (… status = 'approved')`, so losing the CAS to a concurrent
+    // rejection leaves the ledger untouched instead of debiting the coach for a
+    // payout that was refused.
     const [updated] = await db.batch([
       db
         .update(coachPayoutRequests)
@@ -173,7 +173,7 @@ async function decideCoach(
         })
         .where(and(eq(coachPayoutRequests.id, id), eq(coachPayoutRequests.status, 'pending')))
         .returning({ id: coachPayoutRequests.id }),
-      db.insert(walletLedger).values(ledgerValues).onConflictDoNothing(),
+      db.execute(ledgerRow),
     ]);
 
     if (updated.length === 0) {
@@ -188,8 +188,9 @@ async function decideCoach(
     }
   } else {
     // Already 'approved' on entry — idempotent repair insert for a prior partial
-    // failure that left the request approved with no ledger row.
-    await db.insert(walletLedger).values(ledgerValues).onConflictDoNothing();
+    // failure that left the request approved with no ledger row. The same
+    // `where exists` re-checks that status at write time.
+    await db.execute(ledgerRow);
   }
 
   if (flipped) {
@@ -292,22 +293,22 @@ async function decidePartner(
 
   // The decrementing payout ledger row. Idempotent via the unique
   // (source_type, source_id) index — a re-run is a no-op, so held decrements
-  // EXACTLY once per approved request.
+  // EXACTLY once per approved request — and conditional on the request actually
+  // reading 'approved' (see ../_ledgerSql).
   //
   // NOTE the sign convention: `partnerBalance` (@gym/shared) computes
   // held = Σearning + Σadjustment − Σpayout, so a `payout` row carries the
   // POSITIVE magnitude and the fold subtracts it (unlike the coach `wallet_ledger`
   // which is a plain SUM and stores payouts negative).
-  const ledgerValues = {
-    partnerId: request.partnerId,
-    type: 'payout' as const,
+  const ledgerRow = partnerPayoutLedgerInsertSql({
+    rowId: crypto.randomUUID(),
+    requestId: request.id,
+    earnerId: request.partnerId,
     amountMinor: Math.abs(request.amountMinor),
     currency: request.currency,
-    sourceType: 'payout',
-    sourceId: request.id,
     note: disbursementRef,
     createdBy: principal.id,
-  };
+  });
 
   let flipped = false;
   if (request.status === 'pending') {
@@ -327,6 +328,9 @@ async function decidePartner(
     // back to 'pending' with NO ledger row — never the split state where the
     // request reads 'approved' but held never decremented, which would free the
     // one-pending slot and let the same balance be disbursed twice (§7.1 WP-5).
+    // The insert is itself conditional on the request reading 'approved', so a
+    // concurrent rejection that wins the CAS cannot leave held decremented for a
+    // payout that was refused.
     const [updated] = await db.batch([
       db
         .update(partnerPayoutRequests)
@@ -339,7 +343,7 @@ async function decidePartner(
         })
         .where(and(eq(partnerPayoutRequests.id, id), eq(partnerPayoutRequests.status, 'pending')))
         .returning({ id: partnerPayoutRequests.id }),
-      db.insert(partnerWalletLedger).values(ledgerValues).onConflictDoNothing(),
+      db.execute(ledgerRow),
     ]);
 
     if (updated.length === 0) {
@@ -357,8 +361,9 @@ async function decidePartner(
     }
   } else {
     // Already 'approved' on entry — a prior partial failure may have left the row
-    // approved with no ledger entry. Idempotent repair insert (no CAS needed).
-    await db.insert(partnerWalletLedger).values(ledgerValues).onConflictDoNothing();
+    // approved with no ledger entry. Idempotent repair insert; the builder's own
+    // `where exists` re-checks that the request still reads 'approved'.
+    await db.execute(ledgerRow);
   }
 
   if (flipped) {
