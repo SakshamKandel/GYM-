@@ -15,7 +15,7 @@ export function Shell({ children }: { children: ReactNode }) {
       <div className="mkt min-h-screen bg-ink font-sans text-snow">
         <a
           href="#main-content"
-          className="absolute left-4 top-4 z-[100] -translate-y-24 rounded-full bg-red px-5 py-2.5 text-[14px] font-semibold text-ink transition-transform focus:translate-y-0"
+          className="absolute left-4 top-4 z-[100] -translate-y-24 rounded-full bg-red px-5 py-2.5 text-[14.5px] font-semibold text-ink transition-transform focus:translate-y-0"
         >
           Skip to content
         </a>

@@ -457,6 +457,54 @@ export class CloudinaryProvider implements VideoProvider {
 }
 
 /**
+ * Public (unsigned) image delivery URLs are stored BARE: `createImageUpload`
+ * hands back `…/image/upload/<folder>/<uuid>` with no transformation, and rows
+ * written before this helper existed hold exactly that. So a 12 MP phone
+ * original is shipped, byte for byte, into a 96 px avatar or a card thumbnail.
+ *
+ * This rewrites such a URL at render time — no migration, no re-upload:
+ *   f_auto  → WebP/AVIF where the browser accepts it
+ *   q_auto  → per-image quality instead of the stored original's
+ *   w_<n>,c_limit → never wider than the largest box we paint it in, and
+ *                   `c_limit` only ever shrinks (a small image is left alone)
+ *
+ * Deliberately conservative — it returns the input UNCHANGED unless every
+ * condition holds:
+ *   - it is an unsigned `image/upload` URL on OUR OWN cloud. Someone else's
+ *     cloud may have strict transformations turned on, where an unsigned
+ *     transformation is a 401, so a foreign (or seeded stock-photo) URL is
+ *     passed through as stored.
+ *   - it carries no signature. A SIGNED URL (`s--<sig>--`, or one scoped by
+ *     `__cld_token__`) must never be touched: the signature is computed over the
+ *     transformation string, so inserting one invalidates it and playback 401s.
+ *     Authenticated assets (progress photos, receipts) go through
+ *     `signedImageUrl`, which already applies f_auto/q_auto inside the signature.
+ *   - it has no transformation yet, so the call is idempotent and an operator's
+ *     hand-tuned URL is left as authored.
+ */
+export function optimizedImageUrl(url: string, opts: { maxWidth: number }): string {
+  if (url.length === 0) return url;
+
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  if (!cloudName) return url;
+  const head = `${CLOUDINARY_DELIVERY_BASE}/${cloudName}/image/upload/`;
+  if (!url.startsWith(head)) return url;
+  // Signed delivery (or a token-scoped one) is off limits.
+  if (url.includes('/s--') || url.includes('__cld_token__')) return url;
+
+  const tail = url.slice(head.length);
+  if (tail.length === 0) return url;
+  // Already carries a multi-param transformation segment (`f_auto,q_auto,…/`)
+  // → leave it alone, so calling this twice is a no-op. The comma is what makes
+  // the test safe: a stored uid starts with a FOLDER (`gym_photo/<uuid>`), and
+  // a folder never contains a comma, so it can't be mistaken for one.
+  if (/^(?:[a-z]{1,3}_[^/,]+,)+[a-z]{1,3}_[^/,]+\//.test(tail)) return url;
+
+  const width = Math.max(1, Math.round(opts.maxWidth));
+  return `${head}f_auto,q_auto,c_limit,w_${width}/${tail}`;
+}
+
+/**
  * Cloudinary context values are pipe/equals-delimited; strip those chars so a
  * label can't corrupt the context string (and thus the signature match).
  */

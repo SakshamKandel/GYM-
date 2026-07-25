@@ -2,8 +2,8 @@ import {
   accounts,
   mealAvailability,
   mealBillingCycles,
-  mealOrderItems,
   mealOrders,
+  mealPartners,
   meals,
   mealSubSkips,
   mealSubscriptions,
@@ -28,6 +28,7 @@ import { and, asc, eq, inArray, lt, sql } from 'drizzle-orm';
 import { after } from 'next/server';
 import { sendPushToAccount } from '@/lib/push';
 import { loadDeliveryConfig } from './config';
+import { guardedOrderItemInsertSql, mealOrderItemsLockSql } from './orderItemsSql';
 
 /**
  * On-read materialization + weekly billing (§3). There is NO cron: this runs at
@@ -39,23 +40,96 @@ import { loadDeliveryConfig } from './config';
  *    unique index (invariant §8b) — racing readers can never double-spawn. The
  *    plan is deterministic (rotation resolves purely from date/window), so a
  *    conflict is a true no-op.
- *  - Horizon is STRICTLY today + tomorrow (KTM); the past never retro-spawns
- *    (§8e).
+ *  - Order horizon is STRICTLY today + tomorrow (KTM); the past never
+ *    retro-spawns (§8e). The BILLING horizon is a full week ahead, so a week's
+ *    bill always exists before that week's first cutoff (see below).
+ *  - Only partners that are live AND accepting orders spawn anything: a paused
+ *    (or deactivated) kitchen receives no new subscription orders and its
+ *    members are not billed for the weeks it is closed. Pause is forward-only —
+ *    orders that already exist are never touched.
  *  - Snapshot: address (name/phone/text) + the day's price are frozen onto the
  *    row at spawn and never re-resolved (§8a).
  *  - Prepaid billing: for DIGITAL (eSewa/Khalti) subscriptions a delivery date is
  *    materialized only when the Sun–Sat cycle covering it is `paid` — "never cook
  *    unpaid". COD subscriptions have no cycle gate (reconciled on delivery).
+ *    A cycle's amount is frozen at creation and never repriced here.
  *
  * Never throws: materialization is a best-effort side effect of a read, so a
  * transient failure logs and the route still serves whatever already exists
  * (the next read retries the spawn).
+ *
+ * Because it is a side effect of a READ, it also has to be cheap when there is
+ * nothing to do — every console that stays open re-triggers it. Two things keep
+ * that in check: the whole weekly-billing pass is three statements no matter how
+ * many plans exist (see `ensureAndBillCycles`), and repeat calls for the same
+ * scope inside a short window return immediately (see the throttle below).
  */
 
 export type MaterializeScope =
   | { kind: 'member'; accountId: string }
   | { kind: 'partner'; partnerId: string }
   | { kind: 'all' };
+
+export interface MaterializeOptions {
+  /**
+   * Run even if this scope was materialized moments ago (see the throttle
+   * below). Write paths that must observe their own effect in the SAME request
+   * pass true: creating a plan bills its first week and answers with that bill,
+   * so a suppressed pass there would hand the member an empty screen.
+   *
+   * Defaults to true for the `member` scope for exactly that reason, and to
+   * false for `partner`/`all` — those are the console surfaces that re-render
+   * and re-poll on a timer with no new work to do.
+   */
+  force?: boolean;
+}
+
+/**
+ * How long a pass suppresses the next one for the same scope (P0). The partner
+ * kitchen board polls every 15 seconds and the admin orders page re-runs a
+ * platform-wide pass on every render, so without this a busy dinner service has
+ * every open console re-driving the same write-heavy billing sweep four times a
+ * minute, each one finding nothing to do.
+ *
+ * Best effort by design: the table is per server instance and purely in memory,
+ * so the worst case is a few extra passes (exactly today's behaviour), never a
+ * missed order. Nothing here decides WHETHER a delivery is billed or spawned —
+ * that stays in the idempotent, conflict-guarded SQL below.
+ */
+const MATERIALIZE_THROTTLE_MS = 60_000;
+/** Bound on the throttle table so a long-lived instance can't grow unbounded. */
+const THROTTLE_MAX_SCOPES = 500;
+const lastRunAtByScope = new Map<string, number>();
+
+function scopeKey(scope: MaterializeScope): string {
+  if (scope.kind === 'member') return `member:${scope.accountId}`;
+  if (scope.kind === 'partner') return `partner:${scope.partnerId}`;
+  return 'all';
+}
+
+/** True when this scope ran inside the throttle window. */
+function ranRecently(key: string, atMs: number): boolean {
+  const last = lastRunAtByScope.get(key);
+  return last !== undefined && atMs - last < MATERIALIZE_THROTTLE_MS;
+}
+
+/**
+ * Stamp the scope BEFORE the work, not after: two console tabs arriving at the
+ * same moment should not both run the sweep. A failed pass therefore waits out
+ * the window like any other, which is the same "the next read retries" contract
+ * the whole module already relies on.
+ */
+function markRun(key: string, atMs: number): void {
+  if (lastRunAtByScope.size >= THROTTLE_MAX_SCOPES) {
+    for (const [k, at] of lastRunAtByScope) {
+      if (atMs - at >= MATERIALIZE_THROTTLE_MS) lastRunAtByScope.delete(k);
+    }
+    // Every entry still fresh: drop the lot rather than grow. Costs at most one
+    // extra pass per scope.
+    if (lastRunAtByScope.size >= THROTTLE_MAX_SCOPES) lastRunAtByScope.clear();
+  }
+  lastRunAtByScope.set(key, atMs);
+}
 
 /** Digital methods are the prepaid, cycle-gated rails; COD is pay-on-delivery. */
 function isDigital(method: string): boolean {
@@ -110,94 +184,167 @@ function plannedSlotsFor(
   return n;
 }
 
+/** Map key for one (subscription, week) billing cycle. */
+function cycleKey(subscriptionId: string, weekStart: string): string {
+  return `${subscriptionId}|${weekStart}`;
+}
+
 /**
- * Ensure the Sun–Sat billing cycle for `(sub, weekStart)` exists and, if still
- * `open`, bill it (freeze amount, flip to `awaiting_payment`, push). Prepaid:
- * the member pays this frozen amount before the week's orders materialize.
- * Returns the current cycle {id,status} or null when the week has no slots.
+ * Ensure the Sun–Sat billing cycles for every (digital sub × horizon week) pair
+ * exist and, if still `open`, bill them (freeze amount, flip to
+ * `awaiting_payment`, push). Prepaid: the member pays this frozen amount before
+ * the week's orders materialize. Returns the current {id,status} per pair; a
+ * week with no billable slot for a plan is simply absent.
+ *
+ * THREE statements total, whatever the plan count (P0). This used to be a
+ * sequential loop of insert → select → update per subscription per week, so an
+ * admin pass over the whole platform cost three round trips per plan per week
+ * and got slower every time someone subscribed.
+ *
+ * The money rules are unchanged and still enforced by the SQL, not by us:
+ *  - the insert keeps its `(subscription, week_start)` conflict guard, so a
+ *    racing pass can never create a second cycle or re-price an existing one;
+ *  - the update is still a CAS on `status='open'`, so a cycle that is already
+ *    awaiting payment, under receipt review, PAID or void is never touched;
+ *  - the frozen amount is still `planned_slots × price_per_day_minor` read from
+ *    the cycle ROW's own creation-time values — computed in the database now,
+ *    which also closes the old read-then-write gap between the two.
+ *  - only rows the update actually flipped come back from RETURNING, so exactly
+ *    one "bill ready" push is sent per cycle, as before.
  */
-async function ensureAndBillCycle(
+async function ensureAndBillCycles(
   db: Db,
-  sub: SubRow,
-  weekStart: string,
+  digitalSubs: readonly SubRow[],
+  horizonWeeks: readonly string[],
   now: Date,
   cfg: MealDeliveryConfig,
-): Promise<{ id: string; status: CycleStatus } | null> {
-  const { weekEnd } = weekBoundsFor(weekStart);
-  const plannedSlots = plannedSlotsFor(sub, weekStart, sub.startDate, now, cfg);
-  if (plannedSlots === 0) return null;
+): Promise<Map<string, { id: string; status: CycleStatus }>> {
+  const out = new Map<string, { id: string; status: CycleStatus }>();
+  if (digitalSubs.length === 0 || horizonWeeks.length === 0) return out;
 
+  // 1. Pure planning pass — no I/O. A week with zero billable slots is dropped
+  //    here exactly as the per-cycle version returned null for it.
+  const planned: { sub: SubRow; weekStart: string; weekEnd: string; plannedSlots: number }[] = [];
+  for (const sub of digitalSubs) {
+    for (const weekStart of horizonWeeks) {
+      const plannedSlots = plannedSlotsFor(sub, weekStart, sub.startDate, now, cfg);
+      if (plannedSlots === 0) continue;
+      planned.push({ sub, weekStart, weekEnd: weekBoundsFor(weekStart).weekEnd, plannedSlots });
+    }
+  }
+  if (planned.length === 0) return out;
+
+  // 2. ONE multi-row insert; existing cycles are left completely alone.
   await db
     .insert(mealBillingCycles)
-    .values({
-      subscriptionId: sub.id,
-      accountId: sub.accountId,
-      weekStart,
-      weekEnd,
-      plannedSlots,
-      pricePerDayMinor: sub.pricePerDayMinor,
-      currency: sub.currency,
-      status: 'open',
-      amountMinor: 0,
-    })
+    .values(
+      planned.map((p) => ({
+        subscriptionId: p.sub.id,
+        accountId: p.sub.accountId,
+        weekStart: p.weekStart,
+        weekEnd: p.weekEnd,
+        plannedSlots: p.plannedSlots,
+        pricePerDayMinor: p.sub.pricePerDayMinor,
+        currency: p.sub.currency,
+        status: 'open' as const,
+        amountMinor: 0,
+      })),
+    )
     .onConflictDoNothing({
       target: [mealBillingCycles.subscriptionId, mealBillingCycles.weekStart],
     });
 
-  const [cycle] = await db
+  // 3. ONE select over the same subscription ids and week bounds.
+  const wanted = new Set(planned.map((p) => cycleKey(p.sub.id, p.weekStart)));
+  const subIds = [...new Set(planned.map((p) => p.sub.id))];
+  const weekStarts = [...new Set(planned.map((p) => p.weekStart))];
+  const cycles = await db
     .select({
       id: mealBillingCycles.id,
+      subscriptionId: mealBillingCycles.subscriptionId,
+      weekStart: mealBillingCycles.weekStart,
       status: mealBillingCycles.status,
-      plannedSlots: mealBillingCycles.plannedSlots,
-      pricePerDayMinor: mealBillingCycles.pricePerDayMinor,
-      currency: mealBillingCycles.currency,
     })
     .from(mealBillingCycles)
     .where(
       and(
-        eq(mealBillingCycles.subscriptionId, sub.id),
-        eq(mealBillingCycles.weekStart, weekStart),
+        inArray(mealBillingCycles.subscriptionId, subIds),
+        inArray(mealBillingCycles.weekStart, weekStarts),
       ),
-    )
-    .limit(1);
-  if (!cycle) return null;
+    );
 
-  if (cycle.status !== 'open') {
-    return { id: cycle.id, status: cycle.status };
+  const keyByOpenId = new Map<string, string>();
+  for (const cycle of cycles) {
+    const key = cycleKey(cycle.subscriptionId, cycle.weekStart);
+    // The select is a cross product of ids × weeks, so it can return a cycle for
+    // a pair this pass did not plan (that plan has nothing left to bill this
+    // week). Skipping it keeps behaviour identical to the per-cycle version.
+    if (!wanted.has(key)) continue;
+    out.set(key, { id: cycle.id, status: cycle.status });
+    if (cycle.status === 'open') keyByOpenId.set(cycle.id, key);
   }
 
-  // Bill: CAS open→awaiting_payment, freezing the amount from the row's own
-  // (creation-time) planned slots × price. A concurrent reader racing the same
-  // flip matches 0 rows and simply observes the already-billed cycle next read.
-  const amountMinor = cycle.plannedSlots * cycle.pricePerDayMinor;
+  const openIds = [...keyByOpenId.keys()];
+  if (openIds.length === 0) return out;
+
+  // 4. ONE update, returning only the rows that actually flipped so the push
+  //    fan-out still fires once per newly billed week.
   const billed = await db
     .update(mealBillingCycles)
-    .set({ status: 'awaiting_payment', amountMinor, updatedAt: now })
-    .where(and(eq(mealBillingCycles.id, cycle.id), eq(mealBillingCycles.status, 'open')))
-    .returning({ id: mealBillingCycles.id });
+    .set({
+      status: 'awaiting_payment',
+      amountMinor: sql`${mealBillingCycles.plannedSlots} * ${mealBillingCycles.pricePerDayMinor}`,
+      updatedAt: now,
+    })
+    .where(and(inArray(mealBillingCycles.id, openIds), eq(mealBillingCycles.status, 'open')))
+    .returning({
+      id: mealBillingCycles.id,
+      accountId: mealBillingCycles.accountId,
+      amountMinor: mealBillingCycles.amountMinor,
+      currency: mealBillingCycles.currency,
+    });
 
-  if (billed.length > 0) {
+  // A cycle we saw open is reported as awaiting_payment whether we won the CAS
+  // or a concurrent pass did — same as before, and the order gate only ever
+  // spawns on 'paid' regardless.
+  for (const [id, key] of keyByOpenId) out.set(key, { id, status: 'awaiting_payment' });
+
+  for (const row of billed) {
     after(() =>
-      sendPushToAccount(sub.accountId, {
+      sendPushToAccount(row.accountId, {
         title: 'Weekly meal bill ready',
-        body: `Your meal plan bill of ${formatMoney(amountMinor, cycle.currency)} is ready to pay.`,
-        data: { type: 'meal_cycle', cycleId: cycle.id },
+        body: `Your meal plan bill of ${formatMoney(row.amountMinor, row.currency)} is ready to pay.`,
+        data: { type: 'meal_cycle', cycleId: row.id },
       }),
     );
   }
-  return { id: cycle.id, status: 'awaiting_payment' };
+  return out;
 }
 
 /**
  * Materialize due subscription orders for `scope` across the today+tomorrow KTM
  * horizon, managing weekly billing cycles first. Best-effort — logs and returns
  * on any failure so the calling read still serves existing rows.
+ *
+ * Repeat calls for the same scope inside {@link MATERIALIZE_THROTTLE_MS} return
+ * immediately; pass `{ force: true }` from a write path that has to see its own
+ * effect right away (see {@link MaterializeOptions}).
  */
 export async function materializeDueOrders(
   db: Db,
   scope: MaterializeScope,
   now: Date = new Date(),
+  opts?: MaterializeOptions,
 ): Promise<void> {
+  // Wall clock, not the injected `now`: a caller pinning `now` for determinism
+  // must not also pin the throttle window.
+  const atMs = Date.now();
+  const key = scopeKey(scope);
+  const force = opts?.force ?? (scope.kind === 'member');
+  if (!force) {
+    if (ranRecently(key, atMs)) return;
+    markRun(key, atMs);
+  }
   try {
     const today = ktmDateString(now);
     const tomorrow = ktmAddDays(today, 1);
@@ -215,6 +362,17 @@ export async function materializeDueOrders(
           ? eq(mealSubscriptions.partnerId, scope.partnerId)
           : undefined;
 
+    // Store pause is a REAL stop (P0-2). `meal_partners.acceptingOrders` (and the
+    // `isActive` kill-switch) gate every other create path — one-time checkout,
+    // subscription create — but subscription orders used to keep spawning into a
+    // paused kitchen, and a prepaid one arrives already paid, so the partner
+    // could not even refuse it. The inner join skips those subscriptions for as
+    // long as the pause lasts: no new weekly bill, no new order.
+    //
+    // Forward-only by construction: this only decides what is CREATED from now
+    // on. Nothing already materialized is cancelled or voided — orders the
+    // partner accepted before pausing are still theirs to fulfil, and resuming
+    // simply lets the next read spawn the remaining, still-before-cutoff slots.
     const subs = (await db
       .select({
         id: mealSubscriptions.id,
@@ -231,10 +389,20 @@ export async function materializeDueOrders(
         startDate: mealSubscriptions.startDate,
       })
       .from(mealSubscriptions)
+      .innerJoin(mealPartners, eq(mealPartners.id, mealSubscriptions.partnerId))
       .where(
         scopePredicate
-          ? and(eq(mealSubscriptions.status, 'active'), scopePredicate)
-          : eq(mealSubscriptions.status, 'active'),
+          ? and(
+              eq(mealSubscriptions.status, 'active'),
+              eq(mealPartners.isActive, true),
+              eq(mealPartners.acceptingOrders, true),
+              scopePredicate,
+            )
+          : and(
+              eq(mealSubscriptions.status, 'active'),
+              eq(mealPartners.isActive, true),
+              eq(mealPartners.acceptingOrders, true),
+            ),
       )) as SubRow[];
 
     if (subs.length === 0) return;
@@ -245,16 +413,35 @@ export async function materializeDueOrders(
     const addressIds = [...new Set(subs.map((s) => s.addressId))];
 
     // --- Weekly billing cycles (digital subs only) --------------------------
-    // The two horizon dates span at most two distinct Sun–Sat weeks.
-    const horizonWeeks = [...new Set([weekBoundsFor(today).weekStart, weekBoundsFor(tomorrow).weekStart])];
-    const cycleByKey = new Map<string, { id: string; status: CycleStatus }>();
-    for (const sub of subs) {
-      if (!isDigital(sub.paymentMethod)) continue;
-      for (const weekStart of horizonWeeks) {
-        const cycle = await ensureAndBillCycle(db, sub, weekStart, now, cfg);
-        if (cycle) cycleByKey.set(`${sub.id}|${weekStart}`, cycle);
-      }
-    }
+    // The BILL horizon is deliberately wider than the ORDER horizon (P0-3).
+    //
+    // Orders still spawn only for today+tomorrow. Bills, though, used to be
+    // created off that same window, so next week's cycle first appeared on
+    // Saturday — while its first cutoff (Sunday lunch closes Saturday 21:00
+    // KTM) was hours away or already past. The member was billed for the whole
+    // week, then physically could not pay in time for the early days: they paid
+    // for slots the materializer can never spawn.
+    //
+    // Looking a full week ahead means the bill for a week always exists before
+    // that week's FIRST cutoff, so every billed slot is still payable-and-
+    // deliverable when it is quoted. `today + 7` is the same weekday next week,
+    // so this resolves to exactly {this week, next week} on every day —
+    // no extra weeks, and the order-spawn horizon below is untouched.
+    const CYCLE_HORIZON_DAYS = 7;
+    const horizonWeeks = [
+      ...new Set([
+        weekBoundsFor(today).weekStart,
+        weekBoundsFor(tomorrow).weekStart,
+        weekBoundsFor(ktmAddDays(today, CYCLE_HORIZON_DAYS)).weekStart,
+      ]),
+    ];
+    const cycleByKey = await ensureAndBillCycles(
+      db,
+      subs.filter((sub) => isDigital(sub.paymentMethod)),
+      horizonWeeks,
+      now,
+      cfg,
+    );
 
     // --- Supporting data for the spawn snapshot -----------------------------
     const skips = await db
@@ -369,7 +556,7 @@ export async function materializeDueOrders(
       let paymentStatus: 'unpaid' | 'paid' = 'unpaid';
       if (isDigital(sub.paymentMethod)) {
         const weekStart = weekBoundsFor(planned.deliveryDate).weekStart;
-        const cycle = cycleByKey.get(`${sub.id}|${weekStart}`);
+        const cycle = cycleByKey.get(cycleKey(sub.id, weekStart));
         if (!cycle || cycle.status !== 'paid') continue; // never cook unpaid
         cycleId = cycle.id;
         paymentStatus = 'paid';
@@ -415,9 +602,10 @@ export async function materializeDueOrders(
         // Conflict: the order row already exists. Normally its items were inserted
         // by the pass that created it, but the order+item inserts are NOT atomic
         // (neon-http has no transactions), so a crash between them can leave an
-        // itemless order. Re-fetch the row and backfill items iff none exist —
-        // otherwise this itemless order would persist forever (the plan is
-        // deterministic, so the resolved meal is identical to the original).
+        // itemless order. Re-fetch the row and let the guarded insert below decide
+        // whether a backfill is still needed — otherwise an itemless order would
+        // persist forever (the plan is deterministic, so the resolved meal is
+        // identical to the original).
         const [existing] = await db
           .select({ id: mealOrders.id })
           .from(mealOrders)
@@ -431,13 +619,7 @@ export async function materializeDueOrders(
           )
           .limit(1);
         if (!existing) continue;
-        const [item] = await db
-          .select({ id: mealOrderItems.id })
-          .from(mealOrderItems)
-          .where(eq(mealOrderItems.orderId, existing.id))
-          .limit(1);
-        if (item) continue; // already has items — true no-op.
-        orderId = existing.id; // itemless order → fall through to backfill.
+        orderId = existing.id;
       }
 
       const macros: MealMacrosSnapshot = {
@@ -448,14 +630,26 @@ export async function materializeDueOrders(
         ...(meal.fiberG != null ? { fiberG: meal.fiberG } : {}),
         ...(meal.sugarG != null ? { sugarG: meal.sugarG } : {}),
       };
-      await db.insert(mealOrderItems).values({
-        orderId,
-        mealId: meal.id,
-        nameSnapshot: meal.name,
-        priceMinorSnapshot: meal.priceMinor,
-        macrosSnapshot: macros,
-        qty: 1,
-      });
+      // P1-4: "has it got items?" and "insert the item" are ONE decision now.
+      // The read-then-write version let two racing materializers both observe an
+      // itemless order and both insert, duplicating the line. The advisory lock
+      // is a separate preceding statement on purpose — READ COMMITTED only gives
+      // the waiter a fresh snapshot at the START of the next statement, so the
+      // conditional insert then correctly sees the winner's row.
+      await db.batch([
+        db.execute(mealOrderItemsLockSql(orderId)),
+        db.execute(
+          guardedOrderItemInsertSql({
+            itemId: crypto.randomUUID(),
+            orderId,
+            mealId: meal.id,
+            nameSnapshot: meal.name,
+            priceMinorSnapshot: meal.priceMinor,
+            macrosSnapshot: macros,
+            qty: 1,
+          }),
+        ),
+      ]);
     }
   } catch (err) {
     console.error('[meals] materializeDueOrders failed', err);

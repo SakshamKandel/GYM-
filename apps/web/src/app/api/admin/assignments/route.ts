@@ -1,9 +1,11 @@
 import { accounts, admins, coachAssignments, coachProfiles } from '@gym/db';
 import { and, count, eq, ne } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -41,13 +43,17 @@ export async function POST(req: Request) {
 
   const db = getDb();
 
-  // coachId must be an account carrying a role='coach' admins row.
+  // coachId must be an account carrying a role='coach' admins row. The profile
+  // is LEFT-joined purely for the member notification's display name — a coach
+  // whose profile row hasn't been lazily created yet is still assignable.
   const coach = await db
-    .select({ accountId: admins.accountId })
+    .select({ accountId: admins.accountId, displayName: coachProfiles.displayName })
     .from(admins)
+    .leftJoin(coachProfiles, eq(coachProfiles.accountId, admins.accountId))
     .where(and(eq(admins.accountId, coachId), eq(admins.role, 'coach')))
     .limit(1);
   if (coach.length === 0) return json({ error: 'not_a_coach' }, 400);
+  const coachName = (coach[0]?.displayName ?? '').trim();
 
   // userId must be a real account.
   const user = await db
@@ -101,6 +107,21 @@ export async function POST(req: Request) {
     }
   }
 
+  // Was this exact pair ALREADY live? Read before the upsert, because
+  // `.returning()` reports the post-update row and a re-assign of an already
+  // active pair must not re-tell the member "you have a coach" every click.
+  const alreadyActive = await db
+    .select({ id: coachAssignments.id })
+    .from(coachAssignments)
+    .where(
+      and(
+        eq(coachAssignments.coachId, coachId),
+        eq(coachAssignments.userId, userId),
+        eq(coachAssignments.status, 'active'),
+      ),
+    )
+    .limit(1);
+
   const inserted = await db
     .insert(coachAssignments)
     .values({
@@ -141,6 +162,29 @@ export async function POST(req: Request) {
     );
 
   await logAudit(principal, 'coach.assign', 'account', userId, { coachId });
+
+  // The coach-side accept flow pushes the member; an ADMIN assign was silent —
+  // a member gained a coach with no notice at all. Fire the same class of
+  // member notification here (best-effort, never blocks or fails the assign).
+  // Skipped when the pair was already active so a repeat click can't spam.
+  // `data.type:'coach'` is the existing deep link: it refreshes `useMyCoach`
+  // on the device and opens Coach Chat. Copy is server-templated — no operator
+  // free text is echoed to the member.
+  if (alreadyActive.length === 0) {
+    after(() =>
+      notify(
+        'coach_assigned',
+        { accountId: userId },
+        {
+          title: 'You have a coach',
+          body: coachName
+            ? `${coachName} is now your coach. Open Coach Chat to say hi.`
+            : 'You have been matched with a coach. Open Coach Chat to say hi.',
+          data: { type: 'coach' },
+        },
+      ),
+    );
+  }
 
   return json({ assignment }, 201);
 }

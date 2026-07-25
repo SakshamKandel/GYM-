@@ -2,7 +2,11 @@
 
 /**
  * Payments — the Nepal-first story: eSewa/Khalti receipt flow as a three-step
- * rail, a perforated coach-code coupon, and the honest app-store note.
+ * rail, a perforated coach-code coupon, and the honest "no cards yet" note.
+ *
+ * The card note states the product truth: there is NO card checkout. Store
+ * billing exists in code but is gated off pending store accounts, so promising
+ * it here would sell something a member cannot buy.
  */
 import { Reveal } from '../motion';
 import { Container, Display, Eyebrow, Lead, Section } from '../ui';
@@ -11,17 +15,17 @@ const STEPS = [
   {
     n: '01',
     title: 'Pay with eSewa or Khalti',
-    body: 'Send the tier amount from the payment sheet in the app. Prices are in NPR — no card, no currency conversion, no international gateway fees.',
+    body: 'Send the tier amount from the payment sheet in the app. Prices are in NPR: no card, no currency conversion, no international gateway fees.',
   },
   {
     n: '02',
     title: 'Upload your receipt',
-    body: 'Attach the payment screenshot right in the app. It lands in the review queue instantly — nothing to email, nothing to chase.',
+    body: 'Attach the payment screenshot right in the app. It reaches us the moment you send it. Nothing to email, nothing to chase.',
   },
   {
     n: '03',
     title: 'Verified, dated, done',
-    body: 'A human verifies the receipt and your tier is granted from that date — usually the same day. Your full month starts when your access does.',
+    body: 'A human verifies the receipt and your tier is granted from that date, usually the same day. Your full month starts when your access does.',
   },
 ] as const;
 
@@ -30,14 +34,14 @@ export function Payments() {
     <Section tone="coal">
       <Container wide>
         <Reveal>
-          <Eyebrow>Payments — Nepal-first, globally ready</Eyebrow>
+          <Eyebrow>Payments: Nepal-first, globally ready</Eyebrow>
           <Display className="mt-4 max-w-3xl">
             <span className="mkt-text-steel">Pay like you</span>{' '}
             <span className="mkt-text-ember">live</span>{' '}
             <span className="mkt-text-steel">here.</span>
           </Display>
           <Lead className="mt-6">
-            Most fitness apps expect a credit card. Nepal runs on eSewa and Khalti — so
+            Most fitness apps expect a credit card. Nepal runs on eSewa and Khalti, so
             that&rsquo;s exactly how you pay, with a human verifying every receipt.
           </Lead>
         </Reveal>
@@ -100,7 +104,7 @@ export function Payments() {
                 />
                 <p className="mt-5 text-[14.5px] leading-relaxed text-dim">
                   Every verified coach has a share code. Enter it at checkout and 30% comes
-                  off your tier — and your coach gets credited for the referral.
+                  off your tier, and your coach gets credited for the referral.
                 </p>
                 <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
                   Codes come from verified coaches only
@@ -114,9 +118,10 @@ export function Payments() {
                   Paying by card?
                 </p>
                 <p className="mt-3 text-[14.5px] leading-relaxed text-dim">
-                  App-store billing arrives with the store launch — cards at store launch,
-                  managed through your Apple or Google account. International pricing is
-                  already live in USD, so nothing changes but the checkout.
+                  Not yet. There is no card checkout anywhere in the product today. Every
+                  tier is paid by sending the amount and uploading the receipt, and a person
+                  verifies it. Outside Nepal the prices are already live in USD, and the
+                  receipt flow is the same.
                 </p>
               </div>
             </Reveal>

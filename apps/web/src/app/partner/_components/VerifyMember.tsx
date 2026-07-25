@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { Badge, Button, Card, TextField } from '@/components/console';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
+import { formatDate } from '@/lib/format';
 
 interface VerifiedMember {
   name: string;
@@ -9,13 +11,6 @@ interface VerifiedMember {
   active: boolean;
   validThru: string | null;
 }
-
-const TIER_LABEL: Record<VerifiedMember['tier'], string> = {
-  starter: 'Free member',
-  silver: 'Silver',
-  gold: 'Gold',
-  elite: 'Elite',
-};
 
 /**
  * Member-code lookup — staff type (or paste) the code from a customer's
@@ -47,17 +42,17 @@ export function VerifyMember() {
         return;
       }
       if (res.status === 429) {
-        setError('Too many lookups — wait a minute and try again.');
+        setError('Too many checks in a row. Wait a minute and try again.');
         return;
       }
       if (!res.ok) {
-        setError('Lookup failed. Try again.');
+        setError('Could not check that code. Try again.');
         return;
       }
       const data = (await res.json()) as { member: VerifiedMember };
       setResult(data.member);
     } catch {
-      setError('Network error. Try again.');
+      setError('Could not reach us just now. Check your connection and try again.');
     } finally {
       setBusy(false);
     }
@@ -112,17 +107,15 @@ export function VerifyMember() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
               <strong style={{ fontSize: 18 }}>{result.name}</strong>
               <Badge tone={result.active ? 'positive' : 'neutral'}>
-                {TIER_LABEL[result.tier]}
+                {tierLabel(result.tier)}
               </Badge>
             </div>
             <p style={{ margin: 0 }}>
               {result.active
-                ? `Active paid membership${
-                    result.validThru
-                      ? ` — valid through ${new Date(result.validThru).toLocaleDateString()}`
-                      : ''
+                ? `Paid membership, running${
+                    result.validThru ? ` until ${formatDate(result.validThru)}` : ''
                   }. Apply your member discount.`
-                : 'Free tier — no paid membership right now, so the member discount does not apply.'}
+                : 'On Starter, our free membership. No paid membership right now, so the member discount does not apply.'}
             </p>
           </div>
         </Card>

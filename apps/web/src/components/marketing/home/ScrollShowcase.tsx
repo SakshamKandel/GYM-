@@ -27,7 +27,7 @@ const STEPS: {
     tab: 'train',
     stepNum: '01',
     title: 'Gym mode carries the session.',
-    copy: 'A rest timer that starts itself, plate math done for you, last session’s numbers where you need them. You lift — the app keeps up.',
+    copy: 'A rest timer that starts itself, plate math done for you, last session’s numbers where you need them. You lift, the app keeps up.',
     href: '/training',
     link: 'Explore training',
   },
@@ -36,7 +36,7 @@ const STEPS: {
     tab: 'food',
     stepNum: '02',
     title: 'Dinner logs itself, almost.',
-    copy: 'Scan a barcode or search dal bhat — Nepali kitchens and global databases alike. Macros, water and Nutri-Score without the spreadsheet feeling.',
+    copy: 'Scan a barcode or search dal bhat, Nepali kitchens and global databases alike. Macros, water and Nutri-Score without the spreadsheet feeling.',
     href: '/nutrition',
     link: 'Explore food',
   },
@@ -45,7 +45,7 @@ const STEPS: {
     tab: 'meals',
     stepNum: '03',
     title: 'Protein shows up at the door.',
-    copy: 'Macro-counted meals from vetted Kathmandu kitchens, tracked live through seven order states — and logged to your diary automatically.',
+    copy: 'Macro-counted meals from vetted Kathmandu kitchens, tracked live through seven order states, and logged to your diary automatically.',
     href: '/meals',
     link: 'Explore meals',
   },
@@ -62,8 +62,8 @@ const STEPS: {
     id: 'progress',
     tab: 'progress',
     stepNum: '05',
-    title: 'Exponential weight trend curve.',
-    copy: 'Daily bodyweight fluctuates — EWMA trend smoothing filters out water noise to give you a true progress velocity curve.',
+    title: 'See which way you are actually going.',
+    copy: 'Daily weigh-ins jump around with water and salt. The trend line smooths that out, so one bad morning never looks like lost progress.',
     href: '/progress',
     link: 'Explore progress',
   },
@@ -120,7 +120,7 @@ export function ScrollShowcase() {
         <Reveal className="max-w-3xl">
           <Display size="lg">One app. Every session, meal and milestone.</Display>
           <Lead tone="light" className="mt-6">
-            Scroll through a day with the GM Method — the phone keeps up with you.
+            Scroll through a day with the GM Method. The phone keeps up with you.
           </Lead>
         </Reveal>
 

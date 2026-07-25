@@ -11,9 +11,9 @@ import { ToolsSection } from '@/components/marketing/for-coaches/Tools';
 import { WalletSection } from '@/components/marketing/for-coaches/Wallet';
 
 export const metadata: Metadata = {
-  title: 'For coaches — The GM Method',
+  title: 'For coaches | The GM Method',
   description:
-    'Coach on your own terms. Get verified, get discovered, and get paid — a public profile, a real client console, and a promo code that earns you 30% commission on every client subscription.',
+    'Coach on your own terms. Get verified, get discovered, and get paid: a public profile, a real client console, and a promo code that earns you 30% commission on every client subscription.',
 };
 
 export default function ForCoachesPage() {

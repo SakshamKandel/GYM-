@@ -16,7 +16,7 @@ export function PRSection() {
         <div className="grid items-center gap-14 lg:grid-cols-[0.85fr_1.15fr]">
           <div>
             <Reveal>
-              <Eyebrow>03 — Personal records</Eyebrow>
+              <Eyebrow>03 · Personal records</Eyebrow>
               <Display className="mt-4">
                 PRs caught,
                 <br />
@@ -24,7 +24,7 @@ export function PRSection() {
               </Display>
               <Lead className="mt-6">
                 You just log the set. The app checks it against your entire lifting history
-                the moment it saves — heaviest weight, best reps at a weight — and stamps a
+                the moment it saves (heaviest weight, best reps at a weight) and stamps a
                 celebration when you beat it. The detection logic is unit-tested, so a PR
                 never slips past unnoticed.
               </Lead>

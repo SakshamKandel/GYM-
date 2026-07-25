@@ -1,6 +1,7 @@
 import { coachMilestones } from '@gym/db';
 import { maskPii } from '@gym/shared';
 import { desc, eq } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -106,14 +107,16 @@ export async function POST(
   // must not appear on the lock screen; the full text arrives in-app. Routed
   // through notify (WP-2 / Pack L) so the member gets a durable inbox row +
   // prefs gating, and WP-13 can fire its celebration moment off the event.
-  void notify(
-    'coach_milestone',
-    { accountId: userId },
-    {
-      title: 'New milestone',
-      body: 'Your coach logged a milestone for you.',
-      data: { type: 'milestone', id: milestone.id },
-    },
+  after(() =>
+    notify(
+      'coach_milestone',
+      { accountId: userId },
+      {
+        title: 'New milestone',
+        body: 'Your coach logged a milestone for you.',
+        data: { type: 'milestone', id: milestone.id },
+      },
+    ),
   );
 
   return json({ milestone }, 201);

@@ -789,7 +789,7 @@ export default function AdminMembersScreen() {
 
               {canChangeTier && statusLocked ? (
                 <AppText variant="caption" color={colors.textFaint}>
-                  Staff account — managed by a higher admin.
+                  Staff account, managed by a higher admin.
                 </AppText>
               ) : null}
 
@@ -855,7 +855,7 @@ export default function AdminMembersScreen() {
 
               {canSuspend && statusLocked ? (
                 <AppText variant="caption" color={colors.textFaint}>
-                  Staff account — managed by a higher admin.
+                  Staff account, managed by a higher admin.
                 </AppText>
               ) : null}
 
@@ -935,7 +935,7 @@ export default function AdminMembersScreen() {
                   ) : null}
                   {canManageCredentials && statusLocked ? (
                     <AppText variant="caption" color={colors.textFaint}>
-                      Staff account — credentials tools are locked here too.
+                      Staff account, so credentials tools are locked here too.
                     </AppText>
                   ) : null}
                 </>
@@ -1096,7 +1096,7 @@ export default function AdminMembersScreen() {
       <ConfirmDialog
         visible={signOutConfirm}
         title="Sign out everywhere?"
-        message="Every device this member is signed into loses access immediately. Their account isn't suspended — they can sign back in right away."
+        message="Every device this member is signed into loses access immediately. Their account isn't suspended, so they can sign back in right away."
         confirmLabel="Sign out"
         cancelLabel="Cancel"
         danger
@@ -1125,7 +1125,7 @@ export default function AdminMembersScreen() {
           ) : resetLinkResult ? (
             <>
               <AppText variant="caption" color={colors.textDim}>
-                Send this one-time link to the member — no email is sent
+                Send this one-time link to the member. No email is sent
                 automatically. It expires{' '}
                 {new Date(resetLinkResult.expiresAt).toLocaleString()}.
               </AppText>

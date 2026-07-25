@@ -1,5 +1,6 @@
 import { accounts, auditLog } from '@gym/db';
 import { and, desc, eq } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
 import { getDb } from '@/lib/db';
@@ -8,6 +9,7 @@ import { staffFromCookie } from '@/lib/staffSession';
 import { BroadcastComposer, type BroadcastHistoryRow } from './_components/BroadcastComposer';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Broadcast' };
 export const dynamic = 'force-dynamic';
 
 /**

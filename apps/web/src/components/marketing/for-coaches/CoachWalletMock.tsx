@@ -9,10 +9,10 @@ import { CountUp, useInView } from '../motion';
 import { BrowserFrame } from '../PhoneFrame';
 
 const LEDGER = [
-  { amount: '+Rs 1,140', label: 'Commission — promo GAURAV30', date: 'Jul 19', kind: 'in' },
-  { amount: '+Rs 855', label: 'Commission — promo GAURAV30', date: 'Jul 15', kind: 'in' },
-  { amount: '−Rs 12,000', label: 'Payout — processed', date: 'Jul 12', kind: 'out' },
-  { amount: '+Rs 1,140', label: 'Commission — promo GAURAV30', date: 'Jul 8', kind: 'in' },
+  { amount: '+Rs 1,140', label: 'Commission · promo GAURAV30', date: 'Jul 19', kind: 'in' },
+  { amount: '+Rs 855', label: 'Commission · promo GAURAV30', date: 'Jul 15', kind: 'in' },
+  { amount: '−Rs 12,000', label: 'Payout · processed', date: 'Jul 12', kind: 'out' },
+  { amount: '+Rs 1,140', label: 'Commission · promo GAURAV30', date: 'Jul 8', kind: 'in' },
 ] as const;
 
 export function CoachWalletMock({ className = '' }: { className?: string }) {

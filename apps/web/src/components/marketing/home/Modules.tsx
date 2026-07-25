@@ -36,14 +36,14 @@ const MODULES = [
     n: '02',
     title: 'Food',
     href: '/nutrition',
-    blurb: 'Macros without the math — barcode scans, a Nepali + global food database, water and Nutri-Score.',
+    blurb: 'Macros without the math: barcode scans, a Nepali + global food database, water and Nutri-Score.',
     icon: 'M4 17h16M5 17c0-5 3-9 7-9s7 4 7 9M12 8V5m0 0c2 0 3-1.5 3-3',
   },
   {
     n: '03',
     title: 'Progress',
     href: '/progress',
-    blurb: 'Smoothed EWMA weight trends, body measurements and streak tracking. Proof, not vibes.',
+    blurb: 'A weight trend that ignores the daily water swings, body measurements and streak tracking. Proof, not vibes.',
     icon: 'M4 19h16M6 16l4-6 3.5 3.5L18 8m0 0h-3.5M18 8v3.5',
   },
   {
@@ -57,14 +57,14 @@ const MODULES = [
     n: '05',
     title: 'Gyms',
     href: '/gyms',
-    blurb: 'Find a verified gym near you — photos, hours, pricing, and day passes.',
+    blurb: 'Find a verified gym near you: photos, hours, pricing, and day passes.',
     icon: 'M12 21s-6.5-5.4-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15.6 12 21 12 21Zm0-8.2a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8Z',
   },
   {
     n: '06',
     title: 'Coaching',
     href: '/coaching',
-    blurb: 'Real, verified human coaches. Custom workouts, diet plans and 1-on-1 chat — no bots.',
+    blurb: 'Real, verified human coaches. Custom workouts, diet plans and 1-on-1 chat, no bots.',
     icon: 'M4 5h16v10H8l-4 4zM8 9h8M8 12h5',
   },
 ] as const;

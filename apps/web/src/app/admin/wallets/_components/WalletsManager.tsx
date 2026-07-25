@@ -1,6 +1,5 @@
 'use client';
 
-import { formatMoney } from '@gym/shared';
 import { useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
@@ -13,6 +12,8 @@ import {
   TextField,
   TierChip,
 } from '@/components/console';
+import { formatDate, formatMoney } from '@/lib/format';
+import { MemberLink } from '../../_components/MemberLink';
 import { PayoutsQueue } from './PayoutsQueue';
 
 export type CoachTier = 'silver' | 'gold' | 'elite';
@@ -46,12 +47,6 @@ interface WalletDetail {
   entries: LedgerEntry[];
 }
 
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-});
-
 const CURRENCIES = ['NPR', 'USD'] as const;
 
 const TYPE_LABEL: Record<LedgerEntry['type'], string> = {
@@ -70,10 +65,13 @@ const TYPE_LABEL: Record<LedgerEntry['type'], string> = {
  */
 export function WalletsManager({
   wallets,
+  canViewMembers,
   canManageWallets,
   canReviewPayouts,
 }: {
   wallets: WalletRow[];
+  /** Viewer holds `members.read`, so coach names can link to their record. */
+  canViewMembers: boolean;
   /** `wallet.manage` — balances table + record-entry drawer. */
   canManageWallets: boolean;
   /** `payouts.review` — the coach-initiated payout request queue. */
@@ -137,7 +135,7 @@ export function WalletsManager({
         setDetailError(
           res.status === 403
             ? 'You are not allowed to view this wallet.'
-            : 'Could not load this wallet ledger.',
+            : 'Could not open this wallet. Try again.',
         );
         setDetailLoading(false);
         return;
@@ -148,7 +146,7 @@ export function WalletsManager({
       setDetailLoading(false);
     } catch {
       if (seq !== detailSeq.current) return;
-      setDetailError('Network error.');
+      setDetailError('Could not reach us just now. Check your connection and try again.');
       setDetailLoading(false);
     }
   }, []);
@@ -219,7 +217,7 @@ export function WalletsManager({
             ? 'That payout is more than the coach’s current balance.'
             : res.status === 403
               ? 'You are not allowed to manage wallets.'
-              : 'Could not record that entry. Try again.',
+              : 'Nothing was recorded. Try again.',
         );
         setSaving(false);
         return;
@@ -232,7 +230,7 @@ export function WalletsManager({
       await loadDetail(selected.coachId);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now, so nothing was recorded. Try again.');
       setSaving(false);
     }
   }
@@ -253,7 +251,12 @@ export function WalletsManager({
               gap: 6,
             }}
           >
-            {w.displayName || w.email}
+            <MemberLink
+              id={w.coachId}
+              name={w.displayName}
+              email={w.email}
+              canView={canViewMembers}
+            />
             {w.revoked ? <Badge tone="neutral">Revoked</Badge> : null}
           </div>
           <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{w.email}</div>
@@ -336,7 +339,7 @@ export function WalletsManager({
       ) : wallets.length === 0 ? (
         <EmptyState
           title="No coach wallets yet"
-          description="Wallets appear once a coach is approved. Commission credits land automatically when a promo-coded purchase settles."
+          description="A wallet opens as soon as a coach is approved. Commission is added on its own whenever someone pays using that coach's promo code."
         />
       ) : (
         <DataTable columns={columns} rows={wallets} rowKey={(w) => w.coachId} />
@@ -352,7 +355,7 @@ export function WalletsManager({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
               {selected.email}
-              {selected.revoked ? ' · coach role revoked (balance still owed)' : ''}
+              {selected.revoked ? ' · no longer a coach, but we still owe this balance' : ''}
             </div>
 
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -529,10 +532,10 @@ export function WalletsManager({
 
               <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 8 }}>
                 {type === 'payout'
-                  ? 'Recorded as a negative ledger entry (money paid out to the coach).'
+                  ? 'Takes this much off the balance. Use it once the money has left our side.'
                   : direction === 'debit'
-                    ? 'Recorded as a negative ledger entry (clawback).'
-                    : 'Recorded as a positive ledger entry (credit).'}
+                    ? 'Takes this much off the balance.'
+                    : 'Adds this much to the balance.'}
               </div>
 
               {error ? (
@@ -605,7 +608,7 @@ export function WalletsManager({
                           </div>
                         ) : null}
                         <div style={{ fontSize: 11, color: 'var(--gt-text-dim)' }}>
-                          {DATE_FMT.format(new Date(entry.createdAt))}
+                          {formatDate(entry.createdAt)}
                         </div>
                       </div>
                       <span

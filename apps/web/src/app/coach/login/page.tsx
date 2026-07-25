@@ -1,12 +1,15 @@
+import type { Metadata } from 'next';
 import { StaffLogin } from '@/components/console/StaffLogin';
+
+export const metadata: Metadata = { title: 'Sign in' };
 
 export default function CoachLoginPage() {
   return (
     <StaffLogin
       portal="Coach"
       destination="/coach"
-      description="Review assigned clients, respond to check-ins, manage plans, and focus on the members who need attention."
-      unauthorizedMessage="Those credentials do not belong to an authorized coach account."
+      description="See your clients, answer their check-ins, and get to whoever has gone quiet."
+      unauthorizedMessage="That email and password do not open a coach account."
     />
   );
 }

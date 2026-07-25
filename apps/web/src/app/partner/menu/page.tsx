@@ -1,9 +1,11 @@
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { getDb } from '@/lib/db';
 import { MenuManager } from '../_components/MenuManager';
 import { loadPartnerMenu, requirePartnerPage } from '../_data';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Menu' };
 export const dynamic = 'force-dynamic';
 
 /**

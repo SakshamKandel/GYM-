@@ -1,3 +1,5 @@
+import { coachRequests } from '@gym/db';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import type { ReactNode } from 'react';
@@ -7,9 +9,15 @@ import {
   canAccessCoachPage,
   type CoachPageRequirement,
 } from '@/lib/coachPageAccess';
+import { getDb } from '@/lib/db';
 
 export const runtime = 'nodejs';
-export const metadata: Metadata = { robots: { index: false, follow: false } };
+export const metadata: Metadata = {
+  // Every coach page exports its own short `title`; this template turns it into
+  // the browser tab title, and `default` covers any page that forgets one.
+  title: { default: 'Coach console', template: '%s · Coach console' },
+  robots: { index: false, follow: false },
+};
 // Guard reads cookies, so this subtree is always dynamic.
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +26,9 @@ export const dynamic = 'force-dynamic';
  * so both consoles flip with the tokens. Each item carries the same capability
  * its server page enforces; explicit per-account denies therefore remove the
  * link as well as blocking direct navigation.
+ *
+ * Labels are the destination page's own title, in sentence case, so the sidebar
+ * never promises a heading the page does not show.
  */
 interface CoachNavItem {
   href: string;
@@ -26,11 +37,15 @@ interface CoachNavItem {
   required: CoachPageRequirement;
 }
 
+/** The one nav item that carries a live count — see pendingRequestCount below. */
+const REQUESTS_HREF = '/coach/requests';
+
 const COACH_NAV: { label: string; items: CoachNavItem[] }[] = [
   {
     label: 'Coaching',
     items: [
       { href: '/coach', label: 'Inbox', match: 'exact', required: 'coach.user.read' },
+      { href: REQUESTS_HREF, label: 'Requests', required: 'coach.user.read' },
       { href: '/coach/clients', label: 'Clients', required: 'coach.user.read' },
       { href: '/coach/attention', label: 'Attention', required: 'coach.user.read' },
       { href: '/coach/review', label: 'Review', required: 'coach.user.read' },
@@ -53,7 +68,7 @@ const COACH_NAV: { label: string; items: CoachNavItem[] }[] = [
     label: 'Account',
     items: [
       { href: '/coach/wallet', label: 'Wallet', required: 'coach.wallet.read' },
-      { href: '/coach/profile', label: 'Profile', required: 'coach.user.read' },
+      { href: '/coach/profile', label: 'Your profile', required: 'coach.user.read' },
     ],
   },
 ];
@@ -68,13 +83,43 @@ const COACH_ENTRY_PERMISSIONS = [
 function navFor(
   role: Parameters<typeof canAccessCoachPage>[0],
   permissions: Parameters<typeof canAccessCoachPage>[1],
+  pendingRequests: number,
 ): NavGroup[] {
   return COACH_NAV.map((group) => ({
     label: group.label,
     items: group.items
       .filter((item) => canAccessCoachPage(role, permissions, item.required))
-      .map(({ required: _required, ...item }) => item),
+      .map(({ required: _required, ...item }) => ({
+        ...item,
+        ...(item.href === REQUESTS_HREF && pendingRequests > 0
+          ? { badge: pendingRequests }
+          : {}),
+      })),
   })).filter((group) => group.items.length > 0);
+}
+
+/**
+ * Pending inbound requests addressed to THIS coach — drives the nav badge so a
+ * desktop coach sees waiting members without opening the page. Ownership is
+ * intrinsic (coachId = me), matching GET /api/coach/requests, so a top admin
+ * browsing the console simply reads zero.
+ *
+ * Best-effort: a count failure must never take down the whole console shell, so
+ * it degrades to no badge rather than throwing.
+ */
+async function pendingRequestCount(coachId: string): Promise<number> {
+  try {
+    const rows = await getDb()
+      .select({ n: sql<number>`count(*)::int` })
+      .from(coachRequests)
+      .where(
+        and(eq(coachRequests.coachId, coachId), eq(coachRequests.status, 'pending')),
+      );
+    return rows[0]?.n ?? 0;
+  } catch (error) {
+    console.error('coach pending-request count failed:', error);
+    return 0;
+  }
 }
 
 /**
@@ -96,11 +141,12 @@ export default async function CoachLayout({ children }: { children: ReactNode })
   if (isLoginRoute) return <>{children}</>;
 
   const { principal, permissions } = await requireCoachPage(COACH_ENTRY_PERMISSIONS);
+  const pendingRequests = await pendingRequestCount(principal.id);
 
   return (
     <ConsoleShell
-      brand="Coach Console"
-      groups={navFor(principal.role, permissions)}
+      brand="Coach console"
+      groups={navFor(principal.role, permissions, pendingRequests)}
       pathname={pathname}
       email={principal.email}
       loginHref="/coach/login"

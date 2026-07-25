@@ -16,24 +16,24 @@ import {
 export const metadata: Metadata = {
   title: 'Support | The GM Method',
   description:
-    'Get member, coach, or meal-partner help for the GM Method. Support routes through your signed-in account, so the team already has the context.',
+    'How to reach the GM Method team. Members write to support from inside the app. Coaches and partners sign in to their own console.',
 };
 
 const MEMBER_STEPS = [
   {
     n: '1',
     title: 'Open the app',
-    body: 'On iOS or Android — the account you train with is the account we help.',
+    body: 'On iOS or Android. The account you train with is the account we help.',
   },
   {
     n: '2',
-    title: 'Settings → Support',
-    body: 'Start a thread from inside your account. No login form to re-fill, no case number to memorise.',
+    title: 'Settings, then Support',
+    body: 'Write to us from inside your account. Nothing to sign into twice, no case number to remember.',
   },
   {
     n: '3',
-    title: 'Priority routing',
-    body: 'Messages land attached to your plan, coaching and meal orders, so the team answers with the full picture in front of them.',
+    title: 'Elite goes first',
+    body: 'Your message arrives with your membership, your coaching and your meal orders already beside it. Elite members are answered before the rest.',
   },
 ] as const;
 
@@ -64,13 +64,13 @@ export default function ContactPage() {
             </Reveal>
             <Reveal delay={160}>
               <Lead className="mt-7">
-                No ticket queue, no bot maze. Help lives inside the app, attached to your account —
-                so whoever picks it up already sees your plan, your coaching and your orders.
+                No case numbers, no bot maze. Help lives inside the app, on your own account, so
+                whoever picks it up already sees your membership, your coaching and your orders.
               </Lead>
             </Reveal>
             <Reveal delay={240}>
               <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-faint">
-                No public inbox · Support routes through your signed-in account
+                No public inbox · Members write to us from inside the app
               </p>
             </Reveal>
           </div>
@@ -161,8 +161,9 @@ export default function ContactPage() {
               Partner or coach?
             </Display>
             <Lead className="mt-6">
-              Meal partners and coaches have their own consoles, their own support, and their own
-              way in. Pick your lane.
+              Meal partners and coaches each have their own console and their own way in. Partners
+              can message the GM team from inside the portal. Coaches do not have a support line of
+              their own yet.
             </Lead>
           </Reveal>
 
@@ -176,8 +177,8 @@ export default function ContactPage() {
                   Cook with the app
                 </h2>
                 <p className="mt-4 flex-1 text-[15px] leading-relaxed text-dim">
-                  Run live orders, menu availability, subscriptions and payouts from an isolated
-                  partner portal. New kitchen? Start with the pitch.
+                  Run today&rsquo;s orders, what is on the menu, weekly meal plans and your payouts
+                  from one portal that only your kitchen can see. New kitchen? Start with the pitch.
                 </p>
                 <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
                   <PillLink href="/partners" variant="ghost" small>
@@ -199,8 +200,9 @@ export default function ContactPage() {
                   Coach on the platform
                 </h2>
                 <p className="mt-4 flex-1 text-[15px] leading-relaxed text-dim">
-                  Program training, build diet plans and message assigned members from the coach
-                  console — with everyone&rsquo;s personal details masked. Apply to join.
+                  Write programs, build diet plans and message the members assigned to you, all from
+                  the coach console. Phone numbers and emails stay hidden on both sides. Apply to
+                  join.
                 </p>
                 <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
                   <PillLink href="/for-coaches" variant="ghost" small>

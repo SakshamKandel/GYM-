@@ -4,7 +4,9 @@ import * as ImagePicker from 'expo-image-picker';
 import { formatMoney } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText, Button, PressableScale } from '../../../components/ui';
+import { PayeeDetailsCard } from '../../../components/payments/PayeeDetailsCard';
 import { ApiError, reserveImageUpload, uploadImageAsset } from '../../../lib/api/client';
+import { supportsRail, usePayee } from '../../../lib/api/payee';
 import { successHaptic, warnHaptic } from '../../../lib/haptics';
 import { MealsApiError, submitMealReceipt, type MealPendingCycle } from '../api';
 import { mealErrorMessage, paymentMethodLabel } from '../logic';
@@ -17,6 +19,10 @@ import { mealErrorMessage, paymentMethodLabel } from '../logic';
  * `cycleId` instead of `orderId` — a subscription only ever reaches this
  * state on a digital (esewa/khalti) payment method (COD subs have no billing
  * cycle), so `method` is always one of those two.
+ *
+ * Like ReceiptUploadPanel, the payee is shown directly above the uploader: this
+ * screen used to ask for a transfer and a receipt without ever naming the
+ * wallet the money should go to. When nothing is configured it says so instead.
  */
 
 const styles = StyleSheet.create({
@@ -44,6 +50,8 @@ export function CyclePaymentPanel({
   const [asset, setAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [line, setLine] = useState<{ text: string; tone: 'dim' | 'error' } | null>(null);
+  const { payee, loading: payeeLoading } = usePayee(token, 'meals');
+  const canPay = supportsRail(payee, method);
 
   async function pick(): Promise<void> {
     setLine(null);
@@ -90,6 +98,22 @@ export function CyclePaymentPanel({
         Pay {formatMoney(cycle.amountMinor, cycle.currency)} for the week of {cycle.weekStart} to {cycle.weekEnd} via{' '}
         {paymentMethodLabel(method)}, then upload the confirmation screenshot for review.
       </AppText>
+      {payee && canPay ? (
+        <PayeeDetailsCard
+          payee={payee}
+          rails={[method]}
+          amountLabel={formatMoney(cycle.amountMinor, cycle.currency)}
+        />
+      ) : payeeLoading ? (
+        <AppText variant="caption" color={colors.textDim}>
+          Getting the payment details…
+        </AppText>
+      ) : (
+        <AppText variant="caption" color={colors.warning}>
+          We can’t show where to send this payment right now. Please check with support before you
+          pay.
+        </AppText>
+      )}
       {asset ? (
         <PressableScale accessibilityRole="button" accessibilityLabel="Change receipt photo" onPress={pick}>
           <Image source={{ uri: asset.uri }} style={styles.photoPreview} accessibilityIgnoresInvertColors />

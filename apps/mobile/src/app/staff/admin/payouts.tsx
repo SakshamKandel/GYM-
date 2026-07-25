@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { formatMoney } from '@gym/shared';
@@ -26,6 +26,7 @@ import {
   toStaffError,
   type PayoutQueue,
   type PayoutRequestRow,
+  type PayoutScope,
   type PayoutStatus,
   type StaffErrorCode,
 } from '../../../features/staff/api';
@@ -34,21 +35,31 @@ import { ReauthSheet, useReauth } from '../../../features/staff/ReauthGate';
 import { useAuth } from '../../../state/auth';
 
 /**
- * Admin · Payouts — the coach withdrawal-request review queue (gap build
- * P1-12). One fetch (getPayoutRequests) returns EVERY pending request plus a
- * capped tail of decided history in a single call — the status tabs below
- * are a purely client-side filter over that one payload (the server has no
+ * Admin · Payouts — the withdrawal-request review queue (gap build P1-12).
+ * One fetch (getPayoutRequests) returns EVERY pending request plus a capped
+ * tail of decided history in a single call — the status tabs below are a
+ * purely client-side filter over that one payload (the server has no
  * per-status query param; pending never starves behind a page size). Mirrors
  * the Payments screen's shell otherwise: a list + a detail sheet with the
  * decision. Approving REQUIRES a disbursement reference (the bank/eSewa/
- * Khalti transaction id) — the server re-checks the coach's live balance and
- * posts the negative wallet-ledger entry keyed to it; rejecting frees the
- * coach's one-pending slot with an optional note.
+ * Khalti transaction id) — the server re-checks the earner's live balance and
+ * posts the payout ledger entry keyed to it; rejecting frees the earner's
+ * one-pending slot with an optional note.
+ *
+ * Two earner rails share this screen: coaches and restaurant partners. The
+ * rail picker sends `scope` on both the fetch and the decision, so partner
+ * withdrawals — which previously had no admin surface anywhere and could
+ * never be approved — get reviewed here too.
  *
  * CAS-conflict friendly: a 404/409 on decide means another admin already
  * acted on this request — the sheet closes and the queue refetches instead
  * of inviting a blind retry (mirrors the payments queue's B13 fix).
  */
+
+const SCOPE_TABS: { key: PayoutScope; label: string }[] = [
+  { key: 'coach', label: 'Coaches' },
+  { key: 'partner', label: 'Restaurants' },
+];
 
 const STATUS_TABS: { key: PayoutStatus; label: string }[] = [
   { key: 'pending', label: 'Pending' },
@@ -64,13 +75,15 @@ function statusTone(status: PayoutStatus): { label: string; color: string } {
   return { label: 'Pending', color: colors.warning };
 }
 
-function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+function errorLine(code: StaffErrorCode, scope: PayoutScope): string {
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'not_found' || code === 'conflict')
-    return 'Another admin already decided this request — refresh the queue.';
+    return 'Another admin already decided this request. Refresh the queue.';
   if (code === 'insufficient_balance')
-    return "This coach's balance no longer covers the request.";
+    return scope === 'partner'
+      ? "This restaurant's balance no longer covers the request."
+      : "This coach's balance no longer covers the request.";
   return "Couldn't load the queue.";
 }
 
@@ -114,6 +127,7 @@ export default function AdminPayoutsScreen() {
   // Rejecting stays ungated (no money moves).
   const reauth = useReauth();
 
+  const [scope, setScope] = useState<PayoutScope>('coach');
   const [status, setStatus] = useState<PayoutStatus>('pending');
   const [queue, setQueue] = useState<PayoutQueue | null>(null);
   const [loading, setLoading] = useState(true);
@@ -126,22 +140,44 @@ export default function AdminPayoutsScreen() {
   const [deciding, setDeciding] = useState(false);
   const [decideError, setDecideError] = useState<string | null>(null);
 
+  // Monotonic guard: now that the rail can change mid-flight, a slow coach
+  // fetch must never land under the partner toggle (and vice versa).
+  const seq = useRef(0);
+
   const load = useCallback(async () => {
     if (!token) return;
+    const mine = ++seq.current;
     setLoading(true);
     setError(null);
     try {
-      setQueue(await getPayoutRequests(token));
+      const next = await getPayoutRequests(token, scope);
+      if (mine !== seq.current) return;
+      setQueue(next);
     } catch (e) {
-      setError(errorLine(toStaffError(e).code));
+      if (mine !== seq.current) return;
+      setError(errorLine(toStaffError(e).code, scope));
     } finally {
-      setLoading(false);
+      // A superseded load leaves `loading` to whoever replaced it.
+      if (mine === seq.current) setLoading(false);
     }
-  }, [token]);
+  }, [token, scope]);
 
   useEffect(() => {
     if (allowed) void load();
   }, [allowed, load]);
+
+  /** Switching rails drops the other rail's rows so nothing renders stale. */
+  function switchScope(next: PayoutScope): void {
+    if (next === scope || deciding) return;
+    seq.current += 1; // discard any in-flight load for the rail we're leaving
+    setScope(next);
+    setQueue(null);
+    setSelected(null);
+    setConfirmAction(null);
+    setDecideError(null);
+    setError(null);
+    setLoading(true);
+  }
 
   const rows = useMemo(
     () =>
@@ -177,8 +213,8 @@ export default function AdminPayoutsScreen() {
         selected.id,
         action,
         action === 'approve'
-          ? { disbursementRef: disbursementRef.trim(), note: note.trim() || undefined }
-          : { note: note.trim() || undefined },
+          ? { scope, disbursementRef: disbursementRef.trim(), note: note.trim() || undefined }
+          : { scope, note: note.trim() || undefined },
         token,
       );
       setConfirmAction(null);
@@ -194,7 +230,7 @@ export default function AdminPayoutsScreen() {
         setDecideError(null);
         await load();
       } else {
-        setDecideError(errorLine(code));
+        setDecideError(errorLine(code, scope));
       }
     } finally {
       setDeciding(false);
@@ -223,6 +259,17 @@ export default function AdminPayoutsScreen() {
   return (
     <Screen scroll>
       <BackRow onBack={goBack} />
+
+      <Animated.View entering={enterDown()} style={styles.tabsRow}>
+        {SCOPE_TABS.map((s) => (
+          <Chip
+            key={s.key}
+            label={s.label}
+            selected={scope === s.key}
+            onPress={() => switchScope(s.key)}
+          />
+        ))}
+      </Animated.View>
 
       <Animated.View entering={enterDown()} style={styles.tabsRow}>
         {STATUS_TABS.map((t) => (
@@ -255,16 +302,17 @@ export default function AdminPayoutsScreen() {
               <Animated.View key={r.id} entering={enterUp(Math.min(i, 6))}>
                 <PressableScale
                   accessibilityRole="button"
-                  accessibilityLabel={`Open payout request from ${r.coach.displayName}`}
+                  accessibilityLabel={`Open payout request from ${r.earner.label}`}
                   onPress={() => openDetail(r)}
                   style={styles.row}
                 >
                   <View style={styles.rowText}>
                     <AppText variant="bodyBold" numberOfLines={1}>
-                      {r.coach.displayName}
+                      {r.earner.label}
                     </AppText>
                     <AppText variant="caption" numberOfLines={1}>
-                      {r.coach.coachTier} · {tone.label}
+                      {r.earner.coachTier ? `${r.earner.coachTier} · ` : ''}
+                      {tone.label}
                     </AppText>
                   </View>
                   <View style={styles.rowRight}>
@@ -286,7 +334,7 @@ export default function AdminPayoutsScreen() {
       <Sheet
         visible={selected !== null}
         onClose={closeDetail}
-        title={selected ? selected.coach.displayName : 'Payout request'}
+        title={selected ? selected.earner.label : 'Payout request'}
       >
         {selected ? (
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetScroll}>
@@ -294,21 +342,25 @@ export default function AdminPayoutsScreen() {
               <AppText variant="display" tabular>
                 {formatMoney(selected.amountMinor, selected.currency)}
               </AppText>
-              <Tag label={selected.coach.coachTier} variant="dim" />
+              {selected.earner.coachTier ? (
+                <Tag label={selected.earner.coachTier} variant="dim" />
+              ) : (
+                <Tag label="Restaurant" variant="dim" />
+              )}
             </View>
 
             {selected.status === 'pending' && selected.balanceMinor !== null ? (
               <AppText variant="caption" color={colors.textDim}>
                 Current balance: {formatMoney(selected.balanceMinor, selected.currency)}
                 {selected.balanceMinor < selected.amountMinor
-                  ? ' — below the requested amount.'
+                  ? ', below the requested amount.'
                   : ''}
               </AppText>
             ) : null}
 
             {selected.note ? (
               <>
-                <SectionLabel>Coach note</SectionLabel>
+                <SectionLabel>{scope === 'partner' ? 'Restaurant note' : 'Coach note'}</SectionLabel>
                 <AppText variant="body">{selected.note}</AppText>
               </>
             ) : null}
@@ -324,7 +376,7 @@ export default function AdminPayoutsScreen() {
                   accessibilityLabel="Disbursement reference"
                 />
                 <AppText variant="caption" color={colors.textFaint} style={styles.hint}>
-                  Required to approve — links this request to the money actually sent.
+                  Required to approve. It links this request to the money actually sent.
                 </AppText>
 
                 <SectionLabel>Note</SectionLabel>
@@ -388,8 +440,8 @@ export default function AdminPayoutsScreen() {
         title={confirmAction === 'approve' ? 'Approve this payout?' : 'Reject this payout?'}
         message={
           confirmAction === 'approve'
-            ? `Records ${formatMoney(selected?.amountMinor ?? 0, selected?.currency ?? '')} as paid out to ${selected?.coach.displayName ?? 'this coach'} against reference "${disbursementRef.trim()}".`
-            : `${selected?.coach.displayName ?? 'This coach'} can file a new request afterward.`
+            ? `Records ${formatMoney(selected?.amountMinor ?? 0, selected?.currency ?? '')} as paid out to ${selected?.earner.label ?? (scope === 'partner' ? 'this restaurant' : 'this coach')} against reference "${disbursementRef.trim()}".`
+            : `${selected?.earner.label ?? (scope === 'partner' ? 'This restaurant' : 'This coach')} can file a new request afterward.`
         }
         confirmLabel={deciding ? 'Working…' : confirmAction === 'approve' ? 'Approve' : 'Reject'}
         cancelLabel="Cancel"

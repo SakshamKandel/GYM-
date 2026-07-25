@@ -10,9 +10,9 @@ import { OwnersBand } from '@/components/marketing/gyms/Owners';
 import { VerifiedBand } from '@/components/marketing/gyms/Verified';
 
 export const metadata: Metadata = {
-  title: 'Gyms — know the gym before you go',
+  title: 'Gyms: know the gym before you go',
   description:
-    'Curated, admin-verified gym listings across Kathmandu valley — real photos, current hours, exact locations and contact. Browse the Gyms tab and walk in already sure.',
+    'Curated, admin-verified gym listings across Kathmandu valley: real photos, current hours, exact locations and contact. Browse the Gyms tab and walk in already sure.',
 };
 
 export default function GymsPage() {

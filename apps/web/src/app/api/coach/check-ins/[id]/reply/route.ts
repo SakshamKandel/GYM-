@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -17,10 +17,13 @@ export const runtime = 'nodejs';
  *    (senderAccountId = me, unread by the user, read by the coach) and links
  *    it back via check_ins.coachReplyMessageId. The reply lives in the SAME
  *    thread the mobile app already renders, so it appears with zero mobile
- *    changes; the check-in row just gains its "replied" state.
+ *    changes; the check-in row just gains its "replied" state. The response
+ *    carries an additive `contactHidden` flag when the stored body differs
+ *    from what was typed.
  *
- * Push is best-effort via after() (sendPushToAccount never throws and no-ops
- * without FIREBASE_SERVICE_ACCOUNT_B64) — the thread row IS the record.
+ * Notification is best-effort via after() + notify() (never throws; writes the
+ * durable inbox row, honours the member's category prefs + quiet hours, and is
+ * redriven by the retry-unsent cron) — the thread row IS the record.
  *
  * Guards (both, fail closed): requirePermission('coach.message.user') +
  * requireCoachOwnsUser(principal, checkIn.accountId) — the member comes from
@@ -57,7 +60,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
   // Masked BEFORE storage — the in-app-contact policy binds coaches too.
-  const body = maskPii(parsed.data.body);
+  const raw = parsed.data.body;
+  const body = maskPii(raw);
+  const contactHidden = body !== raw;
 
   const inserted = await db
     .insert(coachMessages)
@@ -95,16 +100,26 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // replies routinely quote health details (bodyweight, injuries), which must
   // not appear on the lock screen — the full text arrives in-app via
   // hydrateCheckIns() triggered by data.type 'checkin_reply'.
-  after(() => sendPushToAccount(checkIn.accountId, {
-    title: 'Your coach replied',
-    body: 'Your coach replied to your check-in.',
-    data: { type: 'checkin_reply', checkInId: checkIn.id },
-  }));
+  after(() =>
+    notify(
+      'coach_message_client',
+      { accountId: checkIn.accountId },
+      {
+        title: 'Your coach replied',
+        body: 'Your coach replied to your check-in.',
+        data: { type: 'checkin_reply', checkInId: checkIn.id },
+      },
+    ),
+  );
 
   await logAudit(principal, 'coach.checkin.reply', 'check_in', checkIn.id, {
     userId: checkIn.accountId,
     len: body.length,
+    contactHidden,
   });
 
-  return json({ message }, 201);
+  // `contactHidden` is additive: true when what we stored differs from what the
+  // coach typed, so the console can say so rather than leaving them to believe
+  // a phone number went through. Older clients ignore the extra key.
+  return json({ message, contactHidden }, 201);
 }

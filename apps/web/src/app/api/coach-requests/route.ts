@@ -7,7 +7,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { adminRoleOf } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -90,6 +90,10 @@ export async function POST(req: Request) {
   if (assigned.length > 0) return json({ error: 'already_assigned' }, 409);
 
   // One pending request per member, toward ANY coach — shop one at a time.
+  // This read is only advisory: two concurrent POSTs both pass it, so the
+  // partial unique index `coach_requests_one_pending` (user_id WHERE
+  // status='pending') is the real guard — onConflictDoNothing below turns a lost
+  // race into 0 rows, which maps to this same already_pending.
   const pending = await db
     .select({ id: coachRequests.id })
     .from(coachRequests)
@@ -109,6 +113,7 @@ export async function POST(req: Request) {
   const inserted = await db
     .insert(coachRequests)
     .values({ userId: user.id, coachId, message: maskPii(message ?? '') })
+    .onConflictDoNothing()
     .returning({
       id: coachRequests.id,
       coachId: coachRequests.coachId,
@@ -116,15 +121,22 @@ export async function POST(req: Request) {
       createdAt: coachRequests.createdAt,
     });
 
+  // 0 rows means the partial unique index rejected a concurrent duplicate — a
+  // pending request already exists for this member. Same 409 the read above
+  // returns, so the client contract is unchanged.
   const request = inserted[0];
-  if (!request) return json({ error: 'invalid' }, 400);
+  if (!request) return json({ error: 'already_pending' }, 409);
 
   after(() =>
-    sendPushToAccount(coachId, {
-      title: 'New coaching request',
-      body: 'A member asked you to be their coach.',
-      data: { type: 'coach_request' },
-    }),
+    notify(
+      'coach_request_received',
+      { accountId: coachId },
+      {
+        title: 'New coaching request',
+        body: 'A member asked you to be their coach.',
+        data: { type: 'coach_request' },
+      },
+    ),
   );
 
   return json({ request }, 201);

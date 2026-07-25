@@ -20,6 +20,11 @@ import {
   UpgradePrompt,
 } from '../../../components/ui';
 import {
+  mediaPermissionMessage,
+  OpenSettingsButton,
+  requestMediaPermission,
+} from '../../../components/ui/permissions';
+import {
   reserveImageUpload,
   toApiError,
   uploadImageAsset,
@@ -152,7 +157,7 @@ function loadErrorMessage(error: unknown): string {
 function saveErrorMessage(error: unknown): string {
   if (error instanceof ProgressPhotoApiError) {
     if (error.code === 'unauthorized') return 'Your session expired. Sign in again to continue.';
-    if (error.code === 'locked') return 'Your current plan no longer includes progress photos.';
+    if (error.code === 'locked') return 'Your current membership no longer includes progress photos.';
     if (error.code === 'invalid') return 'Check the date and note, then try again.';
     if (error.code === 'image_not_configured') {
       return 'Private photo storage is temporarily unavailable.';
@@ -210,6 +215,8 @@ export function ProgressPhotosScreen() {
   const [pendingUid, setPendingUid] = useState<string | null>(null);
   const [uploadStage, setUploadStage] = useState<UploadStage>('idle');
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Camera or photo access is denied for good — the error line gets a way out.
+  const [permissionBlocked, setPermissionBlocked] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
 
   const [deleteCandidate, setDeleteCandidate] = useState<ProgressPhoto | null>(null);
@@ -283,10 +290,14 @@ export function ProgressPhotosScreen() {
   async function takePhoto(): Promise<void> {
     if (uploadStage !== 'idle' || pendingUid) return;
     setUploadError(null);
+    setPermissionBlocked(false);
     try {
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      const permission = await requestMediaPermission('camera');
       if (!permission.granted) {
-        setUploadError('Allow camera access in Settings to take a progress photo.');
+        setPermissionBlocked(permission.blocked);
+        setUploadError(
+          mediaPermissionMessage('camera', 'take a progress photo', permission.blocked),
+        );
         return;
       }
       const result = await ImagePicker.launchCameraAsync({
@@ -303,10 +314,14 @@ export function ProgressPhotosScreen() {
   async function choosePhoto(): Promise<void> {
     if (uploadStage !== 'idle' || pendingUid) return;
     setUploadError(null);
+    setPermissionBlocked(false);
     try {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const permission = await requestMediaPermission('library');
       if (!permission.granted) {
-        setUploadError('Allow photo library access in Settings to choose a progress photo.');
+        setPermissionBlocked(permission.blocked);
+        setUploadError(
+          mediaPermissionMessage('library', 'choose a progress photo', permission.blocked),
+        );
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -548,6 +563,7 @@ export function ProgressPhotosScreen() {
                     The image upload finished. Retry to save it without uploading the image again.
                   </AppText>
                 ) : null}
+                {permissionBlocked ? <OpenSettingsButton /> : null}
               </View>
             ) : null}
             {uploadSuccess ? (

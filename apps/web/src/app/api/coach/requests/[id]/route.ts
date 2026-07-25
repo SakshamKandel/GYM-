@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -74,6 +74,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         userId: request.userId,
         pendingSince: request.createdAt.toISOString(),
       });
+
+      // Same silent-expiry hole the oversight sweep had: the member's request
+      // vanishes with no push and no banner. Inside the CAS-winner branch, so
+      // the member hears about it exactly once no matter which path expires it.
+      after(() =>
+        notify(
+          'coach_request_closed',
+          { accountId: request.userId },
+          {
+            title: 'Coach request timed out',
+            body: 'Your coach request timed out because it went unanswered. You can ask another coach whenever you are ready.',
+            data: { type: 'coach_request_decided' },
+          },
+        ),
+      );
     }
     return json({ error: 'expired' }, 404);
   }
@@ -136,11 +151,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     });
 
     after(() =>
-      sendPushToAccount(request.userId, {
-        title: 'Coach request accepted',
-        body: `${coachName} is now your coach.`,
-        data: { type: 'coach_request_decided' },
-      }),
+      notify(
+        'coach_assigned',
+        { accountId: request.userId },
+        {
+          title: 'Coach request accepted',
+          body: `${coachName} is now your coach.`,
+          data: { type: 'coach_request_decided' },
+        },
+      ),
     );
 
     return json({ ok: true }, 200);
@@ -156,11 +175,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   });
 
   after(() =>
-    sendPushToAccount(request.userId, {
-      title: 'Coach request update',
-      body: `${coachName} can't take new clients right now.`,
-      data: { type: 'coach_request_decided' },
-    }),
+    notify(
+      'coach_request_declined',
+      { accountId: request.userId },
+      {
+        title: 'Coach request update',
+        body: `${coachName} can't take new clients right now.`,
+        data: { type: 'coach_request_decided' },
+      },
+    ),
   );
 
   return json({ ok: true }, 200);

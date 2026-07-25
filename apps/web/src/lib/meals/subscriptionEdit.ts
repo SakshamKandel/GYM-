@@ -1,4 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
+import { pgIntArray } from './pgArray.ts';
 import type { CycleAdjustment, SubscriptionPlanShape } from './subscriptionPlan';
 
 export interface AtomicSubscriptionCreateArgs {
@@ -24,7 +25,7 @@ export function atomicSubscriptionCreateSql(args: AtomicSubscriptionCreateArgs):
       status
     )
     select
-      ${args.id}, ${args.accountId}, ${args.partnerId}, ${args.shape.daysOfWeek},
+      ${args.id}, ${args.accountId}, ${args.partnerId}, ${pgIntArray(args.shape.daysOfWeek)},
       ${args.shape.window}, ${args.shape.planType}, ${args.shape.mealId},
       ${args.shape.addressId}, ${args.pricePerDayMinor}, ${args.currency},
       ${args.paymentMethod}, ${args.startDate}, 'active'
@@ -221,7 +222,7 @@ export function atomicSubscriptionEditSql(args: AtomicSubscriptionEditArgs): SQL
     updated_sub as (
       update meal_subscriptions sub
       set
-        days_of_week = ${args.shape.daysOfWeek},
+        days_of_week = ${pgIntArray(args.shape.daysOfWeek)},
         window = ${args.shape.window},
         plan_type = ${args.shape.planType},
         meal_id = ${args.shape.mealId},

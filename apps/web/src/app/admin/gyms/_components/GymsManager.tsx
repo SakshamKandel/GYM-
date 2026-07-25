@@ -3,8 +3,31 @@
 import { useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
-import { GYM_AMENITIES, GYM_CATEGORIES, GYM_DAY_KEYS } from '@gym/shared';
-import type { GymAmenity, GymCategory, GymDayKey, GymHoursShift, GymStatus, GymWeeklyHours } from '@gym/shared';
+import {
+  GYM_AMENITIES,
+  GYM_CATEGORIES,
+  GYM_CROWD_LEVELS,
+  GYM_DAY_KEYS,
+  GYM_EQUIPMENT_CATEGORIES,
+  GYM_PASS_TYPES,
+  gymCrowdStatusSchema,
+  gymEquipmentItemSchema,
+  gymPassOptionSchema,
+} from '@gym/shared';
+import type {
+  GymAmenity,
+  GymCategory,
+  GymCrowdLevel,
+  GymCrowdStatus,
+  GymDayKey,
+  GymEquipmentCategory,
+  GymEquipmentItem,
+  GymHoursShift,
+  GymPassOption,
+  GymPassType,
+  GymStatus,
+  GymWeeklyHours,
+} from '@gym/shared';
 import {
   Badge,
   Button,
@@ -60,6 +83,48 @@ const STATUS_TONE: Record<GymStatus, 'neutral' | 'positive' | 'warning'> = {
   archived: 'warning',
 };
 
+/** Same wording the member app uses for each equipment group. */
+const EQUIPMENT_CATEGORY_LABEL: Record<GymEquipmentCategory, string> = {
+  free_weights: 'Free weights',
+  cardio: 'Cardio',
+  machines: 'Machines',
+  functional: 'Turf & functional',
+  recovery: 'Recovery',
+};
+
+const CROWD_LEVEL_LABEL: Record<GymCrowdLevel, string> = {
+  quiet: 'Quiet',
+  moderate: 'Moderate',
+  busy: 'Busy',
+  packed: 'Packed',
+};
+
+const PASS_TYPE_LABEL: Record<GymPassType, string> = {
+  day_pass: 'Day pass',
+  weekly_pass: 'Weekly pass',
+  monthly: 'Monthly',
+  annual: 'Annual',
+};
+
+const HOURS_IN_DAY = 24;
+
+function hourLabel(hour: number): string {
+  return `${String(hour).padStart(2, '0')}:00`;
+}
+
+/** priceMinor → an editable major-unit string (e.g. 50000 → "500", 999 → "9.99"). */
+function toMajorInput(priceMinor: number): string {
+  return (priceMinor / 100).toString();
+}
+
+/** Editable major-unit string → priceMinor. Blank/negative/NaN = not a price. */
+function toMinor(major: string): number | null {
+  if (major.trim() === '') return null;
+  const n = Number(major);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100);
+}
+
 async function parseErrorCode(res: Response): Promise<string | null> {
   try {
     const data = (await res.json()) as { error?: unknown };
@@ -68,6 +133,48 @@ async function parseErrorCode(res: Response): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * Draft rows keep every number as a string while the admin is typing (a
+ * half-typed "1" must not become a saved count of 1), then get parsed and
+ * re-validated against the shared zod schemas in `save()` — the same schemas
+ * the API routes enforce, so the console never posts something the server
+ * would reject with a bare "invalid".
+ */
+interface EquipmentDraft {
+  id: string;
+  name: string;
+  category: GymEquipmentCategory;
+  count: string;
+  description: string;
+}
+
+interface CrowdDraft {
+  level: GymCrowdLevel;
+  percentage: string;
+  /** null = no hour-by-hour chart. Otherwise exactly 24 entries (00:00→23:00). */
+  hourly: string[] | null;
+  peakHoursText: string;
+}
+
+interface PassDraft {
+  id: string;
+  type: GymPassType;
+  title: string;
+  /** Major units (rupees/dollars) — converted to priceMinor on save. */
+  price: string;
+  currency: GymPassOption['currency'];
+  /** Comma-separated list of what's included. */
+  features: string;
+  isPopular: boolean;
+}
+
+const EMPTY_CROWD: CrowdDraft = {
+  level: 'moderate',
+  percentage: '',
+  hourly: null,
+  peakHoursText: '',
+};
 
 interface FormState {
   slug: string;
@@ -86,6 +193,10 @@ interface FormState {
   amenities: GymAmenity[];
   hours: GymWeeklyHours;
   socialLinks: GymSocialLinkValue[];
+  equipment: EquipmentDraft[];
+  /** null = "No crowd data" — the default for every listing. */
+  crowdData: CrowdDraft | null;
+  passOptions: PassDraft[];
   status: GymStatus;
   verifiedByAdmin: boolean;
 }
@@ -107,6 +218,9 @@ const EMPTY_FORM: FormState = {
   amenities: [],
   hours: {},
   socialLinks: [],
+  equipment: [],
+  crowdData: null,
+  passOptions: [],
   status: 'draft',
   verifiedByAdmin: false,
 };
@@ -129,9 +243,159 @@ function rowToForm(row: GymRow): FormState {
     amenities: row.amenities,
     hours: row.hours,
     socialLinks: row.socialLinks,
+    equipment: row.equipment.map((e) => ({
+      id: e.id,
+      name: e.name,
+      category: e.category,
+      count: e.count === undefined ? '' : String(e.count),
+      description: e.description ?? '',
+    })),
+    crowdData: row.crowdData
+      ? {
+          level: row.crowdData.level,
+          percentage: String(row.crowdData.percentage),
+          hourly: row.crowdData.hourlyOccupancy
+            ? row.crowdData.hourlyOccupancy.map((n) => String(n))
+            : null,
+          peakHoursText: row.crowdData.peakHoursText ?? '',
+        }
+      : null,
+    passOptions: row.passOptions.map((p) => ({
+      id: p.id,
+      type: p.type,
+      title: p.title,
+      price: toMajorInput(p.priceMinor),
+      currency: p.currency,
+      features: p.features.join(', '),
+      isPopular: p.isPopular ?? false,
+    })),
     status: row.status,
     verifiedByAdmin: row.verifiedByAdmin,
   };
+}
+
+/**
+ * Draft → validated payload. Each builder returns either the parsed value or a
+ * plain-language message for the inline error line; nothing is guessed or
+ * filled in on the admin's behalf, so a gym with no data keeps no data.
+ */
+type BuildResult<T> = { value: T } | { error: string };
+
+function buildEquipment(drafts: EquipmentDraft[]): BuildResult<GymEquipmentItem[]> {
+  const items: GymEquipmentItem[] = [];
+  for (const d of drafts) {
+    const name = d.name.trim();
+    // Rows with no name are treated as never filled in (matches the hint under
+    // the editor) rather than blocking the whole save.
+    if (!name) continue;
+
+    const countText = d.count.trim();
+    let count: number | undefined;
+    if (countText) {
+      const n = Number(countText);
+      if (!Number.isInteger(n) || n < 1 || n > 10_000) {
+        return {
+          error: `How many "${name}"? Use a whole number between 1 and 10,000, or leave it blank.`,
+        };
+      }
+      count = n;
+    }
+
+    const parsed = gymEquipmentItemSchema.safeParse({
+      id: d.id,
+      name,
+      category: d.category,
+      ...(count === undefined ? {} : { count }),
+      ...(d.description.trim() ? { description: d.description.trim() } : {}),
+    });
+    if (!parsed.success) {
+      return { error: `Something in the "${name}" equipment row isn't valid. Please shorten it.` };
+    }
+    items.push(parsed.data);
+  }
+  return { value: items };
+}
+
+function buildCrowd(draft: CrowdDraft | null): BuildResult<GymCrowdStatus | null> {
+  if (!draft) return { value: null };
+
+  const pctText = draft.percentage.trim();
+  if (!pctText) {
+    return { error: 'Enter how full this gym usually is (0 to 100), or choose "No crowd data".' };
+  }
+  const percentage = Number(pctText);
+  if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+    return { error: 'How full the gym usually is must be a number between 0 and 100.' };
+  }
+
+  let hourlyOccupancy: number[] | undefined;
+  if (draft.hourly) {
+    // The member app draws all 24 bars or none, so a half-filled chart can't be
+    // saved — it would either lie about the gaps or be rejected by the server.
+    const numbers: number[] = [];
+    for (let hour = 0; hour < draft.hourly.length; hour++) {
+      const cell = draft.hourly[hour].trim();
+      if (!cell) {
+        return {
+          error: `The hour-by-hour chart needs all 24 hours filled in, and ${hourLabel(hour)} is empty. Fill it in or remove the chart.`,
+        };
+      }
+      const n = Number(cell);
+      if (!Number.isFinite(n) || n < 0 || n > 100) {
+        return { error: `${hourLabel(hour)} in the hour-by-hour chart must be a number between 0 and 100.` };
+      }
+      numbers.push(n);
+    }
+    hourlyOccupancy = numbers;
+  }
+
+  const parsed = gymCrowdStatusSchema.safeParse({
+    level: draft.level,
+    percentage,
+    ...(hourlyOccupancy ? { hourlyOccupancy } : {}),
+    ...(draft.peakHoursText.trim() ? { peakHoursText: draft.peakHoursText.trim() } : {}),
+  });
+  if (!parsed.success) {
+    return { error: "Something in the busy-times section isn't valid. Please check it." };
+  }
+  return { value: parsed.data };
+}
+
+function buildPasses(drafts: PassDraft[]): BuildResult<GymPassOption[]> {
+  const passes: GymPassOption[] = [];
+  for (const d of drafts) {
+    const title = d.title.trim();
+    // Same rule as equipment: an unnamed row was never really filled in.
+    if (!title) continue;
+
+    const priceMinor = toMinor(d.price);
+    if (priceMinor === null) {
+      return { error: `Enter a price for "${title}". Numbers only, 0 or more.` };
+    }
+
+    const features = d.features
+      .split(',')
+      .map((f) => f.trim())
+      .filter((f) => f.length > 0);
+    if (features.length > 20) {
+      return { error: `"${title}" can list up to 20 things included.` };
+    }
+
+    const parsed = gymPassOptionSchema.safeParse({
+      id: d.id,
+      type: d.type,
+      title,
+      priceMinor,
+      currency: d.currency,
+      features,
+      ...(d.isPopular ? { isPopular: true } : {}),
+    });
+    if (!parsed.success) {
+      return { error: `Something in the "${title}" pass isn't valid. Please shorten it.` };
+    }
+    passes.push(parsed.data);
+  }
+  return { value: passes };
 }
 
 /**
@@ -206,6 +470,22 @@ export function GymsManager({ gyms }: { gyms: GymRow[] }) {
       return;
     }
 
+    const equipment = buildEquipment(form.equipment);
+    if ('error' in equipment) {
+      setError(equipment.error);
+      return;
+    }
+    const crowdData = buildCrowd(form.crowdData);
+    if ('error' in crowdData) {
+      setError(crowdData.error);
+      return;
+    }
+    const passOptions = buildPasses(form.passOptions);
+    if ('error' in passOptions) {
+      setError(passOptions.error);
+      return;
+    }
+
     setSaving(true);
     setError(null);
 
@@ -222,6 +502,9 @@ export function GymsManager({ gyms }: { gyms: GymRow[] }) {
       socialLinks: form.socialLinks.filter((s) => s.platform.trim() && s.url.trim()),
       hours: form.hours,
       amenities: form.amenities,
+      equipment: equipment.value,
+      crowdData: crowdData.value,
+      passOptions: passOptions.value,
       externalImageUrl: form.externalImageUrl.trim() || null,
       priceNote: form.priceNote.trim(),
       description: form.description.trim(),
@@ -267,7 +550,7 @@ export function GymsManager({ gyms }: { gyms: GymRow[] }) {
       setModalOpen(false);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
@@ -356,7 +639,7 @@ export function GymsManager({ gyms }: { gyms: GymRow[] }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           {!editing ? (
             <TextField
-              label="Slug (optional — auto-generated from name if blank)"
+              label="Slug (optional, auto-generated from name if blank)"
               value={form.slug}
               onChange={(e) => setForm((f) => ({ ...f, slug: e.target.value }))}
               disabled={saving}
@@ -466,7 +749,7 @@ export function GymsManager({ gyms }: { gyms: GymRow[] }) {
 
           <TextField
             label="Operator-supplied image URL (not verified by us)"
-            hint="A photo the gym operator sent us — never a scraped/hotlinked image. Prefer uploading real photos below."
+            hint="A photo the gym operator sent us, never a scraped/hotlinked image. Prefer uploading real photos below."
             value={form.externalImageUrl}
             onChange={(e) => setForm((f) => ({ ...f, externalImageUrl: e.target.value }))}
             disabled={saving}
@@ -488,6 +771,24 @@ export function GymsManager({ gyms }: { gyms: GymRow[] }) {
           <SocialLinksEditor
             value={form.socialLinks}
             onChange={(socialLinks) => setForm((f) => ({ ...f, socialLinks }))}
+            disabled={saving}
+          />
+
+          <EquipmentEditor
+            value={form.equipment}
+            onChange={(equipment) => setForm((f) => ({ ...f, equipment }))}
+            disabled={saving}
+          />
+
+          <CrowdEditor
+            value={form.crowdData}
+            onChange={(crowdData) => setForm((f) => ({ ...f, crowdData }))}
+            disabled={saving}
+          />
+
+          <PassesEditor
+            value={form.passOptions}
+            onChange={(passOptions) => setForm((f) => ({ ...f, passOptions }))}
             disabled={saving}
           />
 
@@ -757,6 +1058,416 @@ function SocialLinksEditor({
   );
 }
 
+// ── Equipment ────────────────────────────────────────────────────────────
+
+function EquipmentEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: EquipmentDraft[];
+  onChange: (v: EquipmentDraft[]) => void;
+  disabled: boolean;
+}) {
+  function update(i: number, patch: Partial<EquipmentDraft>) {
+    const next = [...value];
+    next[i] = { ...next[i], ...patch };
+    onChange(next);
+  }
+  function remove(i: number) {
+    const next = [...value];
+    next.splice(i, 1);
+    onChange(next);
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <FieldLabel>Equipment</FieldLabel>
+      <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+        Only list kit the gym actually told us about. Members see this exactly as typed. Rows
+        left without a name are dropped when you save.
+      </span>
+      {value.map((item, i) => (
+        <div
+          key={item.id}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: '1px solid var(--gt-border)',
+          }}
+        >
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              className="gt-input"
+              placeholder="Squat rack"
+              aria-label="Equipment name"
+              value={item.name}
+              onChange={(e) => update(i, { name: e.target.value })}
+              disabled={disabled}
+              style={{ flex: 2 }}
+            />
+            <select
+              className="gt-input"
+              aria-label="Equipment group"
+              value={item.category}
+              onChange={(e) => update(i, { category: e.target.value as GymEquipmentCategory })}
+              disabled={disabled}
+              style={{ flex: 1 }}
+            >
+              {GYM_EQUIPMENT_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {EQUIPMENT_CATEGORY_LABEL[c]}
+                </option>
+              ))}
+            </select>
+            <input
+              className="gt-input"
+              type="number"
+              min={1}
+              step={1}
+              placeholder="How many"
+              aria-label="How many (optional)"
+              value={item.count}
+              onChange={(e) => update(i, { count: e.target.value })}
+              disabled={disabled}
+              style={{ width: 110 }}
+            />
+            <Button variant="ghost" size="sm" disabled={disabled} onClick={() => remove(i)}>
+              Remove
+            </Button>
+          </div>
+          <input
+            className="gt-input"
+            placeholder="Short note (optional), e.g. 4 platforms with bumper plates"
+            aria-label="Equipment note (optional)"
+            value={item.description}
+            onChange={(e) => update(i, { description: e.target.value })}
+            disabled={disabled}
+          />
+        </div>
+      ))}
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={disabled}
+        onClick={() =>
+          onChange([
+            ...value,
+            { id: crypto.randomUUID(), name: '', category: 'free_weights', count: '', description: '' },
+          ])
+        }
+      >
+        + Add equipment
+      </Button>
+    </div>
+  );
+}
+
+// ── How busy it gets ─────────────────────────────────────────────────────
+
+/**
+ * Crowd info is opt-in: "No crowd data" is the default and submits `null`, so
+ * a listing never claims to know how busy a gym is until someone types it in.
+ * The hour-by-hour chart is all-or-nothing — the shared schema (and the member
+ * app's 24-bar chart) needs every hour, so a half-filled grid is refused
+ * rather than padded with invented numbers.
+ */
+function CrowdEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: CrowdDraft | null;
+  onChange: (v: CrowdDraft | null) => void;
+  disabled: boolean;
+}) {
+  function update(patch: Partial<CrowdDraft>) {
+    if (!value) return;
+    onChange({ ...value, ...patch });
+  }
+  function setHour(hour: number, cell: string) {
+    if (!value?.hourly) return;
+    const hourly = [...value.hourly];
+    hourly[hour] = cell;
+    onChange({ ...value, hourly });
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <FieldLabel>How busy it gets</FieldLabel>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--gt-text)' }}>
+          <input
+            type="radio"
+            name="gym-crowd-mode"
+            checked={value === null}
+            onChange={() => onChange(null)}
+            disabled={disabled}
+          />
+          No crowd data
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--gt-text)' }}>
+          <input
+            type="radio"
+            name="gym-crowd-mode"
+            checked={value !== null}
+            onChange={() => onChange(EMPTY_CROWD)}
+            disabled={disabled}
+          />
+          Add busy-times info
+        </label>
+      </div>
+
+      {value === null ? (
+        <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+          Members see nothing about crowds for this gym. Leave it here unless the gym gave us
+          real numbers.
+        </span>
+      ) : (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            padding: '10px',
+            borderRadius: 8,
+            border: '1px solid var(--gt-border)',
+          }}
+        >
+          <div style={{ display: 'flex', gap: 12 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+              <FieldLabel>Right now it feels</FieldLabel>
+              <select
+                className="gt-input"
+                value={value.level}
+                onChange={(e) => update({ level: e.target.value as GymCrowdLevel })}
+                disabled={disabled}
+              >
+                {GYM_CROWD_LEVELS.map((l) => (
+                  <option key={l} value={l}>
+                    {CROWD_LEVEL_LABEL[l]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <TextField
+              label="How full (0–100)"
+              type="number"
+              min={0}
+              max={100}
+              value={value.percentage}
+              onChange={(e) => update({ percentage: e.target.value })}
+              disabled={disabled}
+              style={{ flex: 1 }}
+            />
+            <TextField
+              label="Busiest times (optional)"
+              value={value.peakHoursText}
+              onChange={(e) => update({ peakHoursText: e.target.value })}
+              disabled={disabled}
+              placeholder="e.g. 6–8pm on weekdays"
+              style={{ flex: 2 }}
+            />
+          </div>
+
+          {value.hourly === null ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={disabled}
+              onClick={() => update({ hourly: Array.from({ length: HOURS_IN_DAY }, () => '') })}
+            >
+              + Add hour-by-hour chart
+            </Button>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                All 24 hours are needed. The app draws the whole day or nothing. Each box is how
+                full the gym is (0 to 100) at that hour.
+              </span>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(78px, 1fr))',
+                  gap: 6,
+                }}
+              >
+                {value.hourly.map((cell, hour) => (
+                  <label key={hour} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span style={{ fontSize: 11, color: 'var(--gt-text-dim)' }}>{hourLabel(hour)}</span>
+                    <input
+                      className="gt-input"
+                      type="number"
+                      min={0}
+                      max={100}
+                      aria-label={`How full at ${hourLabel(hour)}`}
+                      value={cell}
+                      onChange={(e) => setHour(hour, e.target.value)}
+                      disabled={disabled}
+                    />
+                  </label>
+                ))}
+              </div>
+              <Button variant="ghost" size="sm" disabled={disabled} onClick={() => update({ hourly: null })}>
+                Remove chart
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Passes ───────────────────────────────────────────────────────────────
+
+function PassesEditor({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: PassDraft[];
+  onChange: (v: PassDraft[]) => void;
+  disabled: boolean;
+}) {
+  function update(i: number, patch: Partial<PassDraft>) {
+    const next = [...value];
+    next[i] = { ...next[i], ...patch };
+    onChange(next);
+  }
+  function remove(i: number) {
+    const next = [...value];
+    next.splice(i, 1);
+    onChange(next);
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <FieldLabel>Passes & memberships</FieldLabel>
+      <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+        Prices the gym gave us, in rupees or dollars (not paisa/cents). Rows left without a name
+        are dropped when you save.
+      </span>
+      {value.map((pass, i) => (
+        <div
+          key={pass.id}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: '1px solid var(--gt-border)',
+          }}
+        >
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              className="gt-input"
+              placeholder="Day pass"
+              aria-label="Pass name"
+              value={pass.title}
+              onChange={(e) => update(i, { title: e.target.value })}
+              disabled={disabled}
+              style={{ flex: 2 }}
+            />
+            <select
+              className="gt-input"
+              aria-label="How long it lasts"
+              value={pass.type}
+              onChange={(e) => update(i, { type: e.target.value as GymPassType })}
+              disabled={disabled}
+              style={{ flex: 1 }}
+            >
+              {GYM_PASS_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {PASS_TYPE_LABEL[t]}
+                </option>
+              ))}
+            </select>
+            <input
+              className="gt-input"
+              type="number"
+              min={0}
+              step="0.01"
+              placeholder="Price"
+              aria-label="Price"
+              value={pass.price}
+              onChange={(e) => update(i, { price: e.target.value })}
+              disabled={disabled}
+              style={{ width: 110 }}
+            />
+            <select
+              className="gt-input"
+              aria-label="Currency"
+              value={pass.currency}
+              onChange={(e) => update(i, { currency: e.target.value as GymPassOption['currency'] })}
+              disabled={disabled}
+              style={{ width: 96 }}
+            >
+              <option value="NPR">NPR</option>
+              <option value="USD">USD</option>
+            </select>
+            <Button variant="ghost" size="sm" disabled={disabled} onClick={() => remove(i)}>
+              Remove
+            </Button>
+          </div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <input
+              className="gt-input"
+              placeholder="What's included (optional), separate with commas"
+              aria-label="What's included (optional)"
+              value={pass.features}
+              onChange={(e) => update(i, { features: e.target.value })}
+              disabled={disabled}
+              style={{ flex: 1 }}
+            />
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 13,
+                color: 'var(--gt-text-dim)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={pass.isPopular}
+                onChange={(e) => update(i, { isPopular: e.target.checked })}
+                disabled={disabled}
+              />
+              Most popular
+            </label>
+          </div>
+        </div>
+      ))}
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={disabled}
+        onClick={() =>
+          onChange([
+            ...value,
+            {
+              id: crypto.randomUUID(),
+              type: 'day_pass',
+              title: '',
+              price: '',
+              currency: 'NPR',
+              features: '',
+              isPopular: false,
+            },
+          ])
+        }
+      >
+        + Add pass
+      </Button>
+    </div>
+  );
+}
+
 // ── Photos ───────────────────────────────────────────────────────────────
 
 /** Reservation shape returned by POST /api/uploads/image. */
@@ -828,7 +1539,7 @@ function PhotosEditor({ gymId, photos }: { gymId: string; photos: GymPhotoRow[] 
       form.append('file', file);
       const cloudRes = await fetch(reservation.uploadUrl, { method: 'POST', body: form });
       if (!cloudRes.ok) {
-        setLocalError('Image upload failed — try again.');
+        setLocalError('Image upload failed. Try again.');
         return;
       }
 
@@ -839,7 +1550,7 @@ function PhotosEditor({ gymId, photos }: { gymId: string; photos: GymPhotoRow[] 
         body: JSON.stringify({ uid: reservation.uid, deliveryUrl: reservation.deliveryUrl }),
       });
       if (!attachRes.ok) {
-        setLocalError('Uploaded, but could not attach the photo — try again.');
+        setLocalError('Uploaded, but could not attach the photo. Try again.');
         return;
       }
       const attached = (await attachRes.json()) as { photo?: GymPhotoRow };
@@ -848,7 +1559,7 @@ function PhotosEditor({ gymId, photos }: { gymId: string; photos: GymPhotoRow[] 
       }
       router.refresh();
     } catch {
-      setLocalError('Network error during upload.');
+      setLocalError('Could not reach us just now, so nothing uploaded. Try again.');
     } finally {
       setUploading(false);
     }
@@ -870,7 +1581,7 @@ function PhotosEditor({ gymId, photos }: { gymId: string; photos: GymPhotoRow[] 
       setOrder((o) => o.filter((p) => p.id !== photoId));
       router.refresh();
     } catch {
-      setLocalError('Network error.');
+      setLocalError('Could not reach us just now. Try again.');
     } finally {
       setBusyId(null);
     }

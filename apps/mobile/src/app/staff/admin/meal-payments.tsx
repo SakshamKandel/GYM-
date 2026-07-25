@@ -81,16 +81,16 @@ function receiptUnusable(url: string): boolean {
  * against a reject, not a double-decision).
  */
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'not_found') return 'That request is no longer available.';
   if (code === 'already_refunded') return 'This payment was already refunded.';
   if (code === 'not_approved')
-    return "This request isn't approved — refresh the queue to see its current state.";
+    return "This request isn't approved. Refresh the queue to see its current state.";
   if (code === 'non_refundable')
-    return "This can no longer be refunded — the order is already in production or past its cutoff, or the cycle's billed week has begun.";
+    return "This can no longer be refunded. The order is already in production or past its cutoff, or the cycle's billed week has begun.";
   if (code === 'conflict')
-    return 'Another admin already decided this — refresh the queue and try again.';
+    return 'Another admin already decided this. Refresh the queue and try again.';
   return "Couldn't load the queue.";
 }
 
@@ -381,7 +381,7 @@ export default function AdminMealPaymentsScreen() {
                 ) : null}
                 {receiptBad ? (
                   <AppText variant="caption" color={colors.textFaint} style={styles.decideError}>
-                    Approve is disabled until the receipt loads — reload the queue and try again.
+                    Approve is disabled until the receipt loads. Reload the queue and try again.
                   </AppText>
                 ) : null}
                 <View style={styles.decisionButtons}>

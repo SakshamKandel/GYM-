@@ -29,9 +29,9 @@ function errorLine(code: ChallengeJoinErrorCode): string {
     case 'not_found':
       return 'This challenge no longer exists.';
     case 'unauthorized':
-      return 'Your session expired — sign in again.';
+      return 'Your session expired. Sign in again.';
     default:
-      return "Can't join right now — try again in a bit.";
+      return "Can't join right now. Try again in a bit.";
   }
 }
 
@@ -83,7 +83,7 @@ export function ChallengeCard({ challenge, onJoin, onJoined }: Props) {
             <View style={styles.completeRow}>
               <Ionicons name="checkmark-circle" size={18} color={colors.success} />
               <AppText variant="caption" color={colors.success}>
-                Challenge complete — badge earned.
+                Challenge complete. Badge earned.
               </AppText>
             </View>
           ) : null}

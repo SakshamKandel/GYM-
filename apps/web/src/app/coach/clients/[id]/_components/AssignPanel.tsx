@@ -1,7 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import { hasEntitlement, minTierFor, type Feature, type Tier } from '@gym/shared';
 import { Button } from '@/components/console';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
+import { usePanelData } from './panelKit';
 
 /**
  * The desktop coach's WRITE surface for a client (Pack K / WP-10): assign a
@@ -10,9 +13,27 @@ import { Button } from '@/components/console';
  * POSTs to the EXISTING coach assign route this package already owns
  * (clients/[userId]/{workouts,diet-plans,milestones}); the server masks all
  * free text and pushes the member. No new engine — just the missing front door.
+ *
+ * Assigned programs and diet plans have a tier floor (Silver / Gold), and the
+ * member's app hides them below it. Writing one for a client under that floor
+ * used to succeed silently: stored, pushed, and invisible. Each form now reads
+ * the client's current plan and turns itself off with the reason in words, and
+ * the route backs it up with a 409 naming the plan required.
  */
 
 type MealSlot = 'breakfast' | 'lunch' | 'dinner' | 'snacks';
+
+/**
+ * Why this form is switched off, or null when it isn't.
+ *
+ * Null while the client's plan is still loading, on purpose: the route re-checks
+ * every write and its 409 names the plan, so a slow read can never lock out a
+ * coach who is allowed to write.
+ */
+function assignBlockNote(tier: Tier | null, feature: Feature, what: string): string | null {
+  if (tier === null || hasEntitlement({ tier }, feature)) return null;
+  return `${what} need ${tierLabel(minTierFor(feature))} or higher. This client is on ${tierLabel(tier)}, so they would not see it.`;
+}
 
 interface WorkoutRow {
   name: string;
@@ -28,6 +49,31 @@ interface DietRow {
 
 const MEAL_SLOTS: MealSlot[] = ['breakfast', 'lunch', 'dinner', 'snacks'];
 
+/**
+ * Plain words for a rejected write. The 409 is the tier floor the client sits
+ * under: it is the one failure a coach can actually do something about (ask
+ * them to upgrade), so it names the plan instead of reading as a save error.
+ */
+async function failureText(res: Response): Promise<string> {
+  if (res.status === 409) {
+    let body: { error?: unknown; requiredTier?: unknown } | null = null;
+    try {
+      body = (await res.json()) as { error?: unknown; requiredTier?: unknown };
+    } catch {
+      // Not JSON. Fall through to the generic wording below.
+    }
+    if (body?.error === 'tier_required') {
+      const needed = typeof body.requiredTier === 'string' ? tierLabel(body.requiredTier) : null;
+      return needed
+        ? `This client needs the ${needed} plan or higher before they can be given this.`
+        : 'This client is on a plan that does not include this yet.';
+    }
+  }
+  if (res.status === 400) return 'Please fill every field with a valid value.';
+  if (res.status === 403) return 'You are not assigned to this client.';
+  return 'Could not save. Try again.';
+}
+
 function useSubmit(userId: string) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
@@ -42,15 +88,7 @@ function useSubmit(userId: string) {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        setMsg({
-          kind: 'err',
-          text:
-            res.status === 400
-              ? 'Please fill every field with a valid value.'
-              : res.status === 403
-                ? 'You are not assigned to this client.'
-                : 'Could not save. Try again.',
-        });
+        setMsg({ kind: 'err', text: await failureText(res) });
         setBusy(false);
         return false;
       }
@@ -58,7 +96,7 @@ function useSubmit(userId: string) {
       setBusy(false);
       return true;
     } catch {
-      setMsg({ kind: 'err', text: 'Network error. Retry.' });
+      setMsg({ kind: 'err', text: 'Could not reach us just now. Try again.' });
       setBusy(false);
       return false;
     }
@@ -76,6 +114,7 @@ function FormCard({
   busy,
   msg,
   submitLabel,
+  blockedNote,
 }: {
   title: string;
   children: React.ReactNode;
@@ -83,18 +122,26 @@ function FormCard({
   busy: boolean;
   msg: { kind: 'ok' | 'err'; text: string } | null;
   submitLabel: string;
+  /** Set when the client's plan can't show this: the reason, in words. */
+  blockedNote?: string | null;
 }) {
+  const blocked = Boolean(blockedNote);
   return (
     <form
       className="gt-card"
       style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}
       onSubmit={(e) => {
         e.preventDefault();
-        onSubmit();
+        if (!blocked) onSubmit();
       }}
     >
       <strong style={{ fontFamily: 'var(--font-heading)', fontSize: 15 }}>{title}</strong>
       {children}
+      {blockedNote ? (
+        // Sits right above the button it explains, so the disabled state is
+        // never a dead control with no reason attached.
+        <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>{blockedNote}</div>
+      ) : null}
       {msg ? (
         <div
           role={msg.kind === 'err' ? 'alert' : 'status'}
@@ -104,7 +151,7 @@ function FormCard({
         </div>
       ) : null}
       <div>
-        <Button type="submit" variant="primary" size="sm" disabled={busy}>
+        <Button type="submit" variant="primary" size="sm" disabled={busy || blocked}>
           {busy ? 'Saving…' : submitLabel}
         </Button>
       </div>
@@ -112,7 +159,7 @@ function FormCard({
   );
 }
 
-function WorkoutForm({ userId }: { userId: string }) {
+function WorkoutForm({ userId, blockedNote }: { userId: string; blockedNote: string | null }) {
   const { busy, msg, send } = useSubmit(userId);
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
@@ -142,7 +189,14 @@ function WorkoutForm({ userId }: { userId: string }) {
   }
 
   return (
-    <FormCard title="Assign workout" onSubmit={submit} busy={busy} msg={msg} submitLabel="Assign workout">
+    <FormCard
+      title="Assign workout"
+      onSubmit={submit}
+      busy={busy}
+      msg={msg}
+      submitLabel="Assign workout"
+      blockedNote={blockedNote}
+    >
       <input
         className="gt-input"
         style={inputStyle}
@@ -218,7 +272,7 @@ function WorkoutForm({ userId }: { userId: string }) {
   );
 }
 
-function DietForm({ userId }: { userId: string }) {
+function DietForm({ userId, blockedNote }: { userId: string; blockedNote: string | null }) {
   const { busy, msg, send } = useSubmit(userId);
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
@@ -248,11 +302,18 @@ function DietForm({ userId }: { userId: string }) {
   }
 
   return (
-    <FormCard title="Assign diet plan" onSubmit={submit} busy={busy} msg={msg} submitLabel="Assign diet plan">
+    <FormCard
+      title="Assign diet plan"
+      onSubmit={submit}
+      busy={busy}
+      msg={msg}
+      submitLabel="Assign diet plan"
+      blockedNote={blockedNote}
+    >
       <input
         className="gt-input"
         style={inputStyle}
-        placeholder="Plan title (e.g. Cut — 2200 kcal)"
+        placeholder="Plan title (e.g. Cut at 2200 kcal)"
         aria-label="Diet plan title"
         value={title}
         maxLength={120}
@@ -381,11 +442,32 @@ const addRowStyle: React.CSSProperties = {
   alignSelf: 'flex-start',
 };
 
+/** Only the tier is read here; the Overview tab owns the rest of this payload. */
+interface ClientTierRead {
+  client: { tier: Tier };
+}
+
 export function AssignPanel({ userId }: { userId: string }) {
+  // The client's CURRENT plan (the route already collapses a lapsed paid window
+  // to starter, exactly as the member's own app does). A failed read leaves the
+  // forms enabled and the route's 409 does the talking.
+  const { data } = usePanelData<ClientTierRead>(
+    `/api/coach/clients/${encodeURIComponent(userId)}/overview`,
+  );
+  const tier = data?.client.tier ?? null;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <WorkoutForm userId={userId} />
-      <DietForm userId={userId} />
+      <WorkoutForm
+        userId={userId}
+        blockedNote={assignBlockNote(tier, 'coach_workouts', 'Assigned workouts')}
+      />
+      <DietForm
+        userId={userId}
+        blockedNote={assignBlockNote(tier, 'coach_diet', 'Assigned diet plans')}
+      />
+      {/* Milestones are a record of something the client actually did, so they
+          are never gated by what the client is paying for. */}
       <MilestoneForm userId={userId} />
     </div>
   );

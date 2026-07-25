@@ -13,14 +13,8 @@ import {
   SearchField,
   TextField,
 } from '@/components/console';
+import { formatShortDateTime } from '@/lib/format';
 import type { AwardedBadgeRow, ChallengeRow, XpCorrectionRow } from './types';
-
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-});
 
 async function parseErrorCode(res: Response): Promise<string | null> {
   try {
@@ -76,7 +70,7 @@ function XpCorrectionCard({ corrections }: { corrections: XpCorrectionRow[] }) {
       return;
     }
     if (!reason.trim()) {
-      setError('A reason is required — it is audit-logged.');
+      setError('A reason is required. It is audit-logged.');
       return;
     }
     setSaving(true);
@@ -99,7 +93,7 @@ function XpCorrectionCard({ corrections }: { corrections: XpCorrectionRow[] }) {
       setSuccess(
         data.xpTotal !== null
           ? `Applied. Account's XP total is now ${data.xpTotal}.`
-          : 'Applied — the cache refresh failed but the correction is recorded.',
+          : 'Applied. The cache refresh failed, but the correction is recorded.',
       );
       setAccountId('');
       setDelta('');
@@ -107,7 +101,7 @@ function XpCorrectionCard({ corrections }: { corrections: XpCorrectionRow[] }) {
       setSaving(false);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
@@ -140,7 +134,7 @@ function XpCorrectionCard({ corrections }: { corrections: XpCorrectionRow[] }) {
       width: 140,
       render: (r) => (
         <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {DATE_FMT.format(new Date(r.createdAt))}
+          {formatShortDateTime(r.createdAt)}
         </span>
       ),
     },
@@ -240,7 +234,7 @@ function BadgeCard({ badges: initialBadges }: { badges: AwardedBadgeRow[] }) {
       setRevoking(null);
       router.refresh();
     } catch {
-      setRowError({ id: row.id, msg: 'Network error.' });
+      setRowError({ id: row.id, msg: 'Could not reach us just now. Try again.' });
       setRevoking(null);
     }
   }
@@ -264,7 +258,7 @@ function BadgeCard({ badges: initialBadges }: { badges: AwardedBadgeRow[] }) {
       width: 140,
       render: (r) => (
         <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {DATE_FMT.format(new Date(r.earnedAt))}
+          {formatShortDateTime(r.earnedAt)}
         </span>
       ),
     },

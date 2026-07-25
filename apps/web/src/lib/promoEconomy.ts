@@ -13,7 +13,7 @@ import {
   type PriceRegion,
   type Tier,
 } from '@gym/shared';
-import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, or, sql } from 'drizzle-orm';
 import { getDb } from './db';
 
 /**
@@ -190,6 +190,53 @@ export async function grantDiscount(args: GrantDiscountArgs): Promise<string> {
   }
   // Unreachable: the loop either returns or throws.
   throw new Error('grantDiscount: exhausted retries');
+}
+
+/** Referral reward window (SCALE-UP-PLAN §1.3 / §7.2). */
+export const REFERRAL_DISCOUNT_PCT = 20;
+export const REFERRAL_GRANT_DAYS = 90;
+
+/**
+ * If anyone invited this (just-created) email, flip their referral(s) to
+ * 'joined' and grant BOTH parties a 20%/90-day discount. Only rows still
+ * 'pending' transition — an already joined/rewarded row is left alone, which
+ * is what prevents double-granting on any retry of this same call. One email
+ * can have pending referral rows from multiple referrers (the unique index is
+ * (referrerId, inviteeEmail)), so every matching referrer is granted too.
+ * Best-effort: a referral-wiring failure must never fail the sign-up itself.
+ *
+ * Call this ONLY on the new-account path. It was previously copy-pasted, byte
+ * for byte, into /api/auth/register, /api/auth/google and /api/auth/apple —
+ * three separate places to keep the reward rule in step.
+ */
+export async function wireReferralsForNewAccount(
+  accountId: string,
+  email: string,
+): Promise<void> {
+  try {
+    const db = getDb();
+    const joined = await db
+      .update(referrals)
+      .set({ inviteeId: accountId, status: 'joined' })
+      .where(and(eq(referrals.inviteeEmail, email), eq(referrals.status, 'pending')))
+      .returning({ referrerId: referrals.referrerId });
+
+    if (joined.length === 0) return;
+
+    const expiresAt = new Date(Date.now() + REFERRAL_GRANT_DAYS * 24 * 60 * 60 * 1000);
+    await grantDiscount({ accountId, source: 'referral', pct: REFERRAL_DISCOUNT_PCT, expiresAt });
+    for (const row of joined) {
+      await grantDiscount({
+        accountId: row.referrerId,
+        source: 'referral',
+        pct: REFERRAL_DISCOUNT_PCT,
+        expiresAt,
+      });
+    }
+  } catch {
+    // Best-effort — the account is already created; the next referral fetch or
+    // a support ticket can reconcile. Never fail authentication for this.
+  }
 }
 
 /**
@@ -476,8 +523,16 @@ export interface AllCoachBalancesRow {
  * Every coach's wallet balance per currency in ONE grouped query (SCALE-UP-PLAN
  * §4.1: "balances via one grouped query (no N+1)"). GET /api/admin/wallets
  * joins this in-memory against the coach roster rather than querying per-coach.
+ *
+ * Pass `coachIds` to restrict the scan to a known set (the admin payout queue
+ * only needs the coaches with a pending request) — still one round-trip. An
+ * EMPTY array means "no coaches", so it short-circuits to [] rather than
+ * degenerating into the unfiltered whole-table scan.
  */
-export async function allCoachWalletBalances(): Promise<AllCoachBalancesRow[]> {
+export async function allCoachWalletBalances(
+  coachIds?: readonly string[],
+): Promise<AllCoachBalancesRow[]> {
+  if (coachIds && coachIds.length === 0) return [];
   const db = getDb();
   // sum(int) → bigint cast to text + Number() (E12), same overflow guard as
   // coachWalletBalances.
@@ -488,6 +543,7 @@ export async function allCoachWalletBalances(): Promise<AllCoachBalancesRow[]> {
       amountMinor: sql<string>`sum(${walletLedger.amountMinor})::text`,
     })
     .from(walletLedger)
+    .where(coachIds ? inArray(walletLedger.coachId, [...coachIds]) : undefined)
     .groupBy(walletLedger.coachId, walletLedger.currency);
   return rows.map((r) => ({
     coachId: r.coachId,

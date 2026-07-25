@@ -4,7 +4,7 @@ import {
   compareMemberDataVersions,
   memberDataRecordId,
   memberDataSyncRequestSchema,
-} from '../schemas/memberDataSync';
+} from '../schemas/memberDataSync.ts';
 
 test('member data conflict order is deterministic and retry stable', () => {
   const first = {

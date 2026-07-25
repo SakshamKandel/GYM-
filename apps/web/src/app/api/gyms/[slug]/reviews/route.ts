@@ -19,11 +19,14 @@ export const runtime = 'nodejs';
  *           appear here regardless of caller.
  *  - POST → the caller's OWN review for this gym. One per (gym, account) —
  *           `unique(gymId,accountId)` — so a second submission EDITS the
- *           first (upsert) rather than adding a duplicate; editing always
- *           resets `status` to 'visible' (an admin who previously hid a
- *           review gets a fresh look at the edited text, never a permanently
- *           re-silenced row). `note` is `maskPii`'d before storage — contact
- *           details never reach a public review.
+ *           first (upsert) rather than adding a duplicate. The edit does NOT
+ *           touch `status`: an author who re-submits after an admin hid an
+ *           abusive review would otherwise silently un-hide themselves, and
+ *           the moderation lever would only ever hold until the next edit.
+ *           `status` moves only through the admin queue. (The insert path
+ *           still starts at 'visible' — that's the column default.) `note` is
+ *           `maskPii`'d before storage — contact details never reach a public
+ *           review.
  *
  * Unlike meal ratings there is no "delivered order" ownership signal for a
  * gym visit, so this does not gate on prior purchase — the moderation queue
@@ -131,7 +134,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
     .values({ gymId: gym.id, accountId: user.id, stars, note, status: 'visible' })
     .onConflictDoUpdate({
       target: [gymReviews.gymId, gymReviews.accountId],
-      set: { stars, note, status: 'visible' },
+      // `status` is deliberately absent: an edit must not resurrect a review
+      // an admin hid. Only the moderation queue writes this column.
+      set: { stars, note },
     })
     .returning({ id: gymReviews.id, stars: gymReviews.stars, note: gymReviews.note, createdAt: gymReviews.createdAt });
 

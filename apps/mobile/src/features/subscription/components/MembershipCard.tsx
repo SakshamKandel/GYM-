@@ -167,8 +167,8 @@ export function MembershipCard({ tier, holderName, memberId, signedIn, expiresAt
       : `, valid through ${expiry.dateLabel}`
     : '';
   const label = `${TIER_TITLE[tier]} gym membership card for ${name}${
-    signedIn ? '' : ', local profile — sign in to sync'
-  }${expiryLabel}${onPress ? '. Opens subscription options.' : ''}`;
+    signedIn ? '' : ', not signed in. Sign in to save your membership'
+  }${expiryLabel}${onPress ? '. Opens membership options.' : ''}`;
 
   // Brushed-metal hairlines: precomputed static rows (no randomness — the
   // texture must be identical every render and on both platforms).

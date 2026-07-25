@@ -103,7 +103,7 @@ export function Footer() {
                   <li key={link.href}>
                     <Link
                       href={link.href}
-                      className="text-[14px] text-dim hover:text-snow transition-colors duration-200"
+                      className="text-[14.5px] text-dim hover:text-snow transition-colors duration-200"
                     >
                       {link.label}
                     </Link>
@@ -115,7 +115,7 @@ export function Footer() {
         </div>
 
         {/* Bottom Bar */}
-        <div className="pt-8 border-t border-line-strong/30 flex items-center justify-between font-sans text-[13px] text-faint">
+        <div className="pt-8 border-t border-line-strong/30 flex items-center justify-between font-sans text-[14.5px] text-faint">
           <p>© 2026 The GM Method. All rights reserved.</p>
         </div>
       </Container>

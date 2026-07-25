@@ -3,7 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { CoachApiError, getCoachMessages } from '../../lib/api/client';
 import { mmkvStorage } from '../../lib/mmkvStorage';
 import { useAuth } from '../../state/auth';
-import { CheckInApiError, getCheckIns, type ServerCheckIn } from './api';
+import { CheckInApiError, getAssignedCoachName, getCheckIns, type ServerCheckIn } from './api';
 
 /**
  * Weekly coach check-in state.
@@ -11,8 +11,9 @@ import { CheckInApiError, getCheckIns, type ServerCheckIn } from './api';
  * `lastCheckInAt` (the newest check-in's yyyy-mm-dd date) is persisted so the
  * due-state works offline; hydrateCheckIns() reconciles it with the server
  * (GET /api/check-ins?limit=1) so a reinstall or a second device never nags
- * for a check-in the coach already has. The latest server row and the coach's
- * reply text live in memory only — they re-resolve on the next hydrate.
+ * for a check-in the coach already has. The latest server row, the coach's
+ * reply text and whether a coach is assigned at all live in memory only —
+ * they re-resolve on the next hydrate.
  *
  * The persisted state is fingerprinted to an account id: an account switch on
  * the same device resets it, so one member's cadence never leaks to another.
@@ -32,6 +33,14 @@ interface CheckInState {
   latest: ServerCheckIn | null;
   /** The coach's reply to `latest`, resolved from the coach thread. */
   coachReply: CoachReply | null;
+  /**
+   * Where a check-in actually goes, resolved from GET /api/me/coach:
+   *  - `{ known: false }`     — not looked up yet (or the lookup failed).
+   *  - `{ known: true, name }` — an active coach; `name` may be '' if unnamed.
+   *  - `{ known: true, name: null }` — no coach reads these check-ins.
+   * The card only claims a coach was told when `name` is a real assignment.
+   */
+  coachStatus: { known: false } | { known: true; name: string | null };
 
   /** Adopt the row a successful POST returned (server-confirmed only). */
   recordCheckIn: (row: ServerCheckIn) => void;
@@ -44,6 +53,7 @@ export const useCheckIn = create<CheckInState>()(
       accountId: null,
       latest: null,
       coachReply: null,
+      coachStatus: { known: false },
 
       recordCheckIn: (row) => set({ latest: row, lastCheckInAt: row.date, coachReply: null }),
     }),
@@ -82,7 +92,21 @@ export async function hydrateCheckIns(): Promise<void> {
         lastCheckInAt: null,
         latest: null,
         coachReply: null,
+        coachStatus: { known: false },
       });
+    }
+
+    // Who reads this member's check-ins. Resolved BEFORE the check-in list so
+    // an account with no check-ins yet (the early return below) still gets an
+    // honest "sent" screen on its very first submit. Its own try/catch: a
+    // failed lookup leaves `known: false`, which reads as "we don't know" and
+    // never as "you have no coach".
+    try {
+      const name = await getAssignedCoachName(auth.token);
+      useCheckIn.setState({ coachStatus: { known: true, name } });
+    } catch (err) {
+      if (err instanceof CheckInApiError && err.code === 'unauthorized') throw err;
+      // Offline or a hiccup — keep whatever we last knew.
     }
 
     const rows = await getCheckIns(auth.token, 1);

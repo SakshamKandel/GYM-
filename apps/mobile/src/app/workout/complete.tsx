@@ -418,7 +418,7 @@ export default function WorkoutCompleteScreen() {
             </View>
             <AppText variant="caption" color={colors.textFaint} numberOfLines={1}>
               {previous.fuzzy
-                ? `Closest match from ${posterDate(previous.workout.date)} — similar exercises, different name`
+                ? `Closest match from ${posterDate(previous.workout.date)} , similar exercises with a different name`
                 : `Compared with ${posterDate(previous.workout.date)}`}
             </AppText>
           </Card>
@@ -518,7 +518,7 @@ export default function WorkoutCompleteScreen() {
         {sets.length > 0 ? (
           templateSaved ? (
             <AppText variant="caption" color={colors.textDim} center>
-              Saved — find it under Your templates on the Train tab.
+              Saved. Find it under Your templates on the Train tab.
             </AppText>
           ) : (
             <Button

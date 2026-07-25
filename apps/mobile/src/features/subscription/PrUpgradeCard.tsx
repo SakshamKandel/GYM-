@@ -38,7 +38,7 @@ interface Props {
 const GOLD_BENEFITS = [
   'Predicts your next lift from this PR',
   'Targets adapt to your weekly trend',
-  "Greece's plan levels up every week",
+  "Greece's program levels up every week",
 ] as const;
 
 const styles = StyleSheet.create({

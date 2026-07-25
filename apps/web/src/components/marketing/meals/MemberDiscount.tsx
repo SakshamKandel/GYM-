@@ -37,20 +37,20 @@ export function MemberDiscount() {
               </Display>
               <Lead tone="red" className="mt-6">
                 Every GM membership comes with a member card and code. Partner restaurants
-                verify the code right at the counter and apply the member discount — no
+                verify the code right at the counter and apply the member discount. No
                 coupons, no screenshots, no arguing.
               </Lead>
             </Reveal>
             <Reveal delay={120}>
               <ul className="mt-8 flex flex-col gap-3.5">
                 <CheckItem tone="red">
-                  Show the card in the app — the code reads in groups of four
+                  Show the card in the app. The code reads in groups of four
                 </CheckItem>
                 <CheckItem tone="red">
                   The restaurant verifies it in seconds on their partner portal
                 </CheckItem>
                 <CheckItem tone="red">
-                  They see your first name, tier and validity — nothing else
+                  They see your first name, tier and validity, nothing else
                 </CheckItem>
               </ul>
             </Reveal>
@@ -68,11 +68,11 @@ export function MemberDiscount() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <LogoMark size={30} />
-                    <span className="font-display text-[14px] font-medium uppercase tracking-[0.08em] text-snow">
+                    <span className="font-display text-[14.5px] font-medium uppercase tracking-[0.08em] text-snow">
                       The GM Method
                     </span>
                   </div>
-                  <span className="rounded-full bg-cream px-3 py-1 font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-ink">
+                  <span className="rounded-full bg-cream px-3 py-1 font-mono text-[11px] font-medium uppercase tracking-[0.16em] text-ink">
                     Gold
                   </span>
                 </div>
@@ -81,7 +81,7 @@ export function MemberDiscount() {
                 </p>
                 <div className="mt-8 flex items-end justify-between">
                   <div>
-                    <p className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-faint">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-faint">
                       Member
                     </p>
                     <p className="mt-1 font-display text-[16px] font-medium uppercase text-snow">
@@ -89,7 +89,7 @@ export function MemberDiscount() {
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-faint">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-faint">
                       Valid thru
                     </p>
                     <p className="mt-1 font-display text-[16px] font-medium uppercase text-snow">
@@ -108,14 +108,14 @@ export function MemberDiscount() {
                       state === 'idle' ? 'opacity-100' : 'pointer-events-none opacity-0'
                     }`}
                   >
-                    <p className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-cream-dim">
-                      Partner counter — verify member
+                    <p className="font-mono text-[11px] font-medium uppercase tracking-[0.18em] text-cream-dim">
+                      Partner counter · verify member
                     </p>
                     <div className="mt-2.5 flex items-center justify-between gap-3">
-                      <span className="font-mono text-[13.5px] tracking-[0.1em] text-ink">
+                      <span className="font-mono text-[14.5px] tracking-[0.1em] text-ink">
                         {CODE}
                       </span>
-                      <span className="rounded-full bg-ink px-3.5 py-1.5 text-[11px] font-semibold text-snow">
+                      <span className="rounded-full bg-ink px-3.5 py-1.5 text-[14.5px] font-semibold text-snow">
                         Verify
                       </span>
                     </div>
@@ -135,7 +135,7 @@ export function MemberDiscount() {
                         />
                       ))}
                     </span>
-                    <p className="text-[13px] font-semibold text-ink">Checking code…</p>
+                    <p className="text-[14.5px] font-semibold text-ink">Checking code…</p>
                   </div>
                   {/* verified */}
                   <div
@@ -143,12 +143,12 @@ export function MemberDiscount() {
                       state === 'verified' ? 'opacity-100' : 'pointer-events-none opacity-0'
                     }`}
                   >
-                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-ink text-[13px] font-bold text-red">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-ink text-[14.5px] font-bold text-red">
                       ✓
                     </span>
                     <div>
-                      <p className="text-[13.5px] font-bold text-ink">Aarav · Gold member</p>
-                      <p className="mt-0.5 text-[11.5px] font-medium text-cream-dim">
+                      <p className="text-[16px] font-bold text-ink">Aarav · Gold member</p>
+                      <p className="mt-0.5 text-[14.5px] font-medium text-cream-dim">
                         Member discount applied
                       </p>
                     </div>

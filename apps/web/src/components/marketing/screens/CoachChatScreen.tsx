@@ -14,8 +14,8 @@ type Msg =
 const THREAD: Msg[] = [
   { kind: 'coach', text: 'Form check on that last squat set?' },
   { kind: 'member', text: 'Sent the video. Felt heavy at the bottom 😅' },
-  { kind: 'coach', text: 'Depth is perfect. Brace earlier — add 2.5 kg on Friday.' },
-  { kind: 'system', text: 'Personal contact details are auto-hidden · PII guard' },
+  { kind: 'coach', text: 'Depth is perfect. Brace earlier, and add 2.5 kg on Friday.' },
+  { kind: 'system', text: 'Phone numbers and emails are hidden here' },
   { kind: 'member', text: 'Done. Logging it now 💪' },
 ];
 

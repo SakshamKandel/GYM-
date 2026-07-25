@@ -119,7 +119,7 @@ export async function loadAbuseDashboard(): Promise<AbuseDashboard> {
       })),
     },
     limitations: [
-      'No device fingerprint or IP is captured on accounts or trial_usage — same-device multi-account detection is not available from stored data.',
+      'No device fingerprint or IP is captured on accounts or trial_usage, so same-device multi-account detection is not available from stored data.',
     ],
   };
 }

@@ -44,7 +44,11 @@ page. Read the exemplar code before writing anything:
 6. Honesty: NO invented user counts, ratings, download numbers or fake
    company logos. Product-truth stats only (offline <100 ms logging, 17
    anatomy zones, 7 order states, 2 price regions, 10 card faces…).
-   Testimonials are first-name personas only.
+   NO testimonials, quotes or member stories unless a real, named member gave
+   them to us — invented "personas" are banned. Tier feature bullets come from
+   `TIER_BULLETS` in `pricing-format.ts` (every bullet is backed by a real
+   entitlement, enforced by `src/lib/marketingClaims.test.ts`); never hand-write
+   a feature list on a page.
 7. Every page: unique `metadata` title + description; `h1` via
    `<Display as="h1">` or a styled `<h1>` with `WordStagger`; images get real
    `alt`; links use `next/link` via PillLink/ArrowLink.

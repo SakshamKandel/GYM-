@@ -15,6 +15,10 @@ export const runtime = 'nodejs';
  *    main_admin see every client's suggestions. Oldest first so the queue is
  *    reviewed FIFO.
  *
+ * Identity is a display name only — member emails stay out of the coach
+ * console, because handing a coach an address is what makes leaving the
+ * platform easy. The admin console remains the permissioned place for it.
+ *
  * Guarded by requirePermission('coach.user.read'); the per-row write guard
  * (requireCoachOwnsUser) lives on the review route.
  */
@@ -72,7 +76,6 @@ export async function GET(req: Request) {
       user: {
         id: accounts.id,
         displayName: accounts.displayName,
-        email: accounts.email,
       },
     })
     .from(progressionSuggestions)

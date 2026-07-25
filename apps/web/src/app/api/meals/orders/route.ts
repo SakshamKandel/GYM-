@@ -43,6 +43,7 @@ import {
 } from '@/lib/meals';
 import { atomicOneTimeOrderSql } from '@/lib/meals/atomicOneTimeOrder';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { formatDateLabel, windowShort } from '@/lib/format';
 
 export const runtime = 'nodejs';
 
@@ -58,10 +59,23 @@ export const runtime = 'nodejs';
  *    account-scoped requestId makes retries replay-safe; order, lines, and the
  *    initial pending event are one atomic Neon transaction.
  *  - GET ?scope=upcoming|history — materializes due subscription orders first,
- *    then returns the caller's own orders with line items.
+ *    then returns the caller's own orders with line items. `history` is the only
+ *    scope that grows without bound, so it is PAGINATED (`?limit&offset`,
+ *    newest-first) exactly like /api/notifications; `upcoming` stays whole
+ *    because it is naturally capped by the 30-day ordering horizon.
  */
 
 const MAX_HORIZON_DAYS = 30;
+
+/** History page size (`?limit`), and the ceiling a caller may ask for. */
+const HISTORY_DEFAULT_LIMIT = 50;
+const HISTORY_MAX_LIMIT = 100;
+
+function parseIntOr(value: string | null, fallback: number): number {
+  if (value === null) return fallback;
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
 
 const postSchema = z.object({
   requestId: mealOrderRequestIdSchema,
@@ -367,10 +381,22 @@ export async function POST(req: Request) {
     const persisted = await loadExistingOneTimeOrder(db, me.id, requestId);
     if (!persisted) throw new Error('Atomic meal order insert returned no order');
 
-    // B29: tell the partner a new order landed (fatal gap for a delivery product
-    // if missing). Fire-and-forget, server-templated (order code + item count +
-    // slot — never member PII). Push + inbox; the portal poll/chime (WP-7) is the
-    // audible fallback. Only on a genuine create (201), not an idempotent replay.
+    // B29: record that a new order landed, for the partner (fatal gap for a
+    // delivery product if missing). Fire-and-forget, server-templated (order
+    // code + item count + slot — never member PII), only on a genuine create
+    // (201), never on an idempotent replay.
+    //
+    // What this call actually achieves, precisely: it writes the durable inbox
+    // row. The push half reaches NOBODY — a partner is a web-only account with
+    // no device registered, and there is no partner surface for the inbox
+    // either. So this is the audit trail, not the alert.
+    //
+    // The alert a restaurant genuinely receives is the portal's own watch
+    // (GET /api/partner/alerts, polled by PartnerAlerts from every page of the
+    // partner console): it counts the orders that arrived since the kitchen
+    // last acknowledged, rings an opt-in chime, and puts the count in the
+    // browser tab title so a backgrounded tab is still noticeable. If that ever
+    // needs to change, change it there — nothing here can reach a kitchen.
     const itemCount = persisted.items.reduce((sum, it) => sum + it.qty, 0);
     after(() =>
       notify(
@@ -378,7 +404,10 @@ export async function POST(req: Request) {
         { partnerId },
         {
           title: 'New order',
-          body: `Order ${orderNumber(persisted.order.id)} · ${itemCount} item${itemCount === 1 ? '' : 's'} · ${window} · ${deliveryDate}`,
+          // Kathmandu wall-clock words, not the stored date string: the kitchen
+          // reading this push should see "Lunch on Mon, Jul 20", never
+          // "lunch · 2026-07-20".
+          body: `Order ${orderNumber(persisted.order.id)} · ${itemCount} item${itemCount === 1 ? '' : 's'} · ${windowShort(window)} on ${formatDateLabel(deliveryDate)}`,
           data: { type: 'order', id: persisted.order.id },
         },
       ),
@@ -421,14 +450,31 @@ export async function GET(req: Request) {
       ? inArray(mealOrders.status, terminal)
       : notInArray(mealOrders.status, terminal);
 
-  const orders = await db
+  const limit = Math.min(
+    HISTORY_MAX_LIMIT,
+    Math.max(1, parseIntOr(url.searchParams.get('limit'), HISTORY_DEFAULT_LIMIT)),
+  );
+  const offset = Math.max(0, parseIntOr(url.searchParams.get('offset'), 0));
+
+  const query = db
     .select()
     .from(mealOrders)
-    .where(and(eq(mealOrders.accountId, me.id), statusPredicate))
-    .orderBy(scope === 'history' ? desc(mealOrders.placedAt) : asc(mealOrders.cutoffAt));
+    .where(and(eq(mealOrders.accountId, me.id), statusPredicate));
 
-  if (orders.length === 0) return json({ orders: [] }, 200);
+  // History over-fetches by one to detect whether another page exists; the
+  // client can keep ignoring `nextOffset` and simply read the first page.
+  const rows =
+    scope === 'history'
+      ? await query.orderBy(desc(mealOrders.placedAt)).limit(limit + 1).offset(offset)
+      : await query.orderBy(asc(mealOrders.cutoffAt));
 
+  const hasMore = scope === 'history' && rows.length > limit;
+  const orders = hasMore ? rows.slice(0, limit) : rows;
+  const nextOffset = hasMore ? offset + limit : null;
+
+  if (orders.length === 0) return json({ orders: [], nextOffset: null }, 200);
+
+  // Only the orders on THIS page — the line-item fan-out must never outgrow it.
   const orderIds = orders.map((o) => o.id);
   const itemRows = await db
     .select()
@@ -442,7 +488,10 @@ export async function GET(req: Request) {
   }
 
   return json(
-    { orders: orders.map((o) => buildMemberOrderView(o, itemsByOrder.get(o.id) ?? [])) },
+    {
+      orders: orders.map((o) => buildMemberOrderView(o, itemsByOrder.get(o.id) ?? [])),
+      nextOffset,
+    },
     200,
   );
 }

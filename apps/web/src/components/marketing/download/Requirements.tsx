@@ -11,7 +11,7 @@ const SPECS = [
   ['Platforms', 'iOS 15+ · Android 9+'],
   ['Interface language', 'English'],
   ['Pricing regions', 'Nepal (NPR) · International (USD)'],
-  ['Account', 'Optional — the tracker works signed out'],
+  ['Account', 'Optional, the tracker works signed out'],
   ['Connectivity', 'Offline-first, syncs when online'],
   ['Ads & data', 'No ads. We never sell your data.'],
 ] as const;
@@ -27,7 +27,7 @@ export function Requirements() {
               What it runs on.
             </Display>
             <p className="mt-6 max-w-sm text-[15px] leading-relaxed text-dim">
-              Nothing exotic. If your phone is from the last few years, you&rsquo;re set —
+              Nothing exotic. If your phone is from the last few years, you&rsquo;re set,
               in Kathmandu or anywhere else.
             </p>
           </Reveal>

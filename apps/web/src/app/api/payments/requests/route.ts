@@ -1,6 +1,7 @@
 import { accounts, paymentRequests } from '@gym/db';
 import { applyDiscount, formatMoney, maskPii, type PriceRegion, resolveRegion } from '@gym/shared';
 import { and, desc, eq } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
@@ -8,6 +9,7 @@ import { json, preflight, readJson } from '@/lib/http';
 import { notify } from '@/lib/notify';
 import { bestActiveGrant, resolveCatalogAmount } from '@/lib/promoEconomy';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 
 export const runtime = 'nodejs';
 
@@ -278,26 +280,28 @@ export async function POST(req: Request) {
   // submit confirmation with the review SLA; staff with payments.review get a
   // new-work alert. The staff body is server-templated (no member free text →
   // no injection, §7.2-S2); the amount is the server-computed figure.
-  const tierName = tier.charAt(0).toUpperCase() + tier.slice(1);
+  const tierName = tierLabel(tier);
   const amountLabel = formatMoney(inserted.amountMinor, inserted.currency);
-  void notify(
-    'tier_payment_submitted',
-    { accountId: me.id },
-    {
-      title: 'Payment submitted for review',
-      body: `We received your ${tierName} membership payment (${amountLabel}). An admin will review your receipt within 24 hours.`,
-      data: { type: 'tier' },
-    },
-  );
-  void notify(
-    'payment_request_staff',
-    { role: 'staff', permission: 'payments.review' },
-    {
-      title: 'New membership payment',
-      body: `A member submitted a ${amountLabel} ${tierName} payment for review.`,
-      data: { type: 'payment_request', id: inserted.id },
-    },
-  );
+  after(async () => {
+    await notify(
+      'tier_payment_submitted',
+      { accountId: me.id },
+      {
+        title: 'Payment submitted for review',
+        body: `We have your ${amountLabel} for ${tierName}. Someone checks the receipt by hand, usually within a day.`,
+        data: { type: 'tier' },
+      },
+    );
+    await notify(
+      'payment_request_staff',
+      { role: 'staff', permission: 'payments.review' },
+      {
+        title: 'New membership payment',
+        body: `A member sent ${amountLabel} for ${tierName}. Their receipt is waiting on you.`,
+        data: { type: 'payment_request', id: inserted.id },
+      },
+    );
+  });
 
   return json(inserted, 201);
 }

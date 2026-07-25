@@ -1,5 +1,5 @@
 import { StyleSheet, View } from 'react-native';
-import { colors, radius, spacing, type } from '@gym/ui-tokens';
+import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText } from './AppText';
 
 /**
@@ -22,12 +22,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs / 2,
     alignSelf: 'flex-start',
-  },
-  text: {
-    fontFamily: type.display,
-    fontSize: 12,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
   },
 });
 
@@ -56,7 +50,9 @@ export function Tag({ label, variant = 'outline', color = colors.accent }: Props
         variant === 'outline' && { borderWidth: 1.5, borderColor: color },
       ]}
     >
-      <AppText style={[styles.text, { color: textColor }]} tabular={false} numberOfLines={1}>
+      {/* variant="label" is the same 12px Oswald caps this pill hand-rolled,
+          but it also picks up the member's text-size setting. */}
+      <AppText variant="label" color={textColor} tabular={false} numberOfLines={1}>
         {label}
       </AppText>
     </View>

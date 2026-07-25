@@ -36,7 +36,7 @@ function StatePipeline() {
           return (
             <span key={s} className="flex items-center">
               <span
-                className={`inline-flex h-8 items-center rounded-full px-3 text-[12px] transition-all duration-300 ${
+                className={`inline-flex h-8 items-center rounded-full px-3 text-[14.5px] transition-all duration-300 ${
                   isActive
                     ? 'bg-red font-semibold text-ink shadow-ember'
                     : done
@@ -83,7 +83,7 @@ export function OrdersBoardTour() {
             <Reveal delay={160}>
               <Lead className="mt-6">
                 Every order lands on the live board the moment it&rsquo;s placed. Accept it,
-                advance it as you cook, hand it off — the same seven-state machine members watch
+                advance it as you cook, hand it off. The same seven-state machine members watch
                 from their phones.
               </Lead>
             </Reveal>
@@ -124,7 +124,7 @@ export function PrepMenuTour() {
             </Reveal>
             <Reveal delay={160}>
               <Lead className="mt-6">
-                Before each cutoff, the portal folds every order into one prep list — dish by
+                Before each cutoff, the portal folds every order into one prep list, dish by
                 dish, with totals. Fourteen paneer bowls is one line, not fourteen tickets.
               </Lead>
             </Reveal>
@@ -169,7 +169,7 @@ export function EarningsTour() {
             <Reveal delay={160}>
               <Lead className="mt-6">
                 Every delivered order lands in your wallet ledger. Request a payout when you want
-                one, and read the week ahead from the order history and subscription roster — no
+                one, and read the week ahead from the order history and subscription roster. No
                 spreadsheets, no guessing.
               </Lead>
             </Reveal>

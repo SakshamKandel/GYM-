@@ -44,7 +44,7 @@ export const AppTextInput = forwardRef<TextInput, TextInputProps>(function AppTe
   return (
     <TextInput
       ref={ref}
-      placeholderTextColor={colors.textFaint}
+      placeholderTextColor={colors.textDim}
       selectionColor={colors.accent}
       {...rest}
       onFocus={(e) => {

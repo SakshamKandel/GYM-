@@ -25,7 +25,8 @@ export const runtime = 'nodejs';
  * stores that uid; GET mints a fresh signed URL per row per request via
  * signedImageUrl (same never-cache contract as plan-video playback).
  *
- *  - GET  → own photos, newest takenOn first, each with a freshly-signed url.
+ *  - GET  → own photos, newest takenOn first (capped at 200), each with a
+ *          freshly-signed url.
  *          Rate-limited 30/min/account — every row mints a fresh signed
  *          Cloudinary URL, so this is a minting cost, not a free read.
  *  - POST {takenOn, uid, note?} → insert one row (DB assigns the id). `note`
@@ -73,7 +74,11 @@ export async function GET(req: Request) {
     })
     .from(progressPhotos)
     .where(eq(progressPhotos.accountId, user.id))
-    .orderBy(desc(progressPhotos.takenOn), desc(progressPhotos.createdAt));
+    .orderBy(desc(progressPhotos.takenOn), desc(progressPhotos.createdAt))
+    // Hard cap: every row mints a fresh signed Cloudinary URL, so an unbounded
+    // read grows with the member's whole history. Newest 200 is plenty for the
+    // gallery; older photos stay in the DB.
+    .limit(200);
 
   const provider = getImageProvider();
   try {

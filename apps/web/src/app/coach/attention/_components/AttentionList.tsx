@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { Badge, Button, EmptyState, TierBadge } from '@/components/console';
+import { memberLabel } from '../../_components/memberLabel';
 import { SkeletonBars } from '../../_components/SkeletonBars';
 
 /**
@@ -45,7 +46,6 @@ interface LatestCheckIn {
 interface AttentionClient {
   id: string;
   displayName: string;
-  email: string;
   // Membership identity — server-authoritative effective tier, for the tier
   // shield beside the name. Not gamification; never affects this list's order.
   tier: 'starter' | 'silver' | 'gold' | 'elite';
@@ -112,6 +112,12 @@ export function AttentionList() {
   const [replyBody, setReplyBody] = useState('');
   const [replyBusy, setReplyBusy] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
+  /**
+   * Which client's last reply had contact details hidden before it was stored.
+   * Kept against the client id because the composer closes on send, so the
+   * notice has to survive on the collapsed row.
+   */
+  const [hiddenFor, setHiddenFor] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setState('loading');
@@ -121,7 +127,7 @@ export function AttentionList() {
         setLoadError(
           res.status === 401
             ? 'Your session expired. Sign in again.'
-            : 'Could not load the attention queue. Try again.',
+            : 'Could not load your client list. Try again.',
         );
         setState('error');
         return;
@@ -130,7 +136,7 @@ export function AttentionList() {
       setClients(data.clients);
       setState('ready');
     } catch {
-      setLoadError('Network error. Check your connection and retry.');
+      setLoadError('Could not reach us just now. Check your connection and try again.');
       setState('error');
     }
   }, []);
@@ -143,6 +149,7 @@ export function AttentionList() {
     setReplyFor(clientId);
     setReplyBody('');
     setReplyError(null);
+    setHiddenFor(null);
   }
 
   async function sendReply(client: AttentionClient) {
@@ -171,7 +178,13 @@ export function AttentionList() {
         setReplyBusy(false);
         return;
       }
-      const data = (await res.json()) as { message: { id: string } };
+      const data = (await res.json()) as {
+        message: { id: string };
+        contactHidden?: boolean;
+      };
+      // The route hides contact details before it stores the reply, so say so
+      // rather than letting the coach believe a number went through.
+      setHiddenFor(data.contactHidden === true ? client.id : null);
       // Flip the row to "Replied" locally; the reply lives in the coach thread.
       setClients((prev) =>
         prev.map((c) =>
@@ -190,7 +203,7 @@ export function AttentionList() {
       setReplyBody('');
       setReplyBusy(false);
     } catch {
-      setReplyError('Network error. Check your connection and retry.');
+      setReplyError('Could not reach us just now. Check your connection and try again.');
       setReplyBusy(false);
     }
   }
@@ -253,7 +266,7 @@ export function AttentionList() {
         const trimmed = replyBody.trim();
         const canSend =
           trimmed.length > 0 && trimmed.length <= REPLY_MAX_LEN && !replyBusy;
-        const name = client.displayName || client.email;
+        const name = memberLabel(client.displayName);
 
         return (
           <div
@@ -287,9 +300,6 @@ export function AttentionList() {
                   </Link>
                   <TierBadge tier={client.tier} />
                 </span>
-                <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 2 }}>
-                  {client.email}
-                </div>
               </div>
               <div
                 style={{
@@ -444,10 +454,21 @@ export function AttentionList() {
                     </div>
                   </div>
                 ) : (
-                  <div>
-                    <Button size="sm" onClick={() => openReply(client.id)}>
-                      {replied ? 'Reply again' : 'Reply'}
-                    </Button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {hiddenFor === client.id ? (
+                      <div
+                        style={{ color: 'var(--gt-text-dim)', fontSize: 13 }}
+                        role="status"
+                      >
+                        Sent, but we hid the contact details in that message.
+                        Coaching stays in the app.
+                      </div>
+                    ) : null}
+                    <div>
+                      <Button size="sm" onClick={() => openReply(client.id)}>
+                        {replied ? 'Reply again' : 'Reply'}
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>

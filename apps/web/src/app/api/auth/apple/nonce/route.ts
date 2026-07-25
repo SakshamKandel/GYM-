@@ -2,7 +2,7 @@ import { appleAuthNonceResponseSchema } from '@gym/shared';
 import { allowedAppleClientIds } from '@/lib/apple';
 import { issueAppleAuthNonce } from '@/lib/appleNonce';
 import { json, preflight } from '@/lib/http';
-import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -12,7 +12,10 @@ export function OPTIONS() {
 
 /** Begin one native Apple authorization with a server-issued challenge. */
 export async function POST(req: Request) {
-  const limited = rateLimit({
+  // A challenge is minted and stored per call, so the ceiling has to hold
+  // across instances: shared store when one is configured, per instance when
+  // none is.
+  const limited = await rateLimitShared({
     route: 'auth/apple/nonce',
     limit: 15,
     windowMs: 60_000,

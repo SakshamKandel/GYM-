@@ -20,6 +20,7 @@ import {
   Skeleton,
   UpgradePrompt,
 } from '../../components/ui';
+import { toHref } from '../../features/engagement/logic';
 import { Big4Card } from '../../features/analytics/components/Big4Card';
 import { MuscleBalanceSection } from '../../features/analytics/components/MuscleBalanceSection';
 import { NutritionSection } from '../../features/analytics/components/NutritionSection';
@@ -218,7 +219,7 @@ export default function ProgressScreen() {
               <SectionLabel>Muscle balance</SectionLabel>
               <UpgradePrompt
                 title="Muscle balance"
-                description="Weekly hard sets per muscle against the 10–20 band, push-pull balance, and the muscles you haven't hit yet."
+                description="Weekly hard sets per muscle against the 10 to 20 band, push-pull balance, and the muscles you haven't hit yet."
                 requiredTier={minTierFor('adaptive_progression')}
               />
             </View>
@@ -258,7 +259,7 @@ export default function ProgressScreen() {
               <SectionLabel>Nutrition trends</SectionLabel>
               <UpgradePrompt
                 title="Nutrition trends"
-                description="Two weeks of calories against your target, protein hit rate and water — the bigger picture behind the Food tab."
+                description="Two weeks of calories against your target, protein hit rate and water. The bigger picture behind the Food tab."
                 requiredTier={minTierFor('full_kcal_tracker')}
               />
             </View>
@@ -281,7 +282,7 @@ export default function ProgressScreen() {
         <Button
           label="View my report card"
           variant="secondary"
-          onPress={() => router.push('/report-card')}
+          onPress={() => router.push(toHref('/report-card'))}
         />
       </Animated.View>
     </Screen>

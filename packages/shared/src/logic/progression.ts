@@ -50,7 +50,7 @@ export interface ProgressionResult {
   targetWeightKg: number;
   targetRepsMin: number;
   targetRepsMax: number;
-  /** Short human-readable explanation, e.g. "Hit 3x12 @ RPE 7 last time — +2.5 kg". */
+  /** Short human-readable explanation, e.g. "Hit 3x12 @ RPE 7 last time, add 2.5 kg". */
   reason: string;
 }
 
@@ -138,7 +138,7 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
   const topWeight = Math.max(...last.sets.map((s) => s.weightKg));
   const minReps = Math.min(...last.sets.map((s) => s.reps));
   const avgRpe = averageRpe(last.sets);
-  const rangeLabel = `${repMin}–${repMax}`;
+  const rangeLabel = `${repMin} to ${repMax}`;
   const base = {
     exerciseId: input.exerciseId,
     exerciseName: input.exerciseName,
@@ -153,14 +153,14 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
         ...base,
         action: 'hold',
         targetWeightKg: 0,
-        reason: `Only one session logged — repeat ${rangeLabel} reps at bodyweight to set a baseline`,
+        reason: `Only one session logged. Repeat ${rangeLabel} reps at bodyweight to set a baseline`,
       };
     }
     return {
       ...base,
       action: 'hold',
       targetWeightKg: topWeight,
-      reason: `Only one session logged — repeat ${fmtWeight(topWeight, unitPref)} x ${rangeLabel} to set a baseline`,
+      reason: `Only one session logged. Repeat ${fmtWeight(topWeight, unitPref)} x ${rangeLabel} to set a baseline`,
     };
   }
 
@@ -177,14 +177,14 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
         targetWeightKg: 0,
         targetRepsMin: nextMin,
         targetRepsMax: nextMax,
-        reason: `Hit ${last.sets.length}x${minReps} at bodyweight — aim for ${nextMin}–${nextMax} reps next time`,
+        reason: `Hit ${last.sets.length}x${minReps} at bodyweight. Aim for ${nextMin} to ${nextMax} reps next time`,
       };
     }
     return {
       ...base,
       action: 'hold',
       targetWeightKg: 0,
-      reason: `Bodyweight work — build toward ${last.sets.length}x${repMax} before raising the target`,
+      reason: `Bodyweight work. Build toward ${last.sets.length}x${repMax} before raising the target`,
     };
   }
 
@@ -206,7 +206,7 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
       ...base,
       action: 'deload',
       targetWeightKg: target,
-      reason: `No e1RM progress in ${stall} sessions — deload ~10% and rebuild`,
+      reason: `No e1RM progress in ${stall} sessions. Deload ~10% and rebuild`,
     };
   }
 
@@ -217,7 +217,7 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
       ...base,
       action: 'increase',
       targetWeightKg: round2(topWeight + incrementKg),
-      reason: `Hit ${last.sets.length}x${minReps}${rpePart} last time — +${fmtWeight(incrementKg, unitPref)}`,
+      reason: `Hit ${last.sets.length}x${minReps}${rpePart} last time, add ${fmtWeight(incrementKg, unitPref)}`,
     };
   }
 
@@ -227,7 +227,7 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
       ...base,
       action: 'hold',
       targetWeightKg: topWeight,
-      reason: `Missed the rep target last time — hold ${fmtWeight(topWeight, unitPref)} and own the ${rangeLabel} range`,
+      reason: `Missed the rep target last time. Hold ${fmtWeight(topWeight, unitPref)} and own the ${rangeLabel} range`,
     };
   }
   if (avgRpe !== null && avgRpe >= RPE_HOLD_FLOOR) {
@@ -235,7 +235,7 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
       ...base,
       action: 'hold',
       targetWeightKg: topWeight,
-      reason: `RPE ${fmtRpe(avgRpe)} last time — hold ${fmtWeight(topWeight, unitPref)} and recover before adding weight`,
+      reason: `RPE ${fmtRpe(avgRpe)} last time. Hold ${fmtWeight(topWeight, unitPref)} and recover before adding weight`,
     };
   }
 
@@ -247,13 +247,13 @@ export function suggestProgression(input: ProgressionInput): ProgressionResult |
       ...base,
       action: 'hold',
       targetWeightKg: topWeight,
-      reason: `${rpePart || `Topped the ${rangeLabel} range`} — hold ${fmtWeight(topWeight, unitPref)} and recover before adding weight`,
+      reason: `${rpePart || `Topped the ${rangeLabel} range`}. Hold ${fmtWeight(topWeight, unitPref)} and recover before adding weight`,
     };
   }
   return {
     ...base,
     action: 'hold',
     targetWeightKg: topWeight,
-    reason: `In the ${rangeLabel} range — add reps before adding weight`,
+    reason: `In the ${rangeLabel} range. Add reps before adding weight`,
   };
 }

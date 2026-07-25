@@ -1,4 +1,5 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
@@ -23,6 +24,7 @@ import {
   Screen,
   Stepper,
 } from '../../components/ui';
+import { toApiError } from '../../lib/api/client';
 import { todayIso } from '../../lib/dates';
 import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { uid } from '../../lib/id';
@@ -31,15 +33,20 @@ import { registerForPushNotificationsAsync } from '../../lib/notifications';
 import { syncProfileNow } from '../../lib/profileSync';
 import { getRepo } from '../../lib/repo';
 import { useTrainingCatalog } from '../../lib/trainingCatalog';
+import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
 import { requestHealthConnectPermission, requestStepPermission } from '../activity/pedometer';
 import { CountUpStat } from './components/CountUpStat';
 import { NewieStage } from './components/NewieStage';
 import {
+  clearOnboardingProgress,
+  useOnboardingProgress,
+  useOnboardingProgressHydrated,
+} from './draftStore';
+import {
   ACTIVITY_OPTIONS,
   BIRTH_YEAR,
   DAYS_PER_WEEK,
-  DEFAULT_DRAFT,
   draftTargets,
   formatWeightValue,
   GOAL_OPTIONS,
@@ -58,6 +65,21 @@ import {
  * header + progress on top, the conversation + answers scroll in the middle,
  * and the Continue button lives OUTSIDE the scroll — always on screen.
  * Answers are never hidden behind typing state.
+ *
+ * THE ACCOUNT IS PART OF SETUP (not an afterthought). Programs and the
+ * exercise library are published in Neon and only reach a member through the
+ * authenticated catalog read, so finishing setup signed out used to drop the
+ * member on a Train tab that said "Sign in for training programs", an empty
+ * library, and a Home card that pushed them straight back to that tab. The
+ * last step therefore asks for a free account BEFORE the app opens: the
+ * locally computed targets are shown first (the payoff needs no account),
+ * then the account block, then the matched program once the catalog lands.
+ *
+ * The one exception is a member whose sign-up couldn't reach us at all
+ * (offline). Trapping them in a wizard they can't leave would be worse than
+ * letting them in, so that failure — and only that failure — offers a way to
+ * finish setup now, with copy that says plainly what stays empty until the
+ * account exists.
  */
 
 /** Steps whose OptionCards auto-advance (no bottom button). */
@@ -65,34 +87,65 @@ const OPTION_STEPS = new Set([3, 6, 8, 9]);
 /** Permission step renders its own Allow/Later buttons — no shared footer. */
 const PERMISSION_STEP = 11;
 
+/**
+ * Field checks that mirror the account screens (features/auth/validation.ts)
+ * and the server's own rules. Deliberately loose: this only catches typos
+ * before a round trip, the server is still the judge. Duplicated rather than
+ * imported because feature modules never import each other (CLAUDE.md rule 2).
+ */
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PASSWORD_MIN = 8;
+
+function emailIssue(email: string): string | null {
+  const trimmed = email.trim();
+  if (!trimmed) return 'Enter your email';
+  if (!EMAIL_PATTERN.test(trimmed)) return "That doesn't look like an email";
+  return null;
+}
+
+function passwordIssue(password: string): string | null {
+  if (!password) return 'Choose a password';
+  if (password.length < PASSWORD_MIN) return `Use at least ${PASSWORD_MIN} characters`;
+  return null;
+}
+
 const SCRIPT: Record<number, { q: string; caption?: string }> = {
-  1: { q: "I'm Newie — Greece built me to get you strong. 60 seconds of questions, then we lift." },
-  2: { q: 'First things first — what should I call you?', caption: "Skip it and I'll call you Athlete." },
+  1: { q: "I'm Newie. Greece built me to get you strong. 60 seconds of questions, then we lift." },
+  2: { q: 'First things first. What should I call you?', caption: "Skip it and I'll call you Athlete." },
   3: { q: "What's your sex? My calorie math needs it." },
   4: { q: 'What year were you born?', caption: 'Sets your calorie-burn baseline.' },
   5: { q: 'How tall are you?' },
   6: { q: 'Which units do you lift in?', caption: 'Switch anytime in Settings.' },
-  7: { q: "Where's the scale at today?", caption: "A best guess is fine — we'll track the real trend." },
-  8: { q: 'Now the big one — what are we chasing?' },
+  7: { q: "Where's the scale at today?", caption: "A best guess is fine. We'll track the real trend." },
+  8: { q: 'Now the big one. What are we chasing?' },
   9: { q: 'How active are you outside the gym?', caption: 'Workouts are counted separately.' },
-  10: { q: 'How many days a week can you give me?', caption: 'Be honest — consistency beats ambition.' },
+  10: { q: 'How many days a week can you give me?', caption: 'Be honest. Consistency beats ambition.' },
   11: {
-    q: 'One more thing — stay on track?',
+    q: 'One more thing. Stay on track?',
     caption:
       "I'll ping you when your coach replies or when you miss a day, and count your daily steps. Change this anytime in Settings.",
   },
-  12: { q: "Here's your plan. The GM Method takes it from here." },
+  12: { q: "Here's your program. The GM Method takes it from here." },
+};
+
+/**
+ * The last step speaks differently before the account exists: the numbers are
+ * already earned, the account is what brings the program with it.
+ */
+const ACCOUNT_SCRIPT = {
+  q: "Here are your numbers. One free account and I'll bring your program in.",
+  caption: 'It is free and it takes a moment.',
 };
 
 const REACT_LINES: Record<string, string> = {
   'sex:male': 'Logged. Calorie math sorted.',
   'sex:female': 'Logged. Calorie math sorted.',
   'sex:other': 'Logged. Calorie math sorted.',
-  'units:kg': 'Kilos — the honest unit.',
+  'units:kg': 'Kilos, the honest unit.',
   'units:lb': 'Pounds it is.',
   'goal:muscle': 'Muscle it is. We eat big, we lift bigger.',
   'goal:fat_loss': "Cutting season. The scale won't know what hit it.",
-  'goal:strength': 'Strength — the honest kind of progress.',
+  'goal:strength': 'Strength, the honest kind of progress.',
   'activity:sedentary': "Desk job? We'll fix that.",
   'activity:light': 'A start. The gym does the rest.',
   'activity:moderate': 'Solid base to build on.',
@@ -100,14 +153,33 @@ const REACT_LINES: Record<string, string> = {
 };
 
 export function OnboardingWizard() {
-  const [step, setStep] = useState(1);
-  const [draft, setDraft] = useState<OnboardingDraft>(DEFAULT_DRAFT);
+  // Step + answers live in a persisted store, so a mid-setup app kill resumes
+  // exactly where it stopped instead of restarting at question 1.
+  const step = useOnboardingProgress((s) => s.step);
+  const draft = useOnboardingProgress((s) => s.draft);
+  const patchDraft = useOnboardingProgress((s) => s.patchDraft);
+  const progressHydrated = useOnboardingProgressHydrated();
   const [reaction, setReaction] = useState<string | null>(null);
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState<string | null>(null);
   const [permissionsBusy, setPermissionsBusy] = useState(false);
   const update = useProfile((s) => s.update);
   const completeOnboarding = useProfile((s) => s.completeOnboarding);
+  const signedIn = useAuth((s) => s.status === 'signedIn');
+  const signUp = useAuth((s) => s.signUp);
+  // Account fields live in component state ONLY. The resume snapshot is
+  // written to device storage on every keystroke; a password must never go
+  // anywhere near it.
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [passwordShown, setPasswordShown] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  /** Sign-up never reached us (offline). Only then is finishing without an
+   * account offered — see the file header. */
+  const [couldNotConnect, setCouldNotConnect] = useState(false);
+  const [creatingAccount, setCreatingAccount] = useState(false);
   const catalogState = useTrainingCatalog();
   const suggestedPlan = selectTrainingPlan(
     catalogState.catalog?.plans ?? [],
@@ -115,16 +187,22 @@ export function OnboardingWizard() {
     draft.daysPerWeek,
   );
   const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Set once the profile write lands — see the unmount cleanup below. */
+  const completed = useRef(false);
 
   useEffect(
     () => () => {
       if (advanceTimer.current) clearTimeout(advanceTimer.current);
+      // Drop the saved run only once this screen is GONE. Clearing it inline in
+      // finish() would snap the still-mounted wizard back to question 1 for a
+      // frame, under the route replace.
+      if (completed.current) clearOnboardingProgress();
     },
     [],
   );
 
   function patch(p: Partial<OnboardingDraft>): void {
-    setDraft((d) => ({ ...d, ...p }));
+    patchDraft(p);
   }
 
   function clearAdvance(): void {
@@ -134,16 +212,46 @@ export function OnboardingWizard() {
     }
   }
 
+  /**
+   * Move by `delta` steps. Reads the CURRENT step from the store rather than
+   * this render's closure: the option steps advance from a timeout, which can
+   * outlive the render that scheduled it. The store clamps to [1, TOTAL_STEPS].
+   */
+  function goStep(delta: number): void {
+    const state = useOnboardingProgress.getState();
+    state.setStep(state.step + delta);
+  }
+
   function next(): void {
     clearAdvance();
     setReaction(null);
-    setStep((s) => Math.min(TOTAL_STEPS, s + 1));
+    goStep(1);
   }
 
   function back(): void {
     clearAdvance();
     setReaction(null);
-    setStep((s) => Math.max(1, s - 1));
+    goStep(-1);
+  }
+
+  /**
+   * Step 1's back control. There is nothing before question 1 inside the
+   * wizard, so it leaves for the Welcome poster the member came from — without
+   * it, step 1 was a dead end on iOS (no chevron, and the stack swipe is
+   * deliberately disabled mid-wizard). `resetStackTo` covers the case where
+   * onboarding IS the stack root — a brand-new account is sent straight here
+   * after sign-up, so there is nothing to go back to.
+   */
+  function leaveWizard(): void {
+    clearAdvance();
+    if (router.canGoBack()) router.back();
+    else resetStackTo('/welcome');
+  }
+
+  /** "I already have an account" — the returning member's way out of setup. */
+  function goToSignIn(): void {
+    clearAdvance();
+    router.push('/auth/sign-in');
   }
 
   /** Option tap → Newie reacts for a beat → next question. */
@@ -160,9 +268,11 @@ export function OnboardingWizard() {
   }
 
   function chooseUnits(unit: UnitPref): void {
-    setDraft((d) =>
-      d.unitPref === unit ? d : { ...d, unitPref: unit, weightInput: WEIGHT_DEFAULTS[unit] },
-    );
+    // Switching units re-bases the weight stepper; re-picking the SAME unit
+    // must not throw away a weight the member already dialled in.
+    if (draft.unitPref !== unit) {
+      patch({ unitPref: unit, weightInput: WEIGHT_DEFAULTS[unit] });
+    }
     clearAdvance();
     setReaction(REACT_LINES[`units:${unit}`] ?? null);
     advanceTimer.current = setTimeout(next, 850);
@@ -197,6 +307,51 @@ export function OnboardingWizard() {
     }
   }
 
+  /**
+   * Last step, signed out: open the free account the program arrives with.
+   * Runs BEFORE finish() on purpose — sign-up switches the local store over
+   * to the new account, so the starting weight and profile written by finish()
+   * land in that account rather than in the guest namespace.
+   *
+   * Success deliberately does NOT enter the app: it leaves the member on this
+   * step, where the catalog they just unlocked fills in the matched program
+   * under their targets and "Let's go" commits setup.
+   */
+  async function createAccount(): Promise<void> {
+    if (creatingAccount || finishing) return;
+    const nextEmail = emailIssue(email);
+    const nextPassword = passwordIssue(password);
+    setEmailError(nextEmail);
+    setPasswordError(nextPassword);
+    setAccountError(null);
+    setCouldNotConnect(false);
+    if (nextEmail || nextPassword) {
+      warnHaptic();
+      return;
+    }
+
+    setCreatingAccount(true);
+    try {
+      await signUp(email, password, draft.name.trim() || 'Athlete');
+      successHaptic();
+      setPassword('');
+      setPasswordShown(false);
+    } catch (error: unknown) {
+      warnHaptic();
+      const code = toApiError(error).code;
+      if (code === 'email_taken') {
+        setEmailError('This email already has an account. Sign in below instead.');
+      } else if (code === 'invalid') {
+        setAccountError('Check your email and password, then try again.');
+      } else {
+        setAccountError("We couldn't connect. Check your connection and try again.");
+        setCouldNotConnect(true);
+      }
+    } finally {
+      setCreatingAccount(false);
+    }
+  }
+
   async function finish(): Promise<void> {
     if (finishing) return;
     setFinishError(null);
@@ -221,6 +376,10 @@ export function OnboardingWizard() {
         daysPerWeek: draft.daysPerWeek,
       });
       completeOnboarding({ targets, planId: suggestedPlan?.id ?? null });
+      // Setup is committed: this run is finished, so the resume snapshot must
+      // never come back. The actual wipe happens on unmount (see the effect
+      // above) to keep the last frame of the wizard steady.
+      completed.current = true;
       // Push the freshly-onboarded profile to Neon immediately — don't rely on
       // the 3s debounce, which a quick app-close could miss (that's how an
       // account ends up onboarded locally but empty on the server). No-op when
@@ -402,7 +561,87 @@ export function OnboardingWizard() {
             <AppText variant="caption" style={styles.gmMethodNote}>
               Starting targets by the GM Method. Gold adapts them to your weekly trend.
             </AppText>
-            {plan ? (
+            {/* Signed out, this is where the program WOULD be. Say what brings
+                it, and ask for it here rather than two screens later. */}
+            {!signedIn ? (
+              <View style={styles.planBlock}>
+                <AppText variant="label">Last step</AppText>
+                <AppText variant="body" color={colors.textDim} style={styles.accountIntro}>
+                  Your programs and the exercise library come from your coach, and they
+                  arrive with your free account. It also keeps your progress if you
+                  change phone.
+                </AppText>
+
+                <View style={styles.field}>
+                  <AppText variant="label">Email</AppText>
+                  <AppTextInput
+                    value={email}
+                    onChangeText={(t) => {
+                      setEmail(t);
+                      if (emailError) setEmailError(null);
+                    }}
+                    placeholder="you@example.com"
+                    keyboardType="email-address"
+                    autoComplete="email"
+                    textContentType="emailAddress"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="next"
+                    accessibilityLabel="Email"
+                  />
+                  {emailError ? (
+                    <AppText variant="caption" color={colors.error}>
+                      {emailError}
+                    </AppText>
+                  ) : null}
+                </View>
+
+                <View style={styles.field}>
+                  <AppText variant="label">Password</AppText>
+                  <AppTextInput
+                    value={password}
+                    onChangeText={(t) => {
+                      setPassword(t);
+                      if (passwordError) setPasswordError(null);
+                    }}
+                    placeholder="At least 8 characters"
+                    secureTextEntry={!passwordShown}
+                    autoComplete="new-password"
+                    textContentType="newPassword"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="go"
+                    onSubmitEditing={() => void createAccount()}
+                    accessibilityLabel="Password"
+                  />
+                  <View style={styles.passwordRow}>
+                    <View style={styles.passwordIssue}>
+                      {passwordError ? (
+                        <AppText variant="caption" color={colors.error}>
+                          {passwordError}
+                        </AppText>
+                      ) : null}
+                    </View>
+                    <PressableScale
+                      accessibilityRole="button"
+                      accessibilityLabel={passwordShown ? 'Hide password' : 'Show password'}
+                      onPress={() => setPasswordShown((shown) => !shown)}
+                      style={styles.showPassword}
+                    >
+                      <AppText variant="caption" color={colors.accent}>
+                        {passwordShown ? 'Hide' : 'Show'}
+                      </AppText>
+                    </PressableScale>
+                  </View>
+                </View>
+
+                {accountError ? (
+                  <AppText variant="body" color={colors.error} style={styles.accountError}>
+                    {accountError}
+                  </AppText>
+                ) : null}
+              </View>
+            ) : plan ? (
               <View style={styles.planBlock}>
                 <AppText variant="label">Suggested plan</AppText>
                 <AppText variant="title" style={styles.planName}>
@@ -417,13 +656,13 @@ export function OnboardingWizard() {
               </View>
             ) : (
               <View style={styles.planBlock}>
-                <AppText variant="label">Live plan matching</AppText>
+                <AppText variant="label">Your program</AppText>
                 <AppText variant="body" color={colors.textDim}>
-                  {catalogState.status === 'authRequired'
-                    ? 'Sign in from Train and your coach’s live catalog will match a plan to this goal.'
-                    : catalogState.status === 'error'
-                      ? 'The coach catalog is offline. Your goal is saved and a plan will be matched when it reconnects.'
-                      : 'Looking for the closest published plan for your goal…'}
+                  {catalogState.status === 'error'
+                    ? 'We can’t reach your coach’s programs right now. Your goal is saved, and one is matched as soon as they load.'
+                    : catalogState.status === 'ready'
+                      ? 'Nothing published matches this goal yet. Your goal is saved, and your program shows up in Train the moment your coach publishes it.'
+                      : 'Finding the closest published program for your goal…'}
                 </AppText>
               </View>
             )}
@@ -433,11 +672,35 @@ export function OnboardingWizard() {
     }
   }
 
-  const script = SCRIPT[step] ?? SCRIPT[TOTAL_STEPS]!;
-  const footerLabel =
-    step === 1 ? "Let's talk" : step === TOTAL_STEPS ? "Let's go" : 'Continue';
-  const footerAction =
-    step === TOTAL_STEPS ? () => void finish() : step === 2 ? submitName : next;
+  /** The last step still has one thing to collect: the account. */
+  const needsAccount = step === TOTAL_STEPS && !signedIn;
+  const script = needsAccount ? ACCOUNT_SCRIPT : (SCRIPT[step] ?? SCRIPT[TOTAL_STEPS]!);
+  const footerLabel = needsAccount
+    ? 'Create account'
+    : step === 1
+      ? "Let's talk"
+      : step === TOTAL_STEPS
+        ? "Let's go"
+        : 'Continue';
+  const footerAction = needsAccount
+    ? () => void createAccount()
+    : step === TOTAL_STEPS
+      ? () => void finish()
+      : step === 2
+        ? submitName
+        : next;
+  const onFirstStep = step === 1;
+
+  // Wait for the saved run before painting. Native storage reads synchronously
+  // (this never shows), but web resolves a tick later — and question 1 flashing
+  // before the resumed step would read as "it lost my answers after all".
+  if (!progressHydrated) {
+    return (
+      <Screen>
+        <View style={styles.flex} />
+      </Screen>
+    );
+  }
 
   return (
     <Screen>
@@ -445,20 +708,19 @@ export function OnboardingWizard() {
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        {/* Header: back + progress */}
+        {/* Header: back + progress. The chevron is on EVERY step, question 1
+            included — on step 1 it leaves the wizard (the stack swipe stays
+            disabled on purpose, so a missing chevron left iOS with no way
+            out at all). */}
         <View style={styles.header}>
-          {step > 1 ? (
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="Go back"
-              onPress={back}
-              style={styles.backBtn}
-            >
-              <Ionicons name="chevron-back" size={24} color={colors.text} />
-            </PressableScale>
-          ) : (
-            <View style={styles.backSpacer} />
-          )}
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel={onFirstStep ? 'Back to the welcome screen' : 'Go back'}
+            onPress={onFirstStep ? leaveWizard : back}
+            style={styles.backBtn}
+          >
+            <Ionicons name="chevron-back" size={24} color={colors.text} />
+          </PressableScale>
           {/* Step indicator: one thin red bar sweeping toward done (brief §7).
               ProgressBar owns the 500ms expo-out sweep + reduced-motion snap. */}
           <ProgressBar
@@ -498,7 +760,43 @@ export function OnboardingWizard() {
                 {finishError}
               </AppText>
             ) : null}
-            <Button label={footerLabel} onPress={footerAction} loading={finishing} />
+            <Button
+              label={footerLabel}
+              onPress={footerAction}
+              loading={finishing || creatingAccount}
+            />
+            {/* Sign-up never left the phone. Holding someone hostage in setup
+                would be worse than letting them in, so offer the door — and
+                say exactly what stays empty until the account exists. */}
+            {needsAccount && couldNotConnect ? (
+              <>
+                <AppText variant="caption" color={colors.textDim} center style={styles.offlineNote}>
+                  You can finish setup now and make the account later from Train. Until
+                  then your programs and the exercise library stay empty.
+                </AppText>
+                <Button
+                  label="Finish setup for now"
+                  variant="ghost"
+                  disabled={creatingAccount}
+                  onPress={() => void finish()}
+                />
+              </>
+            ) : null}
+            {/* Setup is for new members; a returning one shouldn't have to
+                answer 12 questions to find the door back to their account. */}
+            {onFirstStep || needsAccount ? (
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="I already have an account"
+                accessibilityHint="Opens sign in"
+                onPress={goToSignIn}
+                style={styles.signInLink}
+              >
+                <AppText variant="body" color={colors.accent} center>
+                  I already have an account
+                </AppText>
+              </PressableScale>
+            ) : null}
           </View>
         )}
       </KeyboardAvoidingView>
@@ -530,6 +828,12 @@ const styles = StyleSheet.create({
   // lg bottom so the button clears the viewport edge even at insets=0 (web).
   footer: { paddingTop: spacing.md, paddingBottom: spacing.lg },
   finishError: { marginBottom: spacing.sm, textAlign: 'center' },
+  // Quiet text link under the CTA — no chrome, but a full 48dp tap target.
+  signInLink: {
+    minHeight: touch.min,
+    justifyContent: 'center',
+    marginTop: spacing.xs,
+  },
 
   cards: { gap: spacing.md },
   // "Stay on track" step: Allow stacks full-width above the ghost "Later" —
@@ -569,4 +873,18 @@ const styles = StyleSheet.create({
   },
   planName: { marginTop: spacing.xs },
   planDescription: { marginTop: spacing.sm },
+
+  // Account block (last step, signed out) — same charcoal block as the plan
+  // reveal it stands in for.
+  accountIntro: { marginTop: spacing.xs },
+  field: { gap: spacing.sm, marginTop: spacing.lg },
+  passwordRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  passwordIssue: { flex: 1 },
+  showPassword: {
+    minHeight: touch.min,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  accountError: { marginTop: spacing.lg },
+  offlineNote: { marginTop: spacing.md },
 });

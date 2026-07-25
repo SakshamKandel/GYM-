@@ -1,5 +1,6 @@
 import { ktmAddDays, ktmDateString } from '@gym/shared';
-import Link from 'next/link';
+import type { Metadata } from 'next';
+import type { CSSProperties } from 'react';
 import {
   Card,
   CardHeader,
@@ -15,11 +16,15 @@ import {
   loadPartnerDashboardStats,
   loadPartnerEarnings,
   loadPartnerHeld,
+  loadPartnerLedger,
+  loadPartnerPayoutRequests,
   requirePartnerPage,
 } from '../_data';
 import { formatMoney } from '../_format';
+import { PartnerWalletView } from './_components/PartnerWalletView';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Earnings' };
 export const dynamic = 'force-dynamic';
 
 const RANGE_DAYS = 30;
@@ -27,17 +32,27 @@ const WEEKS = 8;
 const WEEK_SPAN_DAYS = WEEKS * 7;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+const TILE_GRID: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+  gap: 14,
+};
+
 function shortLabel(dateStr: string): string {
   const [, mo, da] = dateStr.split('-').map((p) => Number(p));
   return `${MONTHS[(mo ?? 1) - 1]} ${da}`;
 }
 
 /**
- * Earnings — delivered-order revenue analytics for the partner. Adds a weekly
- * revenue + order-count rollup (last 8 weeks) on top of the 30-day totals, plus
- * the best-selling items over the trailing 30 days. Only `delivered` orders ever
- * count toward earnings (cancelled / refused never do); every read is scoped to
- * the caller's own restaurant.
+ * Earnings — the partner's ONE money page. It used to be two: /partner/earnings
+ * showed gross delivered-order revenue while /partner/wallet showed the
+ * withdrawable balance, so "how much am I owed" had two answers with different
+ * numbers. The balance, the payout request and the payout history now sit at the
+ * top (that is what the partner actually receives); sales sit underneath as
+ * performance, clearly labelled as sales rather than as money in hand.
+ *
+ * Only `delivered` orders count toward sales (cancelled / refused never do), and
+ * every read is scoped to the caller's own restaurant.
  */
 export default async function PartnerEarningsPage() {
   const { partnerId, currency } = await requirePartnerPage();
@@ -47,13 +62,17 @@ export default async function PartnerEarningsPage() {
   const monthStart = ktmAddDays(today, -(RANGE_DAYS - 1));
   const weekWindowStart = ktmAddDays(today, -(WEEK_SPAN_DAYS - 1));
 
-  const [earnings, weekEarnings, stats, allTime, held] = await Promise.all([
+  const [earnings, weekEarnings, stats, allTime, held, ledger, requests] = await Promise.all([
     loadPartnerEarnings(db, partnerId, monthStart, currency),
     loadPartnerEarnings(db, partnerId, weekWindowStart, currency),
     loadPartnerDashboardStats(db, partnerId, today, monthStart),
     loadPartnerAllTime(db, partnerId),
     loadPartnerHeld(db, partnerId, currency),
+    loadPartnerLedger(db, partnerId, 50),
+    loadPartnerPayoutRequests(db, partnerId, 25),
   ]);
+
+  const pending = requests.find((r) => r.status === 'pending') ?? null;
 
   const byDateRevenue = new Map(weekEarnings.byDay.map((d) => [d.date, d.totalMinor]));
   const byDateOrders = new Map(weekEarnings.byDay.map((d) => [d.date, d.orders]));
@@ -84,104 +103,89 @@ export default async function PartnerEarningsPage() {
     <div style={{ maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 24 }}>
       <PageHeader
         title="Earnings"
-        subtitle={`Delivered-order revenue — 30-day totals and an ${WEEKS}-week trend.`}
+        subtitle="What you can withdraw now, and how sales are going. Cash paid at the door is already yours, so it is not part of the balance."
       />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-          gap: 14,
-        }}
-      >
-        <StatTile
-          label={`Earnings (${RANGE_DAYS}d)`}
-          value={formatMoney(earnings.totalMinor, currency)}
-          viz={{ kind: 'bars', data: revenueSeries.map((p) => p.value) }}
-        />
-        <StatTile label="Delivered orders" value={earnings.deliveredCount} hint={`last ${RANGE_DAYS} days`} />
-        <StatTile label="Avg per order" value={formatMoney(avgPerOrder, currency)} />
-        <StatTile label="Weekly average" value={formatMoney(weeklyAvg, currency)} hint={`over ${WEEKS} weeks`} />
-      </div>
-
       {/*
-        Payment split (last 30d). The gross earnings above are NOT all money in
-        the restaurant's hands: COD is cash it already collected at the door,
-        while digital (eSewa/Khalti) is held by the platform and paid out later.
-        Refunds are already netted out of every earned figure and shown here only
-        for transparency.
+        The answer to "how much am I owed" — balance, payout request, payout
+        history. First on the page, and the only place that figure is stated.
       */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-          gap: 14,
-        }}
-      >
-        <StatTile
-          label={`Collected at door (${RANGE_DAYS}d)`}
-          value={formatMoney(earnings.codCollectedMinor, currency)}
-          hint="Cash on delivery"
-        />
-        <StatTile
-          label={`Held by platform (${RANGE_DAYS}d)`}
-          value={formatMoney(earnings.digitalHeldMinor, currency)}
-          hint="Digital — paid out later"
-        />
-        {earnings.refundedCount > 0 ? (
-          <StatTile
-            label={`Refunded (${RANGE_DAYS}d)`}
-            value={formatMoney(earnings.refundedMinor, currency)}
-            hint={`${earnings.refundedCount} order${earnings.refundedCount === 1 ? '' : 's'} — not counted`}
-          />
-        ) : null}
-      </div>
+      <PartnerWalletView
+        currency={currency}
+        heldMinor={held.heldMinor}
+        earnedMinor={held.earnedMinor}
+        paidOutMinor={held.paidOutMinor}
+        ledger={ledger}
+        requests={requests}
+        initialPending={pending}
+      />
 
       {/*
-        Lifetime money truth (B28 — the old route capped at 90 days, so a
-        partner could never see lifetime figures). `heldMinor` is the ledger-
-        derived WITHDRAWABLE balance (B27 — decrements as payouts post, unlike
-        the old permanently-inflated live sum) and doubles as the payout floor
-        on the Wallet page.
+        Sales, deliberately below the balance: gross delivered-order revenue is
+        NOT all money the restaurant is waiting on. Cash on delivery is already
+        in its hands; digital (eSewa/Khalti) is what feeds the balance above.
+        Refunds are already netted out of every figure and shown for clarity.
       */}
       <Card padded={false}>
-        <CardHeader
-          title="Lifetime"
-          action={
-            <Link
-              href="/partner/wallet"
-              style={{ fontSize: 13, fontWeight: 600, color: 'var(--gt-accent-strong)', textDecoration: 'none' }}
-            >
-              Wallet & payouts →
-            </Link>
-          }
-        />
-        <div
-          style={{
-            padding: 18,
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-            gap: 14,
-          }}
-        >
+        <CardHeader title={`Sales · last ${RANGE_DAYS} days`} />
+        <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={TILE_GRID}>
+            <StatTile
+              label="Sales"
+              value={formatMoney(earnings.totalMinor, currency)}
+              viz={{ kind: 'bars', data: revenueSeries.map((p) => p.value) }}
+            />
+            <StatTile label="Delivered orders" value={earnings.deliveredCount} />
+            <StatTile label="Average order" value={formatMoney(avgPerOrder, currency)} />
+            <StatTile
+              label="Weekly average"
+              value={formatMoney(weeklyAvg, currency)}
+              hint={`over ${WEEKS} weeks`}
+            />
+          </div>
+          <div style={TILE_GRID}>
+            <StatTile
+              label="Cash you collected"
+              value={formatMoney(earnings.codCollectedMinor, currency)}
+              hint="Paid at the door, already yours"
+            />
+            <StatTile
+              label="Added to your balance"
+              value={formatMoney(earnings.digitalHeldMinor, currency)}
+              hint="eSewa and Khalti, paid out to you"
+            />
+            {earnings.refundedCount > 0 ? (
+              <StatTile
+                label="Refunded"
+                value={formatMoney(earnings.refundedMinor, currency)}
+                hint={`${earnings.refundedCount} order${earnings.refundedCount === 1 ? '' : 's'}, not counted`}
+              />
+            ) : null}
+          </div>
+        </div>
+      </Card>
+
+      {/*
+        Lifetime money truth (B28 — the old route capped at 90 days, so a partner
+        could never see lifetime figures). The withdrawable balance is NOT
+        repeated here: it is stated once, at the top of the page.
+      */}
+      <Card padded={false}>
+        <CardHeader title="All time" />
+        <div style={{ padding: 18, ...TILE_GRID }}>
           <StatTile
-            label="Lifetime collected at door"
+            label="Cash you collected"
             value={formatMoney(allTime.codMinor, currency)}
             hint={`${allTime.deliveredCount} delivered order${allTime.deliveredCount === 1 ? '' : 's'}`}
           />
           <StatTile
-            label="Lifetime digital revenue"
+            label="Added to your balance"
             value={formatMoney(allTime.digitalMinor, currency)}
-            hint="eSewa / Khalti, all time"
-          />
-          <StatTile
-            label="Held by platform now"
-            value={formatMoney(held.heldMinor, currency)}
-            hint="Withdrawable — decrements as payouts post"
+            hint="eSewa and Khalti, all time"
           />
           {allTime.refundedMinor > 0 ? (
             <StatTile
-              label="Lifetime refunded"
+              label="Refunded"
               value={formatMoney(allTime.refundedMinor, currency)}
               hint="Not counted above"
             />
@@ -190,8 +194,8 @@ export default async function PartnerEarningsPage() {
       </Card>
 
       <ChartCard
-        title="Weekly revenue"
-        caption={`Delivered-order revenue per week · last ${WEEKS} weeks`}
+        title="Sales by week"
+        caption={`Delivered orders only · last ${WEEKS} weeks`}
         data={revenueSeries}
         valueFormat={(v) => formatMoney(v, currency)}
         height={230}
@@ -199,7 +203,7 @@ export default async function PartnerEarningsPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
         <Card padded={false}>
-          <CardHeader title="Weekly orders" />
+          <CardHeader title="Orders by week" />
           <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
             {ordersSeries.map((p) => (
               <div key={p.label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

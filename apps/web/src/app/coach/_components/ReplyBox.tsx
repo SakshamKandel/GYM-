@@ -34,8 +34,11 @@ export function ReplyBox({ userId }: { userId: string }) {
   const [body, setBody] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Set when the sent reply had contact details hidden before it was stored. */
+  const [contactHidden, setContactHidden] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [savingTemplate, setSavingTemplate] = useState(false);
+  const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
 
   const trimmed = body.trim();
   const canSend = trimmed.length > 0 && trimmed.length <= MAX_LEN && !busy;
@@ -80,7 +83,7 @@ export function ReplyBox({ userId }: { userId: string }) {
         const data = (await res.json()) as { template: Template };
         setTemplates((prev) => [data.template, ...prev]);
       } else if (res.status === 409) {
-        setError('Template limit reached — delete one first.');
+        setError('Template limit reached. Delete one first.');
       }
     } catch {
       setError('Could not save template. Try again.');
@@ -88,10 +91,42 @@ export function ReplyBox({ userId }: { userId: string }) {
     setSavingTemplate(false);
   }
 
+  /**
+   * Drop one saved quick reply. The DELETE route scopes by coachId, so a coach
+   * can only ever remove their own; a 404 means it is already gone, which for
+   * the list is the same outcome as a success — drop it either way. Without this
+   * the 40-template cap was a dead end: the save error told coaches to delete
+   * one, but the console had no way to do it.
+   */
+  async function deleteTemplate(t: Template) {
+    if (deletingTemplateId) return;
+    setDeletingTemplateId(t.id);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/coach/message-templates/${encodeURIComponent(t.id)}`,
+        { method: 'DELETE' },
+      );
+      if (res.ok || res.status === 404) {
+        setTemplates((prev) => prev.filter((x) => x.id !== t.id));
+      } else {
+        setError(
+          res.status === 401
+            ? 'Your session expired. Sign in again.'
+            : 'Could not delete that quick reply. Try again.',
+        );
+      }
+    } catch {
+      setError('Could not reach us just now. Check your connection and try again.');
+    }
+    setDeletingTemplateId(null);
+  }
+
   async function submit() {
     if (!canSend) return;
     setBusy(true);
     setError(null);
+    setContactHidden(false);
     try {
       const res = await fetch(
         `/api/coach/threads/${encodeURIComponent(userId)}/reply`,
@@ -112,12 +147,23 @@ export function ReplyBox({ userId }: { userId: string }) {
         setBusy(false);
         return;
       }
+      // The route hides contact details before it stores the reply. Without
+      // this the coach saw a clean "sent" and had no idea part of what they
+      // typed never reached the client. Read defensively: the reply IS already
+      // stored at this point, so a body we cannot read must not look like a
+      // failed send.
+      try {
+        const sent = (await res.json()) as { contactHidden?: boolean };
+        setContactHidden(sent.contactHidden === true);
+      } catch {
+        setContactHidden(false);
+      }
       setBody('');
       setBusy(false);
       taRef.current?.focus();
       router.refresh();
     } catch {
-      setError('Network error. Check your connection and retry.');
+      setError('Could not reach us just now. Check your connection and try again.');
       setBusy(false);
     }
   }
@@ -142,31 +188,67 @@ export function ReplyBox({ userId }: { userId: string }) {
     >
       {templates.length > 0 ? (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }} aria-label="Quick replies">
-          {templates.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => insertTemplate(t)}
-              title={t.body}
-              style={{
-                appearance: 'none',
-                cursor: 'pointer',
-                border: '1px solid var(--gt-border)',
-                borderRadius: 999,
-                background: 'var(--gt-bg)',
-                color: 'var(--gt-text)',
-                fontSize: 12,
-                padding: '6px 10px',
-                minHeight: 32,
-                maxWidth: 220,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {t.title.trim() || t.body.slice(0, 32)}
-            </button>
-          ))}
+          {templates.map((t) => {
+            const label = t.title.trim() || t.body.slice(0, 32);
+            const deleting = deletingTemplateId === t.id;
+            return (
+              <span
+                key={t.id}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  border: '1px solid var(--gt-border)',
+                  borderRadius: 999,
+                  background: 'var(--gt-bg)',
+                  opacity: deleting ? 0.5 : 1,
+                  overflow: 'hidden',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => insertTemplate(t)}
+                  title={t.body}
+                  disabled={deleting}
+                  style={{
+                    appearance: 'none',
+                    cursor: deleting ? 'default' : 'pointer',
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--gt-text)',
+                    fontSize: 12,
+                    padding: '6px 4px 6px 10px',
+                    minHeight: 32,
+                    maxWidth: 200,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {label}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteTemplate(t)}
+                  disabled={deleting}
+                  aria-label={`Delete quick reply: ${label}`}
+                  title="Delete this quick reply"
+                  style={{
+                    appearance: 'none',
+                    cursor: deleting ? 'default' : 'pointer',
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--gt-text-dim)',
+                    fontSize: 14,
+                    lineHeight: 1,
+                    padding: '6px 10px 6px 6px',
+                    minHeight: 32,
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
         </div>
       ) : null}
       <textarea
@@ -195,6 +277,12 @@ export function ReplyBox({ userId }: { userId: string }) {
       {error ? (
         <div style={{ color: '#ff8178', fontSize: 13 }} role="alert">
           {error}
+        </div>
+      ) : null}
+      {contactHidden ? (
+        <div style={{ color: 'var(--gt-text-dim)', fontSize: 13 }} role="status">
+          Sent, but we hid the contact details in that message. Coaching stays in
+          the app.
         </div>
       ) : null}
       <div

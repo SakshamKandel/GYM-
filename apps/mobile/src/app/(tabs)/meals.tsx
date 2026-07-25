@@ -29,7 +29,7 @@ import type { MealPartner } from '../../features/meals/api';
  * member-only surface.
  *
  * Visual language (2026-07-21 professional pass): a single red hero block
- * carries the brand statement + the member's quick links (Orders / Plans) as
+ * carries the brand statement + the member's quick links (Orders / Meal plans) as
  * black onBlock pills; partner kitchens list below as chunky block cards with
  * a monogram tile, delivery-area line and service badges.
  */
@@ -92,17 +92,36 @@ const styles = StyleSheet.create({
   },
   cardMain: { flex: 1, gap: 3 },
   areaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   badgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
 });
 
 function PartnerCard({ partner, index }: { partner: MealPartner; index: number }) {
   const areas = partner.serviceAreas.slice(0, 3).join(', ');
   const initial = partner.name.trim().charAt(0) || '?';
+  // The kitchen has paused orders. The card stays tappable — members can still
+  // read the menu — but every ordering affordance is replaced by the closed
+  // badge, so nobody builds a cart that checkout would reject.
+  const closed = !partner.acceptingOrders;
+  // Real member ratings, folded server-side from delivered-order reviews. Both
+  // keys are optional AND nullable (withheld until the kitchen has enough
+  // genuine ratings; absent entirely on older servers) — anything that isn't a
+  // number renders no star line rather than a misleading "0.0".
+  const rating = typeof partner.rating === 'number' ? partner.rating : null;
+  const reviewCount = typeof partner.reviewCount === 'number' ? partner.reviewCount : null;
+  const ratingLabel =
+    rating === null
+      ? ''
+      : ` Rated ${rating.toFixed(1)} out of 5${
+          reviewCount !== null ? ` from ${reviewCount} order${reviewCount === 1 ? '' : 's'}` : ''
+        }.`;
   return (
     <Animated.View entering={enterUp(Math.min(index, 4))}>
       <Card
         onPress={() => pushPath(`/meals/${partner.id}`)}
-        accessibilityLabel={`${partner.name}${areas ? `, delivers to ${areas}` : ''}. View menu`}
+        accessibilityLabel={`${partner.name}${areas ? `, delivers to ${areas}` : ''}.${ratingLabel} ${
+          closed ? 'Closed right now. View menu' : 'View menu'
+        }`}
       >
         <View style={styles.cardTop}>
           <View style={styles.monogram} accessible={false} importantForAccessibility="no-hide-descendants">
@@ -118,13 +137,27 @@ function PartnerCard({ partner, index }: { partner: MealPartner; index: number }
                 {areas || 'Delivery area not listed'}
               </AppText>
             </View>
+            {rating !== null ? (
+              <View
+                style={styles.ratingRow}
+                accessible={false}
+                importantForAccessibility="no-hide-descendants"
+              >
+                <Ionicons name="star" size={14} color={colors.accent} />
+                <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+                  {rating.toFixed(1)}
+                  {reviewCount !== null ? ` (${reviewCount})` : ''}
+                </AppText>
+              </View>
+            ) : null}
           </View>
           <Ionicons name="chevron-forward" size={20} color={colors.textFaint} />
         </View>
         <View style={styles.badgeRow}>
+          {closed ? <Tag label="Closed right now" variant="dim" /> : null}
           {partner.acceptsCod ? <Tag label="Cash on delivery" variant="dim" /> : null}
           <Tag label="Lunch & dinner" variant="dim" />
-          <Tag label="View menu" variant="outline" color={colors.accent} />
+          <Tag label="View menu" variant="outline" color={closed ? colors.textFaint : colors.accent} />
         </View>
       </Card>
     </Animated.View>
@@ -162,12 +195,12 @@ export default function MealsTabScreen() {
               </PressableScale>
               <PressableScale
                 accessibilityRole="button"
-                accessibilityLabel="My meal subscriptions"
+                accessibilityLabel="My meal plans"
                 onPress={() => pushPath('/meals/subscriptions')}
                 style={styles.heroLink}
               >
                 <Ionicons name="repeat-outline" size={16} color={colors.text} />
-                <AppText variant="bodyBold">Plans</AppText>
+                <AppText variant="bodyBold">Meal plans</AppText>
               </PressableScale>
             </View>
           ) : null}
@@ -179,7 +212,7 @@ export default function MealsTabScreen() {
           <EmptyState
             icon="restaurant"
             title="Sign in to order meals"
-            body="Browse partner menus, order once, or set up a weekly plan on your account."
+            body="Browse partner menus, order once, or set up a weekly meal plan on your account."
             art={<EmptyArt variant="food" />}
             actionLabel="Sign in"
             onAction={() => pushPath('/auth/sign-in')}
@@ -206,7 +239,7 @@ export default function MealsTabScreen() {
               >
                 <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
                 <AppText variant="caption" style={styles.retryText}>
-                  {partners === null ? "Couldn't load partners — tap to retry." : 'Showing last known list — tap to retry.'}
+                  {partners === null ? "Couldn't load partners. Tap to retry." : 'Showing last known list. Tap to retry.'}
                 </AppText>
                 <Ionicons name="refresh" size={15} color={colors.textDim} />
               </PressableScale>
@@ -224,7 +257,7 @@ export default function MealsTabScreen() {
               <EmptyState
                 icon="restaurant"
                 title="No partners yet"
-                body="Meal delivery partners are on the way — check back soon."
+                body="Meal delivery partners are on the way. Check back soon."
               />
             </Animated.View>
           ) : partners !== null ? (

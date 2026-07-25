@@ -8,6 +8,7 @@ import { colors, spacing, touch, radius } from '@gym/ui-tokens';
 import {
   AppText,
   Chip,
+  EmptyState,
   enterDown,
   enterFade,
   enterUp,
@@ -145,11 +146,13 @@ export default function PublicLeaderboardScreen() {
       />
 
       {status !== 'signedIn' ? (
-        <Animated.View entering={enterUp(0)} style={styles.notice}>
-          <AppText variant="body" color={colors.textDim}>
-            Sign in to see this month&apos;s gym-wide consistency ranking.
-          </AppText>
-        </Animated.View>
+        <EmptyState
+          icon="trophy-outline"
+          title="Sign in to see the leaderboard"
+          body="See how your consistency stacks up against the whole gym this month."
+          actionLabel="Sign in"
+          onAction={() => router.push('/auth/sign-in')}
+        />
       ) : (
         <>
           {/* ── Scope: live month vs. last month's final standings ── */}
@@ -176,7 +179,7 @@ export default function PublicLeaderboardScreen() {
               >
                 <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
                 <AppText variant="caption" style={styles.staleText}>
-                  Showing last known state — tap to retry.
+                  Showing last known state. Tap to retry.
                 </AppText>
                 <Ionicons name="refresh" size={15} color={colors.textDim} />
               </PressableScale>
@@ -275,7 +278,7 @@ function StandingCard({ result }: { result: PublicLeaderboardResult }) {
       accessible
       accessibilityLabel={
         me.position === null
-          ? `Not ranked yet — ${me.sessionDays} sessions this month`
+          ? `Not ranked yet, ${me.sessionDays} sessions this month`
           : `Your standing: ${ordinalLabel(me.position)} with ${me.sessionDays} sessions this month`
       }
     >
@@ -351,7 +354,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   header: { marginBottom: spacing.gutter },
-  notice: { paddingVertical: spacing.xxl },
   scopeRow: {
     flexDirection: 'row',
     gap: spacing.sm,

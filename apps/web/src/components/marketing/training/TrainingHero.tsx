@@ -27,7 +27,7 @@ export function TrainingHero() {
 
             <Reveal delay={700}>
               <Lead tone="dark" className="mt-7">
-                Coach-built plans, a gym mode that flows set to set, and an instant logger —
+                Coach-built plans, a gym mode that flows set to set, and an instant logger:
                 offline, mid-set, chalk on your hands. When the PR lands, the app already knows.
               </Lead>
             </Reveal>
@@ -44,7 +44,7 @@ export function TrainingHero() {
             </Reveal>
 
             <Reveal delay={920}>
-              <p className="mt-8 font-sans text-[13px] text-faint">
+              <p className="mt-8 font-sans text-[14.5px] text-faint">
                 650+ exercises · Works fully offline
               </p>
             </Reveal>
@@ -66,7 +66,7 @@ export function TrainingHero() {
             <div className="mkt-text-steel font-display text-5xl font-medium sm:text-6xl">
               <CountUp to={650} suffix="+" />
             </div>
-            <p className="mt-2.5 font-sans text-[13px] text-dim">
+            <p className="mt-2.5 font-sans text-[14.5px] text-dim">
               exercises in the library
             </p>
           </Reveal>
@@ -74,7 +74,7 @@ export function TrainingHero() {
             <div className="mkt-text-steel font-display text-5xl font-medium sm:text-6xl">
               Instant
             </div>
-            <p className="mt-2.5 font-sans text-[13px] text-dim">
+            <p className="mt-2.5 font-sans text-[14.5px] text-dim">
               workout logging speed
             </p>
           </Reveal>
@@ -82,13 +82,13 @@ export function TrainingHero() {
             <div className="mkt-text-steel font-display text-5xl font-medium sm:text-6xl">
               <CountUp to={17} />
             </div>
-            <p className="mt-2.5 font-mono text-[11.5px] uppercase tracking-[0.16em] text-dim">
+            <p className="mt-2.5 font-mono text-[12px] uppercase tracking-[0.16em] text-dim">
               heat-mapped muscle zones
             </p>
           </Reveal>
           <Reveal delay={270}>
             <div className="mkt-text-steel font-display text-5xl font-medium sm:text-6xl">0</div>
-            <p className="mt-2.5 font-mono text-[11.5px] uppercase tracking-[0.16em] text-dim">
+            <p className="mt-2.5 font-mono text-[12px] uppercase tracking-[0.16em] text-dim">
               bars of signal needed
             </p>
           </Reveal>

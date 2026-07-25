@@ -28,6 +28,30 @@ const DAYS: { i: number; label: string }[] = [
 const WINDOWS: MealWindow[] = ['lunch', 'dinner'];
 const GOALS: MealGoalTag[] = ['cutting', 'bulking', 'balanced'];
 
+/** One (weekday, window) availability slot — the unit both grids toggle. */
+interface Slot {
+  dayOfWeek: number;
+  window: MealWindow;
+}
+
+function slotKey(dayOfWeek: number, window: MealWindow): string {
+  return `${dayOfWeek}|${window}`;
+}
+
+function slotLabel(slot: Slot): string {
+  return `${DAYS[slot.dayOfWeek]?.label ?? slot.dayOfWeek} ${windowShort(slot.window)}`;
+}
+
+/**
+ * Card summary for the sold-out flags. Named by WEEKDAY on purpose: the flag is
+ * stored per (weekday, window), so it applies to that day every week and calling
+ * it "today" would be a lie.
+ */
+function soldOutSummary(slots: Slot[]): string {
+  if (slots.length > 3) return `Sold out on ${slots.length} slots`;
+  return `Sold out: ${slots.map(slotLabel).join(', ')}`;
+}
+
 function fixedSubscriptionBlockCount(value: unknown): number | null {
   if (typeof value !== 'object' || value === null) return null;
   if (!('error' in value) || value.error !== 'fixed_subscription_in_use') return null;
@@ -51,7 +75,7 @@ interface FormState {
   currency: MealCurrency;
   isActive: boolean;
   sortOrder: string;
-  availability: { dayOfWeek: number; window: MealWindow }[];
+  availability: Slot[];
 }
 
 function blankForm(currency: MealCurrency): FormState {
@@ -103,13 +127,22 @@ export function MenuManager({
   items: PartnerMenuItem[];
   defaultCurrency: MealCurrency;
 }) {
-  const [editing, setEditing] = useState<{ id: string | null; form: FormState } | null>(null);
+  const [editing, setEditing] = useState<{
+    id: string | null;
+    form: FormState;
+    /** Live sold-out flags, kept beside the form: they save instantly, not on Save. */
+    soldOut: Slot[];
+  } | null>(null);
 
   function openNew() {
-    setEditing({ id: null, form: blankForm(defaultCurrency) });
+    setEditing({ id: null, form: blankForm(defaultCurrency), soldOut: [] });
   }
   function openEdit(item: PartnerMenuItem) {
-    setEditing({ id: item.id, form: formFrom(item) });
+    setEditing({
+      id: item.id,
+      form: formFrom(item),
+      soldOut: item.soldOutSlots.map((s) => ({ ...s })),
+    });
   }
 
   return (
@@ -140,6 +173,7 @@ export function MenuManager({
           mealId={editing.id}
           accountCurrency={defaultCurrency}
           initial={editing.form}
+          initialSoldOut={editing.soldOut}
           onClose={() => setEditing(null)}
         />
       ) : null}
@@ -180,6 +214,9 @@ function MenuCard({ item, onEdit }: { item: PartnerMenuItem; onEdit: () => void 
         <Badge tone={item.isActive ? 'positive' : 'neutral'}>
           {item.isActive ? 'Active' : 'Hidden'}
         </Badge>
+        {item.soldOutSlots.length > 0 ? (
+          <Badge tone="warning">{soldOutSummary(item.soldOutSlots)}</Badge>
+        ) : null}
         <Badge tone="info">{DIET_LABEL[item.dietType] ?? item.dietType}</Badge>
         {item.goalTags.map((g) => (
           <Badge key={g} tone="neutral">
@@ -213,15 +250,22 @@ function MealFormDrawer({
   mealId,
   accountCurrency,
   initial,
+  initialSoldOut,
   onClose,
 }: {
   mealId: string | null;
   accountCurrency: MealCurrency;
   initial: FormState;
+  initialSoldOut: Slot[];
   onClose: () => void;
 }) {
   const router = useRouter();
   const [form, setForm] = useState<FormState>(initial);
+  // Sold-out is NOT part of the form: it is a live "we ran out" flag with its
+  // own PATCH, so it saves the moment it is switched instead of waiting for
+  // Save. Kept here so the grid can render both states side by side.
+  const [soldOut, setSoldOut] = useState<Slot[]>(initialSoldOut);
+  const [soldOutBusy, setSoldOutBusy] = useState<string | null>(null);
   // Once a create succeeds we adopt the new id here so a retry (e.g. after the
   // availability sub-write fails) PATCHes the same row instead of inserting a
   // duplicate (P0-15).
@@ -254,6 +298,73 @@ function MealFormDrawer({
     }));
   }
 
+  function isSoldOut(day: number, window: MealWindow) {
+    return soldOut.some((s) => s.dayOfWeek === day && s.window === window);
+  }
+
+  /**
+   * Flip one slot's sold-out flag. Optimistic, then reverted if the write is
+   * refused, so the grid never shows a state the kitchen isn't actually in.
+   * `slot_not_available` means the slot only exists in the unsaved form, which
+   * is the one case worth naming to the partner.
+   */
+  async function toggleSoldOut(dayOfWeek: number, window: MealWindow, next: boolean) {
+    if (!currentId) return;
+    const key = slotKey(dayOfWeek, window);
+    const previousSoldOut = soldOut;
+    const previousAvailability = form.availability;
+    setSoldOutBusy(key);
+    setError(null);
+    setSoldOut((list) =>
+      next
+        ? [...list, { dayOfWeek, window }]
+        : list.filter((s) => !(s.dayOfWeek === dayOfWeek && s.window === window)),
+    );
+    // A dish with no schedule is "always available", so there is no slot row to
+    // flag. The write fills the whole 7x2 grid in that case (same availability,
+    // spelled out), so mirror it here or a later Save would wipe the grid back
+    // to empty and take the flag with it.
+    if (next && previousAvailability.length === 0) {
+      setForm((f) => ({
+        ...f,
+        availability: DAYS.flatMap((d) => WINDOWS.map((w) => ({ dayOfWeek: d.i, window: w }))),
+      }));
+    }
+
+    function revert() {
+      setSoldOut(previousSoldOut);
+      setForm((f) => ({ ...f, availability: previousAvailability }));
+    }
+
+    try {
+      const res = await fetch(
+        `/api/partner/meals/${encodeURIComponent(currentId)}/availability`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ dayOfWeek, window, soldOut: next }),
+        },
+      );
+      if (!res.ok) {
+        revert();
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(
+          body.error === 'slot_not_available'
+            ? 'Save this item first, then you can mark that slot sold out.'
+            : 'Could not change that slot. Try again in a moment.',
+        );
+        return;
+      }
+      router.refresh();
+    } catch {
+      revert();
+      setError('Could not save that change. Check your connection and try again.');
+    } finally {
+      setSoldOutBusy(null);
+    }
+  }
+
   async function handleFile(file: File) {
     setUploading(true);
     setError(null);
@@ -282,12 +393,12 @@ function MealFormDrawer({
       fd.append('file', file);
       const cloudRes = await fetch(reservation.uploadUrl, { method: 'POST', body: fd });
       if (!cloudRes.ok) {
-        setError('Photo upload failed — try again.');
+        setError('Photo upload failed. Try again.');
         return;
       }
       set('imageUrl', reservation.deliveryUrl);
     } catch {
-      setError('Network error during photo upload.');
+      setError('Could not reach us just now, so the photo did not upload. Try again.');
     } finally {
       setUploading(false);
     }
@@ -390,7 +501,7 @@ function MealFormDrawer({
       router.refresh();
       onClose();
     } catch {
-      setError('Network error while saving.');
+      setError('Could not reach us just now, so nothing was saved. Try again.');
       setBusy(false);
     }
   }
@@ -426,7 +537,7 @@ function MealFormDrawer({
       router.refresh();
       onClose();
     } catch {
-      setError('Network error while removing.');
+      setError('Could not reach us just now, so nothing was removed. Try again.');
       setBusy(false);
     }
   }
@@ -569,10 +680,10 @@ function MealFormDrawer({
           <Field label="Fat (g)">
             <input className="gt-input" type="number" min={0} value={form.fatG} onChange={(e) => set('fatG', e.target.value)} />
           </Field>
-          <Field label="Fiber (g) — optional">
+          <Field label="Fiber (g), optional">
             <input className="gt-input" type="number" min={0} value={form.fiberG} onChange={(e) => set('fiberG', e.target.value)} />
           </Field>
-          <Field label="Sugar (g) — optional">
+          <Field label="Sugar (g), optional">
             <input className="gt-input" type="number" min={0} value={form.sugarG} onChange={(e) => set('sugarG', e.target.value)} />
           </Field>
         </div>
@@ -610,19 +721,52 @@ function MealFormDrawer({
         </Field>
 
         <Field label="Availability (leave all off = always available)">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {DAYS.map((d) => (
-              <div key={d.i} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div
+                key={d.i}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}
+              >
                 <span style={{ width: 36, fontSize: 13, color: 'var(--gt-text-dim)' }}>{d.label}</span>
                 {WINDOWS.map((w) => (
-                  <label key={w} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
-                    <input type="checkbox" checked={hasSlot(d.i, w)} onChange={() => toggleSlot(d.i, w)} />
-                    {windowShort(w)}
-                  </label>
+                  <div key={w} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                      <input type="checkbox" checked={hasSlot(d.i, w)} onChange={() => toggleSlot(d.i, w)} />
+                      {windowShort(w)}
+                    </label>
+                    {/* Sold out needs a saved item to write against. A dish with
+                        no schedule at all is on the menu every slot, so it can
+                        be flagged too. */}
+                    {currentId && (hasSlot(d.i, w) || form.availability.length === 0) ? (
+                      <label
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          fontSize: 12,
+                          color: isSoldOut(d.i, w) ? 'var(--gt-warning)' : 'var(--gt-text-dim)',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSoldOut(d.i, w)}
+                          disabled={busy || soldOutBusy === slotKey(d.i, w)}
+                          aria-label={`Sold out on ${d.label} ${windowShort(w)}`}
+                          onChange={(e) => void toggleSoldOut(d.i, w, e.target.checked)}
+                        />
+                        Sold out
+                      </label>
+                    ) : null}
+                  </div>
                 ))}
               </div>
             ))}
           </div>
+          <span style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 2 }}>
+            Sold out saves straight away and takes that dish off the menu for that weekday every
+            week, until you switch it back on.
+            {currentId ? '' : ' Save the item first to use it.'}
+          </span>
         </Field>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, alignItems: 'end' }}>

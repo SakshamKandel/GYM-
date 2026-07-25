@@ -24,7 +24,12 @@ export const runtime = 'nodejs';
  * only via a per-account override, per plan §8).
  *
  *  - GET  → every gym regardless of status (draft/published/archived), so the
- *    console can show what's not live yet. Includes `photoCount`.
+ *    console can show what's not live yet. Includes `photoCount`. The stored
+ *    `rating` / `reviewCount` columns are left out: nothing has been able to
+ *    set them since listings stopped carrying admin-authored star ratings, and
+ *    the member app works out a gym's stars from real member reviews instead,
+ *    so passing them along would only offer an editor a number that means
+ *    nothing. The columns themselves still need dropping.
  *  - POST → create a new listing. Always starts `status:'draft'`,
  *    `verifiedByAdmin:false` regardless of what the client sends — a listing
  *    only goes live through the PATCH route once an editor has actually
@@ -113,7 +118,12 @@ export async function GET(req: Request) {
   }
 
   return json(
-    { gyms: rows.map((r) => ({ ...r, photoCount: photoCountMap.get(r.id) ?? 0 })) },
+    {
+      gyms: rows.map(({ rating, reviewCount, ...r }) => ({
+        ...r,
+        photoCount: photoCountMap.get(r.id) ?? 0,
+      })),
+    },
     200,
   );
 }

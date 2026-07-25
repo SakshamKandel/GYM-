@@ -81,7 +81,7 @@ export function SuggestionRow({ suggestion, unitPref, applied, onApply }: Props)
       {suggestion.reviewed ? (
         <AppText variant="caption" color={colors.success} numberOfLines={2}>
           {suggestion.coachNote
-            ? `Reviewed by your coach — ${suggestion.coachNote}`
+            ? `Reviewed by your coach: ${suggestion.coachNote}`
             : 'Reviewed by your coach'}
         </AppText>
       ) : null}

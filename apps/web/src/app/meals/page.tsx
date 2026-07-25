@@ -9,9 +9,9 @@ import { OrderJourney } from '@/components/marketing/meals/OrderJourney';
 import { Subscriptions } from '@/components/marketing/meals/Subscriptions';
 
 export const metadata: Metadata = {
-  title: 'GM Meals — macro-counted meals, delivered | The GM Method',
+  title: 'GM Meals: macro-counted meals, delivered | The GM Method',
   description:
-    'Macro-counted meals from vetted partner kitchens across Kathmandu valley. One-off orders or weekly subscriptions, live 7-state tracking, cash on delivery or eSewa/Khalti — every meal auto-logged into your food diary.',
+    'Macro-counted meals from vetted partner kitchens across Kathmandu valley. One-off orders or weekly subscriptions, live 7-state tracking, cash on delivery or eSewa/Khalti, and every meal is auto-logged into your food diary.',
 };
 
 export default function MealsPage() {

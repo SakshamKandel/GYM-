@@ -1,15 +1,17 @@
 import { mealPartners } from '@gym/db';
 import { asc } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { materializeDueOrders } from '@/lib/meals';
 import { staffFromCookie } from '@/lib/staffSession';
-import { loadAdminOrders, loadOrderStatusCounts } from './_data';
+import { ADMIN_ORDERS_PAGE_SIZE, loadAdminOrders, loadOrderStatusCounts } from './_data';
 import { OrdersOversight } from './_components/OrdersOversight';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Meal orders' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -41,7 +43,7 @@ export default async function AdminOrdersPage() {
   return (
     <div style={{ maxWidth: 1280 }}>
       <PageHeader
-        title="Order oversight"
+        title="Meal orders"
         subtitle="Every meal-delivery order, across every partner, in one place. Force a status or cancel with a reason when a partner can't act."
       />
 
@@ -61,7 +63,16 @@ export default async function AdminOrdersPage() {
         <StatTile label="Cancelled / refused" value={statusCounts.cancelled + statusCounts.refused} />
       </div>
 
-      <OrdersOversight initialOrders={orders} partners={partners} />
+      <OrdersOversight
+        initialOrders={orders}
+        partners={partners}
+        pageSize={ADMIN_ORDERS_PAGE_SIZE}
+        canViewMembers={permissions.has('members.read')}
+        // Reversing money needs the money permission on top of orders.review —
+        // the same pair POST …/force-cancel enforces. Passing it lets the drawer
+        // hide an action this operator would only be 403'd for.
+        canReverseMoney={permissions.has('payments.review')}
+      />
     </div>
   );
 }

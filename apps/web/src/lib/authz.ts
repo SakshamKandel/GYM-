@@ -12,10 +12,11 @@ import {
   type Permission,
 } from '@gym/shared';
 import { and, eq } from 'drizzle-orm';
-import { bearerToken, staffForToken, type StaffRole } from './auth';
+import { cache } from 'react';
+import { bearerToken, type StaffRole } from './auth';
 import { getDb } from './db';
 import { json } from './http';
-import { staffTokenFromCookie } from './staffSession';
+import { staffPrincipalForToken, staffTokenFromCookie } from './staffSession';
 
 /**
  * Guard layer mirroring the existing inline `if (!user) return json(...)`
@@ -50,27 +51,19 @@ export interface AuditActor {
  * EITHER the mobile/API `Authorization: Bearer` token OR the browser console's
  * httpOnly `gt_staff` cookie (bearer wins if both are present) — so the same
  * guards protect API clients and the coach console's same-origin fetches.
+ *
+ * The session join itself is memoized per request (see `staffPrincipalForToken`),
+ * so a request that passes through several guards pays for it once.
  */
 export async function requireStaff(req: Request): Promise<Principal | Response> {
   const token = bearerToken(req) ?? (await staffTokenFromCookie());
   if (!token) return json({ error: 'unauthorized' }, 401);
-  const staff = await staffForToken(token);
+  const staff = await staffPrincipalForToken(token);
   if (!staff) return json({ error: 'forbidden' }, 403);
   return { id: staff.user.id, email: staff.user.email, role: staff.role };
 }
 
-/**
- * All per-account permission overrides as a `perm → allow` map (one query).
- * allow=true grants an EXTRA permission; allow=false STRIPS a preset one. A
- * missing entry means "defer to the role preset". Exported so the future staff
- * override-management routes read the same shape they write.
- *
- * Throws on DB error so callers fail closed. Falling back to the role preset
- * could restore a permission that an unread explicit deny removed.
- */
-export async function getAccountOverrides(
-  accountId: string,
-): Promise<Map<Permission, boolean>> {
+async function fetchAccountOverrides(accountId: string): Promise<Map<Permission, boolean>> {
   const rows = await getDb()
     .select({ perm: adminPermissionOverrides.perm, allow: adminPermissionOverrides.allow })
     .from(adminPermissionOverrides)
@@ -78,6 +71,39 @@ export async function getAccountOverrides(
   const map = new Map<Permission, boolean>();
   for (const row of rows) map.set(row.perm as Permission, row.allow);
   return map;
+}
+
+/**
+ * The ENFORCEMENT read of an account's overrides, memoized for the current
+ * request. Keyed on the account id (a primitive — `cache` compares arguments by
+ * identity, so keying on a Principal object would never hit). One console
+ * render checks permissions in the layout and again in the page; now that is
+ * one query instead of two. The memo dies with the request, so an override
+ * written moments ago is live on the very next one.
+ *
+ * Deliberately NOT used by `getAccountOverrides` below: the override editor
+ * writes a row and then re-reads it in the same request to send the provenance
+ * view back, and a memo would hand it the pre-write picture.
+ */
+const overridesForAccount = cache(
+  async (accountId: string): Promise<ReadonlyMap<Permission, boolean>> =>
+    fetchAccountOverrides(accountId),
+);
+
+/**
+ * All per-account permission overrides as a `perm → allow` map (one query).
+ * allow=true grants an EXTRA permission; allow=false STRIPS a preset one. A
+ * missing entry means "defer to the role preset". Exported so the staff
+ * override-management routes read the same shape they write — always freshly,
+ * never memoized, because those routes read straight after writing.
+ *
+ * Throws on DB error so callers fail closed. Falling back to the role preset
+ * could restore a permission that an unread explicit deny removed.
+ */
+export async function getAccountOverrides(
+  accountId: string,
+): Promise<Map<Permission, boolean>> {
+  return fetchAccountOverrides(accountId);
 }
 
 /**
@@ -107,15 +133,25 @@ export async function getAccountOverrides(
  * when a deny row cannot be read would widen access during a database failure;
  * server routes catch this and return 503, while server components fail without
  * rendering protected data.
+ *
+ * Memoized per request on (account id, role) — both primitives, so the layout's
+ * call and the page's call share one result even though each built its own
+ * Principal object.
  */
+const permissionSetFor = cache(
+  async (accountId: string, role: StaffRole): Promise<ReadonlySet<Permission>> => {
+    if (role === 'super_admin' || role === 'main_admin') {
+      return new Set(ALL_PERMISSIONS);
+    }
+    const overrides = await overridesForAccount(accountId);
+    return new Set(effectivePermissionsForRole(role, overrides));
+  },
+);
+
 export async function effectivePermissionSet(
   principal: Principal,
 ): Promise<ReadonlySet<Permission>> {
-  if (principal.role === 'super_admin' || principal.role === 'main_admin') {
-    return new Set(ALL_PERMISSIONS);
-  }
-  const overrides = await getAccountOverrides(principal.id);
-  return new Set(effectivePermissionsForRole(principal.role, overrides));
+  return permissionSetFor(principal.id, principal.role);
 }
 
 /**
@@ -345,6 +381,21 @@ export function assertNotPartnerOverrideTarget(
   if (targetRole !== 'partner') return null;
   if (PARTNER_NATIVE_PERMISSIONS.includes(perm)) return null;
   return json({ error: 'partner_override_forbidden' }, 403);
+}
+
+/**
+ * The caller's IP for an audit row: first hop of x-forwarded-for (the client;
+ * on Vercel that hop is platform-set), else x-real-ip, else null. Six admin
+ * routes each carried their own copy of this under two different names.
+ *
+ * Distinct from rateLimit's clientIp(), which falls back to the string
+ * 'unknown' because a limiter always needs a bucket key. An audit row would
+ * rather record nothing than record a fake address, so this one returns null.
+ */
+export function auditIp(req: Request): string | null {
+  const forwarded = req.headers.get('x-forwarded-for');
+  if (forwarded) return forwarded.split(',')[0]!.trim();
+  return req.headers.get('x-real-ip');
 }
 
 /**

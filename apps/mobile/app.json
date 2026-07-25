@@ -11,7 +11,8 @@
     "ios": {
       "icon": "./assets/images/icon.png",
       "supportsTablet": false,
-      "bundleIdentifier": "com.gmmethod.gymtracker"
+      "bundleIdentifier": "com.gmmethod.gymtracker",
+      "usesAppleSignIn": true
     },
     "android": {
       "package": "com.gmmethod.gymtracker",
@@ -23,7 +24,6 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO",
         "android.permission.ACTIVITY_RECOGNITION",
         "android.permission.health.READ_STEPS"
       ],
@@ -46,11 +46,11 @@
       "expo-sqlite",
       "expo-web-browser",
       "@react-native-google-signin/google-signin",
+      "expo-apple-authentication",
       [
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true,
             "minSdkVersion": 26
           }
         }
@@ -65,13 +65,22 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "GYM Tracker uses the camera to scan food barcodes."
+          "cameraPermission": "GYM Tracker uses the camera to scan food barcodes and take progress photos.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "GYM Tracker needs photo library access so coaches can upload exercise demo videos."
+          "photosPermission": "GYM Tracker needs photo library access so you can add a profile photo, save private progress photos, and attach payment receipts.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "GYM Tracker uses Face ID to unlock the app when app lock is turned on."
         }
       ],
       [

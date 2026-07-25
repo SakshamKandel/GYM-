@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
 
 function whatNextCopy(receipt: MealOrderReceipt): string[] {
   if (receipt.status === 'cancelled' || receipt.status === 'refused') {
-    return ["This order was cancelled — you won't be charged for it."];
+    return ["This order was cancelled. You won't be charged for it."];
   }
   const lines = ["The partner has your order and will confirm it shortly."];
   if (receipt.timeline.some((t) => t.status === 'confirmed')) {
@@ -122,7 +122,7 @@ export default function OrderConfirmationScreen() {
   function shareReceipt(): void {
     if (!receipt) return;
     const lines = receipt.items.map(
-      (item) => `${item.qty}x ${item.name} — ${formatMoney(item.priceMinorSnapshot * item.qty, receipt.currency)}`,
+      (item) => `${item.qty}x ${item.name} · ${formatMoney(item.priceMinorSnapshot * item.qty, receipt.currency)}`,
     );
     const message = [`Order ${receipt.orderNumber}`, ...lines, `Total: ${formatMoney(receipt.totalMinor, receipt.currency)}`].join(
       '\n',

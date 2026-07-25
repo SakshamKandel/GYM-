@@ -1,5 +1,18 @@
 import type { Tier } from '@gym/shared';
+import { GM_TIERS } from '@gym/shared';
 import { useAuth } from '../state/auth';
+
+/**
+ * The ONE place that turns a tier into words a member can read.
+ *
+ * `Tier` values are internal slugs ('gold'), and copy that interpolated them
+ * raw — or hand-capitalised them with `charAt(0).toUpperCase()` — leaked the
+ * identifier into member-facing text. The catalog in @gym/shared already
+ * carries the display name, so read it from there and never re-spell it.
+ */
+export function tierName(tier: Tier): string {
+  return GM_TIERS.find((t) => t.tier === tier)?.name ?? 'Starter';
+}
 
 /**
  * The tier that gated UI should trust.

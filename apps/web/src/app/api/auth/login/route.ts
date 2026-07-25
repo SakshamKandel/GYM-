@@ -7,7 +7,7 @@ import { createSession } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { verifyPassword } from '@/lib/password';
-import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -28,8 +28,12 @@ export function OPTIONS() {
 
 export async function POST(req: Request) {
   try {
-    // Credential-stuffing damping: 10 attempts/min per IP (in-memory, per instance).
-    const limited = rateLimit({
+    // Credential-stuffing ceiling: 10 attempts/min per IP. Counted in the shared
+    // store when one is configured, so every serverless instance draws on ONE
+    // budget instead of each warm instance handing out its own ten; with no
+    // store configured it falls back to the per-instance counter, so local
+    // development is unchanged.
+    const limited = await rateLimitShared({
       route: 'auth/login',
       limit: 10,
       windowMs: 60_000,

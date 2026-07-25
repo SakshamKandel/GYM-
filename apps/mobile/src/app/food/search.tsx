@@ -194,7 +194,7 @@ export default function FoodSearchScreen() {
         <Animated.View entering={enterFade(0)} style={styles.statusRow}>
           <Ionicons name="alert-circle" size={16} color={colors.error} />
           <AppText variant="caption" color={colors.error}>
-            {"Couldn't save that food — try again"}
+            {"Couldn't save that food. Try again"}
           </AppText>
         </Animated.View>
       ) : null}
@@ -236,14 +236,14 @@ export default function FoodSearchScreen() {
             {error ? (
               <View style={styles.statusRow}>
                 <AppText variant="caption" color={colors.textDim}>
-                  Couldn&apos;t reach food database — check connection
+                  Couldn&apos;t reach food database. Check connection
                 </AppText>
               </View>
             ) : null}
             {queried === trimmed && !loading && !error && remote.length === 0 && local.length === 0 ? (
               <View style={styles.statusRow}>
                 <AppText variant="caption" color={colors.textDim}>
-                  No matches — try a simpler name
+                  No matches. Try a simpler name
                 </AppText>
               </View>
             ) : null}

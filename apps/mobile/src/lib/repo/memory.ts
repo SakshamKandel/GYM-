@@ -8,6 +8,7 @@ import {
   memberDataSyncCursorSchema,
   memberDataMutationSchema,
   trainingCatalogCacheSchema,
+  workoutRestoreCursorSchema,
 } from '@gym/shared';
 import type {
   DailyMacros,
@@ -23,6 +24,7 @@ import type {
   Streak,
   TrainingCatalogCache,
   WeightLog,
+  WorkoutRestoreCursor,
   WorkoutSessionBlueprint,
   WorkoutLog,
 } from '@gym/shared';
@@ -58,6 +60,8 @@ interface OwnerMemoryState {
   syncedWorkoutIds: string[];
   /** Permanently rejected rows stay local but no longer wedge the pending queue. */
   failedWorkoutSyncs: Record<string, WorkoutSyncFailure>;
+  /** Where the server-side restore stream stopped; null before the first pull. */
+  workoutRestoreCursor: WorkoutRestoreCursor | null;
   /** Restart metadata for active sessions only, keyed by local workout id. */
   workoutBlueprints: Record<string, WorkoutSessionBlueprint>;
   /** One latest local mutation per entity/key; replacing a row coalesces retries. */
@@ -90,6 +94,7 @@ function emptyOwnerState(): OwnerMemoryState {
     streak: { current: 0, best: 0, lastWorkoutDate: null },
     syncedWorkoutIds: [],
     failedWorkoutSyncs: {},
+    workoutRestoreCursor: null,
     workoutBlueprints: {},
     memberDataMutations: {},
     memberDataCursor: { ...EMPTY_MEMBER_DATA_SYNC_CURSOR },
@@ -396,10 +401,61 @@ function createScopedMemoryRepo(
       state.failedWorkoutSyncs[failure.workoutId] = failure;
       persist();
     },
+    async clearWorkoutSyncFailure(workoutId) {
+      // Mirrors the SQLite `synced_at IS NULL` guard — a confirmed row keeps
+      // its synced state and is never pushed back into the pending queue.
+      if (state.syncedWorkoutIds.includes(workoutId)) return;
+      if (!(workoutId in state.failedWorkoutSyncs)) return;
+      delete state.failedWorkoutSyncs[workoutId];
+      persist();
+    },
     async getWorkoutSyncFailures(limit) {
       return Object.values(state.failedWorkoutSyncs)
         .sort((a, b) => b.failedAt.localeCompare(a.failedAt))
         .slice(0, limit);
+    },
+
+    // ── Workout restore (server → device, additive only) ────
+    async getWorkoutRestoreCursor() {
+      return state.workoutRestoreCursor;
+    },
+    async applyWorkoutRestorePage(page) {
+      const existing = new Set(state.workouts.map((w) => w.id));
+      for (const workout of page.restoredWorkouts) {
+        // Absent-only, same rule as SQLite: whatever this device already holds
+        // for an id wins, so restore can never undo a local edit or a pending
+        // upload.
+        if (existing.has(workout.id)) continue;
+        existing.add(workout.id);
+        state.workouts.push({
+          id: workout.id,
+          date: workout.date,
+          planWorkoutId: workout.templateId,
+          name: workout.name,
+          startedAt: workout.startedAt,
+          finishedAt: workout.finishedAt,
+          durationSec: workout.durationSec,
+        });
+        // Mirrors the SQLite synced_at stamp — a restored row is already
+        // backed up and must never re-enter the upload queue.
+        state.syncedWorkoutIds.push(workout.id);
+        for (const set of workout.sets) {
+          state.sets.push({
+            id: set.id,
+            workoutLogId: workout.id,
+            exerciseId: set.exerciseId,
+            exerciseName: set.exerciseName,
+            setNo: set.setNo,
+            weightKg: set.weightKg,
+            reps: set.reps,
+            rpe: set.rpe,
+            isPr: set.isPr,
+            loggedAt: set.loggedAt,
+          });
+        }
+      }
+      if (page.cursor !== null) state.workoutRestoreCursor = page.cursor;
+      persist();
     },
 
     async getPendingMemberDataMutations(limit) {
@@ -525,7 +581,9 @@ function createScopedMemoryRepo(
       const i = state.foods.findIndex((f) => f.id === item.id);
       if (i >= 0) state.foods[i] = item;
       else state.foods.push(item);
-      if (item.source === 'custom') queueMemberData({ entity: 'food', value: item });
+      if (item.source === 'custom') {
+        queueMemberData({ entity: 'food', value: { ...item, source: 'custom' as const } });
+      }
       persist();
       if (item.source === 'custom') notifyMemberDataChanged();
     },
@@ -704,6 +762,10 @@ export async function createMemoryRepo(): Promise<RepoStore> {
           owner.memberDataCursor = parsedCursor.success
             ? parsedCursor.data
             : { ...EMPTY_MEMBER_DATA_SYNC_CURSOR };
+          // Stores written before restore landed have no cursor at all; null
+          // simply means "start from this account's first workout".
+          const parsedRestore = workoutRestoreCursorSchema.safeParse(owner.workoutRestoreCursor);
+          owner.workoutRestoreCursor = parsedRestore.success ? parsedRestore.data : null;
         }
       }
     }

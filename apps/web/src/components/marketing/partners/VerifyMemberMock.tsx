@@ -67,8 +67,8 @@ export function VerifyMemberMock() {
       </div>
 
       <p className="mt-3 text-[9.5px] leading-relaxed text-[#9a9ea6]">
-        First name · tier · validity — nothing else. Unknown codes get a uniform &ldquo;not
-        found&rdquo;.
+        First name · tier · how long it runs, nothing else. Any code we do not know gets the same
+        &ldquo;not found&rdquo;, so nobody can guess their way in.
       </p>
     </div>
   );

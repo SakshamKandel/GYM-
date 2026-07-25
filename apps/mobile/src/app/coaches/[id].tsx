@@ -194,9 +194,9 @@ function requestErrorLine(code: string): string {
     case 'not_found':
       return 'This coach is no longer available.';
     case 'unauthorized':
-      return 'Your session expired — sign in again to continue.';
+      return 'Your session expired. Sign in again to continue.';
     default:
-      return "Couldn't reach the server — try again.";
+      return "That didn't go through. Check your connection and try again.";
   }
 }
 
@@ -394,6 +394,8 @@ export default function CoachProfileScreen() {
                 headline={coach.headline}
                 photoUrl={coach.photoUrl ?? coach.avatarUrl}
                 tier={coach.coachTier}
+                rating={coach.rating}
+                reviewCount={coach.reviewCount}
               />
             </Animated.View>
 
@@ -631,7 +633,7 @@ export default function CoachProfileScreen() {
             ) : pendingHere ? (
               <>
                 <AppText variant="caption" color={colors.textDim} style={styles.ctaNote}>
-                  Your request is with {coach.displayName} — you&apos;ll hear back soon.
+                  Your request is with {coach.displayName}. You&apos;ll hear back soon.
                 </AppText>
                 <Button
                   label="Cancel request"

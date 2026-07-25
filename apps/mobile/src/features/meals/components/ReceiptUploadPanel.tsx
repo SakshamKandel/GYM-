@@ -4,7 +4,9 @@ import * as ImagePicker from 'expo-image-picker';
 import { formatMoney } from '@gym/shared';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText, Button, PressableScale } from '../../../components/ui';
+import { PayeeDetailsCard } from '../../../components/payments/PayeeDetailsCard';
 import { ApiError, reserveImageUpload, uploadImageAsset } from '../../../lib/api/client';
+import { supportsRail, usePayee } from '../../../lib/api/payee';
 import { successHaptic, warnHaptic } from '../../../lib/haptics';
 import { MealsApiError, submitMealReceipt, type MealOrder } from '../api';
 import { mealErrorMessage, paymentMethodLabel } from '../logic';
@@ -15,6 +17,12 @@ import { mealErrorMessage, paymentMethodLabel } from '../logic';
  * screen's "receipt-submitted state" affordance (plan §6), so both submit
  * through the exact same reserve → upload → submitMealReceipt sequence
  * SubscribeScreen.tsx uses for the Nepal manual-payment flow.
+ *
+ * The payee (where the money actually goes) is shown DIRECTLY above the
+ * uploader. Asking for a transfer used to name no wallet at all, which made the
+ * instruction impossible to follow. When nothing is configured the panel says
+ * so plainly instead; the uploader stays available because this panel is also
+ * reached from my-orders, where the member may have already paid.
  */
 
 const styles = StyleSheet.create({
@@ -43,6 +51,8 @@ export function ReceiptUploadPanel({
   const [submitting, setSubmitting] = useState(false);
   const [line, setLine] = useState<{ text: string; tone: 'dim' | 'error' | 'success' } | null>(null);
   const method = order.paymentMethod === 'khalti' ? 'khalti' : 'esewa';
+  const { payee, loading: payeeLoading } = usePayee(token, 'meals');
+  const canPay = supportsRail(payee, method);
 
   async function pick(): Promise<void> {
     setLine(null);
@@ -89,6 +99,22 @@ export function ReceiptUploadPanel({
         Pay {formatMoney(order.totalMinor, order.currency)} via {paymentMethodLabel(order.paymentMethod)}, then
         upload the confirmation screenshot for review.
       </AppText>
+      {payee && canPay ? (
+        <PayeeDetailsCard
+          payee={payee}
+          rails={[method]}
+          amountLabel={formatMoney(order.totalMinor, order.currency)}
+        />
+      ) : payeeLoading ? (
+        <AppText variant="caption" color={colors.textDim}>
+          Getting the payment details…
+        </AppText>
+      ) : (
+        <AppText variant="caption" color={colors.warning}>
+          We can’t show where to send this payment right now. Please check with support before you
+          pay.
+        </AppText>
+      )}
       {asset ? (
         <PressableScale accessibilityRole="button" accessibilityLabel="Change receipt photo" onPress={pick}>
           <Image source={{ uri: asset.uri }} style={styles.photoPreview} accessibilityIgnoresInvertColors />

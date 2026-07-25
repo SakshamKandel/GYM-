@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import type { UnitPref } from '@gym/shared';
+import {
+  workoutRestorePageSchema,
+  type UnitPref,
+  type WorkoutRestoreCursor,
+  type WorkoutRestorePage,
+} from '@gym/shared';
 import { BASE_URL } from '../../lib/api/client';
 
 /**
@@ -75,15 +80,26 @@ const syncResponseSchema = z.object({
 /** Every call gives up after this long — sync retries on the next trigger. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/** What a call may carry. Both halves are optional and independent. */
+interface WorkoutSyncBody {
+  workouts?: SyncWorkoutPayload[];
+  /** Omit for push-only. Null asks for the restore stream from its start. */
+  cursor?: WorkoutRestoreCursor | null;
+}
+
+interface WorkoutSyncResult {
+  syncedWorkoutIds: string[];
+  /** Null when no cursor was sent, or the server is older than restore. */
+  restore: WorkoutRestorePage | null;
+}
+
 /**
- * POST /api/sync/workouts {workouts} → the workout ids the server accepted
- * (previously-synced ids included — duplicates are a server-side no-op).
- * Throws SyncApiError; callers treat every failure as "retry next trigger".
+ * POST /api/sync/workouts — push a batch, pull a restore page, or both.
+ *
+ * JSON.stringify drops undefined-valued keys, so a push-only call puts exactly
+ * `{"workouts":[…]}` on the wire, the same bytes as before restore existed.
  */
-export async function postWorkoutBatch(
-  token: string,
-  workouts: SyncWorkoutPayload[],
-): Promise<string[]> {
+async function postWorkoutSync(token: string, body: WorkoutSyncBody): Promise<WorkoutSyncResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let res: Response;
@@ -95,11 +111,11 @@ export async function postWorkoutBatch(
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ workouts }),
+      body: JSON.stringify({ workouts: body.workouts, cursor: body.cursor }),
       signal: controller.signal,
     });
   } catch {
-    throw new SyncApiError('network', "Can't reach the server");
+    throw new SyncApiError('network', "We couldn't connect. Check your connection and try again");
   } finally {
     clearTimeout(timer);
   }
@@ -118,5 +134,39 @@ export async function postWorkoutBatch(
   }
   const parsed = syncResponseSchema.safeParse(data);
   if (!parsed.success) throw new SyncApiError('network', 'Unexpected server response');
-  return parsed.data.syncedWorkoutIds;
+  // The restore keys are read separately and never required: a server that
+  // predates restore (a hosted deploy lagging the app build) simply omits
+  // them, and the push half of this call must still succeed.
+  const restore = workoutRestorePageSchema.safeParse(data);
+  return {
+    syncedWorkoutIds: parsed.data.syncedWorkoutIds,
+    restore: restore.success ? restore.data : null,
+  };
+}
+
+/**
+ * POST /api/sync/workouts {workouts} → the workout ids the server accepted
+ * (previously-synced ids included — duplicates are a server-side no-op).
+ * Throws SyncApiError; callers treat every failure as "retry next trigger".
+ */
+export async function postWorkoutBatch(
+  token: string,
+  workouts: SyncWorkoutPayload[],
+): Promise<string[]> {
+  const result = await postWorkoutSync(token, { workouts });
+  return result.syncedWorkoutIds;
+}
+
+/**
+ * One page of this account's server-held workouts, resumed from `cursor`
+ * (null = from the beginning). Null result = this server can't restore; the
+ * caller stops asking for the rest of the run. Throws SyncApiError like its
+ * sibling, so offline is just "try again next trigger".
+ */
+export async function fetchWorkoutRestorePage(
+  token: string,
+  cursor: WorkoutRestoreCursor | null,
+): Promise<WorkoutRestorePage | null> {
+  const result = await postWorkoutSync(token, { cursor });
+  return result.restore;
 }

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -5,6 +6,7 @@ import { staffFromCookie } from '@/lib/staffSession';
 import { GymModerationConsole } from './_components/GymModerationConsole';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Gym reports & reviews' };
 export const dynamic = 'force-dynamic';
 
 /**

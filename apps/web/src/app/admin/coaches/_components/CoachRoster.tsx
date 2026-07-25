@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import { Badge, EmptyState, SearchField, TierChip } from '@/components/console';
 import { CoachDetail } from './CoachDetail';
 
@@ -42,20 +42,29 @@ export interface TierRequest {
  * Coach roster — a master/detail screen. The left column lists every coach with
  * their active client count and accepting/inactive badges, filterable by a
  * search box. The right column shows the selected coach's active clients plus
- * the "Assign client" control. Both lists are server-rendered snapshots passed
- * in as props; after any mutation (assign / end) the detail pane calls
- * router.refresh() to re-run the server component and pull fresh data, so the
+ * the "Assign client" control.
+ *
+ * Selection lives in the URL (`?coach=<id>`), not in local state, because only
+ * the SELECTED coach's client list is loaded. Shipping every coach's clients up
+ * front put every coached member's name, email, and tier into the page payload
+ * on every visit; now the roster carries counts only and picking a coach
+ * re-runs the server component for just that one list. Everything else is
+ * unchanged: after any mutation the detail pane calls router.refresh() and the
  * server stays the single source of truth (no optimistic client cache).
  */
 export function CoachRoster({
   coaches,
-  clientsByCoach,
+  selectedCoachId,
+  selectedClients,
   tierRequestsByCoach,
   canAssign,
   canReview,
 }: {
   coaches: CoachSummary[];
-  clientsByCoach: Record<string, ClientAssignment[]>;
+  /** Server-resolved selection (from `?coach=`, falling back to the first coach). */
+  selectedCoachId: string | null;
+  /** Active clients for `selectedCoachId` ONLY — never the whole platform. */
+  selectedClients: ClientAssignment[];
   tierRequestsByCoach: Record<string, TierRequest[]>;
   /** Effective `coach.assign` — gates the "Assign client" control. */
   canAssign: boolean;
@@ -64,10 +73,21 @@ export function CoachRoster({
 }) {
   const router = useRouter();
   const [query, setQuery] = useState('');
-  // Persist the selection across router.refresh() (props change, this survives).
-  const [selectedId, setSelectedId] = useState<string | null>(
-    coaches.length > 0 ? coaches[0].id : null,
-  );
+  // Which coach the operator just clicked. Only meaningful while the navigation
+  // that loads their clients is still in flight; once it lands, the server's
+  // `selectedCoachId` matches it and this falls back out of use.
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [navigating, startNavigation] = useTransition();
+
+  function selectCoach(id: string) {
+    if (id === selectedCoachId) return;
+    setPendingId(id);
+    startNavigation(() => {
+      // replace, not push: flipping between coaches shouldn't stack up history
+      // entries the operator has to back out of one by one.
+      router.replace(`/admin/coaches?coach=${encodeURIComponent(id)}`, { scroll: false });
+    });
+  }
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -79,12 +99,18 @@ export function CoachRoster({
     );
   }, [coaches, query]);
 
-  // Selected coach — prefer the explicit selection, but fall back to the first
-  // coach so the detail pane is never empty when coaches exist. Resolve against
-  // the FULL list (not the filtered one) so filtering the list doesn't blank the
-  // currently-open detail.
-  const selected =
-    coaches.find((c) => c.id === selectedId) ?? coaches[0] ?? null;
+  // Selected coach — resolved against the FULL list (not the filtered one) so
+  // filtering the list doesn't blank the currently-open detail. The server
+  // already applied the first-coach fallback.
+  const selected = coaches.find((c) => c.id === selectedCoachId) ?? null;
+  // The row to highlight: the one just clicked while its clients load, then the
+  // server's selection. Keeps the click feeling instant even though the list it
+  // opens comes from the server.
+  const highlightId = navigating && pendingId ? pendingId : selectedCoachId;
+  // True while the pane's contents belong to a DIFFERENT coach than the one now
+  // highlighted — showing the previous coach's clients under the new coach's
+  // name would be worse than showing nothing.
+  const detailLoading = navigating && pendingId != null && pendingId !== selectedCoachId;
 
   if (coaches.length === 0) {
     return (
@@ -128,14 +154,14 @@ export function CoachRoster({
             </div>
           ) : (
             filtered.map((c) => {
-              const isSelected = c.id === selected?.id;
+              const isSelected = c.id === highlightId;
               const label = c.coachName || c.displayName || c.email;
               const inactive = c.isActive === false;
               return (
                 <button
                   key={c.id}
                   type="button"
-                  onClick={() => setSelectedId(c.id)}
+                  onClick={() => selectCoach(c.id)}
                   aria-pressed={isSelected}
                   className="gt-card"
                   style={{
@@ -228,12 +254,21 @@ export function CoachRoster({
         </div>
       </div>
 
-      {/* Detail: selected coach's clients + assign control */}
-      {selected ? (
+      {/* Detail: selected coach's clients + assign control. Loaded on demand
+          for this coach alone, so switching coaches is a server round trip. */}
+      {detailLoading ? (
+        <div
+          className="gt-card"
+          aria-busy="true"
+          style={{ padding: 32, color: 'var(--gt-text-dim)', fontSize: 14 }}
+        >
+          Loading this coach&rsquo;s clients…
+        </div>
+      ) : selected ? (
         <CoachDetail
           key={selected.id}
           coach={selected}
-          clients={clientsByCoach[selected.id] ?? []}
+          clients={selectedClients}
           tierRequests={tierRequestsByCoach[selected.id] ?? []}
           canAssign={canAssign}
           canReview={canReview}

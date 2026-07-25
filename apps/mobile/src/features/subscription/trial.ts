@@ -19,15 +19,15 @@ export const TRIAL_TIERS = ['silver', 'gold', 'elite'] as const;
 export function trialErrorLine(code: RewardsErrorCode): string {
   switch (code) {
     case 'trial_used':
-      return "You've already used your trial for this plan.";
+      return "You've already used your trial for this membership.";
     case 'not_an_upgrade':
-      return 'Your current plan already includes this.';
+      return 'Your current membership already includes this.';
     case 'invalid':
-      return 'Something went wrong — try again.';
+      return 'Something went wrong. Try again.';
     case 'unauthorized':
-      return 'Your session expired — sign in again.';
+      return 'Your session expired. Sign in again.';
     default:
-      return "Can't start the trial — try again in a bit.";
+      return "Can't start the trial. Try again in a bit.";
   }
 }
 

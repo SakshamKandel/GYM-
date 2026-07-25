@@ -1,4 +1,12 @@
-import type { GymAmenity, GymCategory, GymStatus, GymWeeklyHours } from '@gym/shared';
+import type {
+  GymAmenity,
+  GymCategory,
+  GymCrowdStatus,
+  GymEquipmentItem,
+  GymPassOption,
+  GymStatus,
+  GymWeeklyHours,
+} from '@gym/shared';
 
 export interface GymSocialLinkValue {
   platform: string;
@@ -29,6 +37,12 @@ export interface GymRow {
   socialLinks: GymSocialLinkValue[];
   hours: GymWeeklyHours;
   amenities: GymAmenity[];
+  /** Operator-supplied kit list. Empty = we were never told; never invented. */
+  equipment: GymEquipmentItem[];
+  /** null = no busy-times info for this gym (the honest default). */
+  crowdData: GymCrowdStatus | null;
+  /** Day passes / memberships. Empty = the gym has not given us any. */
+  passOptions: GymPassOption[];
   externalImageUrl: string | null;
   priceNote: string;
   description: string;

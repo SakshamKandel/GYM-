@@ -1,9 +1,11 @@
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { getDb } from '@/lib/db';
 import { StoreControls } from '../_components/StoreControls';
 import { deriveStoreState, loadPartnerMenu, requirePartnerPage } from '../_data';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Store controls' };
 export const dynamic = 'force-dynamic';
 
 /**

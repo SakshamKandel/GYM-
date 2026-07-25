@@ -150,19 +150,31 @@ export function useVideoLibrary(): VideoLibraryState & { reload: () => void } {
   return { ...state, reload: () => setNonce((n) => n + 1) };
 }
 
+/**
+ * What the player screen renders. The three failure shapes are kept apart on
+ * purpose: they need different words and only some of them are worth retrying.
+ *  - `notFound`      — the video is gone; retrying will not bring it back.
+ *  - `notConfigured` — playback isn't switched on yet; nothing the member did.
+ *  - `unavailable`   — a connection or link problem, the retryable one.
+ */
 export type VideoPlaybackState =
   | { status: 'loading' }
   | { status: 'ready'; url: string; title: string; description: string }
   | { status: 'locked'; requiredTier: Tier }
+  | { status: 'notFound' }
+  | { status: 'notConfigured' }
   | { status: 'unavailable' };
 
 /**
  * Resolve signed playback for one video. A short-lived URL is re-fetched
  * whenever the id or session token changes; it is never cached beyond state.
+ * `reload()` mints a fresh URL, which is the only thing that can rescue a link
+ * that has already expired.
  */
-export function useVideoPlayback(id: string): VideoPlaybackState {
+export function useVideoPlayback(id: string): VideoPlaybackState & { reload: () => void } {
   const token = useAuth((s) => s.token);
   const [state, setState] = useState<VideoPlaybackState>({ status: 'loading' });
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     let mounted = true;
@@ -186,6 +198,12 @@ export function useVideoPlayback(id: string): VideoPlaybackState {
         case 'locked':
           setState({ status: 'locked', requiredTier: result.requiredTier });
           break;
+        case 'not_found':
+          setState({ status: 'notFound' });
+          break;
+        case 'not_configured':
+          setState({ status: 'notConfigured' });
+          break;
         default:
           setState({ status: 'unavailable' });
       }
@@ -193,9 +211,9 @@ export function useVideoPlayback(id: string): VideoPlaybackState {
     return () => {
       mounted = false;
     };
-  }, [id, token]);
+  }, [id, token, nonce]);
 
-  return state;
+  return { ...state, reload: () => setNonce((n) => n + 1) };
 }
 
 /** mm:ss runtime label, or null when the duration is unknown. */

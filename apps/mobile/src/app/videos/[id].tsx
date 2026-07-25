@@ -19,8 +19,15 @@ import { useVideoPlayback } from '../../features/training/videoLibrary';
 
 /**
  * Video player — resolves a short-lived signed URL for one library video and
- * plays it with the shared ExerciseVideo (expo-video) surface. Locked → paywall
- * affordance; anything else → a graceful unavailable state with a way back.
+ * plays it with the shared ExerciseVideo surface. Locked → paywall affordance.
+ *
+ * The failure branches are split rather than collapsed into one "unavailable"
+ * dead end, because they need different words and different offers: a removed
+ * video only earns a way back, while a link problem or playback not being
+ * switched on yet is worth another try. Try again re-mints the signed link —
+ * the player's own retry can only rebuild itself, and a link that has already
+ * expired never recovers from that alone, so the player's retry is wired to the
+ * same refetch.
  */
 
 const styles = StyleSheet.create({
@@ -50,7 +57,7 @@ export default function VideoPlayerScreen() {
         <Skeleton height={240} radius={radius.md} style={styles.body} />
       ) : state.status === 'ready' ? (
         <Animated.View entering={enterUp(0)} style={styles.body}>
-          <ExerciseVideo url={state.url} label={state.title} />
+          <ExerciseVideo url={state.url} label={state.title} onRetry={state.reload} />
           {state.description.trim().length > 0 ? (
             <AppText variant="body" color={colors.textDim} style={styles.description}>
               {state.description}
@@ -80,11 +87,29 @@ export default function VideoPlayerScreen() {
             />
           </PressableScale>
         </Animated.View>
-      ) : (
+      ) : state.status === 'notFound' ? (
         <EmptyState
           icon="videocam-off-outline"
-          title="Video unavailable"
-          body="This video can't be played right now. It may have been removed."
+          title="This video is gone"
+          body="It's no longer in the coach library."
+          actionLabel="Back to videos"
+          onAction={() => router.replace('/videos' as Href)}
+        />
+      ) : state.status === 'notConfigured' ? (
+        <EmptyState
+          icon="construct-outline"
+          title="Not ready yet"
+          body="Coach videos aren't switched on right now. Have another go in a bit."
+          actionLabel="Try again"
+          onAction={state.reload}
+        />
+      ) : (
+        <EmptyState
+          icon="cloud-offline-outline"
+          title="Video won't play"
+          body="Check your connection and try again."
+          actionLabel="Try again"
+          onAction={state.reload}
         />
       )}
     </Screen>

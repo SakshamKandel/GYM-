@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -5,6 +6,7 @@ import { staffFromCookie } from '@/lib/staffSession';
 import { MealSubscriptionsRoster } from './_components/MealSubscriptionsRoster';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Meal subscriptions' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -26,9 +28,9 @@ export default async function AdminMealSubscriptionsPage() {
     <div style={{ maxWidth: 1200 }}>
       <PageHeader
         title="Meal subscriptions"
-        subtitle="Every member's recurring meal plan — schedule, partner, price, and this week's billing-cycle state. Pause or cancel a plan on the member's behalf."
+        subtitle="Every member's recurring meal plan: schedule, partner, price, and this week's billing-cycle state. Pause or cancel a plan on the member's behalf."
       />
-      <MealSubscriptionsRoster />
+      <MealSubscriptionsRoster canViewMembers={permissions.has('members.read')} />
     </div>
   );
 }

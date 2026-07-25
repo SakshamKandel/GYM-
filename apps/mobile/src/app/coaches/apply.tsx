@@ -21,6 +21,11 @@ import {
   SectionLabel,
   Stepper,
 } from '../../components/ui';
+import {
+  mediaPermissionMessage,
+  OpenSettingsButton,
+  requestMediaPermission,
+} from '../../components/ui/permissions';
 import { reserveImageUpload, toApiError, uploadImageAsset } from '../../lib/api/client';
 import {
   submitCoachApplication,
@@ -110,6 +115,8 @@ export default function CoachApplyScreen() {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  // Photo access is denied for good — the error line gets a route out.
+  const [photoBlocked, setPhotoBlocked] = useState(false);
 
   const [achievementDraft, setAchievementDraft] = useState('');
   const [certDraft, setCertDraft] = useState({ title: '', issuer: '', year: '' });
@@ -172,9 +179,11 @@ export default function CoachApplyScreen() {
   async function pickAvatar(): Promise<void> {
     if (!token || avatarUploading) return;
     setAvatarError(null);
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    setPhotoBlocked(false);
+    const perm = await requestMediaPermission('library');
     if (!perm.granted) {
-      setAvatarError('Allow photo library access in Settings to add a photo.');
+      setPhotoBlocked(perm.blocked);
+      setAvatarError(mediaPermissionMessage('library', 'add a photo', perm.blocked));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -188,7 +197,7 @@ export default function CoachApplyScreen() {
     if (!asset) return;
     // Guard against absurdly large originals before the bytes leave the phone.
     if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_PHOTO_BYTES) {
-      setAvatarError('That photo is too large — pick one under 10 MB.');
+      setAvatarError('That photo is too large. Pick one under 10 MB.');
       return;
     }
 
@@ -286,8 +295,8 @@ export default function CoachApplyScreen() {
             : code === 'already_staff'
               ? 'Staff accounts cannot apply to become a coach.'
               : code === 'unauthorized'
-                ? 'Your session expired — sign in again.'
-                : "Couldn't submit that — check the fields and try again.",
+                ? 'Your session expired. Sign in again.'
+                : "Couldn't submit that. Check the fields and try again.",
       );
       if (code === 'already_open' || code === 'already_coach' || code === 'already_staff') {
         setReapplying(false);
@@ -363,7 +372,7 @@ export default function CoachApplyScreen() {
             <View style={styles.reapplyBanner}>
               <Ionicons name="refresh" size={16} color={colors.textDim} />
               <AppText variant="caption" color={colors.textDim} style={styles.reapplyText}>
-                Editing your previous application — resubmitting sends it for review again.
+                Editing your previous application. Resubmitting sends it for review again.
               </AppText>
             </View>
           ) : null}
@@ -413,9 +422,10 @@ export default function CoachApplyScreen() {
                 </AppText>
               ) : (
                 <AppText variant="caption" color={colors.textFaint} style={styles.avatarErrorText}>
-                  Optional — you can add this later too.
+                  Optional. You can add this later too.
                 </AppText>
               )}
+              {photoBlocked ? <OpenSettingsButton /> : null}
             </View>
           </View>
 
@@ -468,7 +478,7 @@ export default function CoachApplyScreen() {
 
           <SectionLabel>Specialties</SectionLabel>
           <AppText variant="caption" style={styles.hint}>
-            Pick up to {SPECIALTIES_MAX} — members filter coaches by these.
+            Pick up to {SPECIALTIES_MAX}. Members filter coaches by these.
           </AppText>
           <View style={styles.chips}>
             {COACH_SPECIALTIES.map((s) => (
@@ -482,7 +492,7 @@ export default function CoachApplyScreen() {
           </View>
           {specialtyNote ? (
             <AppText variant="caption" color={colors.textDim} style={styles.noteLine}>
-              That&apos;s the limit of {SPECIALTIES_MAX} — deselect one to swap it.
+              That&apos;s the limit of {SPECIALTIES_MAX}. Deselect one to swap it.
             </AppText>
           ) : null}
 
@@ -523,7 +533,7 @@ export default function CoachApplyScreen() {
             </View>
           ) : (
             <AppText variant="caption" color={colors.textFaint} style={styles.noteLine}>
-              Max {ACHIEVEMENTS_MAX} achievements — remove one to add another.
+              Max {ACHIEVEMENTS_MAX} achievements. Remove one to add another.
             </AppText>
           )}
 
@@ -599,7 +609,7 @@ export default function CoachApplyScreen() {
             </View>
           ) : (
             <AppText variant="caption" color={colors.textFaint} style={styles.noteLine}>
-              Max {CERTS_MAX} certifications — remove one to add another.
+              Max {CERTS_MAX} certifications. Remove one to add another.
             </AppText>
           )}
 
@@ -680,7 +690,7 @@ function StatusCard({
         <AppText variant="bodyBold">Application under review</AppText>
       </View>
       <AppText variant="caption" color={colors.textDim}>
-        We&apos;ll let you know once an admin has reviewed it — usually within a few days.
+        We&apos;ll let you know once an admin has reviewed it, usually within a few days.
       </AppText>
     </View>
   );

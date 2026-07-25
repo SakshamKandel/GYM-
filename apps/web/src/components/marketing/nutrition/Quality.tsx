@@ -57,7 +57,7 @@ function QualityPanel() {
           })}
         </div>
         <div className="mt-2.5 grid grid-cols-5 gap-2.5">
-          <p className="col-start-2 text-center font-mono text-[9.5px] uppercase tracking-[0.12em] text-gravel-faint">
+          <p className="col-start-2 text-center font-mono text-[11px] uppercase tracking-[0.12em] text-gravel-faint">
             ▲ your scanned bar
           </p>
         </div>
@@ -84,8 +84,8 @@ function QualityPanel() {
               >
                 {row.n}
               </span>
-              <span className="flex-1 text-[13.5px] font-semibold text-ink">{row.label}</span>
-              <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-gravel-faint">
+              <span className="flex-1 text-[14.5px] font-semibold text-ink">{row.label}</span>
+              <span className="font-mono text-[11px] uppercase tracking-[0.1em] text-gravel-faint">
                 {row.note}
               </span>
             </div>
@@ -99,14 +99,14 @@ function QualityPanel() {
           {SIGNALS.map((sig) => (
             <span
               key={sig.label}
-              className="inline-flex items-center gap-2 rounded-full bg-ink px-3.5 py-2 font-mono text-[10.5px] uppercase tracking-[0.12em] text-snow"
+              className="inline-flex items-center gap-2 rounded-full bg-ink px-3.5 py-2 font-mono text-[11px] uppercase tracking-[0.12em] text-snow"
             >
               {sig.label}
               <span className={`font-semibold ${sig.color}`}>{sig.verdict}</span>
             </span>
           ))}
         </div>
-        <p className="mt-3.5 font-mono text-[10px] uppercase tracking-[0.14em] text-gravel-faint">
+        <p className="mt-3.5 font-mono text-[11px] uppercase tracking-[0.14em] text-gravel-faint">
           Per 100 g · masoor dal, cooked · USDA record
         </p>
       </Card>
@@ -121,7 +121,7 @@ export function NutritionQuality() {
         <div className="grid items-center gap-16 lg:grid-cols-[1fr_1.05fr]">
           <div>
             <Reveal>
-              <Eyebrow tone="light">03 — Food quality</Eyebrow>
+              <Eyebrow tone="light">03 · Food quality</Eyebrow>
               <Display className="mt-4">
                 Signals,
                 <br />
@@ -130,14 +130,14 @@ export function NutritionQuality() {
               <Lead tone="light" className="mt-6">
                 Every matched food carries its evidence: a Nutri-Score letter, its NOVA
                 processing level, plus fiber, sugar and sodium. We surface the numbers and
-                skip the guilt — no food is &ldquo;bad&rdquo;, some are just
+                skip the guilt. No food is &ldquo;bad&rdquo;, some are just
                 information-rich.
               </Lead>
             </Reveal>
             <Reveal delay={120}>
               <p className="mt-5 max-w-xl text-[15px] leading-relaxed text-gravel">
                 The scores come straight from Open Food Facts and USDA records. We don&rsquo;t
-                editorialize them, re-weight them, or hide them behind a paywall — they sit
+                editorialize them, re-weight them, or hide them behind a paywall. They sit
                 right in the scan result and the search rows.
               </p>
             </Reveal>

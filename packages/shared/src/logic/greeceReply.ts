@@ -45,7 +45,7 @@ export interface GreeceReply {
   headline: string;
   /** 1–3 body lines referencing the real facts, in coach voice. */
   lines: string[];
-  /** The closing line: "— The GM Method" for silver/gold, "— Greece" for elite. */
+  /** The closing line: "The GM Method" for silver/gold, "Greece" for elite. */
   signoff: string;
 }
 
@@ -63,7 +63,7 @@ function buildHeadline(signals: CheckInSignals): string {
   if (signals.weekFeel === 3) return 'Strong week. That is the standard now.';
   if (signals.weekFeel === 1) {
     return signals.energy === 1
-      ? 'Rough week — let us reset and go again.'
+      ? 'Rough week. Let us reset and go again.'
       : 'A tough week still counts. You showed up.';
   }
   return signals.energy >= 2
@@ -77,23 +77,23 @@ function trendLine(facts: CheckInFacts): string | null {
   const magnitude = Math.abs(Math.round(rate * 10) / 10);
   if (magnitude < 0.05) {
     return facts.goal === 'muscle'
-      ? 'The scale held flat — we want it creeping up, so eat.'
-      : 'The scale held flat this week — steady is fine.';
+      ? 'The scale held flat. We want it creeping up, so eat.'
+      : 'The scale held flat this week. Steady is fine.';
   }
   const losing = rate < 0;
   switch (facts.goal) {
     case 'fat_loss':
       return losing
-        ? `Down ${magnitude} kg on the trend — exactly the direction we want.`
-        : `Trend ticked up ${magnitude} kg — nothing to panic about, we adjust.`;
+        ? `Down ${magnitude} kg on the trend. Exactly the direction we want.`
+        : `Trend ticked up ${magnitude} kg. Nothing to panic about, we adjust.`;
     case 'muscle':
       return losing
-        ? `Trend dipped ${magnitude} kg — we need to feed the growth.`
-        : `Up ${magnitude} kg on the trend — building, right on plan.`;
+        ? `Trend dipped ${magnitude} kg. We need to feed the growth.`
+        : `Up ${magnitude} kg on the trend. Building, right on plan.`;
     case 'strength':
       return losing
-        ? `Down ${magnitude} kg — we protect the fuel that drives your lifts.`
-        : `Up ${magnitude} kg — the scale is backing your strength work.`;
+        ? `Down ${magnitude} kg. We protect the fuel that drives your lifts.`
+        : `Up ${magnitude} kg. The scale is backing your strength work.`;
   }
 }
 
@@ -113,12 +113,12 @@ export function greeceReply(signals: CheckInSignals, facts: CheckInFacts): Greec
   // 1) The standout win — the emotional hook.
   if (facts.topPr !== undefined) {
     candidates.push(
-      `You added weight to your ${facts.topPr.exerciseName} — that's the GM method working.`,
+      `You added weight to your ${facts.topPr.exerciseName}. That's the GM method working.`,
     );
   } else if (facts.prCount > 0) {
     candidates.push(`${facts.prCount} PRs this week. The work is showing.`);
   } else if (facts.weeklyVolumeKg >= BIG_VOLUME_KG) {
-    candidates.push('Big volume week — no PR needed, that tonnage is the win.');
+    candidates.push('Big volume week. No PR needed, that tonnage is the win.');
   }
 
   // 2) The calorie nudge — reference the exact number the engine chose.
@@ -127,18 +127,18 @@ export function greeceReply(signals: CheckInSignals, facts: CheckInFacts): Greec
       `I nudged your calories ${deltaPhrase(facts.kcalDeltaFromCheckIn)} to match your trend.`,
     );
   } else {
-    candidates.push('Calories stay put — you are right in the band.');
+    candidates.push('Calories stay put. You are right in the band.');
   }
 
   // 3) Recovery guidance when it's actually triggered — deload wins over
   //    generic low-energy advice. Ranked above the trend line so it survives
   //    the tier truncation on a heavy, sore week.
   if (facts.deloadSuggested || (signals.soreness === 3 && facts.weeklyVolumeKg >= BIG_VOLUME_KG)) {
-    candidates.push('Soreness is high on heavy volume — take a lighter week, then attack.');
+    candidates.push('Soreness is high on heavy volume. Take a lighter week, then attack.');
   } else if (signals.energy === 1) {
-    candidates.push('Low energy — prioritise sleep and protein before the next block.');
+    candidates.push('Low energy. Prioritise sleep and protein before the next block.');
   } else if (signals.soreness === 3) {
-    candidates.push('Legs and back need recovery — add a mobility day this week.');
+    candidates.push('Legs and back need recovery. Add a mobility day this week.');
   }
 
   // 4) The weight trend vs the goal — context fallback.
@@ -162,6 +162,6 @@ export function greeceReply(signals: CheckInSignals, facts: CheckInFacts): Greec
     }
   }
 
-  const signoff = isElite ? '— Greece' : '— The GM Method';
+  const signoff = isElite ? 'Greece' : 'The GM Method';
   return { headline, lines, signoff };
 }

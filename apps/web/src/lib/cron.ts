@@ -1,9 +1,24 @@
 import { timingSafeEqual } from 'node:crypto';
-import { accounts, mealBillingCycles, notifications } from '@gym/db';
-import { cronDedupeKey, ktmDateString } from '@gym/shared';
-import { and, asc, eq, gt, isNull, lt, lte, ne, notExists, sql } from 'drizzle-orm';
+import { accounts, mealBillingCycles, mealOrders, notifications } from '@gym/db';
+import { cronDedupeKey, ktmDateString, orderNumber } from '@gym/shared';
+import {
+  and,
+  asc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  ne,
+  notExists,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { getDb } from './db';
 import { json } from './http';
+import { advanceOrderStatus } from './meals';
 import { notify, redispatch } from './notify';
 
 /**
@@ -42,6 +57,30 @@ const EXPIRY_GRACE_DAYS = 2;
 const RENEWAL_LEAD_DAYS = 3;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * How long AFTER its ordering cutoff a still-`pending` order is auto-cancelled.
+ * The cutoff is the last moment the slot can be changed (21:00 the day before
+ * for lunch, 10:00 the same day for dinner), and delivery is hours later, so
+ * this grace leaves a restaurant that is simply late a real chance to confirm
+ * while still freeing the member long before the food was due.
+ */
+const PENDING_EXPIRY_GRACE_MS = 2 * HOUR_MS;
+
+/** How long a `pending` order may sit unconfirmed before staff are told. */
+const PENDING_ESCALATION_MS = 2 * HOUR_MS;
+
+/**
+ * Anti-join horizon for the escalation notice. An order can only stay `pending`
+ * until its cutoff + grace, so a week is far wider than any live candidate and
+ * keeps the correlated lookup off the full notifications history.
+ */
+const ESCALATION_LOOKBACK_MS = 7 * DAY_MS;
+
+/** Persisted on the order (and shown in both consoles) when the sweep cancels it. */
+const PENDING_EXPIRY_REASON = 'The restaurant did not confirm this order in time.';
 
 export interface CronResult {
   /** Rows the scan examined this run (≤ BATCH). */
@@ -124,6 +163,13 @@ export async function runRetryUnsent(now: Date = new Date()): Promise<CronResult
 
   let dispatched = 0;
   for (const row of rows) {
+    // Stamp the ATTEMPT before dispatching, mirroring notify()'s primary path.
+    // Sending first and stamping after leaves a window where a crash between the
+    // FCM accept and this UPDATE re-delivers the identical push on the next tick.
+    await db
+      .update(notifications)
+      .set({ sentAt: new Date() })
+      .where(eq(notifications.id, row.id));
     const resolved = await redispatch({
       accountId: row.accountId,
       event: row.event,
@@ -132,11 +178,13 @@ export async function runRetryUnsent(now: Date = new Date()): Promise<CronResult
       data: row.data ?? null,
     });
     if (resolved) {
+      dispatched += 1;
+    } else {
+      // Confirmed transient failure — return the row to the queue for a later tick.
       await db
         .update(notifications)
-        .set({ sentAt: new Date() })
+        .set({ sentAt: null })
         .where(eq(notifications.id, row.id));
-      dispatched += 1;
     }
   }
   const result = { scanned: rows.length, dispatched, durationMs: Date.now() - startedAt };
@@ -324,7 +372,11 @@ export async function runCycleDunning(now: Date = new Date()): Promise<CronResul
 export async function runDay2Reengage(now: Date = new Date()): Promise<CronResult> {
   const startedAt = Date.now();
   const db = getDb();
-  const windowStart = new Date(now.getTime() - 2 * DAY_MS);
+  // 3 days back (not 2): the window is wider than the daily tick interval, so a
+  // skipped or failed cron day is still recoverable on the next run instead of
+  // silently aging its signups out un-nudged. Safe to widen — the anti-join and
+  // the constant dedupe scope below keep this a single nudge per account, ever.
+  const windowStart = new Date(now.getTime() - 3 * DAY_MS);
   const windowEnd = new Date(now.getTime() - DAY_MS);
   const rows = await db
     .select({ id: accounts.id })
@@ -370,6 +422,199 @@ export async function runDay2Reengage(now: Date = new Date()): Promise<CronResul
   const result = { scanned: rows.length, dispatched: rows.length, durationMs: Date.now() - startedAt };
   console.log(
     `[cron:day2-reengage] scanned=${result.scanned} dispatched=${result.dispatched} ms=${result.durationMs}`,
+  );
+  return result;
+}
+
+/**
+ * stale-orders: the fulfilment-side sweep. A restaurant that never opens the
+ * portal simply never acts on an order, and nothing else in the system ever
+ * closes it, so the member was left watching a `pending` order past the moment
+ * the food was due. Two passes, both bounded and safe to run twice:
+ *
+ *  1. EXPIRE — a `pending` order still unconfirmed `PENDING_EXPIRY_GRACE_MS`
+ *     after its cutoff is cancelled through {@link advanceOrderStatus}, the same
+ *     helper every console cancel uses. That is deliberate: the member push, the
+ *     append-only `meal_order_events` row, the `cancelled_at`/`cancel_reason`
+ *     bookkeeping and the money backstop all happen exactly as they do for a
+ *     human cancel, so an auto-cancel is indistinguishable downstream.
+ *     Idempotency is the CAS itself (`status = 'pending'`): a second run finds
+ *     the row already cancelled, writes nothing and notifies nobody. That also
+ *     gives forward progress, since a handled row leaves the candidate set.
+ *
+ *     Orders with money in flight (`receipt_submitted` / `paid`) are NOT
+ *     cancelled here — the destructive-transition guard would refuse them
+ *     anyway, and stranding captured money is support's call, not a cron's.
+ *     They go to pass 2 instead, so a human sees them and can run the refund +
+ *     cancel together.
+ *
+ *  2. ESCALATE — a `pending` order older than `PENDING_ESCALATION_MS` that
+ *     pass 1 did not (or could not) cancel nudges the restaurant again and tells
+ *     staff, so someone can phone the kitchen while the order can still be
+ *     saved. Idempotency + forward progress come from the per-order `dedupeKey`
+ *     and the anti-join against it (same shape as cycle-dunning).
+ */
+export async function runStaleOrders(now: Date = new Date()): Promise<CronResult> {
+  const startedAt = Date.now();
+  const db = getDb();
+  const expiryCutoff = new Date(now.getTime() - PENDING_EXPIRY_GRACE_MS);
+
+  // --- Pass 1: cancel orders the restaurant never confirmed -----------------
+  const expired = await db
+    .select({
+      id: mealOrders.id,
+      accountId: mealOrders.accountId,
+      partnerId: mealOrders.partnerId,
+    })
+    .from(mealOrders)
+    .where(
+      and(
+        eq(mealOrders.status, 'pending'),
+        lte(mealOrders.cutoffAt, expiryCutoff),
+        // Money-in-flight orders are pass 2's problem (see the note above).
+        inArray(mealOrders.paymentStatus, ['unpaid', 'refunded']),
+      ),
+    )
+    .orderBy(asc(mealOrders.cutoffAt))
+    .limit(BATCH);
+
+  let cancelled = 0;
+  for (const row of expired) {
+    const advanced = await advanceOrderStatus({
+      db,
+      orderId: row.id,
+      expectedStatus: 'pending',
+      toStatus: 'cancelled',
+      actor: 'admin',
+      // No human decided this, so `decided_by` stays null rather than borrowing
+      // a staff identity the audit trail would then misattribute.
+      actorId: null,
+      cancelReason: PENDING_EXPIRY_REASON,
+      now,
+    });
+    // Lost the CAS: the restaurant confirmed it in the meantime (or a previous
+    // run already cancelled it). Either way there is nothing left to say.
+    if (!advanced.ok) continue;
+    cancelled += 1;
+
+    const code = orderNumber(row.id);
+    // advanceOrderStatus already sent the member the plain "Order cancelled"
+    // status push; this is the WHY, mirroring the partner-refuse route.
+    await notify(
+      'order_status',
+      { accountId: row.accountId },
+      {
+        title: 'Order cancelled',
+        body: `Order ${code} was cancelled because the restaurant did not confirm it in time. Sorry about that.`,
+        data: { type: 'order', id: row.id },
+      },
+      { dedupeKey: cronDedupeKey('order_status', row.accountId, `order_expired:${row.id}`) },
+    );
+    await notify(
+      'order_cancelled_partner',
+      { partnerId: row.partnerId },
+      {
+        title: 'Order cancelled',
+        body: `Order ${code} was cancelled because it was not confirmed in time.`,
+        data: { type: 'order', id: row.id },
+      },
+      {
+        dedupeKey: cronDedupeKey('order_cancelled_partner', row.partnerId, `order_expired:${row.id}`),
+      },
+    );
+    await notify(
+      'order_cancelled_partner',
+      { role: 'staff', permission: 'orders.review' },
+      {
+        title: 'An order expired unconfirmed',
+        body: `Order ${code} was cancelled for the member because the restaurant never confirmed it.`,
+        data: { type: 'order', id: row.id },
+      },
+      // A fan-out key is namespaced per recipient by notify(), so the literal
+      // 'staff' segment is only there to keep this key distinct from the
+      // partner's above.
+      { dedupeKey: cronDedupeKey('order_cancelled_partner', 'staff', `order_expired:${row.id}`) },
+    );
+  }
+
+  // --- Pass 2: escalate orders that are still waiting on the restaurant -----
+  const escalateBefore = new Date(now.getTime() - PENDING_ESCALATION_MS);
+  const escalationSince = new Date(now.getTime() - ESCALATION_LOOKBACK_MS);
+  const waiting = await db
+    .select({
+      id: mealOrders.id,
+      partnerId: mealOrders.partnerId,
+      deliveryDate: mealOrders.deliveryDate,
+      window: mealOrders.window,
+    })
+    .from(mealOrders)
+    .where(
+      and(
+        eq(mealOrders.status, 'pending'),
+        lte(mealOrders.placedAt, escalateBefore),
+        // Everything pass 1 could cancel is excluded, so one order is never
+        // both cancelled and escalated in the same run. The second half is what
+        // catches a PREPAID order past its cutoff: pass 1 must leave captured
+        // money alone, so without this it would sit pending with nobody told.
+        or(
+          gt(mealOrders.cutoffAt, expiryCutoff),
+          notInArray(mealOrders.paymentStatus, ['unpaid', 'refunded']),
+        ),
+        // Forward progress: drop orders staff were already told about. The
+        // stored key carries a per-recipient suffix (fan-out targets are
+        // namespaced), so this matches on the prefix. `starts_with` is used
+        // rather than LIKE so an id can never be read as a wildcard.
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(notifications)
+            .where(
+              and(
+                gt(notifications.createdAt, escalationSince),
+                sql`starts_with(${notifications.dedupeKey}, 'order_placed_partner:staff:order_waiting:' || ${mealOrders.id} || ':')`,
+              ),
+            ),
+        ),
+      ),
+    )
+    .orderBy(asc(mealOrders.placedAt))
+    .limit(BATCH);
+
+  for (const row of waiting) {
+    const code = orderNumber(row.id);
+    const slot = row.window === 'lunch' ? 'lunch' : 'dinner';
+    await notify(
+      'order_placed_partner',
+      { partnerId: row.partnerId },
+      {
+        title: 'An order is still waiting',
+        body: `Order ${code} for ${slot} on ${row.deliveryDate} has not been confirmed yet. Please confirm or reject it.`,
+        data: { type: 'order', id: row.id },
+      },
+      {
+        dedupeKey: cronDedupeKey('order_placed_partner', row.partnerId, `order_waiting:${row.id}`),
+      },
+    );
+    await notify(
+      'order_placed_partner',
+      { role: 'staff', permission: 'orders.review' },
+      {
+        title: 'A restaurant has not answered',
+        body: `Order ${code} for ${slot} on ${row.deliveryDate} is still unconfirmed by the restaurant. Worth a call.`,
+        data: { type: 'order', id: row.id },
+      },
+      // MUST stay byte-identical to the prefix the anti-join above tests.
+      { dedupeKey: cronDedupeKey('order_placed_partner', 'staff', `order_waiting:${row.id}`) },
+    );
+  }
+
+  const result = {
+    scanned: expired.length + waiting.length,
+    dispatched: cancelled + waiting.length,
+    durationMs: Date.now() - startedAt,
+  };
+  console.log(
+    `[cron:stale-orders] scanned=${result.scanned} cancelled=${cancelled} escalated=${waiting.length} ms=${result.durationMs}`,
   );
   return result;
 }

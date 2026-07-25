@@ -1,4 +1,5 @@
 import { ktmAddDays, ktmDateString } from '@gym/shared';
+import type { Metadata } from 'next';
 import {
   Badge,
   Card,
@@ -24,6 +25,7 @@ import {
 import { type BadgeTone, formatDateLabel, formatMoney, windowShort } from '../_format';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Subscriptions' };
 export const dynamic = 'force-dynamic';
 
 const FORECAST_WEEKS = 4;
@@ -161,7 +163,7 @@ export default async function PartnerSubscriptionsPage() {
     <div style={{ maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 24 }}>
       <PageHeader
         title="Subscriptions"
-        subtitle="Your standing meal-plan subscribers, this week's billing state, and a forward demand forecast. Contact details are masked here — full delivery details appear on each materialized order."
+        subtitle="Your standing meal-plan subscribers, this week's billing state, and a forward demand forecast. Contact details are masked here. Full delivery details appear on each materialized order."
       />
 
       <div
@@ -182,7 +184,7 @@ export default async function PartnerSubscriptionsPage() {
         <StatTile
           label="Subscription revenue held"
           value={formatMoney(subscriptionHeldMinor, currency)}
-          hint="Prepaid digital cycles — platform-held"
+          hint="Prepaid digital cycles, platform-held"
         />
       </div>
 

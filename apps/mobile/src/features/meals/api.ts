@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
+import { BASE_URL, fetchWithTimeout, payeeFieldSchema } from '../../lib/api/client';
+import type { Payee } from '../../lib/api/payeeLogic';
 
 /**
  * Member meal-delivery API client (plan §6/§7 P12, contracts frozen §8).
@@ -9,6 +10,11 @@ import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
  * boundary (CLAUDE.md rule 8), a typed error class, resilient lists (one bad
  * row never blanks a whole screen), and network failures never throw
  * something the UI can't label.
+ *
+ * The partners response also carries the operator's payee (where a member sends
+ * money for a wallet payment). It is parsed here, with the partners, so the
+ * screens get it from the call they already make instead of asking a second
+ * time — see {@link MealPartner} and {@link mealsPayee}.
  *
  * `code` deliberately stays a plain string (not a closed union): the server
  * surfaces business-specific codes per route (`past_cutoff`,
@@ -69,7 +75,7 @@ export type MealPlanType = z.infer<typeof planTypeSchema>;
 
 // ── Partners / menu ──────────────────────────────────────────────
 
-const partnerSchema = z.object({
+const partnerRowSchema = z.object({
   id: z.string(),
   name: z.string(),
   serviceAreas: z.array(z.string()).catch([]),
@@ -83,16 +89,44 @@ const partnerSchema = z.object({
   serviceLat: z.number().nullable().catch(null).optional(),
   serviceLng: z.number().nullable().catch(null).optional(),
   serviceRadiusKm: z.number().nullable().catch(null).optional(),
+  // Real member ratings folded from delivered-order reviews (additive). The
+  // server sends null — not a number — until the kitchen has enough genuine
+  // ratings to show as social proof, and an older server omits the keys
+  // entirely; both read as "no rating yet" to callers, so every consumer must
+  // handle `null | undefined`.
+  rating: z.number().min(0).max(5).nullable().catch(null).optional(),
+  reviewCount: z.number().int().nonnegative().nullable().catch(null).optional(),
+  // Operational pause (additive): false = the kitchen has stopped taking
+  // orders for now, so the UI shows "Closed right now" and disables add-to-cart
+  // instead of letting the member reach a checkout that will be rejected.
+  // Distinct from admin deactivation (those partners never appear at all) and
+  // from a single meal being sold out. An older server omits the key and a
+  // malformed value falls back to `true` — never wrongly close an open kitchen.
+  acceptingOrders: z.boolean().catch(true),
 });
-export type MealPartner = z.infer<typeof partnerSchema>;
+
+type MealPartnerRow = z.infer<typeof partnerRowSchema>;
+
+export type MealPartner = MealPartnerRow & {
+  /**
+   * Where the member sends money for this order, or null when the operator has
+   * configured nowhere. Meal money is collected centrally, so it is the SAME
+   * destination for every kitchen — the partners response publishes it once and
+   * it is copied onto each row here, because a flat list of partners is the
+   * shape the screens already load. Screens must offer eSewa/Khalti only when
+   * this names that rail (see supportsRail in lib/api/payeeLogic).
+   */
+  payee: Payee | null;
+};
 
 const partnerListSchema = z.object({
   partners: z.array(z.unknown()).transform((arr) =>
-    arr.flatMap((raw): MealPartner[] => {
-      const parsed = partnerSchema.safeParse(raw);
+    arr.flatMap((raw): MealPartnerRow[] => {
+      const parsed = partnerRowSchema.safeParse(raw);
       return parsed.success ? [parsed.data] : [];
     }),
   ),
+  payee: payeeFieldSchema,
 });
 
 const menuMealSchema = z.object({
@@ -190,6 +224,13 @@ const orderListSchema = z.object({
       return parsed.success ? [parsed.data] : [];
     }),
   ),
+});
+
+/** The paged form of the same list. `nextOffset` is ADDITIVE: a server that
+ * doesn't send it (or sends something unusable) reads as "that was the last
+ * page", so paging degrades to the single-page behaviour rather than looping. */
+const orderPageSchema = orderListSchema.extend({
+  nextOffset: z.number().int().nonnegative().nullable().catch(null).optional(),
 });
 
 // ── Subscriptions ─────────────────────────────────────────────────
@@ -319,13 +360,49 @@ const addressEnvelope = z.object({ address: addressSchema });
 
 // ── Payments ──────────────────────────────────────────────────────
 
+const paymentRequestStatusSchema = z.enum(['pending', 'approved', 'rejected', 'refunded']);
+export type MealPaymentRequestStatus = z.infer<typeof paymentRequestStatusSchema>;
+
 const paymentRequestSchema = z.object({
   id: z.string(),
-  status: z.enum(['pending', 'approved', 'rejected', 'refunded']),
+  status: paymentRequestStatusSchema,
 });
 export type MealPaymentRequestResult = z.infer<typeof paymentRequestSchema>;
 
 const paymentEnvelope = z.object({ request: paymentRequestSchema });
+
+/**
+ * One submitted eSewa/Khalti receipt in the member's own history
+ * (GET /api/meals/payments). `reviewNote` is the staff-authored reason a
+ * receipt was turned down or refunded — the only in-app place a member can
+ * find out WHY, so it is the reason this list exists.
+ *
+ * Exactly one of orderId/cycleId is set: an order receipt vs a weekly
+ * meal-plan cycle receipt. `decidedAt` is null while still pending.
+ */
+const paymentRequestRowSchema = z.object({
+  id: z.string(),
+  orderId: z.string().nullable().catch(null),
+  cycleId: z.string().nullable().catch(null),
+  amountMinor: z.number(),
+  currency: currencySchema,
+  method: z.enum(['esewa', 'khalti']),
+  status: paymentRequestStatusSchema,
+  reviewNote: z.string().nullable().catch(null),
+  createdAt: z.string(),
+  decidedAt: z.string().nullable().catch(null),
+});
+export type MealPaymentRequestRow = z.infer<typeof paymentRequestRowSchema>;
+
+/** Resilient list: one unparseable row is dropped, never blanking the section. */
+const paymentRequestListSchema = z.object({
+  requests: z.array(z.unknown()).transform((arr) =>
+    arr.flatMap((raw): MealPaymentRequestRow[] => {
+      const parsed = paymentRequestRowSchema.safeParse(raw);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  ),
+});
 
 // ── Fetch plumbing ────────────────────────────────────────────────
 
@@ -351,7 +428,7 @@ async function mealsRequest(opts: RequestOptions): Promise<unknown> {
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new MealsApiError('network', "Can't reach the server");
+    throw new MealsApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   if (res.ok) {
@@ -385,10 +462,26 @@ function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, data: unknown): T
 
 // ── Endpoints (client fn names frozen §8) ──────────────────────────
 
-/** GET /api/meals/partners → active partners this member may order from. */
+/**
+ * GET /api/meals/partners → active partners this member may order from, each
+ * carrying the payee the same response publishes (see {@link MealPartner}).
+ */
 export async function fetchMealPartners(token: string): Promise<MealPartner[]> {
   const data = await mealsRequest({ method: 'GET', path: '/api/meals/partners', token });
-  return parse(partnerListSchema, data).partners;
+  const { partners, payee } = parse(partnerListSchema, data);
+  return partners.map((partner) => ({ ...partner, payee }));
+}
+
+/**
+ * The payee for meal payments, read off a loaded partner list. Every row
+ * carries the same one, so any row answers — which keeps the answer right even
+ * when the partner a screen is working with isn't in the list.
+ *
+ * null means loading hasn't finished OR nothing payable is configured; screens
+ * that need to tell those apart read the list's own loading flag.
+ */
+export function mealsPayee(partners: readonly MealPartner[] | null): Payee | null {
+  return partners?.find((partner) => partner.payee !== null)?.payee ?? null;
 }
 
 export interface MealMenuFilters {
@@ -499,6 +592,34 @@ export async function fetchMyMealOrders(
   return parse(orderListSchema, data).orders;
 }
 
+/** One page of orders. `nextOffset` is the `offset` that fetches the following
+ * page, or null when this is the last one. */
+export interface MealOrderPage {
+  orders: MealOrder[];
+  nextOffset: number | null;
+}
+
+/** GET /api/meals/orders?scope&limit&offset → one page of the caller's orders.
+ * The `history` scope grows without bound and the server pages it newest-first;
+ * `upcoming` is naturally capped and simply reports no next page. `nextOffset`
+ * is read defensively — a server that doesn't send it reads as "no more". */
+export async function fetchMyMealOrderPage(
+  token: string,
+  scope: 'upcoming' | 'history',
+  page?: { limit?: number; offset?: number },
+): Promise<MealOrderPage> {
+  const params = new URLSearchParams({ scope });
+  if (page?.limit !== undefined) params.set('limit', String(page.limit));
+  if (page?.offset !== undefined) params.set('offset', String(page.offset));
+  const data = await mealsRequest({
+    method: 'GET',
+    path: `/api/meals/orders?${params.toString()}`,
+    token,
+  });
+  const parsed = parse(orderPageSchema, data);
+  return { orders: parsed.orders, nextOffset: parsed.nextOffset ?? null };
+}
+
 /** POST /api/meals/orders/[id]/cancel — member cancel, PENDING + pre-cutoff only. */
 export async function cancelMealOrder(token: string, orderId: string, reason?: string): Promise<MealOrder> {
   const data = await mealsRequest({
@@ -508,6 +629,41 @@ export async function cancelMealOrder(token: string, orderId: string, reason?: s
     body: reason ? { reason } : {},
   });
   return parse(orderEnvelope, data).order;
+}
+
+export interface MealPlanQuoteInput {
+  partnerId: string;
+  daysOfWeek: number[];
+  window: MealWindow;
+  planType: MealPlanType;
+  /** Required for `fixed_meal`; ignored for a rotating plan. */
+  mealId?: string | null;
+  addressId: string;
+  paymentMethod: MealPaymentMethod;
+}
+
+/** POST /api/meals/plan-quote → what a weekly plan would cost per delivery day
+ * (meal + delivery fee), BEFORE the plan exists. Preview only: the create call
+ * re-runs the same server-side quote and never trusts this amount. */
+export async function quoteMealPlan(
+  token: string,
+  input: MealPlanQuoteInput,
+): Promise<MealSubscriptionPlanQuote> {
+  const data = await mealsRequest({
+    method: 'POST',
+    path: '/api/meals/plan-quote',
+    token,
+    body: {
+      partnerId: input.partnerId,
+      daysOfWeek: input.daysOfWeek,
+      window: input.window,
+      planType: input.planType,
+      ...(input.mealId != null ? { mealId: input.mealId } : {}),
+      addressId: input.addressId,
+      paymentMethod: input.paymentMethod,
+    },
+  });
+  return parse(z.object({ quote: subscriptionPlanQuoteSchema }), data).quote;
 }
 
 export interface CreateMealSubscriptionInput {
@@ -688,6 +844,16 @@ export async function submitMealReceipt(
 ): Promise<MealPaymentRequestResult> {
   const data = await mealsRequest({ method: 'POST', path: '/api/meals/payments', token, body: { ...input } });
   return parse(paymentEnvelope, data).request;
+}
+
+/**
+ * GET /api/meals/payments → this member's own receipt submissions, newest
+ * first. Strictly caller-scoped server-side; carries the admin's review note
+ * so a rejected/refunded receipt finally has an in-app explanation.
+ */
+export async function fetchMealPaymentRequests(token: string): Promise<MealPaymentRequestRow[]> {
+  const data = await mealsRequest({ method: 'GET', path: '/api/meals/payments', token });
+  return parse(paymentRequestListSchema, data).requests;
 }
 
 // ── Post-delivery: rating / tip / dispute / receipt (Pack A/C/D/E) ─

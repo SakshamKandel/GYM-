@@ -36,22 +36,35 @@ import { staffFromCookie } from './staffSession';
  *   2. load notification_prefs (a missing row / key = enabled — default all-on)
  *   3. category disabled? → drop entirely (no inbox, no push)
  *   4. dedupeKey set + already used? → no-op (partial-unique idempotency)
- *   5. INSERT the notifications row FIRST (durable outbox)
- *   6. quiet hours? → inbox only, mark the row resolved (no late-push storm)
- *   7. send push → on success/no-recipient set sentAt; on transient error leave
- *      it null for the `retry-unsent` cron to drain.
+ *   5. INSERT the notifications row FIRST (durable outbox), already stamped
+ *      `sentAt = now` — the row records the ATTEMPT, not the outcome
+ *   6. quiet hours? → inbox only, the row is already resolved (no late-push
+ *      storm). The window is Nepal wall-clock for everyone — see ktmMinuteOfDay
+ *   7. send push → on success/no-recipient the row is already correct; ONLY on a
+ *      transient error is `sentAt` reverted to null, handing the row to the
+ *      `retry-unsent` cron.
  *
  * Feature flags (§9.1): NOTIF_PREFS_ENFORCED (default on) gates steps 2/3/6;
  * set to 'false' to force inbox+push for every event (used only to debug a
  * suspected prefs bug in prod).
  */
 
-/** Deep-link payload carried on a notification (mobile routes on `data.type`). */
+/**
+ * Deep-link payload carried on a notification (mobile routes on `data.type`).
+ *
+ * The open string index is deliberate: several senders carry a route-specific
+ * key alongside `type` (`badgeId`, `checkInId`, `orderId`, `status`, …) that
+ * SHIPPED mobile builds already read. FCM data payloads are string→string, and
+ * the mobile inbox parses `data` as an open record, so extra keys are additive
+ * and safe — but every value must stay a string.
+ */
 export interface NotifyData {
   /** Deep-link key WP-14's switch maps to a route ('order'|'cycle'|'tier'|…). */
   type: string;
   /** The target row id for that route (order id, cycle id, …). */
   id?: string;
+  /** Route-specific extras (all string-valued; `undefined` keys are dropped). */
+  [key: string]: string | undefined;
 }
 
 /** The server-templated content of a notification (§7.2-S2: never client text). */
@@ -88,7 +101,23 @@ function prefsEnforced(): boolean {
   return process.env.NOTIF_PREFS_ENFORCED !== 'false';
 }
 
-/** Current minute-of-day (0-1439) in Nepal's fixed UTC+05:45 wall-clock. */
+/**
+ * Current minute-of-day (0-1439) in Nepal's fixed UTC+05:45 wall-clock.
+ *
+ * THIS IS THE CLOCK QUIET HOURS ARE MEASURED ON, FOR EVERY MEMBER ON EARTH.
+ * There is no per-account time zone anywhere in the schema, so a member in
+ * London who sets "quiet from 10 PM" is silenced 22:00-07:00 Kathmandu, i.e.
+ * roughly 16:15-01:15 their own evening — pushes land in the middle of their
+ * night and go quiet through their afternoon.
+ *
+ * Half of that is now honest: the mobile prefs screen labels the window
+ * "Nepal time" instead of printing bare hours that read as local. The real fix
+ * needs a stored zone — `notification_prefs.time_zone` (IANA name, captured
+ * from the device) — after which this function must resolve the recipient's
+ * own minute-of-day and fall back to Nepal only when the column is null. Do
+ * NOT quietly reinterpret the existing start/end minutes as local before that
+ * column exists; today's values were chosen against this clock.
+ */
 export function ktmMinuteOfDay(now: Date): number {
   const totalMinutes = Math.floor(now.getTime() / 60_000) + KTM_OFFSET_MINUTES;
   return ((totalMinutes % 1440) + 1440) % 1440;
@@ -196,10 +225,21 @@ async function deliverToAccount(
     return;
   }
 
-  // Step 5: durable outbox row FIRST. Quiet-hours rows are written with
-  // sentAt=now (resolved: inbox is the record, retry-unsent must never re-push
-  // them → no end-of-window storm). Push-intended rows start null.
-  const initialSentAt = delivery.sendPush ? null : new Date();
+  // Step 5: durable outbox row FIRST, written ALREADY RESOLVED (sentAt=now) —
+  // the row records the ATTEMPT, not the outcome.
+  //
+  // Stamping before the send is what makes retry-unsent safe. If the row only
+  // became resolved AFTER a successful FCM call, then a crash / timeout / failed
+  // UPDATE in the window between "FCM accepted the message" and "sentAt written"
+  // leaves a delivered push behind a null sentAt — and the cron re-delivers an
+  // identical push, so the member sees it twice. Nothing downstream can tell the
+  // two cases apart, because FCM has already fanned the message out.
+  //
+  // Inverting it makes the only observable failure mode the safe one: a push we
+  // KNOW was not accepted is reverted to null below and retried; anything we are
+  // unsure about stays stamped and is never re-sent. Quiet-hours rows land in the
+  // same resolved state for the same reason (no end-of-window storm) — the inbox
+  // row is the durable record either way.
   const values = {
     accountId,
     event,
@@ -207,7 +247,7 @@ async function deliverToAccount(
     body: payload.body,
     data: payload.data ?? null,
     dedupeKey: dedupeKey ?? null,
-    sentAt: initialSentAt,
+    sentAt: new Date(),
   };
 
   let insertedId: string | null;
@@ -249,17 +289,19 @@ async function deliverToAccount(
   });
 
   if (dispatch === 'sent' || dispatch === 'no_recipient') {
-    if (insertedId) {
-      await db
-        .update(notifications)
-        .set({ sentAt: new Date() })
-        .where(eq(notifications.id, insertedId));
-    }
+    // The row was already stamped at insert — nothing to write.
     console.log(`[notify] sent(${dispatch}) event=${event} account=${accountId}`);
-  } else {
-    // Transient failure — leave sentAt null for the retry-unsent cron.
-    console.warn(`[notify] unsent event=${event} account=${accountId} — awaiting retry`);
+    return;
   }
+
+  // Transient failure — this is the ONLY case we know for certain never reached
+  // FCM, so un-resolve the row and hand it to the retry-unsent cron. If this
+  // revert itself fails the row stays stamped and is simply never retried: the
+  // inbox row still exists, and a missed push beats a duplicate one.
+  if (insertedId) {
+    await db.update(notifications).set({ sentAt: null }).where(eq(notifications.id, insertedId));
+  }
+  console.warn(`[notify] unsent event=${event} account=${accountId} — awaiting retry`);
 }
 
 /**
@@ -280,15 +322,25 @@ export async function notify(
   options?: NotifyOptions,
 ): Promise<void> {
   try {
+    // Whether a dedupe key is namespaced per recipient is decided by the TARGET
+    // SHAPE, never by how many recipients it happens to resolve to right now.
+    // Keying off the count was silently wrong for fan-outs: a staff target that
+    // resolved to ONE admin used the bare key, so the day a second admin was
+    // hired the same key resolved to two accounts, the first insert took the
+    // global partial-unique and the second was swallowed as a "duplicate" — the
+    // new admin simply never got the notification, and no retry could fix it.
+    //
+    // `{accountId}` addresses exactly one account by construction, so its key is
+    // stable forever (and existing cron keys keep working across this change).
+    // Every fan-out shape is namespaced unconditionally, at any cardinality.
+    const namespacePerRecipient = !('accountId' in target);
+
     const recipients = await resolveRecipients(target);
     if (recipients.length === 0) return;
-    const multiRecipient = recipients.length > 1;
 
     for (const accountId of recipients) {
-      // When one dedupe key fans out to several recipients, namespace it per
-      // account so the global partial-unique stays one-row-per-account.
       const key = options?.dedupeKey
-        ? multiRecipient
+        ? namespacePerRecipient
           ? `${options.dedupeKey}:${accountId}`
           : options.dedupeKey
         : undefined;

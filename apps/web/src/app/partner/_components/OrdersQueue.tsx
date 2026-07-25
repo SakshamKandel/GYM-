@@ -92,9 +92,9 @@ export function OrdersQueue({
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         const msg =
           body.error === 'payment_required'
-            ? 'This order is not paid yet — the payment must be approved before confirming.'
+            ? 'This order is not paid yet. The payment must be approved before confirming.'
             : body.error === 'conflict' || body.error === 'illegal_transition'
-              ? 'This order changed since you loaded it — refreshing.'
+              ? 'This order changed since you loaded it. Refreshing.'
               : 'Could not update this order. Try again.';
         setErrorById((e) => ({ ...e, [orderId]: msg }));
         if (body.error === 'conflict' || body.error === 'illegal_transition') router.refresh();
@@ -104,7 +104,7 @@ export function OrdersQueue({
       setOrders((list) => list.map((o) => (o.orderId === orderId ? body.order : o)));
       router.refresh();
     } catch {
-      setErrorById((e) => ({ ...e, [orderId]: 'Network error. Try again.' }));
+      setErrorById((e) => ({ ...e, [orderId]: 'Could not reach us just now. Try again.' }));
     } finally {
       setBusyId(null);
     }

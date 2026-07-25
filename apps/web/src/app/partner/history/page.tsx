@@ -1,9 +1,11 @@
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { getDb } from '@/lib/db';
 import { OrdersQueue } from '../_components/OrdersQueue';
 import { loadHistoryOrders, requirePartnerPage } from '../_data';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Order history' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -18,7 +20,7 @@ export default async function PartnerHistoryPage() {
   return (
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
-        title="Order History"
+        title="Order history"
         subtitle="Delivered, cancelled, and refused orders. This is a read-only record for your reference."
       />
       <OrdersQueue

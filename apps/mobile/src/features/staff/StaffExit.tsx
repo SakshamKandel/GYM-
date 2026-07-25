@@ -95,7 +95,7 @@ export function StaffSignOutDialog({
     <ConfirmDialog
       visible={confirming}
       title="Sign out of the staff console?"
-      message="This signs you out completely. Your logs stay safe on this phone — signing out only disconnects your account."
+      message="This signs you out completely. Your logs stay safe on this phone. Signing out only disconnects your account."
       confirmLabel={signingOut ? 'Signing out…' : 'Yes, sign out'}
       cancelLabel="Stay"
       danger

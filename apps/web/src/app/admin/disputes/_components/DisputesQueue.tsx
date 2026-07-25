@@ -1,7 +1,8 @@
 'use client';
 
-import { formatMoney } from '@gym/shared';
-import { useEffect, useRef, useState } from 'react';
+import type { OrderStatus } from '@gym/shared';
+import Link from 'next/link';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Badge,
@@ -10,7 +11,17 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  SearchField,
 } from '@/components/console';
+import {
+  formatAge,
+  formatDateLabel,
+  formatMoney,
+  ORDER_STATUS_LABEL,
+  PAYMENT_STATUS_LABEL,
+} from '@/lib/format';
+import { ConfirmDialog } from '../../_components/ConfirmDialog';
+import { MemberLink } from '../../_components/MemberLink';
 
 /**
  * Admin dispute queue (Pack E non-delivery rail / WP-8). Master/detail —
@@ -67,15 +78,14 @@ const STATUS_TONE: Record<DisputeRow['status'], 'warning' | 'info' | 'positive' 
   rejected: 'critical',
 };
 
-function relativeAge(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return '';
-  const diff = Date.now() - then;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${Math.max(mins, 0)}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
+/** 'lunch' / 'dinner' → the words a person uses. Unknown/absent → ''. */
+function windowText(w: string): string {
+  return w === 'lunch' ? 'Lunch' : w === 'dinner' ? 'Dinner' : '';
+}
+
+/** Raw order status → the shared label; unknown/legacy values pass through. */
+function orderStatusLabel(status: string): string {
+  return ORDER_STATUS_LABEL[status as OrderStatus] ?? status;
 }
 
 /** The `status` query value each tab sends (page server-loads only the live
@@ -88,15 +98,28 @@ const TAB_STATUS: Record<TabKey, string | undefined> = {
   all: 'all',
 };
 
-export function DisputesQueue({ disputes: initialDisputes }: { disputes: DisputeRow[] }) {
+export function DisputesQueue({
+  disputes: initialDisputes,
+  canViewMembers,
+  canRefund,
+}: {
+  disputes: DisputeRow[];
+  /** Viewer holds `members.read`, so member names can link to the record. */
+  canViewMembers: boolean;
+  /** Viewer holds `payments.review` — the permission the refund page enforces. */
+  canRefund: boolean;
+}) {
   const router = useRouter();
   const [tab, setTab] = useState<TabKey>('live');
   const [rows, setRows] = useState<DisputeRow[]>(initialDisputes);
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [resolution, setResolution] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Rejecting closes a member's complaint for good, so it takes a confirm.
+  const [confirmingReject, setConfirmingReject] = useState(false);
 
   /** Loads the given tab's rows — the server-passed prop for 'live', an
    * on-demand fetch for decided tabs (dispute volume is small: one light
@@ -136,18 +159,29 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  const filtered = rows;
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((d) =>
+      [d.account.displayName, d.account.email, d.orderNumber, d.partnerName, d.note]
+        .join(' ')
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [rows, query]);
   const selected = rows.find((d) => d.id === selectedId) ?? null;
 
   function openRow(row: DisputeRow) {
     setSelectedId(row.id);
     setResolution('');
     setError(null);
+    setConfirmingReject(false);
   }
 
   function closeDrawer() {
     if (busy) return;
     setSelectedId(null);
+    setConfirmingReject(false);
   }
 
   async function decide(toStatus: 'reviewing' | 'resolved' | 'rejected') {
@@ -164,12 +198,13 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
       if (!res.ok) {
         setError(
           res.status === 409
-            ? 'This dispute already changed elsewhere — refreshing.'
+            ? 'This dispute already changed elsewhere. Refreshing.'
             : res.status === 403
               ? 'You are not allowed to review disputes.'
               : 'Could not save that decision. Try again.',
         );
         setBusy(false);
+        setConfirmingReject(false);
         if (res.status === 409) {
           setSelectedId(null);
           router.refresh();
@@ -178,6 +213,7 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
         return;
       }
       setBusy(false);
+      setConfirmingReject(false);
       setSelectedId(null);
       // Refresh the server-loaded 'live' queue (stat tiles included) AND the
       // currently-viewed tab's own rows, so a decision made from 'all'/
@@ -185,8 +221,9 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
       router.refresh();
       void loadTab(tab);
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setBusy(false);
+      setConfirmingReject(false);
     }
   }
 
@@ -202,7 +239,12 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
       header: 'Member',
       render: (r) => (
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>{r.account.displayName || r.account.email}</div>
+          <MemberLink
+            id={r.account.id}
+            name={r.account.displayName}
+            email={r.account.email}
+            canView={canViewMembers}
+          />
           <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{r.partnerName}</div>
         </div>
       ),
@@ -218,7 +260,7 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
       width: 70,
       render: (r) => (
         <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {relativeAge(r.createdAt)}
+          {formatAge(r.createdAt)}
         </span>
       ),
     },
@@ -230,10 +272,47 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
         <Badge tone={STATUS_TONE[r.status]}>{r.status[0].toUpperCase() + r.status.slice(1)}</Badge>
       ),
     },
+    // The row's own way into the refund, for the common case where the claim is
+    // obviously good: it lands on this order's receipt in Meal Payments, which
+    // is the only place money actually moves.
+    ...(canRefund
+      ? [
+          {
+            key: 'refund',
+            header: '',
+            width: 90,
+            align: 'right' as const,
+            render: (r: DisputeRow) => (
+              <Link
+                href={`/admin/meal-payments?orderId=${encodeURIComponent(r.orderId)}`}
+                title={`Refund order ${r.orderNumber}`}
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  fontFamily: 'var(--font-heading)',
+                  color: 'var(--gt-accent-strong)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Refund →
+              </Link>
+            ),
+          },
+        ]
+      : []),
   ];
 
   return (
     <>
+      <div style={{ marginBottom: 16, maxWidth: 340 }}>
+        <SearchField
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search member, order or restaurant"
+          aria-label="Search disputes"
+        />
+      </div>
+
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         {TABS.map((t) => {
           const active = tab === t.key;
@@ -260,7 +339,7 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
         })}
       </div>
 
-      {tab === 'live' && rows.length === 0 && !loading ? (
+      {tab === 'live' && rows.length === 0 && !loading && !query.trim() ? (
         <EmptyState
           title="No disputes yet"
           description="When a member reports a problem with a delivered order, it lands here for review."
@@ -271,7 +350,16 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
           rows={filtered}
           rowKey={(r) => r.id}
           onRowClick={openRow}
-          empty={loading ? 'Loading…' : 'No disputes match this view.'}
+          rowAriaLabel={(r) =>
+            `Open dispute on order ${r.orderNumber} from ${r.account.displayName || r.account.email}`
+          }
+          empty={
+            loading
+              ? 'Loading…'
+              : query.trim()
+                ? 'No disputes match that search.'
+                : 'No disputes match this view.'
+          }
         />
       )}
 
@@ -291,15 +379,27 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
             </div>
 
             <Row label="Member">
-              {selected.account.displayName || selected.account.email}
+              <MemberLink
+                id={selected.account.id}
+                name={selected.account.displayName}
+                email={selected.account.email}
+                canView={canViewMembers}
+                strong={false}
+              />
               <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{selected.account.email}</div>
             </Row>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 14 }}>
-              <Row label="Partner">{selected.partnerName}</Row>
+              <Row label="Restaurant">{selected.partnerName}</Row>
               <Row label="Order total">{formatMoney(selected.order.totalMinor, selected.order.currency)}</Row>
-              <Row label="Delivery">{selected.order.deliveryDate} · {selected.order.window}</Row>
-              <Row label="Order status">{selected.order.status}</Row>
+              <Row label="Delivery">
+                {formatDateLabel(selected.order.deliveryDate)}
+                {windowText(selected.order.window) ? ` · ${windowText(selected.order.window)}` : ''}
+              </Row>
+              <Row label="Order status">{orderStatusLabel(selected.order.status)}</Row>
+              <Row label="Payment">
+                {PAYMENT_STATUS_LABEL[selected.order.paymentStatus] ?? selected.order.paymentStatus}
+              </Row>
             </div>
 
             <Row label="Member note">{selected.note || '—'}</Row>
@@ -326,9 +426,43 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
                   disabled={busy}
                   style={{ resize: 'vertical', fontFamily: 'inherit' }}
                 />
-                <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                  Resolving does not refund automatically — issue a refund from the Meal Payments
-                  queue first if money should move back.
+                {/* The handoff this queue tells operators to make, as an actual
+                    link: same order, same order number, straight to the refund
+                    control. It used to be a sentence pointing at another page
+                    that named the order differently. */}
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                    padding: 12,
+                    borderRadius: 10,
+                    border: '1px solid var(--gt-border)',
+                    background: 'var(--gt-surface-sunken)',
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                    Resolving does not move money. If this member is owed a refund, do that first.
+                  </div>
+                  {canRefund ? (
+                    <Link
+                      href={`/admin/meal-payments?orderId=${encodeURIComponent(selected.orderId)}`}
+                      style={{
+                        alignSelf: 'flex-start',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        fontFamily: 'var(--font-heading)',
+                        color: 'var(--gt-accent-strong)',
+                      }}
+                    >
+                      Refund order {selected.orderNumber} →
+                    </Link>
+                  ) : (
+                    <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                      You cannot issue refunds. Ask someone on the payments queue to refund order{' '}
+                      {selected.orderNumber}.
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {selected.status === 'open' ? (
@@ -339,14 +473,19 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
                   <Button variant="primary" size="sm" disabled={busy} onClick={() => void decide('resolved')}>
                     {busy ? 'Working…' : 'Mark resolved'}
                   </Button>
-                  <Button variant="danger" size="sm" disabled={busy} onClick={() => void decide('rejected')}>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => setConfirmingReject(true)}
+                  >
                     {busy ? 'Working…' : 'Reject'}
                   </Button>
                 </div>
               </div>
             ) : (
               <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-                This dispute is closed — no further action.
+                This dispute is closed. No further action.
               </div>
             )}
 
@@ -354,6 +493,50 @@ export function DisputesQueue({ disputes: initialDisputes }: { disputes: Dispute
           </div>
         ) : null}
       </Drawer>
+
+      <ConfirmDialog
+        open={selected != null && confirmingReject}
+        title="Reject this claim?"
+        summary={
+          selected ? (
+            <>
+              <strong>{selected.account.displayName || selected.account.email}</strong> is told
+              their claim about order {selected.orderNumber} was not upheld, and no money moves.
+              The claim closes for good.
+            </>
+          ) : (
+            ''
+          )
+        }
+        details={
+          selected
+            ? [
+                { label: 'Member', value: selected.account.displayName || selected.account.email },
+                { label: 'Order', value: selected.orderNumber },
+                { label: 'Claim', value: REASON_LABEL[selected.reason] ?? selected.reason },
+                {
+                  label: 'Order total',
+                  value: (
+                    <span className="gt-numeric">
+                      {formatMoney(selected.order.totalMinor, selected.order.currency)}
+                    </span>
+                  ),
+                },
+              ]
+            : undefined
+        }
+        confirmLabel="Reject claim"
+        cancelLabel="Go back"
+        busy={busy}
+        onCancel={() => setConfirmingReject(false)}
+        onConfirm={() => void decide('rejected')}
+      >
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--gt-text-dim)' }}>
+          {resolution.trim()
+            ? `The member will read: “${resolution.trim()}”`
+            : 'No note typed. Close this and add one so the member knows why.'}
+        </p>
+      </ConfirmDialog>
     </>
   );
 }

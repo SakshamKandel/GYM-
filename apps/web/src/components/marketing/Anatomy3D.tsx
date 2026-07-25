@@ -93,13 +93,13 @@ export function Anatomy3D({ className = '' }: { className?: string }) {
             <iframe
               ref={iframeRef}
               src="/anatomy/viewer.html"
-              title="Interactive 3D muscle anatomy — drag to orbit, tap a muscle"
+              title="Interactive 3D muscle anatomy: drag to orbit, tap a muscle"
               className="absolute inset-0 size-full border-0"
             />
           ) : null}
           {!ready ? (
             <div className="absolute inset-0 flex items-center justify-center">
-              <span className="font-mono text-[11.5px] uppercase tracking-[0.2em] text-faint">
+              <span className="font-mono text-[12px] uppercase tracking-[0.2em] text-faint">
                 Loading 3D body…
               </span>
             </div>
@@ -109,14 +109,14 @@ export function Anatomy3D({ className = '' }: { className?: string }) {
         {/* Live label — mirrors the app's selection card */}
         <div className="pointer-events-none absolute inset-x-4 bottom-4 flex items-center justify-between rounded-[18px] bg-ink/80 px-5 py-3.5 backdrop-blur-md">
           <span>
-            <span className="block text-[15px] font-bold text-snow">{active.label}</span>
-            <span className="block text-[12px] text-dim">{active.hint}</span>
+            <span className="block text-[16px] font-bold text-snow">{active.label}</span>
+            <span className="block text-[14.5px] text-dim">{active.hint}</span>
           </span>
           <span className="size-2.5 rounded-full bg-red shadow-ember" />
         </div>
       </div>
 
-      <p className="mt-3 flex items-center justify-between font-mono text-[10.5px] uppercase tracking-[0.16em] text-faint">
+      <p className="mt-3 flex items-center justify-between font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
         <span>Drag to orbit · tap a muscle · front / back</span>
         <span>Z-Anatomy · CC BY-SA</span>
       </p>

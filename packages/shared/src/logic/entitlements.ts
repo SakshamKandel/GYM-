@@ -2,14 +2,20 @@ import type { Tier, TrainingCatalogPlan } from '../types';
 
 /**
  * Tier gating goes through THIS function only (CLAUDE.md rule 4).
- * Matrix mirrors the Feature Blueprint §05 exactly:
+ * The matrix:
  *  - STARTER (free): basic logger, weight tracking, limited library, 1 generic plan.
  *  - SILVER: full kcal tracker, food suggestions, all standard programs,
- *    progress photos, no ads. (Entry paid tier — the volume seller.)
- *  - GOLD: signature GM plans, adaptive progression, meal plans, monthly
- *    refresh. (The hero tier — where the coach's methodology is sold.)
- *  - ELITE: everything + 1-on-1 coach chat, video form checks, custom meal
- *    plan, priority support. (Limited seats.)
+ *    progress photos. (Entry paid tier — the volume seller.)
+ *  - GOLD: signature GM plans, adaptive progression, coach diet plans.
+ *    (The hero tier — where the coach's methodology is sold.)
+ *  - ELITE: everything + 1-on-1 coach chat. (Limited seats.)
+ *
+ * EVERY key here must be gating a real screen. Four keys were removed because
+ * nothing ever asked for them and they were being sold on the paywall anyway:
+ * `no_ads` (there are no ads at any tier), `form_checks` (no member video
+ * capture exists), `meal_plans` and `custom_meal_plan` (no meal-plan builder
+ * ships). Do not add a key back "for the paywall" — add it when the screen
+ * that reads it exists.
  *
  * SCALE-UP-PLAN §1.2: `coach_workouts` (silver+) and `coach_diet` (gold+) gate
  * coach-assigned programs. Both ALSO require an active coach assignment,
@@ -24,13 +30,9 @@ export type Feature =
   | 'food_suggestions'
   | 'standard_programs'
   | 'progress_photos'
-  | 'no_ads'
   | 'signature_plans'
   | 'adaptive_progression'
-  | 'meal_plans'
   | 'coach_chat'
-  | 'form_checks'
-  | 'custom_meal_plan'
   | 'coach_workouts'
   | 'coach_diet'
   | 'training_plans_starter'
@@ -47,13 +49,9 @@ const FEATURE_MIN_TIER: Record<Feature, Tier> = {
   food_suggestions: 'silver',
   standard_programs: 'silver',
   progress_photos: 'silver',
-  no_ads: 'silver',
   signature_plans: 'gold',
   adaptive_progression: 'gold',
-  meal_plans: 'gold',
   coach_chat: 'elite',
-  form_checks: 'elite',
-  custom_meal_plan: 'elite',
   coach_workouts: 'silver',
   coach_diet: 'gold',
   training_plans_starter: 'starter',

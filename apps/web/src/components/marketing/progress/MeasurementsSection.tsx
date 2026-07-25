@@ -21,7 +21,7 @@ export function MeasurementsSection() {
 
           <div className="order-1 lg:order-2">
             <Reveal>
-              <Eyebrow tone="light">02 — Measurements</Eyebrow>
+              <Eyebrow tone="light">02 · Measurements</Eyebrow>
               <Display className="mt-4">
                 The tape
                 <br />
@@ -29,7 +29,7 @@ export function MeasurementsSection() {
               </Display>
               <Lead tone="light" className="mt-6">
                 Weight can&rsquo;t tell you where it went. The tape can. Log chest, waist,
-                biceps and thigh, and every entry shows its delta from the last one — so
+                biceps and thigh, and every entry shows its delta from the last one, so
                 recomposition shows up in centimetres even in weeks when the scale stalls.
               </Lead>
             </Reveal>
@@ -37,7 +37,7 @@ export function MeasurementsSection() {
               <ul className="mt-8 flex flex-col gap-3.5">
                 <CheckItem tone="light">Per-site history with a delta on every entry</CheckItem>
                 <CheckItem tone="light">
-                  Mint when it drops, red when it grows — you decide which is the win
+                  Mint when it drops, red when it grows. You decide which is the win
                 </CheckItem>
                 <CheckItem tone="light">
                   Sits beside your weight trend and photos on one timeline
@@ -45,7 +45,7 @@ export function MeasurementsSection() {
               </ul>
             </Reveal>
             <Reveal delay={220}>
-              <p className="mt-8 font-mono text-[11.5px] uppercase tracking-[0.2em] text-cream-dim">
+              <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-cream-dim">
                 Centimetres move when kilograms won&rsquo;t
               </p>
             </Reveal>

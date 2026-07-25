@@ -1,12 +1,13 @@
-import { type CoachDietPlanItem, type CoachDietPlanMeal, coachDietPlans } from '@gym/db';
+import { coachDietPlans } from '@gym/db';
 import { maskPii } from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
+import { maskDietMeal } from '@/lib/coachContent';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -60,20 +61,6 @@ const dietColumns = {
   updatedAt: coachDietPlans.updatedAt,
 };
 
-/** Masks every client-visible free-text field of one food item. */
-function maskItem(item: CoachDietPlanItem): CoachDietPlanItem {
-  return {
-    ...item,
-    name: maskPii(item.name),
-    qty: maskPii(item.qty),
-    note: item.note !== undefined ? maskPii(item.note) : undefined,
-  };
-}
-
-function maskMeal(meal: CoachDietPlanMeal): CoachDietPlanMeal {
-  return { ...meal, items: meal.items.map(maskItem) };
-}
-
 export function OPTIONS() {
   return preflight();
 }
@@ -125,7 +112,7 @@ export async function PATCH(
       ...(title !== undefined ? { title: maskPii(title) } : {}),
       ...(notes !== undefined ? { notes: maskPii(notes) } : {}),
       ...(status !== undefined ? { status } : {}),
-      ...(meals !== undefined ? { meals: meals.map(maskMeal) } : {}),
+      ...(meals !== undefined ? { meals: meals.map(maskDietMeal) } : {}),
       updatedAt: new Date(),
     })
     .where(eq(coachDietPlans.id, id))
@@ -137,11 +124,15 @@ export async function PATCH(
   await logAudit(principal, 'coach.diet.update', 'account', row.clientId, { planId: id });
 
   after(() =>
-    sendPushToAccount(row.clientId, {
-      title: 'Diet plan updated',
-      body: 'Your coach updated one of your diet plans.',
-      data: { type: 'coach_plan' },
-    }),
+    notify(
+      'coach_plan',
+      { accountId: row.clientId },
+      {
+        title: 'Diet plan updated',
+        body: 'Your coach updated one of your diet plans.',
+        data: { type: 'coach_plan' },
+      },
+    ),
   );
 
   return json({ plan }, 200);

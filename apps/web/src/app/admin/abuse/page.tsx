@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -6,6 +7,7 @@ import { AbuseManager } from './_components/AbuseManager';
 import { loadAbuseDashboard } from './_lib';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Referral & trial abuse' };
 export const dynamic = 'force-dynamic';
 
 /**

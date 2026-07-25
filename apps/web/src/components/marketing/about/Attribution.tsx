@@ -23,14 +23,14 @@ export function AboutAttribution() {
               </div>
               <div className="space-y-4 text-[15px] leading-relaxed text-dim">
                 <p>
-                  The app&rsquo;s 3D anatomy explorer — 17 tappable muscle zones — is built on
+                  The app&rsquo;s 3D anatomy explorer, with its 17 tappable muscle zones, is built on
                   <span className="text-snow"> Z-Anatomy</span>, an open anatomical model
                   licensed <span className="text-snow">CC BY-SA</span>. We credit it inside the
                   app and release our changes under the same license.
                 </p>
                 <p>
                   Good tools are made of other people&rsquo;s good work. Where we lean on
-                  open source, we say so plainly and give back — that&rsquo;s the deal, and we
+                  open source, we say so plainly and give back. That&rsquo;s the deal, and we
                   keep it.
                 </p>
                 <ArrowLink href="/training" className="text-red-glow">

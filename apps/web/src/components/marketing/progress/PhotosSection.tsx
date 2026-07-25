@@ -24,7 +24,7 @@ export function PhotosSection() {
         <div className="grid items-center gap-14 lg:grid-cols-[1fr_0.95fr]">
           <div>
             <Reveal>
-              <Eyebrow tone="red">04 — Progress photos</Eyebrow>
+              <Eyebrow tone="red">04 · Progress photos</Eyebrow>
               <Display className="mt-4">
                 Your photos.
                 <br />
@@ -33,13 +33,13 @@ export function PhotosSection() {
               <Lead tone="red" className="mt-6">
                 Progress photos are the most personal data in fitness, so we treat them like
                 it. They&rsquo;re stored privately and delivered only through signed,
-                authenticated URLs — no public feed, no gallery, no community tab. You took
+                authenticated URLs. No public feed, no gallery, no community tab. You took
                 them; you decide who sees them.
               </Lead>
             </Reveal>
             <Reveal delay={140}>
               <ul className="mt-8 flex flex-col gap-3.5">
-                <CheckItem tone="red">Private by default — never published anywhere</CheckItem>
+                <CheckItem tone="red">Private by default, never published anywhere</CheckItem>
                 <CheckItem tone="red">
                   Signed Cloudinary delivery: no valid signature, no image
                 </CheckItem>
@@ -71,7 +71,7 @@ export function PhotosSection() {
                     <span className="text-faint">
                       <LockGlyph />
                     </span>
-                    <span className="font-mono text-[10.5px] uppercase tracking-[0.16em] text-faint">
+                    <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
                       {wk}
                     </span>
                   </div>
@@ -82,13 +82,13 @@ export function PhotosSection() {
                 <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-dim">
                   res.cloudinary.com/…/authenticated/s--x7Kq…--/wk-12.jpg
                 </span>
-                <span className="shrink-0 rounded-full bg-mint/15 px-2.5 py-1 font-mono text-[10.5px] font-medium text-mint">
+                <span className="shrink-0 rounded-full bg-mint/15 px-2.5 py-1 font-mono text-[11px] font-medium text-mint">
                   signed ✓
                 </span>
               </div>
-              <p className="mt-4 text-[13px] leading-relaxed text-dim">
-                Every request carries a signature. Strip it, share it, guess it — the image
-                simply doesn&rsquo;t load.
+              <p className="mt-4 text-[14.5px] leading-relaxed text-dim">
+                Every photo link is signed. Strip the signature, share the link, guess at it, and
+                the image does not load.
               </p>
             </div>
           </Reveal>

@@ -26,17 +26,17 @@ export function VerifySection() {
             <Reveal delay={160}>
               <Lead tone="red" className="mt-6">
                 GM members carry a member code in their app. When one walks into your restaurant,
-                type the code into the portal — you get exactly three facts, enough to honor the
+                type the code into the portal and you get exactly three facts, enough to honor the
                 member discount and nothing more.
               </Lead>
             </Reveal>
             <Reveal delay={240}>
               <ul className="mt-8 flex flex-col gap-3.5">
-                <CheckItem tone="red">First name, tier and validity — nothing else</CheckItem>
+                <CheckItem tone="red">First name, tier and validity, nothing else</CheckItem>
                 <CheckItem tone="red">
-                  Uniform &ldquo;not found&rdquo; reply, so codes can&rsquo;t be fished
+                  Every wrong code gets the same answer, so nobody can guess their way in
                 </CheckItem>
-                <CheckItem tone="red">Rate-limited server-side — 30 checks a minute, max</CheckItem>
+                <CheckItem tone="red">Capped at 30 checks a minute, so nobody can guess codes</CheckItem>
               </ul>
             </Reveal>
           </div>

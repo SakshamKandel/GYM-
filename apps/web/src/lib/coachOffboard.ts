@@ -9,7 +9,9 @@ import {
   walletLedger,
 } from '@gym/db';
 import { and, eq, sql } from 'drizzle-orm';
+import { after } from 'next/server';
 import type { getDb } from './db';
+import { notify } from './notify';
 
 type Db = ReturnType<typeof getDb>;
 
@@ -171,6 +173,29 @@ export async function offboardCoach(
     .from(walletLedger)
     .where(eq(walletLedger.coachId, coachId))
     .groupBy(walletLedger.currency);
+
+  // Every client this cascade just cut loose loses their coach SILENTLY unless
+  // we say so — the coach-side release already notifies, the cascade never did.
+  // Fired here (not in the two calling routes) so both revoke paths and any
+  // future caller inherit it. Fire-and-forget: `notify` never throws, and a
+  // notification must not be able to fail or slow an offboarding that has
+  // already committed. Idempotent by design — the cascade is re-runnable, so a
+  // re-run finds 0 active rows and notifies nobody twice.
+  // `after` (not a bare `void`): on Vercel the function can be frozen the moment
+  // the response is written, which would drop every notification in this loop.
+  for (const client of endedAssignments) {
+    after(() =>
+      notify(
+        'coach_unassigned',
+        { accountId: client.userId },
+        {
+          title: 'Coaching update',
+          body: 'Your coaching assignment has ended. You can request a new coach whenever you are ready.',
+          data: { type: 'coach' },
+        },
+      ),
+    );
+  }
 
   return {
     activeClients: endedAssignments.length,

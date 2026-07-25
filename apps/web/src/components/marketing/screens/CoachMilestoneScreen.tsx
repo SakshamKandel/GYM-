@@ -80,7 +80,7 @@ export function CoachMilestoneScreen() {
         <BlockCard tone="red">
           <AppEyebrow onBlock>Publish</AppEyebrow>
           <p className="mt-1 text-[12.5px] font-medium leading-snug text-ink/75">
-            Lands on Anisha&rsquo;s Progress portfolio — and on yours.
+            Lands on Anisha&rsquo;s Progress portfolio, and on yours.
           </p>
           <BlockPill className="mt-3 w-full">
             {published ? (

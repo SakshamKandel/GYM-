@@ -58,27 +58,6 @@
   background: var(--gt-accent);
 }
 
-.soundToggle {
-  border: 1px solid var(--gt-border-strong);
-  border-radius: var(--gt-radius-pill);
-  padding: 5px 12px;
-  background: var(--gt-surface);
-  color: var(--gt-text-dim);
-  font-size: 12px;
-  font-family: var(--font-heading);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  transition: background 120ms ease, color 120ms ease;
-}
-
-.soundToggle:hover {
-  background: var(--gt-surface-hover);
-  color: var(--gt-text);
-}
-
 /* ── Window lanes ─────────────────────────────────────────────── */
 
 .laneStack {
@@ -531,8 +510,7 @@
 @media (prefers-reduced-motion: reduce) {
   .orderCard,
   .queueCard,
-  .newOrdersBtn,
-  .soundToggle {
+  .newOrdersBtn {
     transition: none;
   }
 }

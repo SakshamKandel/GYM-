@@ -33,6 +33,13 @@ interface Props {
   /** Shrink text to fit one line instead of wrapping (button labels, chips). */
   adjustsFontSizeToFit?: boolean;
   minimumFontScale?: number;
+  /**
+   * Spoken instead of the rendered text. For text a screen reader would
+   * otherwise mangle: a code grouped into fours, a tabular figure, an
+   * abbreviation. Leave unset everywhere else so the visible words stay the
+   * spoken words.
+   */
+  accessibilityLabel?: string;
   children: ReactNode;
 }
 
@@ -75,7 +82,22 @@ const styles = StyleSheet.create({
 });
 
 const NUMBERISH: Variant[] = ['stat', 'statHuge', 'display'];
-const SCALES_WITH_SETTING: Variant[] = ['body', 'bodyBold', 'caption', 'title'];
+/**
+ * Variants that grow with the member's text-size setting.
+ *
+ * `label` is in the set even though it is a micro-label: it is the most-used
+ * variant in the app (260+ call sites) and it carries real meaning — section
+ * headers, macro names, stat eyebrows, field labels. Leaving it out meant a
+ * member who turned text size up saw no change on most of the words on screen.
+ * It is also the smallest type we ship (12px), so it is exactly the text that
+ * needs the setting most.
+ *
+ * `display`, `stat` and `statHuge` stay out on purpose: those are already
+ * 40–76px, they sit in tight tabular rows and timers, and growing them
+ * reflows or clips the layout rather than helping anyone read it.
+ * `heading` stays out for the same reason (34px screen titles wrap instead).
+ */
+const SCALES_WITH_SETTING: Variant[] = ['label', 'body', 'bodyBold', 'caption', 'title'];
 
 export function AppText({
   variant = 'body',
@@ -86,6 +108,7 @@ export function AppText({
   numberOfLines,
   adjustsFontSizeToFit,
   minimumFontScale,
+  accessibilityLabel,
   children,
 }: Props) {
   const fontScale = useProfile((s) => s.fontScale);
@@ -99,6 +122,7 @@ export function AppText({
       numberOfLines={numberOfLines}
       adjustsFontSizeToFit={adjustsFontSizeToFit}
       minimumFontScale={minimumFontScale}
+      accessibilityLabel={accessibilityLabel}
       style={[
         base,
         scaled,

@@ -29,7 +29,7 @@ const LINKS = [
   {
     title: 'Pricing',
     href: '/pricing',
-    blurb: 'Silver, Gold and Elite tiers — priced in NPR for Nepal, USD for everyone else.',
+    blurb: 'Silver, Gold and Elite tiers, priced in NPR for Nepal, USD for everyone else.',
   },
   {
     title: 'For coaches',
@@ -39,7 +39,7 @@ const LINKS = [
   {
     title: 'Progress',
     href: '/progress',
-    blurb: 'Where coach-logged milestones land — next to trends, PRs and streaks.',
+    blurb: 'Where coach-logged milestones land, next to trends, PRs and streaks.',
   },
 ] as const;
 
@@ -104,9 +104,9 @@ export function CoachingCta() {
           </h2>
         </Reveal>
         <Reveal delay={170}>
-          <p className="mx-auto mt-6 max-w-xl text-[16.5px] leading-relaxed text-dim">
-            Download the app, open Coaching, and send your one request. The rest — program,
-            plan, chat — happens where you already train.
+          <p className="mx-auto mt-6 max-w-xl text-[17px] leading-relaxed text-dim">
+            Download the app, open Coaching, and send your one request. Everything else
+            happens where you already train.
           </p>
         </Reveal>
         <Reveal delay={250} className="mt-9 flex flex-wrap items-center justify-center gap-4">

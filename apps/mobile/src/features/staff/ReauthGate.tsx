@@ -114,7 +114,7 @@ function failLine(code: ReauthError): string {
     case 'unauthorized':
       return 'Your session expired. Sign in again.';
     case 'rate_limited':
-      return 'Too many attempts — wait a minute and try again.';
+      return 'Too many attempts. Wait a minute and try again.';
     default:
       return "Couldn't reach the server. Try again.";
   }

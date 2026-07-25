@@ -1,8 +1,10 @@
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { requireCoachPage } from '@/lib/coachPage';
 import { ReviewQueue } from './_components/ReviewQueue';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Review' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -21,7 +23,7 @@ export default async function CoachReviewPage() {
     <div style={{ maxWidth: 900 }}>
       <PageHeader
         title="Review"
-        subtitle="Progression suggestions your clients' training generated, oldest first. Approve to sign off, or adjust the weight with a note. Reviewed targets show a coach badge in the member's app."
+        subtitle="Next-weight suggestions from your clients' recent training, oldest first. Approve one as it stands, or change the weight and say why. Whatever you sign off carries your badge in their app."
       />
       <ReviewQueue />
     </div>

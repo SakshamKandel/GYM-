@@ -17,6 +17,11 @@ import {
   ScreenHeader,
   SectionLabel,
 } from '../components/ui';
+import {
+  mediaPermissionMessage,
+  OpenSettingsButton,
+  requestMediaPermission,
+} from '../components/ui/permissions';
 import { reserveImageUpload, toApiError, uploadImageAsset } from '../lib/api/client';
 import { syncProfileNow } from '../lib/profileSync';
 import { useAuth } from '../state/auth';
@@ -51,6 +56,8 @@ export default function ProfileEditScreen() {
   const [nameDraft, setNameDraft] = useState(displayName);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  // Photo access is denied for good — the error line gets a route out.
+  const [photoBlocked, setPhotoBlocked] = useState(false);
   const [saved, setSaved] = useState(false);
 
   function goBack(): void {
@@ -61,9 +68,11 @@ export default function ProfileEditScreen() {
   async function pickAvatar(): Promise<void> {
     if (!token || avatarUploading) return;
     setAvatarError(null);
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    setPhotoBlocked(false);
+    const perm = await requestMediaPermission('library');
     if (!perm.granted) {
-      setAvatarError('Allow photo library access in Settings to change your photo.');
+      setPhotoBlocked(perm.blocked);
+      setAvatarError(mediaPermissionMessage('library', 'change your photo', perm.blocked));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -76,7 +85,7 @@ export default function ProfileEditScreen() {
     const asset = result.assets[0];
     if (!asset) return;
     if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_PHOTO_BYTES) {
-      setAvatarError('That photo is too large — pick one under 10 MB.');
+      setAvatarError('That photo is too large. Pick one under 10 MB.');
       return;
     }
 
@@ -176,6 +185,7 @@ export default function ProfileEditScreen() {
             {avatarError}
           </AppText>
         ) : null}
+        {photoBlocked ? <OpenSettingsButton /> : null}
       </Animated.View>
 
       <Animated.View entering={enterUp(1)}>

@@ -1,5 +1,6 @@
 import { accounts, admins, coachProfiles, promoCodes } from '@gym/db';
 import { asc, desc, eq } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -12,6 +13,7 @@ import {
 } from './_components/PromoManager';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Promo codes' };
 export const dynamic = 'force-dynamic';
 
 /**

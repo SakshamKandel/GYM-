@@ -12,8 +12,8 @@ import { CheckItem, Container, Display, Eyebrow, Hairline, Lead, Section } from 
 const SPECIALTIES = ['Strength', 'Fat loss', 'Powerlifting'] as const;
 
 const MILESTONES = [
-  { title: 'First 100 kg squat — Anisha S.', when: 'Jul 21' },
-  { title: '−6 kg cut in 10 weeks — Bibek R.', when: 'May 18' },
+  { title: 'First 100 kg squat · Anisha S.', when: 'Jul 21' },
+  { title: '−6 kg cut in 10 weeks · Bibek R.', when: 'May 18' },
 ] as const;
 
 function CoachProfileCard() {
@@ -27,11 +27,11 @@ function CoachProfileCard() {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[17px] font-bold text-ink">Gaurav M.</span>
-            <span className="inline-flex items-center gap-1 rounded-full bg-ink px-2.5 py-1 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em] text-gold">
+            <span className="inline-flex items-center gap-1 rounded-full bg-ink px-2.5 py-1 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-gold">
               Gold coach
             </span>
           </div>
-          <p className="mt-0.5 truncate text-[13px] text-gravel">
+          <p className="mt-0.5 truncate text-[14.5px] text-gravel">
             Strength &amp; fat-loss coach · 8 yrs
           </p>
         </div>
@@ -42,12 +42,12 @@ function CoachProfileCard() {
         {SPECIALTIES.map((s) => (
           <span
             key={s}
-            className="rounded-full border border-mist-strong px-3 py-1.5 text-[11.5px] font-medium text-ink"
+            className="rounded-full border border-mist-strong px-3 py-1.5 text-[14.5px] font-medium text-ink"
           >
             {s}
           </span>
         ))}
-        <span className="rounded-full border border-mist-strong px-3 py-1.5 text-[11.5px] font-medium text-gravel">
+        <span className="rounded-full border border-mist-strong px-3 py-1.5 text-[14.5px] font-medium text-gravel">
           NSCA-certified
         </span>
       </div>
@@ -55,7 +55,7 @@ function CoachProfileCard() {
       <Hairline className="my-5" />
 
       {/* client milestones — the public record */}
-      <p className="font-mono text-[10.5px] uppercase tracking-[0.18em] text-gravel">
+      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-gravel">
         Client milestones
       </p>
       <div className="mt-3 flex flex-col gap-2">
@@ -64,13 +64,13 @@ function CoachProfileCard() {
             key={m.title}
             className="flex items-center gap-2.5 rounded-inner bg-paper-2 px-3.5 py-2.5"
           >
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-red text-[10px] font-bold text-ink">
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-red text-[11px] font-bold text-ink">
               ✓
             </span>
-            <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-ink">
+            <span className="min-w-0 flex-1 truncate text-[14.5px] font-medium text-ink">
               {m.title}
             </span>
-            <span className="shrink-0 font-mono text-[10px] uppercase text-gravel-faint">
+            <span className="shrink-0 font-mono text-[11px] uppercase text-gravel-faint">
               {m.when}
             </span>
           </div>
@@ -80,12 +80,12 @@ function CoachProfileCard() {
       {/* capacity + request */}
       <div className="mt-5 flex items-center justify-between gap-3">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-gravel">Capacity</p>
+          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-gravel">Capacity</p>
           <p className="mt-0.5 font-display text-[19px] font-medium text-ink">
             14<span className="text-gravel-faint"> / 20</span>
           </p>
         </div>
-        <span className="inline-flex h-11 items-center justify-center rounded-full bg-red px-6 text-[13.5px] font-semibold text-ink shadow-ember">
+        <span className="inline-flex h-11 items-center justify-center rounded-full bg-red px-6 text-[14.5px] font-semibold text-ink shadow-ember">
           Request coaching
         </span>
       </div>
@@ -109,14 +109,14 @@ export function DiscoverSection() {
               </Display>
               <Lead tone="light" className="mt-6">
                 Verification puts you in the discovery hub every member scrolls when they want
-                a real coach. Your card is yours to shape — and your logged client milestones
+                a real coach. Your card is yours to shape, and your logged client milestones
                 do the bragging for you.
               </Lead>
             </Reveal>
             <Reveal delay={140}>
               <ul className="mt-8 flex flex-col gap-3.5">
                 <CheckItem tone="light">
-                  Photo, headline, specialties, certifications, achievements and years — every
+                  Photo, headline, specialties, certifications, achievements and years: every
                   field on your public profile is yours to edit.
                 </CheckItem>
                 <CheckItem tone="light">
@@ -124,7 +124,7 @@ export function DiscoverSection() {
                   the moment you hit it.
                 </CheckItem>
                 <CheckItem tone="light">
-                  You accept or decline every request — and each member can only have one
+                  You accept or decline every request, and each member can only have one
                   pending request at a time, so your inbox stays sane.
                 </CheckItem>
                 <CheckItem tone="light">
@@ -140,7 +140,7 @@ export function DiscoverSection() {
             <Parallax range={32}>
               <div className="mx-auto w-full max-w-[440px]">
                 <CoachProfileCard />
-                <p className="mt-4 text-center font-mono text-[10.5px] uppercase tracking-[0.18em] text-gravel-faint">
+                <p className="mt-4 text-center font-mono text-[11px] uppercase tracking-[0.18em] text-gravel-faint">
                   Your card in the member discovery hub
                 </p>
               </div>

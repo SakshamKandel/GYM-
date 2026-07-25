@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import { clientIp } from '@/lib/rateLimit';
 import { setAccountTier } from '@/lib/tier';
 
@@ -272,11 +272,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }, ip);
 
   after(() =>
-    sendPushToAccount(row.accountId, {
-      title: 'Payment refunded',
-      body: 'Your recent payment was refunded and the tier removed.',
-      data: { type: 'payment_decided' },
-    }),
+    notify(
+      'payment_reviewed_member',
+      { accountId: row.accountId },
+      {
+        title: 'Payment refunded',
+        body: 'Your recent payment was refunded and the tier removed.',
+        data: { type: 'payment_decided' },
+      },
+    ),
   );
 
   return json({ ok: true }, 200);

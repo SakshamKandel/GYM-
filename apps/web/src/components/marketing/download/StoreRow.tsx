@@ -22,14 +22,14 @@ function StorePlate({
         {glyph}
       </span>
       <span className="flex-1">
-        <span className="block font-mono text-[10.5px] uppercase tracking-[0.2em] text-faint">
+        <span className="block font-mono text-[11px] uppercase tracking-[0.2em] text-faint">
           Coming to the
         </span>
         <span className="block font-display text-[22px] font-medium uppercase leading-tight text-snow">
           {store}
         </span>
       </span>
-      <span className="rounded-full border border-line-strong px-3 py-1.5 font-mono text-[10.5px] uppercase tracking-[0.16em] text-dim">
+      <span className="rounded-full border border-line-strong px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.16em] text-dim">
         Soon
       </span>
     </div>
@@ -49,7 +49,7 @@ export function StoreRow() {
             </Display>
             <p className="mt-6 max-w-md text-[15px] leading-relaxed text-dim">
               We&rsquo;re finishing store review for iOS and Android. Join early access and
-              we&rsquo;ll send you a build the day it&rsquo;s live — no waiting in a queue.
+              we&rsquo;ll send you a build the day it&rsquo;s live. No waiting in a queue.
             </p>
             <div className="mt-8">
               <PillLink href="/contact">Get early access</PillLink>
@@ -74,7 +74,7 @@ export function StoreRow() {
               }
             />
             <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
-              No fake links — these go live at launch, not before.
+              No fake links. These go live at launch, not before.
             </p>
           </Reveal>
         </div>

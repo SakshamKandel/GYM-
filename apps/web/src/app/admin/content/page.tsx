@@ -1,5 +1,6 @@
 import { planVideos } from '@gym/db';
 import { desc, ne } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -11,6 +12,7 @@ import { ContentTabs } from './_components/ContentTabs';
 import type { Tier, VideoListItem, VideoStatus } from './_components/types';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Content' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -100,7 +102,7 @@ export default async function AdminContentPage() {
     <div style={{ maxWidth: 1100 }}>
       <PageHeader
         title="Content"
-        subtitle="Form-check videos shown inside the training plans, plus moderation for member-visible coach content."
+        subtitle="Form-check videos shown inside the training plans, plus the review queues for anything a coach publishes to members."
       />
 
       {canManageContent ? (
@@ -127,6 +129,7 @@ export default async function AdminContentPage() {
         videoConfigured={configured}
         canManageContent={canManageContent}
         canModerate={canModerate}
+        canViewMembers={permissions.has('members.read')}
       />
     </div>
   );

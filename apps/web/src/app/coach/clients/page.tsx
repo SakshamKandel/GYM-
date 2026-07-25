@@ -1,12 +1,15 @@
 import { accounts, coachAssignments, coachMessages } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
 import { and, eq, sql } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
+import { memberLabel } from '../_components/memberLabel';
 import { type Client, ClientCard } from './ClientCard';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Clients' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -42,7 +45,6 @@ async function loadClients(coachId: string): Promise<Client[]> {
     .select({
       userId: accounts.id,
       displayName: accounts.displayName,
-      email: accounts.email,
       tier: accounts.tier,
       tierExpiresAt: accounts.tierExpiresAt,
       status: accounts.status,
@@ -59,7 +61,6 @@ async function loadClients(coachId: string): Promise<Client[]> {
   const clients: Client[] = rows.map((r) => ({
     userId: r.userId,
     displayName: r.displayName,
-    email: r.email,
     // Effective tier — a lapsed dated subscription must show as 'starter'
     // here, same as everywhere else tier is auth-gated (raw accounts.tier
     // would drift for expired members).
@@ -74,7 +75,7 @@ async function loadClients(coachId: string): Promise<Client[]> {
     const at = a.lastActiveAt?.getTime() ?? 0;
     const bt = b.lastActiveAt?.getTime() ?? 0;
     if (bt !== at) return bt - at;
-    return (a.displayName || a.email).localeCompare(b.displayName || b.email);
+    return memberLabel(a.displayName).localeCompare(memberLabel(b.displayName));
   });
 
   return clients;

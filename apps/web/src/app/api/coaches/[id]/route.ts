@@ -3,14 +3,15 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
+import { coachRatingFor, loadCoachRatings } from '../_lib';
 
 export const runtime = 'nodejs';
 
 /**
  * Member-facing coach detail page — the full public portfolio (bio,
- * certifications, achievements, reply window) for one ACTIVE coach. 404 for
- * anything that isn't an active coach so member clients can't probe accounts.
- * Email is deliberately never selected.
+ * certifications, achievements, reply window, real member star rating) for one
+ * ACTIVE coach. 404 for anything that isn't an active coach so member clients
+ * can't probe accounts. Email is deliberately never selected.
  */
 
 export function OPTIONS() {
@@ -84,6 +85,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     .orderBy(desc(coachMilestones.achievedAt), desc(coachMilestones.createdAt))
     .limit(5);
 
+  // Real member reviews — same fold + display threshold as the discovery list
+  // (./_lib), so a coach's stars never differ between card and profile.
+  // Additive keys: null whenever the coach is under the threshold.
+  const ratings = await loadCoachRatings([row.id]);
+
   // `photoUrl` mirrors `avatarUrl` — the canonical name going forward; the
   // legacy key stays so already-shipped mobile parsers keep working.
   const coach = {
@@ -91,6 +97,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     displayName: row.displayName || 'Coach',
     photoUrl: row.avatarUrl,
     hasCapacity: row.activeClients < row.capacity,
+    ...coachRatingFor(ratings, row.id),
     milestones,
   };
 

@@ -22,6 +22,10 @@ export const runtime = 'nodejs';
  * identity + effective tier, assignment start, 30-day training volume, lifetime
  * PR count, latest bodyweight, and the cached weekly streak.
  *
+ * Identity here is a display name, never an email address: coaching stays in
+ * the app, and an address is the one detail that makes moving off it easy.
+ * The admin console is the permissioned surface that still shows it.
+ *
  * Guards (fail closed): requirePermission('coach.user.read') +
  * requireCoachOwnsUser(userId) → 403 without an ACTIVE assignment (super_admin/
  * main_admin pass without one). No member free text is returned here.
@@ -49,7 +53,6 @@ export async function GET(
     .select({
       id: accounts.id,
       displayName: accounts.displayName,
-      email: accounts.email,
       tier: accounts.tier,
       tierExpiresAt: accounts.tierExpiresAt,
       status: accounts.status,
@@ -128,7 +131,6 @@ export async function GET(
       client: {
         id: acct.id,
         displayName: acct.displayName,
-        email: acct.email,
         tier: effectiveTier(acct.tier, acct.tierExpiresAt, new Date()),
         tierExpiresAt: acct.tierExpiresAt,
         status: acct.status,

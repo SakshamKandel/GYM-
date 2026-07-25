@@ -60,8 +60,8 @@ export function ReviewComposerSheet({ visible, onClose, gymSlug, gymName, token,
       setSubmitting(false);
       setError(
         err instanceof GymsApiError && err.code === 'rate_limited'
-          ? "You're submitting too fast — try again shortly."
-          : "Couldn't submit your review — check your connection and try again.",
+          ? "You're submitting too fast. Try again shortly."
+          : "Couldn't submit your review. Check your connection and try again.",
       );
     }
   }

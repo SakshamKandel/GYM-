@@ -19,7 +19,9 @@ import {
   StatusChip,
   TierChip,
 } from '@/components/console';
+import { formatDate, formatDateTime } from '@/lib/format';
 import { staffRoleLabel } from '@/app/admin/_lib/staffRoleLabel';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import type { StaffRole } from '@/lib/auth';
 import type {
   CoachOption,
@@ -29,6 +31,36 @@ import type {
 } from './types';
 
 const TIERS: Tier[] = ['starter', 'silver', 'gold', 'elite'];
+
+/** A Date → the `YYYY-MM-DD` value an `<input type="date">` expects, in LOCAL
+ * time (the admin picks a calendar day as they see it, not a UTC one). */
+function toDateInput(d: Date): string {
+  const month = `${d.getMonth() + 1}`.padStart(2, '0');
+  const day = `${d.getDate()}`.padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * Seeds the expiry field from a stored `tierExpiresAt`. A window that has
+ * ALREADY closed seeds BLANK, never itself: re-submitting a stale past expiry
+ * is the silent no-op (server rejects it as expiry_in_past) that the explicit
+ * window rule exists to prevent, and "renew" must not carry it forward.
+ */
+function futureExpiryInput(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime()) || d.getTime() <= Date.now()) return '';
+  return toDateInput(d);
+}
+
+/** The picked calendar day → an ISO instant at the END of that local day, so
+ * "expires Aug 5" means the member keeps access through all of Aug 5. */
+function expiryInputToIso(value: string): string | null {
+  const [y, m, d] = value.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  const dt = new Date(y, m - 1, d, 23, 59, 59, 999);
+  return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+}
 
 const accountDeletionErrorSchema = z.object({
   error: z.string(),
@@ -96,6 +128,10 @@ export function MemberDrawer({
 
   // Form state for the tier action.
   const [tierChoice, setTierChoice] = useState<Tier>('starter');
+  // End of the granted window as a `YYYY-MM-DD` date-input value; '' = no
+  // expiry (permanent). Seeded from the member's stored expiry when that window
+  // is still open, blank otherwise.
+  const [tierExpiry, setTierExpiry] = useState('');
   const [tierReason, setTierReason] = useState('');
   const [coachChoice, setCoachChoice] = useState('');
   // Suspend reason (audited via PATCH { status, reason }) — P1-7.
@@ -148,6 +184,7 @@ export function MemberDrawer({
       if (mySeq !== reqSeq.current) return; // superseded while parsing
       setDetail(data);
       setTierChoice(data.member.tier);
+      setTierExpiry(futureExpiryInput(data.member.tierExpiresAt));
       setTierReason('');
       setCoachChoice('');
       setSuspendReason('');
@@ -171,6 +208,7 @@ export function MemberDrawer({
     setSignOutMsg(null);
     setGdprConfirm('');
     setSuspendReason('');
+    setTierExpiry('');
     setAssignBlock(null);
     if (!memberId) {
       setDetail(null);
@@ -215,9 +253,11 @@ export function MemberDrawer({
               ? 'Partner accounts are managed in the Partners console, not here.'
               : code === 'cannot_target_self'
                 ? 'You cannot change your own account this way.'
-                : res.status === 403
-                  ? 'You do not have permission for that action.'
-                  : 'That change could not be saved.',
+                : code === 'expiry_in_past'
+                  ? 'Pick an end date in the future. An already-passed date would leave the member on Starter.'
+                  : res.status === 403
+                    ? 'You do not have permission for that action.'
+                    : 'That change could not be saved.',
         );
         return;
       }
@@ -423,7 +463,7 @@ export function MemberDrawer({
       const data = (await res.json()) as { revoked: number };
       setSignOutMsg(
         data.revoked === 0
-          ? 'No active sessions — the member was already signed out.'
+          ? 'No active sessions. The member was already signed out.'
           : `Signed out of ${data.revoked} session${data.revoked === 1 ? '' : 's'}.`,
       );
     } catch {
@@ -499,7 +539,7 @@ export function MemberDrawer({
   const lockNote = isPartnerTarget
     ? 'Partner accounts are managed in the Partners console, not here.'
     : memberStaffRole != null
-      ? `This member is staff (${staffRoleLabel(memberStaffRole)}) — only a higher-ranked admin can manage this account.`
+      ? `This member is staff (${staffRoleLabel(memberStaffRole)}), so only a higher-ranked admin can manage this account.`
       : '';
 
   // Lapsed = a non-starter stored tier whose dated window has already expired
@@ -511,13 +551,22 @@ export function MemberDrawer({
     currentTier !== 'starter' &&
     effectiveTier(currentTier, tierExpiresAt, new Date()) === 'starter';
 
-  // Dirty when the picked tier differs from the raw stored tier, OR when the
-  // stored tier has lapsed — renewing a lapsed tier back to its own value
-  // (the single most common console action) must still surface the reason
-  // field + submit button, not silently no-op because tierChoice === the
-  // raw (expired) currentTier.
+  // The expiry currently ON the account, as a date-input value — blank when the
+  // window has already closed, so a lapsed member starts from "no expiry" and
+  // never re-submits the stale date.
+  const storedExpiryInput = futureExpiryInput(tierExpiresAt);
+  // Dirty when the picked tier differs from the raw stored tier, when the END
+  // DATE was changed, OR when the stored tier has lapsed — renewing a lapsed
+  // tier back to its own value (the single most common console action) must
+  // still surface the reason field + submit button, not silently no-op because
+  // tierChoice === the raw (expired) currentTier.
   const tierDirty =
-    canTier && detail != null && (tierChoice !== currentTier || isLapsed);
+    canTier &&
+    detail != null &&
+    (tierChoice !== currentTier || isLapsed || tierExpiry !== storedExpiryInput);
+  // Today, for the date picker's `min` — the server refuses a past window
+  // outright (expiry_in_past), so don't let the picker offer one.
+  const todayInput = toDateInput(new Date());
 
   return (
     <Drawer open={memberId != null} onClose={onClose} title={header} width={460}>
@@ -559,36 +608,30 @@ export function MemberDrawer({
         </div>
         {isLapsed && tierExpiresAt ? (
           <div style={{ marginTop: 8, fontSize: 13, color: 'var(--gt-text-dim)' }}>
-            {currentTier} expired{' '}
-            {new Date(tierExpiresAt).toLocaleDateString(undefined, {
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric',
-            })}{' '}
-            — this member is on Starter now.
+            {tierLabel(currentTier)} ended {formatDate(tierExpiresAt)}, so this member is on
+            Starter now.
           </div>
         ) : !isLapsed && tierExpiresAt && currentTier !== 'starter' ? (
           <div style={{ marginTop: 8, fontSize: 13, color: 'var(--gt-text-dim)' }}>
             Renews/expires{' '}
-            {new Date(tierExpiresAt).toLocaleDateString(undefined, {
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric',
-            })}
+            {formatDate(tierExpiresAt)}
           </div>
         ) : null}
         {detail?.member.createdAt ? (
           <div style={{ marginTop: 10, fontSize: 13, color: 'var(--gt-text-dim)' }}>
             Joined{' '}
-            {new Date(detail.member.createdAt).toLocaleDateString(undefined, {
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric',
-            })}
+            {formatDate(detail.member.createdAt)}
           </div>
         ) : null}
         {memberId ? (
-          <div style={{ marginTop: 12 }}>
+          <div
+            style={{
+              marginTop: 12,
+              display: 'flex',
+              gap: 16,
+              flexWrap: 'wrap',
+            }}
+          >
             <Link
               href={`/admin/members/${memberId}/view`}
               style={{
@@ -599,6 +642,23 @@ export function MemberDrawer({
             >
               View read-only snapshot →
             </Link>
+            {/* "Who changed this member, and when" — deep-links the audit log
+                pre-filtered to this account, which is exactly the shape of the
+                audit_log_target (target_type, target_id) index. Only offered to
+                callers who actually hold audit.read; the audit page redirects
+                everyone else. */}
+            {callerPermissions.has('audit.read') ? (
+              <Link
+                href={`/admin/audit?targetType=account&targetId=${encodeURIComponent(memberId)}`}
+                style={{
+                  fontSize: 13,
+                  color: 'var(--gt-accent)',
+                  textDecoration: 'none',
+                }}
+              >
+                View full history →
+              </Link>
+            ) : null}
           </div>
         ) : null}
       </section>
@@ -728,37 +788,99 @@ export function MemberDrawer({
               </div>
               {statusLocked ? (
                 <Muted>{lockNote}</Muted>
-              ) : tierDirty ? (
+              ) : (
                 <>
-                  <input
-                    className="gt-input"
-                    placeholder="Reason (optional, audited)"
-                    value={tierReason}
-                    onChange={(e) => setTierReason(e.target.value)}
-                    disabled={busy}
-                    style={{ marginTop: 8 }}
-                  />
-                  <div style={{ marginTop: 10 }}>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() =>
-                        void patch({
-                          tier: tierChoice,
-                          reason: tierReason.trim() || undefined,
-                        })
-                      }
-                    >
-                      {busy
-                        ? 'Saving…'
-                        : tierChoice === currentTier && isLapsed
-                          ? `Renew ${tierChoice}`
-                          : `Change to ${tierChoice}`}
-                    </Button>
-                  </div>
+                  {/* End date for the granted window. Leaving it blank grants
+                      the tier with NO expiry — which also means the store can
+                      never downgrade this account again, so paid tiers should
+                      normally carry a real end date. */}
+                  {tierChoice !== 'starter' ? (
+                    // A plain div, not a <label>: the row holds a second
+                    // interactive control (Clear), which must not double as a
+                    // click target for the date input. The input carries its own
+                    // aria-label instead.
+                    <div style={{ marginTop: 10 }}>
+                      <span
+                        style={{
+                          display: 'block',
+                          fontSize: 12,
+                          color: 'var(--gt-text-dim)',
+                          marginBottom: 4,
+                        }}
+                      >
+                        Access until
+                      </span>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <input
+                          className="gt-input"
+                          type="date"
+                          value={tierExpiry}
+                          min={todayInput}
+                          onChange={(e) => setTierExpiry(e.target.value)}
+                          disabled={busy}
+                          aria-label="Tier access end date"
+                          style={{ flex: 1 }}
+                        />
+                        {tierExpiry ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => setTierExpiry('')}
+                          >
+                            Clear
+                          </Button>
+                        ) : null}
+                      </div>
+                      <Muted>
+                        {tierExpiry
+                          ? 'The member drops back to Starter after this date.'
+                          : 'No end date, so this member keeps the tier forever, and app-store renewals can no longer change it.'}
+                      </Muted>
+                    </div>
+                  ) : null}
+                  {tierDirty ? (
+                    <>
+                      <input
+                        className="gt-input"
+                        placeholder="Reason (optional, audited)"
+                        value={tierReason}
+                        onChange={(e) => setTierReason(e.target.value)}
+                        disabled={busy}
+                        style={{ marginTop: 8 }}
+                      />
+                      <div style={{ marginTop: 10 }}>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() =>
+                            void patch({
+                              tier: tierChoice,
+                              // Always explicit: a picked date, or null =
+                              // permanent. Never inherits the stored (possibly
+                              // stale) expiry.
+                              expiresAt:
+                                tierChoice === 'starter' || !tierExpiry
+                                  ? null
+                                  : expiryInputToIso(tierExpiry),
+                              reason: tierReason.trim() || undefined,
+                            })
+                          }
+                        >
+                          {busy
+                            ? 'Saving…'
+                            : tierChoice === currentTier && isLapsed
+                              ? `Renew ${tierLabel(tierChoice)}`
+                              : tierChoice === currentTier
+                                ? 'Update end date'
+                                : `Change to ${tierLabel(tierChoice)}`}
+                        </Button>
+                      </div>
+                    </>
+                  ) : null}
                 </>
-              ) : null}
+              )}
             </FieldGroup>
           ) : null}
 
@@ -865,14 +987,9 @@ export function MemberDrawer({
                       </Button>
                     </div>
                     <Muted>
-                      No email is sent. Copy this link and give it to the member — it works
+                      No email is sent. Copy this link and give it to the member. It works
                       once and expires{' '}
-                      {new Date(resetLink.expiresAt).toLocaleString(undefined, {
-                        hour: 'numeric',
-                        minute: '2-digit',
-                        month: 'short',
-                        day: 'numeric',
-                      })}
+                      {formatDateTime(resetLink.expiresAt)}
                       . Generating it invalidates any earlier link.
                     </Muted>
                   </>
@@ -888,7 +1005,7 @@ export function MemberDrawer({
                     </Button>
                     <Muted>
                       Mints a single-use, 1-hour link the member uses to set a new password.
-                      There is no email delivery — you hand it over directly.
+                      There is no email delivery, so you hand it over directly.
                     </Muted>
                   </>
                 )}
@@ -972,7 +1089,7 @@ export function MemberDrawer({
                   <Muted>{signOutMsg}</Muted>
                 ) : (
                   <Muted>
-                    Revokes every active session without suspending the account — the member
+                    Revokes every active session without suspending the account. The member
                     can sign back in with their password.
                   </Muted>
                 )}

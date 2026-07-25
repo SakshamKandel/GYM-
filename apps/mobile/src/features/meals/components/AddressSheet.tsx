@@ -113,7 +113,7 @@ export function AddressSheet({ token, addresses, selectedId, onSelect, onChanged
         const q = [line.trim(), area.trim()].filter(Boolean).join(', ');
         const results = await searchGeo(token, q);
         if (results.length === 0) {
-          setGeoError('No matching location found — you can still save the address without a pin.');
+          setGeoError('No matching location found. You can still save the address without a pin.');
         }
         setGeoResults(results);
       } catch (err) {

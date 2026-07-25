@@ -40,7 +40,7 @@ export function AboutMascot() {
                   Every Single Rep.
                 </p>
                 <p className="mt-4 max-w-md text-[15px] leading-relaxed text-dim">
-                  Shows up when you hit a personal record, maintain a training streak, or hit your daily macros. No ads, no clutter — just an app that keeps up with your progress.
+                  Shows up when you hit a personal record, maintain a training streak, or hit your daily macros. No ads, no clutter, just an app that keeps up with your progress.
                 </p>
               </div>
             </div>

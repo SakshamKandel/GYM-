@@ -57,7 +57,7 @@ function nextKey(): string {
 function errorLine(code: StaffErrorCode): string {
   switch (code) {
     case 'unauthorized':
-      return 'Your session expired — sign in again.';
+      return 'Your session expired. Sign in again.';
     case 'forbidden':
       return 'This client is no longer assigned to you.';
     case 'not_found':
@@ -473,7 +473,7 @@ export function AssignedWorkoutsSection({
         <AppTextInput
           value={title}
           onChangeText={setTitle}
-          placeholder="Title — e.g. Push day A"
+          placeholder="Title, e.g. Push day A"
           maxLength={120}
           accessibilityLabel="Workout title"
           style={styles.sheetInput}
@@ -599,7 +599,7 @@ export function AssignedWorkoutsSection({
             <AppTextInput
               value={repRange}
               onChangeText={setRepRange}
-              placeholder="Rep range — e.g. 8-12"
+              placeholder="Rep range, e.g. 8-12"
               maxLength={20}
               accessibilityLabel="Rep range"
               style={styles.sheetInput}

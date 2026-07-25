@@ -10,6 +10,10 @@ export const dynamic = 'force-dynamic';
  * §9.1). Idempotent via per-account dedupe keys, so a double-fire is a no-op.
  * The `/api/cron/tick` dispatcher (repo-root vercel.json) drives this on any
  * plan; on Pro you may schedule this endpoint directly instead.
+ *
+ * Nothing in this repo calls this route, and that is deliberate: it is the
+ * alternative entry point for a per-scan schedule, and for re-running just this
+ * scan by hand without firing the rest.
  */
 export async function GET(req: Request) {
   const denied = cronGuard(req);

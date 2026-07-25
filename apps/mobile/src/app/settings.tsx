@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import Animated from 'react-native-reanimated';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { BADGE_CATALOG, hasEntitlement, type BadgeDef, type FontScale, type Tier } from '@gym/shared';
+import { BADGE_CATALOG, hasEntitlement, type BadgeDef, type FontScale } from '@gym/shared';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
   AppText,
@@ -32,12 +32,14 @@ import {
   layoutSpring,
 } from '../components/ui';
 import { BadgeMedal } from '../components/ui/badges/BadgeMedal';
+import { notificationPermissionState, OpenSettingsButton } from '../components/ui/permissions';
 import { shareTrainingData } from '../lib/export';
 import { successHaptic, tapHaptic, warnHaptic } from '../lib/haptics';
 import {
   scheduleCheckInReminder,
   scheduleMorningNudge,
   scheduleWorkoutReminders,
+  setNotificationBadgeCount,
 } from '../lib/notifications';
 import { deleteAccount, logoutAll, toApiError } from '../lib/api/client';
 import { resetStackTo } from '../lib/nav';
@@ -47,7 +49,7 @@ import { getPublicLeaderboard, setPublicBoardHidden } from '../lib/api/social';
 import { getRepo } from '../lib/repo';
 import { useTrainingCatalog } from '../lib/trainingCatalog';
 import { MembershipCardAny } from '../features/subscription/components/MembershipCardAny';
-import { useEffectiveTier } from '../lib/tier';
+import { tierName, useEffectiveTier } from '../lib/tier';
 import { useAuth } from '../state/auth';
 import { publicBoardHiddenFor, useGamificationDisplay } from '../state/gamification';
 import { useProfile } from '../state/profile';
@@ -58,6 +60,7 @@ import { useGamificationBadges } from '../features/gamification/store';
 import { getSupportUnread } from '../features/support/api';
 import { getNotifications } from '../features/notifications/api';
 import { useWeeklyStreak } from '../features/streak/hooks';
+import { useWorkoutSyncFailures } from '../features/sync/failures';
 import { useMyCoach } from '../features/mentorship/hooks';
 import { pushPath } from '../features/auth/nav';
 import { pushStaff, STAFF_ROUTES } from '../features/staff/nav';
@@ -84,13 +87,6 @@ const FONT_SCALE_OPTIONS: { value: FontScale; label: string }[] = [
   { value: 'xlarge', label: 'XL' },
 ];
 
-const TIER_LABEL: Record<Tier, string> = {
-  starter: 'Starter',
-  silver: 'Silver',
-  gold: 'Gold',
-  elite: 'Elite',
-};
-
 /** Re-lock grace window options (Pack P) — 0 = always re-prompt (prior behavior). */
 const LOCK_TIMEOUT_OPTIONS: { minutes: number; label: string }[] = [
   { minutes: 0, label: 'Immediately' },
@@ -101,16 +97,16 @@ const LOCK_TIMEOUT_OPTIONS: { minutes: number; label: string }[] = [
 
 function accountDeletionFailureMessage(error: ReturnType<typeof toApiError>): string {
   if (error.code === 'unauthorized') {
-    return 'Your session has expired — sign in again to delete your account.';
+    return 'Your session has expired. Sign in again to delete your account.';
   }
   if (error.code === 'confirmation_required') {
     return 'Type DELETE exactly to confirm.';
   }
   if (error.code === 'private_asset_cleanup_pending') {
-    return "We couldn't finish removing your private progress photos. Nothing else was deleted — try again.";
+    return "We couldn't finish removing your private progress photos. Nothing else was deleted. Try again.";
   }
   if (error.code === 'account_deletion_conflict') {
-    return 'Your account changed while deletion was starting. Nothing was deleted — review your active services and try again.';
+    return 'Your account changed while deletion was starting. Nothing was deleted. Review your active services and try again.';
   }
   if (error.code === 'account_deletion_blocked') {
     const blockerCodes = new Set(
@@ -133,19 +129,19 @@ function accountDeletionFailureMessage(error: ReturnType<typeof toApiError>): st
       blockerCodes.has('partner_offboarding_required') ||
       blockerCodes.has('coach_offboarding_required')
     ) {
-      return 'An administrator must first offboard your staff, coach, or meal-partner access. Nothing was deleted.';
+      return 'Your staff, coach, or restaurant access has to be removed by our team first. Contact support, and nothing has been deleted.';
     }
     if (blockerCodes.has('legacy_identity_ambiguous')) {
-      return 'We found more than one legacy profile for this email. Contact support so we can verify and erase the right data safely.';
+      return 'We found more than one older account under this email. Contact support so we delete the right one safely.';
     }
     if (
       blockerCodes.has('retained_commerce_history') ||
       blockerCodes.has('retained_financial_history')
     ) {
-      return 'Your account has order, payment, discount, or payout records that self-service deletion cannot erase safely. Contact support for verified anonymization; nothing was deleted.';
+      return 'Your account has order, payment, discount, or payout records that we cannot remove from the app. Contact support and we will remove your personal details safely; nothing was deleted yet.';
     }
   }
-  return "Couldn't reach the server. Nothing was deleted — check your connection and try again.";
+  return "We couldn't complete that. Nothing was deleted. Check your connection and try again.";
 }
 
 /**
@@ -161,6 +157,65 @@ const WEEKDAY_CHIPS: { weekday: number; letter: string; name: string }[] = [
   { weekday: 7, letter: 'S', name: 'Saturday' },
   { weekday: 1, letter: 'S', name: 'Sunday' },
 ];
+
+/**
+ * Which reminder row an inline problem belongs to, plus what to say about it.
+ * `blocked` = notifications are off for good in phone settings, so the note
+ * carries an Open Settings button (the only control that can still fix it).
+ */
+type ReminderIssue = {
+  row: 'workout' | 'morning' | 'checkin';
+  message: string;
+  blocked: boolean;
+};
+
+/**
+ * Explain why a reminder didn't get scheduled. PASSIVE permission read — the
+ * scheduler already showed (or deliberately skipped) the OS prompt, so this
+ * must never raise a second dialog.
+ */
+async function reminderFailureIssue(row: ReminderIssue['row']): Promise<ReminderIssue> {
+  switch (await notificationPermissionState()) {
+    case 'blocked':
+      return {
+        row,
+        blocked: true,
+        message:
+          'Notifications are switched off for this app in your phone settings. Turn them on to get reminders.',
+      };
+    case 'denied':
+      return {
+        row,
+        blocked: false,
+        message: 'Reminders need permission to send notifications. Try again and choose Allow.',
+      };
+    case 'unsupported':
+      return {
+        row,
+        blocked: false,
+        message: 'Reminders only work in the phone app.',
+      };
+    default:
+      // Permission is fine, so the schedule call itself failed.
+      return {
+        row,
+        blocked: false,
+        message: "We couldn't set that reminder. Try again in a moment.",
+      };
+  }
+}
+
+/** Inline explanation under a reminder row, with the way out when blocked. */
+function ReminderIssueNote({ issue }: { issue: ReminderIssue }) {
+  return (
+    <View style={styles.reminderIssue} accessibilityRole="alert">
+      <AppText variant="caption" color={colors.error}>
+        {issue.message}
+      </AppText>
+      {issue.blocked ? <OpenSettingsButton /> : null}
+    </View>
+  );
+}
 
 /** Compact pill chip — same language as ui/Chip, sized for inline row controls. */
 function MiniChip({
@@ -397,7 +452,7 @@ function DeleteAccountDialog({
             >
               <AppText variant="title">Last step</AppText>
               <AppText variant="body" color={colors.textDim}>
-                {`This permanently deletes ${email} and eligible synced data. Type DELETE to confirm. The server will stop without deleting anything if active services or retained billing records need offboarding.`}
+                {`This permanently deletes ${email} and everything saved to your account. Type DELETE to confirm. If you still have active orders, plans, or payments under review, nothing will be deleted. We'll tell you what to finish first.`}
               </AppText>
               <AppTextInput
                 value={value}
@@ -505,6 +560,9 @@ export default function SettingsScreen() {
         .then((page) => {
           if (useAuth.getState().token === authToken) {
             setNotifUnreadSnapshot({ token: authToken, count: page.unreadCount });
+            // Free ride for the app-icon badge: this fetch already knows the
+            // count, so opening Settings keeps it fresh (never throws; web no-ops).
+            void setNotificationBadgeCount(page.unreadCount);
           }
         })
         .catch(() => {
@@ -567,6 +625,9 @@ export default function SettingsScreen() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
 
+  // Workouts the server refused. Normally empty, so the row below never shows.
+  const workoutBackup = useWorkoutSyncFailures();
+
   const biometricLock = useSecurity((s) => s.biometricLock);
   const setBiometricLock = useSecurity((s) => s.setBiometricLock);
   // PIN app-lock fallback + re-lock grace timeout (Pack P).
@@ -592,15 +653,60 @@ export default function SettingsScreen() {
   const setReminderTime = useReminders((s) => s.setTime);
   const setMorningNudgeOn = useReminders((s) => s.setMorningNudgeOn);
   const setCheckInReminderOn = useReminders((s) => s.setCheckInReminderOn);
+  // Why a reminder switch refused to stay on (permission, or no days picked).
+  const [reminderIssue, setReminderIssue] = useState<ReminderIssue | null>(null);
   // Data-driven coach identity for the check-in reminder's copy (not a
   // hardcoded name) — null/none-assigned falls back to generic copy.
   const { coach: myCoach } = useMyCoach();
 
+  /**
+   * Shared body for the three reminder switches.
+   *
+   * These used to flip the store optimistically and fire the scheduler without
+   * awaiting it — so a denied notification permission left the switch sitting
+   * ON forever while nothing was ever scheduled. Now the enable path AWAITS
+   * the scheduler, rolls the switch back when it didn't take, and says why
+   * (with an Open Settings route when the OS won't ask again). The disable
+   * path stays fire-and-forget: cancelling can't fail in a way the user can
+   * act on, and those schedulers legitimately return false when disabling.
+   */
+  async function applyReminderToggle(
+    row: ReminderIssue['row'],
+    next: boolean,
+    setOn: (on: boolean) => void,
+    schedule: () => Promise<boolean>,
+  ): Promise<void> {
+    setReminderIssue((current) => (current?.row === row ? null : current));
+    setOn(next);
+    if (!next) {
+      void schedule();
+      return;
+    }
+    if (await schedule()) return;
+    // Nothing got scheduled — the switch must not claim otherwise.
+    setOn(false);
+    warnHaptic();
+    setReminderIssue(await reminderFailureIssue(row));
+  }
+
   /** Toggle the whole workout-reminder schedule on/off. */
   function onWorkoutRemindersToggle(next: boolean): void {
-    setWorkoutRemindersOn(next);
-    // Scheduler asks for permission on first enable and clears on disable.
-    void scheduleWorkoutReminders(next ? reminderWeekdays : [], reminderHour, reminderMinute);
+    if (next && reminderWeekdays.length === 0) {
+      // No days selected: there is genuinely nothing to schedule yet, and the
+      // scheduler's `false` here means "empty set", not "denied". Leave the
+      // switch on so the day picker below opens, and name what's missing.
+      setWorkoutRemindersOn(true);
+      setReminderIssue({
+        row: 'workout',
+        blocked: false,
+        message: 'Pick at least one day below to get workout reminders.',
+      });
+      return;
+    }
+    void applyReminderToggle('workout', next, setWorkoutRemindersOn, () =>
+      // Scheduler asks for permission on first enable and clears on disable.
+      scheduleWorkoutReminders(next ? reminderWeekdays : [], reminderHour, reminderMinute),
+    );
   }
 
   /** Add/remove a training day, then re-sync the schedule (if enabled). */
@@ -609,9 +715,21 @@ export default function SettingsScreen() {
       ? reminderWeekdays.filter((d) => d !== weekday)
       : [...reminderWeekdays, weekday].sort((a, b) => a - b);
     toggleWeekday(weekday);
-    if (workoutRemindersOn) {
-      void scheduleWorkoutReminders(next, reminderHour, reminderMinute);
+    if (!workoutRemindersOn) return;
+    if (next.length === 0) {
+      // Last day removed. Cancel the set but leave the master switch on so the
+      // picker stays open — collapsing it mid-edit would trap the user.
+      void scheduleWorkoutReminders([], reminderHour, reminderMinute);
+      setReminderIssue({
+        row: 'workout',
+        blocked: false,
+        message: 'Pick at least one day below to get workout reminders.',
+      });
+      return;
     }
+    void applyReminderToggle('workout', true, setWorkoutRemindersOn, () =>
+      scheduleWorkoutReminders(next, reminderHour, reminderMinute),
+    );
   }
 
   /** Change the reminder time, then re-sync the schedule (if enabled). */
@@ -624,14 +742,16 @@ export default function SettingsScreen() {
 
   /** Toggle the daily morning nudge (fixed 8:00). */
   function onMorningNudgeToggle(next: boolean): void {
-    setMorningNudgeOn(next);
-    void scheduleMorningNudge(next, 8, 0);
+    void applyReminderToggle('morning', next, setMorningNudgeOn, () =>
+      scheduleMorningNudge(next, 8, 0),
+    );
   }
 
   /** Toggle the weekly Sunday check-in reminder. */
   function onCheckInToggle(next: boolean): void {
-    setCheckInReminderOn(next);
-    void scheduleCheckInReminder(next, myCoach?.displayName ?? null);
+    void applyReminderToggle('checkin', next, setCheckInReminderOn, () =>
+      scheduleCheckInReminder(next, myCoach?.displayName ?? null),
+    );
   }
 
   /**
@@ -681,7 +801,7 @@ export default function SettingsScreen() {
       if (shared) successHaptic();
     } catch {
       setExportError(
-        "The share sheet didn't open. Your data is safe on this phone — give it another try in a moment.",
+        "The share sheet didn't open. Your data is safe on this phone. Try again in a moment.",
       );
     } finally {
       setExporting(false);
@@ -835,8 +955,8 @@ export default function SettingsScreen() {
       setConfirmingLogoutAll(false);
       setLogoutAllError(
         toApiError(err).code === 'unauthorized'
-          ? 'This session has already expired — sign in again, then retry.'
-          : "Couldn't reach the server — your other devices are still signed in. Try again in a moment.",
+          ? 'This session has already expired. Sign in again, then retry.'
+          : "That didn't go through. Your other devices are still signed in. Try again in a moment.",
       );
       warnHaptic();
       return;
@@ -988,13 +1108,13 @@ export default function SettingsScreen() {
                   <Ionicons name="pencil" size={16} color={colors.textDim} />
                 </PressableScale>
               )}
-              <AppText variant="caption" numberOfLines={1}>
-                {signedIn && authUser ? authUser.email : 'Local only — sign in to sync'}
+              <AppText variant="caption" numberOfLines={signedIn && authUser ? 1 : 2}>
+                {signedIn && authUser ? authUser.email : 'Only on this phone. Sign in to back it up'}
               </AppText>
             </View>
             <View style={styles.tierChip}>
               <AppText variant="label" color={colors.text}>
-                {TIER_LABEL[serverTier]}
+                {tierName(serverTier)}
               </AppText>
             </View>
           </View>
@@ -1003,7 +1123,7 @@ export default function SettingsScreen() {
               label="Upgrade"
               variant={signedIn && serverTier === 'starter' ? 'primary' : 'secondary'}
               onPress={() => pushPath('/subscribe')}
-              accessibilityLabel="Upgrade your plan"
+              accessibilityLabel="Upgrade your membership"
             />
           ) : null}
         </View>
@@ -1147,7 +1267,7 @@ export default function SettingsScreen() {
           </View>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel="Recalculate targets from profile — uses your latest logged body weight"
+            accessibilityLabel="Recalculate targets from profile, using your latest logged body weight"
             accessibilityState={{ disabled: !canRecalculate }}
             disabled={!canRecalculate}
             onPress={onRecalculate}
@@ -1159,22 +1279,22 @@ export default function SettingsScreen() {
         </View>
       </Animated.View>
 
-      {/* ── Training plan ───────────────────────────────────── */}
+      {/* ── Training program ────────────────────────────────── */}
       <Animated.View entering={enterUp(3)} layout={layoutSpring}>
         <AppText variant="label" style={styles.sectionLabel}>
-          Training plan
+          Training program
         </AppText>
         <View style={styles.group}>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel="Training plan"
+            accessibilityLabel="Training program"
             accessibilityState={{ expanded: planOpen }}
             onPress={() => setPlanOpen((o) => !o)}
             style={styles.row}
           >
             <IconChip icon="barbell" size={36} />
             <AppText variant="bodyBold" numberOfLines={1} style={styles.planName}>
-              {currentPlan ? currentPlan.name : 'Choose a plan'}
+              {currentPlan ? currentPlan.name : 'Choose a program'}
             </AppText>
             <Ionicons
               name={planOpen ? 'chevron-up' : 'chevron-down'}
@@ -1189,7 +1309,7 @@ export default function SettingsScreen() {
                   <PressableScale
                     accessibilityRole="radio"
                     accessibilityState={{ selected: planId === p.id }}
-                    accessibilityLabel={`Plan: ${p.name}`}
+                    accessibilityLabel={`Program: ${p.name}`}
                     onPress={() => {
                       if (p.isAvailable) update({ planId: p.id });
                       else pushPath('/subscribe');
@@ -1227,14 +1347,14 @@ export default function SettingsScreen() {
         <View style={[styles.group, styles.subscriptionBlock]}>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel={`Subscription — current plan ${TIER_LABEL[serverTier]}`}
+            accessibilityLabel={`Membership, currently ${tierName(serverTier)}`}
             onPress={() => pushPath('/subscribe')}
             style={styles.row}
           >
             <IconChip icon="card" size={36} />
-            <AppText style={styles.rowLabelGrow} numberOfLines={1}>Subscription</AppText>
+            <AppText style={styles.rowLabelGrow} numberOfLines={1}>Membership</AppText>
             <View style={styles.rowValue}>
-              <AppText color={colors.textDim} numberOfLines={1}>{TIER_LABEL[serverTier]}</AppText>
+              <AppText color={colors.textDim} numberOfLines={1}>{tierName(serverTier)}</AppText>
               <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
             </View>
           </PressableScale>
@@ -1315,7 +1435,7 @@ export default function SettingsScreen() {
         <View style={styles.group}>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel="Invite friends — you both earn a subscription discount"
+            accessibilityLabel="Invite friends. You both earn a membership discount"
             onPress={() => pushPath('/invite')}
             style={styles.row}
           >
@@ -1327,7 +1447,7 @@ export default function SettingsScreen() {
           </PressableScale>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel="Gym leaderboard — this month's consistency ranking, whole gym"
+            accessibilityLabel="Gym leaderboard. This month's consistency ranking, whole gym"
             onPress={() => pushPath('/leaderboard')}
             style={styles.row}
           >
@@ -1422,6 +1542,7 @@ export default function SettingsScreen() {
               accessibilityLabel="Workout reminders"
             />
           </View>
+          {reminderIssue?.row === 'workout' ? <ReminderIssueNote issue={reminderIssue} /> : null}
           {workoutRemindersOn ? (
             <Animated.View entering={enterFade()} style={styles.reminderDetail}>
               <View style={styles.dayRow}>
@@ -1479,6 +1600,7 @@ export default function SettingsScreen() {
               accessibilityLabel="Morning nudge"
             />
           </View>
+          {reminderIssue?.row === 'morning' ? <ReminderIssueNote issue={reminderIssue} /> : null}
           {/* Row 3 — weekly Sunday check-in. */}
           <View style={styles.row}>
             <IconChip icon="calendar-clear" size={36} />
@@ -1493,6 +1615,7 @@ export default function SettingsScreen() {
               accessibilityLabel="Sunday check-in reminder"
             />
           </View>
+          {reminderIssue?.row === 'checkin' ? <ReminderIssueNote issue={reminderIssue} /> : null}
         </View>
       </Animated.View>
 
@@ -1558,9 +1681,46 @@ export default function SettingsScreen() {
           Your data
         </AppText>
         <View style={styles.group}>
+          {/* Quiet recovery row — only here when the server refused a workout.
+              The session is already saved on this phone, so this never blocks
+              anything: it just offers another go at the backup. */}
+          {workoutBackup.failures.length > 0 ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel={`${workoutBackup.failures.length} ${
+                workoutBackup.failures.length === 1 ? 'workout' : 'workouts'
+              } not backed up. Tap to try again.`}
+              accessibilityState={{
+                disabled: workoutBackup.retrying,
+                busy: workoutBackup.retrying,
+              }}
+              disabled={workoutBackup.retrying}
+              onPress={workoutBackup.retry}
+              style={styles.row}
+            >
+              <IconChip icon="cloud-offline" size={36} />
+              <View style={styles.exportInfo}>
+                <AppText variant="bodyBold" numberOfLines={1}>
+                  {workoutBackup.failures.length === 1
+                    ? '1 workout not backed up'
+                    : `${workoutBackup.failures.length} workouts not backed up`}
+                </AppText>
+                <AppText variant="caption" numberOfLines={2}>
+                  Saved on this phone. Tap to try again.
+                </AppText>
+              </View>
+              {workoutBackup.retrying ? (
+                <ActivityIndicator size="small" color={colors.textDim} />
+              ) : (
+                <AppText variant="label" color={colors.accent}>
+                  Try again
+                </AppText>
+              )}
+            </PressableScale>
+          ) : null}
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel="Export training data — last 12 months as JSON"
+            accessibilityLabel="Export training data. Last 12 months as a file you can save or share"
             accessibilityState={{ disabled: exporting, busy: exporting }}
             disabled={exporting}
             onPress={() => void onExport()}
@@ -1571,8 +1731,8 @@ export default function SettingsScreen() {
               <AppText variant="bodyBold" numberOfLines={1}>
                 Export training data
               </AppText>
-              <AppText variant="caption" numberOfLines={1}>
-                Last 12 months, JSON
+              <AppText variant="caption" numberOfLines={2}>
+                Last 12 months, as a file you can save or share
               </AppText>
             </View>
             {exporting ? (
@@ -1649,7 +1809,7 @@ export default function SettingsScreen() {
             >
               {pinHash !== null
                 ? 'Locked with a PIN when fingerprint isn’t available'
-                : 'No PIN set — fingerprint is the only lock method'}
+                : 'No PIN set. Fingerprint is the only lock method'}
             </AppText>
 
             {/* Re-lock grace timeout (Pack P) — only meaningful once a lock
@@ -1741,7 +1901,7 @@ export default function SettingsScreen() {
       <ConfirmDialog
         visible={confirmingSignOut}
         title="Sign out?"
-        message="Your logs stay safe on this phone — signing out only disconnects your account."
+        message="Your logs stay safe on this phone. Signing out only disconnects your account."
         confirmLabel={signingOut ? 'Signing out…' : 'Yes, sign out'}
         cancelLabel="No, stay"
         danger
@@ -1764,7 +1924,7 @@ export default function SettingsScreen() {
       <ConfirmDialog
         visible={deleteStep === 'confirm'}
         title="Delete your account?"
-        message="This permanently erases your sign-in, health and training data, and private progress photos. Active services must be closed first; billing and order history may require support-assisted anonymization. After the server confirms, this device’s local health and training logs are also removed."
+        message="This permanently erases your sign-in, health and training data, and private progress photos. If you have placed orders or made payments, contact support to remove those records too. Everything saved on this phone is deleted as well."
         confirmLabel="Continue"
         cancelLabel="Keep my account"
         danger
@@ -1850,8 +2010,8 @@ export default function SettingsScreen() {
       <Animated.View layout={layoutSpring}>
         <AppText variant="caption" color={colors.textFaint} center style={styles.about}>
           v0.1.0 · Food data: Open Food Facts · Exercises: free-exercise-db · Anatomy art: MuscleMapJS
-          (MIT) · 3D anatomy: Z-Anatomy — The libre 3D atlas of anatomy (CC BY-SA 4.0), based on
-          BodyParts3D — The Database Center for Life Science (CC BY-SA 2.1 Japan); modified for this app
+          (MIT) · 3D anatomy: Z-Anatomy, the libre 3D atlas of anatomy (CC BY-SA 4.0), based on
+          BodyParts3D, the Database Center for Life Science (CC BY-SA 2.1 Japan); modified for this app
         </AppText>
       </Animated.View>
     </Screen>
@@ -2026,6 +2186,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   reminderDetail: { paddingBottom: spacing.md, gap: spacing.md },
+  // Why a switch wouldn't stay on, sitting directly under its own row.
+  reminderIssue: { paddingBottom: spacing.md, gap: spacing.sm },
   // Seven equal cells that flex to fill the card width — chips shrink to fit on
   // narrow phones instead of the row spilling past the group border.
   dayRow: {

@@ -7,7 +7,7 @@ import { ArrowLink, Container, Display, Eyebrow, Lead, Section, StatBig } from '
 
 const STATS = [
   { value: '7', caption: 'order states, live on your board' },
-  { value: '2', caption: 'ways to order — one-off + weekly subs' },
+  { value: '2', caption: 'ways to order, one-off + weekly subs' },
   { value: '0', caption: 'member profiles shared with kitchens' },
 ] as const;
 
@@ -29,7 +29,7 @@ export function PartnersValue() {
           <Reveal delay={160}>
             <Lead className="mt-6">
               GM members track macros every day, and the Meals tab is where targets turn into
-              orders — macro-labeled dishes from partner kitchens, batched on prep cutoffs,
+              orders: macro-labeled dishes from partner kitchens, batched on prep cutoffs,
               one-off or as a weekly subscription. When your menu fits their numbers, ordering
               from you isn&rsquo;t a cheat day. It&rsquo;s the plan.
             </Lead>

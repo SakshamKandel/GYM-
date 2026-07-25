@@ -8,6 +8,7 @@ import {
   DataTable,
   SkeletonRows,
 } from '@/components/console';
+import { MemberLink } from '../../_components/MemberLink';
 
 /**
  * Admin moderation of coach_milestones (ADMIN-MASTER-PLAN §3 P1-9) — a
@@ -30,7 +31,12 @@ interface Milestone {
   coach: { id: string; email: string; displayName: string };
 }
 
-export function MilestonesModeration() {
+export function MilestonesModeration({
+  canViewMembers,
+}: {
+  /** Viewer holds `members.read`, so member names can link to the record. */
+  canViewMembers: boolean;
+}) {
   const [milestones, setMilestones] = useState<Milestone[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -46,7 +52,7 @@ export function MilestonesModeration() {
       const data = (await res.json()) as { milestones: Milestone[] };
       setMilestones(data.milestones);
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
     }
   }, []);
 
@@ -64,14 +70,14 @@ export function MilestonesModeration() {
       );
       if (!res.ok) {
         setError(
-          res.status === 404 ? 'Already removed — refreshing.' : "Couldn't remove that.",
+          res.status === 404 ? 'Already removed. Refreshing.' : "Couldn't remove that.",
         );
         await load();
         return;
       }
       setMilestones((prev) => (prev ? prev.filter((m) => m.id !== row.id) : prev));
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
     } finally {
       setBusyId(null);
     }
@@ -83,9 +89,12 @@ export function MilestonesModeration() {
       header: 'Member',
       render: (m) => (
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>
-            {m.member.displayName || m.member.email}
-          </div>
+          <MemberLink
+            id={m.member.id}
+            name={m.member.displayName}
+            email={m.member.email}
+            canView={canViewMembers}
+          />
           <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{m.member.email}</div>
         </div>
       ),

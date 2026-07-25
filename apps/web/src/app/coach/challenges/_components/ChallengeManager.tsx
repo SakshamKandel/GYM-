@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Badge, Button, EmptyState, TextField } from '@/components/console';
+import { memberLabel } from '../../_components/memberLabel';
 import { SkeletonBars } from '../../_components/SkeletonBars';
 
 /**
@@ -44,7 +45,6 @@ interface Challenge {
 interface CoachUser {
   id: string;
   displayName: string;
-  email: string;
 }
 
 function currentMonthKey(): string {
@@ -130,7 +130,7 @@ export function ChallengeManager() {
       setUsers(usersData.users);
       setState('ready');
     } catch {
-      setLoadError('Network error. Check your connection and retry.');
+      setLoadError('Could not reach us just now. Check your connection and try again.');
       setState('error');
     }
   }, []);
@@ -176,7 +176,7 @@ export function ChallengeManager() {
       await load();
       setCreateBusy(false);
     } catch {
-      setCreateError('Network error. Check your connection and retry.');
+      setCreateError('Could not reach us just now. Check your connection and try again.');
       setCreateBusy(false);
     }
   }
@@ -210,7 +210,7 @@ export function ChallengeManager() {
       setPickDone(true);
       setPickBusy(false);
     } catch {
-      setPickError('Network error. Check your connection and retry.');
+      setPickError('Could not reach us just now. Check your connection and try again.');
       setPickBusy(false);
     }
   }
@@ -382,7 +382,7 @@ export function ChallengeManager() {
           <div className="gt-card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--gt-text-dim)', lineHeight: 1.5 }}>
               Spotlight one assigned client this month. They earn the Coach&apos;s pick badge and a
-              notification — one pick per month.
+              notification. One pick per month.
             </p>
             <div
               style={{
@@ -417,7 +417,7 @@ export function ChallengeManager() {
                   <option value="">Choose a client…</option>
                   {users.map((u) => (
                     <option key={u.id} value={u.id}>
-                      {u.displayName || u.email}
+                      {memberLabel(u.displayName)}
                     </option>
                   ))}
                 </select>

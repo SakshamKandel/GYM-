@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
-import type { PlanWorkout, PrRecord, Streak } from '@gym/shared';
+import type { PlanWorkout, PrRecord, Streak, WorkoutLog } from '@gym/shared';
 import { addDays, todayIso } from '../../lib/dates';
 import { getRepo } from '../../lib/repo';
 import { getNextPlanWorkout } from '../../lib/planProgress';
@@ -50,6 +50,13 @@ export interface HomeData {
   streak: Streak;
   planName: string | null;
   nextWorkout: PlanWorkout | null;
+  /**
+   * A workout that is open right now (started, never finished). Home's primary
+   * CTA has to know: starting a new one on top of a live session silently
+   * resumes the old one instead, so the hero offers Resume first — same rule
+   * the Train tab already follows.
+   */
+  activeWorkout: WorkoutLog | null;
   doneToday: DoneToday | null;
   weekVolumeKg: number;
   weekSessions: number;
@@ -75,17 +82,27 @@ export function useHomeData(planId: string | null): HomeData | null {
         const today = todayIso();
         const monday = weekStartIso(today);
 
-        const [streak, nextWorkout, todays, weekWorkouts, weekVolumeKg, prs, kcalByDate, recents] =
-          await Promise.all([
-            repo.getStreak(),
-            planId ? getNextPlanWorkout(repo, planId) : Promise.resolve(null),
-            repo.getWorkoutsBetween(today, today),
-            repo.getWorkoutsBetween(monday, today),
-            repo.getVolumeBetween(monday, today),
-            repo.getPrRecords(100),
-            repo.getKcalByDate([today]),
-            repo.getRecentWorkouts(10),
-          ]);
+        const [
+          streak,
+          nextWorkout,
+          activeWorkout,
+          todays,
+          weekWorkouts,
+          weekVolumeKg,
+          prs,
+          kcalByDate,
+          recents,
+        ] = await Promise.all([
+          repo.getStreak(),
+          planId ? getNextPlanWorkout(repo, planId) : Promise.resolve(null),
+          repo.getActiveWorkout(),
+          repo.getWorkoutsBetween(today, today),
+          repo.getWorkoutsBetween(monday, today),
+          repo.getVolumeBetween(monday, today),
+          repo.getPrRecords(100),
+          repo.getKcalByDate([today]),
+          repo.getRecentWorkouts(10),
+        ]);
 
         const doneWorkout =
           [...todays]
@@ -133,6 +150,7 @@ export function useHomeData(planId: string | null): HomeData | null {
           streak,
           planName: planId ? (getCatalogPlan(planId)?.name ?? null) : null,
           nextWorkout,
+          activeWorkout,
           doneToday,
           weekVolumeKg,
           weekSessions: countFinished(weekWorkouts),

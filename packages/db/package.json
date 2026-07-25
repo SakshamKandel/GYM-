@@ -7,10 +7,15 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "db:push": "drizzle-kit push",
+    "check:constraints": "pnpm dlx tsx src/check-constraints.ts",
+    "preview:normalize": "pnpm dlx tsx src/preview-normalize.ts",
+    "diff:schema": "pnpm dlx tsx src/schema-diff.ts",
+    "apply:migration": "pnpm dlx tsx src/apply-migration.ts",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
     "seed:exercises": "pnpm dlx tsx src/seed/exercises.ts",
     "seed:training-catalog": "pnpm dlx tsx src/seed/trainingCatalog.ts",
+    "seed:staff": "pnpm dlx tsx src/seed-staff.ts",
     "seed:demo-coach": "pnpm dlx tsx src/seed-demo-coach.ts",
     "seed:live-demo": "pnpm dlx tsx src/seed-live-demo.ts"
   },

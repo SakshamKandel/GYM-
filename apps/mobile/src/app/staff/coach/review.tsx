@@ -18,6 +18,7 @@ import {
   Tag,
 } from '../../../components/ui';
 import {
+  coachClientLabel,
   decideCoachReview,
   getCoachReviewQueue,
   toStaffError,
@@ -47,14 +48,14 @@ const ACTION_META: Record<string, { label: string; color: string }> = {
 };
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have coach access.";
   return "Couldn't load the review queue.";
 }
 
 function rowErrorLine(code: StaffErrorCode): string {
   if (code === 'forbidden') return 'This client is no longer assigned to you.';
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   return "Couldn't save the review. Try again.";
 }
 
@@ -192,12 +193,20 @@ export default function CoachReviewScreen() {
     void load();
   }, [load]);
 
+  // Group heading is the client's name, or a neutral word when they haven't set
+  // one. It used to fall back to their email, which the server no longer sends,
+  // so a nameless client headed a group with an empty string.
   const groups = useMemo(() => {
-    const byUser = new Map<string, { name: string; items: ReviewSuggestion[] }>();
+    const byUser = new Map<string, { id: string; name: string; items: ReviewSuggestion[] }>();
     for (const s of suggestions) {
       const existing = byUser.get(s.user.id);
       if (existing) existing.items.push(s);
-      else byUser.set(s.user.id, { name: s.user.displayName || s.user.email, items: [s] });
+      else
+        byUser.set(s.user.id, {
+          id: s.user.id,
+          name: coachClientLabel(s.user.displayName),
+          items: [s],
+        });
     }
     return [...byUser.values()];
   }, [suggestions]);
@@ -333,8 +342,10 @@ export default function CoachReviewScreen() {
           </View>
         ) : (
           <View style={styles.groups}>
+            {/* Keyed on the account id, not the name: two clients with no
+                display name now share the same neutral heading. */}
             {groups.map((group) => (
-              <View key={group.name} style={styles.group}>
+              <View key={group.id} style={styles.group}>
                 <AppText variant="label" color={colors.textFaint}>
                   {group.name}
                 </AppText>
@@ -365,7 +376,8 @@ export default function CoachReviewScreen() {
         {adjustTarget ? (
           <View style={styles.sheetBody}>
             <AppText variant="body" color={colors.textDim}>
-              {adjustTarget.exerciseName || 'Exercise'} · {adjustTarget.user.displayName}
+              {adjustTarget.exerciseName || 'Exercise'} ·{' '}
+              {coachClientLabel(adjustTarget.user.displayName)}
             </AppText>
             <Divider />
             <AppText variant="label">New weight (kg)</AppText>
@@ -380,7 +392,7 @@ export default function CoachReviewScreen() {
             <AppTextInput
               value={noteText}
               onChangeText={setNoteText}
-              placeholder="Why you changed it — the member sees this"
+              placeholder="Why you changed it. The member sees this"
               maxLength={500}
               multiline
               style={styles.noteInput}

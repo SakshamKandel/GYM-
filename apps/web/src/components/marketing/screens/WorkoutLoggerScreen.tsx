@@ -122,7 +122,7 @@ export function WorkoutLoggerScreen({ onTabChange }: { onTabChange?: (tab: TabNa
               New PR Recorded
             </span>
             <span className="mt-0.5 block text-[11.5px] font-semibold text-ink/80">
-              Back Squat — 80 kg × 5 reps
+              Back Squat · 80 kg × 5 reps
             </span>
           </div>
         </div>

@@ -1,8 +1,10 @@
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { requireCoachPage } from '@/lib/coachPage';
 import { AttentionList } from './_components/AttentionList';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Attention' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -22,7 +24,7 @@ export default async function CoachAttentionPage() {
     <div style={{ maxWidth: 900 }}>
       <PageHeader
         title="Attention"
-        subtitle="Your clients sorted by who has gone quiet the longest. Silence first: no synced workouts and no check-ins beats an old one. Read the latest check-in and reply without leaving the list."
+        subtitle="Your clients, quietest first. Someone who has logged nothing at all comes before someone whose last workout is a while back. Read their latest check-in and reply right here."
       />
       <AttentionList />
     </div>

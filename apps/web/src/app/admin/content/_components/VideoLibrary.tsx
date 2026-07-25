@@ -12,6 +12,7 @@ import {
   StatusChip,
   Toolbar,
 } from '@/components/console';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import { UploadModal } from './UploadModal';
 import {
   type Tier,
@@ -124,7 +125,7 @@ export function VideoLibrary({
           x.id === row.id ? { ...x, tierRequired: row.tierRequired } : x,
         ),
       );
-      setRowError({ id: row.id, msg: 'Network error.' });
+      setRowError({ id: row.id, msg: 'Could not reach us just now. Try again.' });
     } finally {
       setBusyId(null);
     }
@@ -145,7 +146,7 @@ export function VideoLibrary({
       }
       setVideos((prev) => prev.filter((x) => x.id !== row.id));
     } catch {
-      setRowError({ id: row.id, msg: 'Network error.' });
+      setRowError({ id: row.id, msg: 'Could not reach us just now. Try again.' });
     } finally {
       setBusyId(null);
     }
@@ -226,13 +227,12 @@ export function VideoLibrary({
             width: 'auto',
             padding: '6px 10px',
             fontSize: 13,
-            textTransform: 'capitalize',
           }}
           aria-label={`Required tier for ${v.title}`}
         >
           {TIERS.map((t) => (
             <option key={t} value={t}>
-              {t}
+              {tierLabel(t)}
             </option>
           ))}
         </select>
@@ -291,12 +291,12 @@ export function VideoLibrary({
               fontSize: 15,
             }}
           >
-            Video hosting not configured
+            Video uploads are switched off
           </div>
           <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-            Uploads are disabled until the video host keys are added to the
-            server environment. Existing videos still list, but new ones
-            can&apos;t be created yet.
+            Nobody can add a new video until video uploads are enabled for this
+            platform. Ask whoever runs it to turn them on. Videos already here
+            keep working.
           </div>
         </Card>
       ) : null}
@@ -329,7 +329,7 @@ export function VideoLibrary({
           description={
             configured
               ? 'Upload your first form-check video to show it inside a training plan.'
-              : 'Add video host keys to the server, then upload your first form-check video.'
+              : 'Video uploads are switched off, so nothing can be added yet. Turn them on and your first form-check video can go up.'
           }
           action={
             configured ? (

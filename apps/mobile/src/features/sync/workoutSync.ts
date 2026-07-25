@@ -5,6 +5,7 @@ import { getRepoForAccount } from '../../lib/repo';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
 import {
+  fetchWorkoutRestorePage,
   MAX_SETS_PER_BATCH,
   MAX_WORKOUTS_PER_BATCH,
   postWorkoutBatch,
@@ -14,9 +15,10 @@ import {
 import { decideInvalidWorkoutBatch } from './queuePolicy';
 
 /**
- * One-way, append-only workout backup: finished workouts flow from the local
- * repo to the server and NOTHING flows back (no download, no merge — v1 is
- * deliberately not a sync engine).
+ * Append-only workout backup: finished workouts flow from the local repo to
+ * the server, and the server can hand back workouts this device is missing
+ * (new phone, reinstall) — but only ever as an ADDITION. Nothing local is
+ * rewritten or removed by a restore, so this is still not a merge engine.
  *
  * Retry safety, in order:
  *  1. Local workouts are marked synced ONLY after the server confirms the
@@ -160,9 +162,9 @@ async function notifyProgression(accountId: string, syncedIds: string[]): Promis
 let inFlight = false;
 
 /**
- * Drain the unsynced-workout backlog to the server. Fire-and-forget:
- * no-ops when signed out or already running, never throws, never blocks
- * the caller — always `void syncWorkouts()`.
+ * Drain the unsynced-workout backlog to the server, then pull back anything
+ * this device is missing. Fire-and-forget: no-ops when signed out or already
+ * running, never throws, never blocks the caller — always `void syncWorkouts()`.
  */
 export async function syncWorkouts(): Promise<void> {
   if (inFlight) return;
@@ -175,70 +177,121 @@ export async function syncWorkouts(): Promise<void> {
   // rows under the new member's token.
   const accountId = initialAuth.user.id;
   try {
-    const repo = await getRepoForAccount(accountId);
-    for (;;) {
-      // Re-read per batch so a mid-drain sign-out — or a switch to a
-      // different account — stops the upload cleanly.
-      const auth = useAuth.getState();
-      if (auth.status !== 'signedIn' || !auth.token || auth.user?.id !== accountId) return;
-      const unitPref = useProfile.getState().unitPref;
-
-      const pending = await repo.getUnsyncedFinishedWorkouts(MAX_WORKOUTS_PER_BATCH);
-      if (pending.length === 0) {
-        // Nothing to upload, but a previous drain may have synced workouts
-        // whose suggestion POST was lost — flush that backlog on its own.
-        await notifyProgression(accountId, []);
-        return;
-      }
-      const batch = buildBatch(pending, unitPref);
-      if (batch.length === 0) return;
-
-      // Poison-pill escape: a 400 means the validator will never accept this
-      // body, so retrying it forever would silently block every workout logged
-      // after it. Isolate the oldest workout; if it 400s alone, quarantine it
-      // locally (the row stays on-device and is NOT recorded as synced).
-      let toSend = batch;
-      let syncedIds: string[] | null = null;
-      while (syncedIds === null) {
-        try {
-          syncedIds = await postWorkoutBatch(auth.token, toSend);
-        } catch (err) {
-          if (!(err instanceof SyncApiError) || err.code !== 'invalid') throw err;
-          const decision = decideInvalidWorkoutBatch(toSend.map((workout) => workout.id));
-          if (decision.kind === 'isolate') {
-            toSend = toSend.filter((workout) => workout.id === decision.retryWorkoutId);
-            continue;
-          }
-          if (decision.kind === 'stop') return;
-          await repo.markWorkoutSyncFailed({
-            workoutId: decision.workoutId,
-            code: 'invalid_payload',
-            failedAt: nowIso(),
-          });
-          break;
-        }
-      }
-      if (syncedIds === null) continue; // poison quarantined — drain the rest
-
-      // Trust the intersection only: mark local rows synced when the server
-      // explicitly confirmed THAT id (rule 11 — never assume, never delete).
-      const sent = new Set(toSend.map((w) => w.id));
-      const confirmed = syncedIds.filter((id) => sent.has(id));
-      if (confirmed.length === 0) return; // nothing landed — retry next trigger
-      await repo.markWorkoutsSynced(confirmed, nowIso());
-      await notifyProgression(accountId, confirmed);
-
-      // Keep draining only after a fully-confirmed batch AND when more may
-      // remain (full page, or the caps trimmed this one). A partial
-      // confirmation stops here so we never spin on the same failing rows.
-      const morePending =
-        pending.length === MAX_WORKOUTS_PER_BATCH || toSend.length < pending.length;
-      if (confirmed.length < toSend.length || !morePending) return;
-    }
+    await drainWorkouts(accountId);
+    // Upload first, restore second: the backlog is the part that only exists
+    // on this phone, so it can never be delayed behind a long download.
+    await restoreWorkouts(accountId);
   } catch {
     // Offline / server hiccup / expired session — silent by design. The
     // backlog stays local and the next trigger retries it.
   } finally {
     inFlight = false;
+  }
+}
+
+/** The upload half. Returns when there is nothing more it can safely send. */
+async function drainWorkouts(accountId: string): Promise<void> {
+  const repo = await getRepoForAccount(accountId);
+  for (;;) {
+    // Re-read per batch so a mid-drain sign-out — or a switch to a
+    // different account — stops the upload cleanly.
+    const auth = useAuth.getState();
+    if (auth.status !== 'signedIn' || !auth.token || auth.user?.id !== accountId) return;
+    const unitPref = useProfile.getState().unitPref;
+
+    const pending = await repo.getUnsyncedFinishedWorkouts(MAX_WORKOUTS_PER_BATCH);
+    if (pending.length === 0) {
+      // Nothing to upload, but a previous drain may have synced workouts
+      // whose suggestion POST was lost — flush that backlog on its own.
+      await notifyProgression(accountId, []);
+      return;
+    }
+    const batch = buildBatch(pending, unitPref);
+    if (batch.length === 0) return;
+
+    // Poison-pill escape: a 400 means the validator will never accept this
+    // body, so retrying it forever would silently block every workout logged
+    // after it. Isolate the oldest workout; if it 400s alone, quarantine it
+    // locally (the row stays on-device and is NOT recorded as synced).
+    let toSend = batch;
+    let syncedIds: string[] | null = null;
+    while (syncedIds === null) {
+      try {
+        syncedIds = await postWorkoutBatch(auth.token, toSend);
+      } catch (err) {
+        if (!(err instanceof SyncApiError) || err.code !== 'invalid') throw err;
+        const decision = decideInvalidWorkoutBatch(toSend.map((workout) => workout.id));
+        if (decision.kind === 'isolate') {
+          toSend = toSend.filter((workout) => workout.id === decision.retryWorkoutId);
+          continue;
+        }
+        if (decision.kind === 'stop') return;
+        await repo.markWorkoutSyncFailed({
+          workoutId: decision.workoutId,
+          code: 'invalid_payload',
+          failedAt: nowIso(),
+        });
+        break;
+      }
+    }
+    if (syncedIds === null) continue; // poison quarantined — drain the rest
+
+    // Trust the intersection only: mark local rows synced when the server
+    // explicitly confirmed THAT id (rule 11 — never assume, never delete).
+    const sent = new Set(toSend.map((w) => w.id));
+    const confirmed = syncedIds.filter((id) => sent.has(id));
+    if (confirmed.length === 0) return; // nothing landed — retry next trigger
+    await repo.markWorkoutsSynced(confirmed, nowIso());
+    await notifyProgression(accountId, confirmed);
+
+    // Keep draining only after a fully-confirmed batch AND when more may
+    // remain (full page, or the caps trimmed this one). A partial
+    // confirmation stops here so we never spin on the same failing rows.
+    const morePending =
+      pending.length === MAX_WORKOUTS_PER_BATCH || toSend.length < pending.length;
+    if (confirmed.length < toSend.length || !morePending) return;
+  }
+}
+
+// ── Restore (server → device) ─────────────────────────────────
+// Accounts whose restore stream is fully caught up in THIS app run. The
+// cursor itself is durable; this only stops a finished restore from asking
+// again after every workout the member logs.
+const restoredAccounts = new Set<string>();
+
+/** Bounded per run so a huge history can never monopolise a session. */
+const MAX_RESTORE_PAGES_PER_RUN = 10;
+
+/**
+ * Pull back workouts this device doesn't have, oldest first, resuming from the
+ * stored cursor. Everything it can do is additive (see the repo's
+ * applyWorkoutRestorePage), so an interrupted or repeated run is harmless:
+ * pages already applied simply find every row present and skip it.
+ *
+ * Silent on failure like the rest of sync — an old server, an offline phone or
+ * a rate limit just means the remaining pages arrive on a later trigger.
+ */
+async function restoreWorkouts(accountId: string): Promise<void> {
+  if (restoredAccounts.has(accountId)) return;
+  const repo = await getRepoForAccount(accountId);
+  for (let page = 0; page < MAX_RESTORE_PAGES_PER_RUN; page += 1) {
+    // Same per-page auth re-read as the drain: a sign-out or account switch
+    // must not write one member's history into another's namespace.
+    const auth = useAuth.getState();
+    if (auth.status !== 'signedIn' || !auth.token || auth.user?.id !== accountId) return;
+
+    const cursor = await repo.getWorkoutRestoreCursor();
+    const restored = await fetchWorkoutRestorePage(auth.token, cursor);
+    // Server too old to restore — stop asking for the rest of this run.
+    if (restored === null) return;
+
+    const current = useAuth.getState();
+    if (current.status !== 'signedIn' || current.user?.id !== accountId) return;
+    await repo.applyWorkoutRestorePage(restored);
+
+    if (!restored.hasMore) {
+      restoredAccounts.add(accountId);
+      return;
+    }
   }
 }

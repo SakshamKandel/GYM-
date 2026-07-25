@@ -8,6 +8,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   adminRoleOf,
+  auditIp,
   logAudit,
   requirePermission,
   requireStaff,
@@ -31,12 +32,25 @@ export const runtime = 'nodejs';
  *          coach_assignments row → coach identity). Guarded by
  *          requirePermission('members.read').
  *
- *  - PATCH {tier?, status?, reason?} → applies whichever fields are present.
+ *  - PATCH {tier?, expiresAt?, status?, reason?} → applies whichever fields are
+ *          present.
  *          `tier` routes through setAccountTier (source of truth + jsonb mirror
  *          + audit) and is gated on 'subscription.override'; console overrides
- *          always pass `{ startsAt: new Date(), expiresAt: null }` per contract
- *          §4.4 — an admin picking a tier in this drawer means "grant this now,
- *          no expiry", never a silent no-op against a stale past expiry.
+ *          always pass an EXPLICIT dated window `{ startsAt: new Date(),
+ *          expiresAt }` per contract §4.4 — an admin picking a tier in this
+ *          drawer means "grant this now", never a silent no-op against a stale
+ *          past expiry.
+ *          `expiresAt` (ISO-8601, same field name the subscriptions route
+ *          takes) is that window's end. OMITTING it still defaults to `null` =
+ *          permanent, preserving the previous contract for callers that don't
+ *          send it — but a forced null on EVERY console tier change is what
+ *          permanently immunized an account against later store downgrades
+ *          (a null-expiry 'console' grant outranks the RevenueCat webhook's
+ *          no-clobber check forever), so the drawer now sends a real end date.
+ *          A past `expiresAt` is rejected (400 expiry_in_past) rather than
+ *          written: it would report success while effectiveTier() collapses the
+ *          account straight back to 'starter' — the same silent no-op the
+ *          explicit-window rule exists to prevent.
  *          `status` writes accounts.status and is gated on 'members.suspend';
  *          flipping to 'suspended' instantly kills every live session for the
  *          account because userForToken/staffForToken filter on
@@ -71,12 +85,6 @@ function pickAllowedProfile(
     if (data[key] !== undefined) out[key] = data[key];
   }
   return Object.keys(out).length > 0 ? out : null;
-}
-
-function getIp(req: Request): string | null {
-  const fwd = req.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]?.trim() ?? null;
-  return req.headers.get('x-real-ip');
 }
 
 export function OPTIONS() {
@@ -172,6 +180,11 @@ const TIERS = ['starter', 'silver', 'gold', 'elite'] as const;
 const patchSchema = z
   .object({
     tier: z.enum(TIERS).optional(),
+    // End of the granted window. Same field name/shape the subscriptions route
+    // accepts: an ISO-8601 datetime, or null for "no expiry". ABSENT keeps the
+    // historical default (null = permanent) so any existing caller that only
+    // sends { tier } behaves exactly as before.
+    expiresAt: z.coerce.date().nullable().optional(),
     status: z.enum(['active', 'suspended']).optional(),
     reason: z.string().max(500).optional(),
   })
@@ -188,10 +201,19 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
   const parsed = patchSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { tier, status, reason } = parsed.data;
+  const { tier, expiresAt, status, reason } = parsed.data;
+
+  // A window that has already closed would be written, audited, and reported as
+  // a success while effectiveTier() keeps collapsing the account to 'starter' —
+  // exactly the silent no-op the explicit-window rule exists to prevent. Refuse
+  // it instead. (Pure payload validation: no dependence on the target account,
+  // so this leaks nothing about whether `id` exists.)
+  if (expiresAt instanceof Date && expiresAt.getTime() <= Date.now()) {
+    return json({ error: 'expiry_in_past' }, 400);
+  }
 
   const db = getDb();
-  const ip = getIp(req);
+  const ip = auditIp(req);
 
   // Per-field permission checks (fail closed, independent) — run BEFORE the
   // existence lookup so a staffer lacking the relevant permission gets the
@@ -245,17 +267,18 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   // Apply tier via the shared helper (updates accounts.tier, mirrors the jsonb
   // blob, and writes its own 'subscription.override' audit row). Contract
   // §4.4: console overrides ALWAYS pass an explicit dated window — starting
-  // now, no expiry — so granting a paid tier to a member whose stored
-  // tierExpiresAt is in the past is never a silent no-op (the stale expiry
-  // would otherwise keep collapsing effectiveTier() back to 'starter' even
-  // though the console reported success).
+  // now — so granting a paid tier to a member whose stored tierExpiresAt is in
+  // the past is never a silent no-op (the stale expiry would otherwise keep
+  // collapsing effectiveTier() back to 'starter' even though the console
+  // reported success). The window's END is the caller's `expiresAt`; only when
+  // that field is OMITTED do we fall back to the historical null = permanent.
   if (tier !== undefined) {
     await setAccountTier(
       id,
       tier as Tier,
       base,
       reason,
-      { startsAt: new Date(), expiresAt: null },
+      { startsAt: new Date(), expiresAt: expiresAt ?? null },
       'console',
     );
   }

@@ -1,5 +1,6 @@
 import { accounts, admins, coachProfiles } from '@gym/db';
 import { asc, eq } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -8,6 +9,7 @@ import { MembersDirectory } from './_components/MembersDirectory';
 import type { CoachOption, MemberRow } from './_components/types';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Members' };
 export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 50;

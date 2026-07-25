@@ -1,5 +1,6 @@
 import type { Tier } from '@gym/shared';
 import Svg, { Defs, LinearGradient, Path, Stop, Text as SvgText } from 'react-native-svg';
+import { tierName } from '../../lib/tier';
 import { BADGE_STOP_OFFSETS, TIER_PALETTE, type MetallicTier } from './tierPalette';
 
 /**
@@ -25,12 +26,6 @@ interface Props {
   /** Height in px; width is derived from the shield's 24:28 aspect ratio. Default 16. */
   size?: number;
 }
-
-const TIER_LABEL: Record<BadgeTier, string> = {
-  silver: 'Silver',
-  gold: 'Gold',
-  elite: 'Elite',
-};
 
 const TIER_INITIAL: Record<BadgeTier, string> = {
   silver: 'S',
@@ -64,7 +59,7 @@ export function TierBadge({ tier, size = 16 }: Props) {
       width={width}
       height={height}
       viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-      accessibilityLabel={`${TIER_LABEL[tier]} member`}
+      accessibilityLabel={`${tierName(tier)} member`}
     >
       <Defs>
         <LinearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">

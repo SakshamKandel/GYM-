@@ -9,12 +9,13 @@ import {
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-context';
 import { colors } from '@gym/ui-tokens';
 import { hydrateCheckIns } from '../features/checkin/store';
+import { getNotifications } from '../features/notifications/api';
 import { registerPushRefresh } from '../features/realtime/pushRefresh';
 import { AppLock } from '../features/security/AppLock';
 import { AppStartupScreen } from '../components/experience/AppStartupScreen';
@@ -22,6 +23,7 @@ import { syncWorkouts } from '../features/sync/workoutSync';
 import { startMemberDataSync, syncMemberData } from '../features/sync/memberDataSync';
 import {
   registerForPushNotificationsAsync,
+  setNotificationBadgeCount,
   setupNotifications,
 } from '../lib/notifications';
 import { startProfileSync } from '../lib/profileSync';
@@ -33,6 +35,31 @@ void SplashScreen.preventAutoHideAsync();
 // short cap nonetheless: a delayed font request must not look like a frozen
 // black launch screen on a cold start.
 const FONT_LOAD_FALLBACK_MS = 750;
+
+/**
+ * Mirror the server's unread count onto the app-icon badge, so notifications
+ * that arrived while the app was closed are visible from the home screen; a
+ * null token (signed out) clears it. The inbox screen keeps it in step from
+ * there (and zeroes it on "mark all read").
+ *
+ * Best-effort and fully swallowed: a failure just leaves the previous badge in
+ * place. The try/catch also covers `lib/notifications`' web build, whose stub
+ * has no badge function (web has no app icon to badge).
+ */
+async function syncNotificationBadge(authToken: string | null): Promise<void> {
+  try {
+    if (authToken === null) {
+      await setNotificationBadgeCount(0);
+      return;
+    }
+    // limit=1 — only `unreadCount` is used; the rows are the inbox's job.
+    const page = await getNotifications(authToken, { limit: 1 });
+    if (useAuth.getState().token !== authToken) return;
+    await setNotificationBadgeCount(page.unreadCount);
+  } catch {
+    // Offline / unauthorized / no badge support — nothing to show.
+  }
+}
 
 export default function RootLayout() {
   const [fontFallbackReady, setFontFallbackReady] = useState(false);
@@ -63,6 +90,9 @@ export default function RootLayout() {
       if (state === 'active') {
         void useAuth.getState().refresh();
         void syncMemberData();
+        // Notifications may have arrived (and been read elsewhere) while we
+        // were backgrounded — keep the app-icon badge honest.
+        void syncNotificationBadge(useAuth.getState().token);
       }
     });
     return () => sub.remove();
@@ -83,29 +113,48 @@ export default function RootLayout() {
     void setupNotifications();
   }, []);
 
-  // Register the device's Expo push token whenever we're signed in — this
-  // effect re-runs on the signedOut→signedIn transition, so a fresh sign-in
-  // registers too. Fire-and-forget: it never throws and no-ops when signed out.
-  // Default (no options) is CHECK-ONLY — it never shows an OS permission
-  // dialog on a cold start; only onboarding's "Stay on track" step and
-  // Settings reminder toggles are allowed to prompt.
-  const authStatus = useAuth((s) => s.status);
+  // Register the device's FCM push token whenever the SESSION changes.
+  //
+  // Keyed on the auth TOKEN, not the status string: switching accounts over a
+  // live session goes signedIn → signedIn, so a status-keyed effect never
+  // re-fired and the device stayed registered to the PREVIOUS account — the
+  // new user kept receiving the old user's notifications. The token changes on
+  // every identity change (and on rehydrate), so this now re-registers each
+  // time. Registration itself is safe to re-enter: it awaits any in-flight
+  // sign-out unregister first, re-reads auth after every await, and the server
+  // upserts on the device token (so the row moves to the new account).
+  //
+  // Fire-and-forget: it never throws and no-ops when signed out. Default (no
+  // options) is CHECK-ONLY — it never shows an OS permission dialog on a cold
+  // start; only surfaces the user just tapped may prompt (see lib/notifications).
+  const authToken = useAuth((s) => s.token);
+  const prevAuthToken = useRef<string | null>(null);
   useEffect(() => {
-    if (authStatus === 'signedIn') {
-      void registerForPushNotificationsAsync();
-      // Drain the unsynced-workout backlog and reconcile check-in due-state.
-      // Keyed to authStatus (not mount) because the persisted 'signedIn' state
-      // rehydrates from AsyncStorage AFTER mount — a mount-only call would race
-      // rehydration and no-op on every cold start, leaving offline workouts
-      // stuck until the next finish(). This also covers fresh sign-ins.
-      void syncWorkouts();
-      void syncMemberData();
-      void hydrateCheckIns();
-      // Push→refresh listeners (coach review / check-in reply pushes trigger
-      // an immediate store re-fetch). Registers once; later calls no-op.
-      registerPushRefresh();
+    const previous = prevAuthToken.current;
+    prevAuthToken.current = authToken;
+    if (authToken === null) {
+      // Signed OUT (not merely "not signed in yet" — a cold start runs this
+      // with a null token before the persisted session rehydrates, and
+      // clearing then would wipe a correct badge while offline). The app icon
+      // must not keep advertising the previous account's unread count.
+      if (previous !== null) void syncNotificationBadge(null);
+      return;
     }
-  }, [authStatus]);
+    if (useAuth.getState().status !== 'signedIn') return;
+    void registerForPushNotificationsAsync();
+    // Drain the unsynced-workout backlog and reconcile check-in due-state.
+    // Keyed to the session (not mount) because the persisted 'signedIn' state
+    // rehydrates from AsyncStorage AFTER mount — a mount-only call would race
+    // rehydration and no-op on every cold start, leaving offline workouts
+    // stuck until the next finish(). This also covers fresh sign-ins.
+    void syncWorkouts();
+    void syncMemberData();
+    void hydrateCheckIns();
+    // Push→refresh listeners (coach review / check-in reply pushes trigger
+    // an immediate store re-fetch). Registers once; later calls no-op.
+    registerPushRefresh();
+    void syncNotificationBadge(authToken);
+  }, [authToken]);
 
   if (!fontsLoaded && !fontsError && !fontFallbackReady) {
     return <AppStartupScreen message="Loading your training" />;

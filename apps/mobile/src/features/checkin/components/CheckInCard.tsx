@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, type Href } from 'expo-router';
 import { displayWeight, inputToKg, unitLabel } from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
@@ -22,6 +22,7 @@ import { formatCompact } from '../../engagement/logic';
 import { postCheckIn, type CheckInSummary } from '../api';
 import { isCheckInDue, weekSummary } from '../logic';
 import { hydrateCheckIns, useCheckIn } from '../store';
+import { CoachChallengeCard } from './CoachChallengeCard';
 
 /**
  * Weekly coach check-in card (home screen). Signed-in members only — this is
@@ -87,6 +88,35 @@ const styles = StyleSheet.create({
   replyBody: { marginTop: spacing.xs },
 });
 
+type CoachStatus = ReturnType<typeof useCheckIn.getState>['coachStatus'];
+
+/**
+ * The confirmation after a check-in lands. It used to always read "Sent to
+ * your coach", which was simply untrue for the many members who have no coach:
+ * the server notifies an ACTIVE assignment or nobody at all. So say what
+ * actually happened — and for an uncoached member, what the check-in is still
+ * good for (a coach taken on later reads the whole history) plus the one step
+ * that changes it.
+ */
+function sentCopy(status: CoachStatus): { title: string; body: string; noCoach: boolean } {
+  if (!status.known) {
+    // The coach lookup hasn't answered (offline, usually). Claim nothing.
+    return { title: 'Check-in saved', body: 'Any reply lands right here.', noCoach: false };
+  }
+  if (status.name === null) {
+    return {
+      title: 'Check-in saved',
+      body: "You don't have a coach yet, so nobody was told. It stays with your training, and a coach you take on later can read the whole run of them.",
+      noCoach: true,
+    };
+  }
+  return {
+    title: status.name ? `Sent to ${status.name}` : 'Sent to your coach',
+    body: 'The reply will show up right here.',
+    noCoach: false,
+  };
+}
+
 /** Parse the optional bodyweight field ("72.5" / "72,5") in the display unit. */
 function parseWeightInput(raw: string): number | null {
   const n = Number(raw.replace(',', '.').trim());
@@ -137,13 +167,28 @@ function ScaleRow({
   );
 }
 
+/**
+ * Home's coach block: the weekly check-in, then the coach's monthly challenge
+ * when one is running. Kept together because they are the same relationship
+ * seen from two sides, and because Home is the one screen every member opens.
+ */
 export function CheckInCard({ stagger = 0 }: { stagger?: number }) {
+  return (
+    <>
+      <WeeklyCoachCheckIn stagger={stagger} />
+      <CoachChallengeCard stagger={stagger} />
+    </>
+  );
+}
+
+function WeeklyCoachCheckIn({ stagger }: { stagger: number }) {
   const status = useAuth((s) => s.status);
   const user = useAuth((s) => s.user);
   const unitPref = useProfile((s) => s.unitPref);
   const lastCheckInAt = useCheckIn((s) => s.lastCheckInAt);
   const accountId = useCheckIn((s) => s.accountId);
   const coachReply = useCheckIn((s) => s.coachReply);
+  const coachStatus = useCheckIn((s) => s.coachStatus);
 
   const [phase, setPhase] = useState<Phase>('due');
   const [summary, setSummary] = useState<CheckInSummary | null>(null);
@@ -220,6 +265,10 @@ export function CheckInCard({ stagger = 0 }: { stagger?: number }) {
   if (accountId !== user.id) return null;
 
   const unit = unitLabel(unitPref);
+  // A check-in only reaches a person when an active coach is assigned; the
+  // server sends nothing to nobody. Three states, three honest lines — and
+  // while the answer is still unknown, only what is true either way.
+  const sent = sentCopy(coachStatus);
 
   // Just sent — a quiet confirmation until the screen unmounts.
   if (phase === 'done') {
@@ -227,8 +276,16 @@ export function CheckInCard({ stagger = 0 }: { stagger?: number }) {
       <Animated.View entering={enterUp(stagger)} style={styles.wrap}>
         <HeroCard mascot variant="charcoal">
           <AppText variant="label">Weekly check-in</AppText>
-          <AppText variant="title">Sent to your coach</AppText>
-          <AppText variant="caption">The reply will show up right here.</AppText>
+          <AppText variant="title">{sent.title}</AppText>
+          <AppText variant="caption">{sent.body}</AppText>
+          {sent.noCoach ? (
+            <Button
+              label="Find a coach"
+              variant="secondary"
+              onPress={() => router.push('/coaches' as Href)}
+              style={styles.buttonTop}
+            />
+          ) : null}
         </HeroCard>
       </Animated.View>
     );
@@ -271,7 +328,7 @@ export function CheckInCard({ stagger = 0 }: { stagger?: number }) {
             <AppTextInput
               value={bodyweight}
               onChangeText={setBodyweight}
-              placeholder={`Bodyweight (${unit}) — optional`}
+              placeholder={`Bodyweight (${unit}), optional`}
               keyboardType="decimal-pad"
               accessibilityLabel={`Bodyweight in ${unit}, optional`}
             />
@@ -281,11 +338,13 @@ export function CheckInCard({ stagger = 0 }: { stagger?: number }) {
             <AppTextInput
               value={note}
               onChangeText={setNote}
-              placeholder="Note for your coach — optional"
+              placeholder={sent.noCoach ? 'Add a note, optional' : 'Note for your coach, optional'}
               multiline
               maxLength={2000}
               style={styles.note}
-              accessibilityLabel="Note for your coach, optional"
+              accessibilityLabel={
+                sent.noCoach ? 'Add a note, optional' : 'Note for your coach, optional'
+              }
             />
             {failed ? (
               <AppText variant="caption" color={colors.error}>
@@ -312,7 +371,9 @@ export function CheckInCard({ stagger = 0 }: { stagger?: number }) {
         <AppText variant="label">Weekly check-in</AppText>
         <AppText variant="title">How was your week?</AppText>
         <AppText variant="caption">
-          A minute of answers keeps your coach in the loop.
+          {sent.noCoach
+            ? 'A minute of answers, kept with your training.'
+            : 'A minute of answers keeps your coach in the loop.'}
         </AppText>
         <Button label="Start check-in" onPress={startForm} style={styles.buttonTop} />
       </HeroCard>

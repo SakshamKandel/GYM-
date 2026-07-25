@@ -2,59 +2,17 @@
 
 /**
  * Feature comparison — the editorial cream counterpoint. A real table,
- * hairline cream-line rows, grouped by how people actually think about the
- * app: self-coached first, marketplace second, human coaching last.
+ * hairline cream-line rows, built from the one bullet map in pricing-format.ts
+ * so every ✓ here matches what the app actually unlocks at that tier.
  */
 import { Fragment } from 'react';
 import { Reveal } from '../motion';
+import { comparisonGroups, TIER_META, totalBulletCount } from '../pricing-format';
 import { Container, Display, Eyebrow, Lead, Section } from '../ui';
 
-interface FeatureRow {
-  label: string;
-  /** [starter, silver, gold, elite] */
-  tiers: [boolean, boolean, boolean, boolean];
-}
+const GROUPS = comparisonGroups();
 
-interface FeatureGroup {
-  group: string;
-  rows: FeatureRow[];
-}
-
-const GROUPS: FeatureGroup[] = [
-  {
-    group: 'Self-coached training',
-    rows: [
-      { label: 'Offline workout logging + gym mode', tiers: [true, true, true, true] },
-      { label: 'Food diary + barcode scan', tiers: [true, true, true, true] },
-      { label: 'True-3D anatomy — 17 muscle zones', tiers: [true, true, true, true] },
-      { label: 'Automatic PR detection + streaks', tiers: [true, true, true, true] },
-      { label: 'Weight trend smoothing + measurements', tiers: [true, true, true, true] },
-    ],
-  },
-  {
-    group: 'Marketplace',
-    rows: [
-      { label: 'Partner meal ordering — Kathmandu Valley', tiers: [true, true, true, true] },
-      { label: 'Nearby gym discovery', tiers: [true, true, true, true] },
-      {
-        label: 'Member discount card at partner restaurants',
-        tiers: [false, true, true, true],
-      },
-    ],
-  },
-  {
-    group: 'Human coaching',
-    rows: [
-      { label: 'Coach-assigned workouts', tiers: [false, true, true, true] },
-      { label: 'Personal diet plan', tiers: [false, false, true, true] },
-      { label: 'Any-time coach chat', tiers: [false, false, false, true] },
-      { label: 'Full mentorship + coach-logged milestones', tiers: [false, false, false, true] },
-      { label: 'Priority support', tiers: [false, false, false, true] },
-    ],
-  },
-];
-
-const TIER_COLS = ['Starter', 'Silver', 'Gold', 'Elite'] as const;
+const TIER_COLS = TIER_META.map((t) => t.name);
 
 function Cell({ included, tier }: { included: boolean; tier: string }) {
   return (
@@ -86,11 +44,14 @@ export function Comparison() {
     <Section tone="cream">
       <Container wide>
         <Reveal>
-          <Eyebrow tone="light">Compare — 13 features · 4 tiers</Eyebrow>
+          <Eyebrow tone="light">
+            Compare · {totalBulletCount()} features · {TIER_COLS.length} tiers
+          </Eyebrow>
           <Display className="mt-4 max-w-3xl">Every feature, by tier.</Display>
           <Lead tone="light" className="mt-5">
-            Starter is the full self-tracking app — nothing crippled, no timer. The paid
-            tiers only add what software can&rsquo;t do: a real human coach.
+            Starter is free forever, with no time limit. Ordering partner meals and
+            finding nearby gyms are open to everyone. The paid tiers add the parts
+            software can&rsquo;t do alone: a real coach, and a plan that adapts to you.
           </Lead>
         </Reveal>
 
@@ -116,7 +77,7 @@ export function Comparison() {
                         {tier}
                       </span>
                       {tier === 'Gold' ? (
-                        <span className="mt-1 block font-mono text-[9.5px] uppercase tracking-[0.18em] text-cream-dim">
+                        <span className="mt-1 block font-mono text-[11px] uppercase tracking-[0.18em] text-cream-dim">
                           Popular
                         </span>
                       ) : null}
@@ -158,8 +119,8 @@ export function Comparison() {
 
         <Reveal delay={220}>
           <p className="mt-10 font-mono text-[11px] uppercase tracking-[0.16em] text-cream-dim">
-            Entitlements are checked server-side — what you see here is what the app
-            enforces.
+            Every tick on this table is checked by the app itself. The tier you pay for
+            is the tier you get.
           </p>
         </Reveal>
       </Container>

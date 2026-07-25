@@ -84,11 +84,11 @@ export const TIER_FRAME: Record<MetallicTier, TierFramePalette> = {
   },
 };
 
-// ── Luxury-island accents (AnimatedTierRing + VipCard ONLY) ────────────────
+// ── Luxury-island accents (AnimatedTierRing ONLY) ──────────────────────────
 // Glow/sheen are the one sanctioned exception to the no-glow law, and they
-// live exclusively on the premium surfaces (settings VIP card + home
-// greeting avatar). Everything below is STATIC color data — the animation
-// itself lives in AnimatedTierRing (native only).
+// live exclusively on the premium surface (home greeting avatar ring).
+// Everything below is STATIC color data — the animation itself lives in
+// AnimatedTierRing (native only).
 
 /** Soft halo color behind the animated ring — a mid-tone of the tier metal. */
 export const TIER_GLOW: Record<MetallicTier, string> = {
@@ -104,7 +104,11 @@ export const TIER_SHEEN: Record<MetallicTier, string> = {
   elite: 'rgba(232,200,120,0.50)',
 };
 
-/** VIP membership-card finish (VipCard) — dark luxury base per tier. */
+/**
+ * Dark luxury membership-card finish per tier. Reference color data only —
+ * the shipped card faces carry their own palettes
+ * (features/subscription/components + cardDesigns.ts).
+ */
 export interface VipCardPalette {
   /** Card base fill (top of the vertical sheen gradient's darker end). */
   base: string;

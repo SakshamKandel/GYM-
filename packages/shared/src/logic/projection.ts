@@ -25,13 +25,13 @@ export function projectGoal(input: {
   const deltaKg = targetKg - trendKg;
 
   if (Math.abs(deltaKg) < 0.5) {
-    return { status: 'reached', etaWeeks: null, message: 'You are at your target — hold it here.' };
+    return { status: 'reached', etaWeeks: null, message: 'You are at your target. Hold it here.' };
   }
   if (Math.abs(ratePerWeekKg) < 0.05) {
     return {
       status: 'noTrend',
       etaWeeks: null,
-      message: 'Your weight is holding steady — the timeline appears once a trend shows.',
+      message: 'Your weight is holding steady. The timeline appears once a trend shows.',
     };
   }
   const movingTowardTarget = Math.sign(deltaKg) === Math.sign(ratePerWeekKg);
@@ -48,7 +48,7 @@ export function projectGoal(input: {
     return {
       status: 'farOut',
       etaWeeks: null,
-      message: 'At the current pace the target is over two years out — expect this to speed up as habits stick.',
+      message: 'At the current pace the target is over two years out. Expect this to speed up as habits stick.',
     };
   }
 
@@ -59,8 +59,8 @@ export function projectGoal(input: {
       etaWeeks: weeks,
       message:
         deltaKg < 0
-          ? 'Faster than the safe band — great pace, but protect your muscle and energy.'
-          : 'Gaining faster than the lean-gain band — some of this will be fat.',
+          ? 'Faster than the safe band. Great pace, but protect your muscle and energy.'
+          : 'Gaining faster than the lean-gain band. Some of this will be fat.',
     };
   }
 

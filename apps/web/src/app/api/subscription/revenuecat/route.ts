@@ -11,10 +11,12 @@ import { setAccountTier, type Tier } from '@/lib/tier';
 export const runtime = 'nodejs';
 
 /**
- * RevenueCat server-to-server entitlement handler. Authorization is always
- * required; HMAC verification is additionally enforced when its secret is
- * configured. Event ids dedupe every entitlement event, while event timestamps
- * prevent delayed delivery from replacing newer subscription state.
+ * RevenueCat server-to-server entitlement handler. Authorization AND the HMAC
+ * signature are both always required: this route grants paid tiers, so a
+ * missing REVENUECAT_WEBHOOK_SIGNATURE_SECRET is a misconfiguration to reject
+ * on, not a check to quietly drop. Event ids dedupe every entitlement event,
+ * while event timestamps prevent delayed delivery from replacing newer
+ * subscription state.
  */
 
 const PAID_TIERS = ['elite', 'gold', 'silver'] as const satisfies readonly Tier[];
@@ -61,7 +63,24 @@ export async function POST(req: Request) {
   } catch {
     return json({ error: 'invalid' }, 400);
   }
-  if (!verifyRevenueCatSignature(rawBody, req.headers.get('x-revenuecat-webhook-signature'))) {
+
+  // Fail closed on a missing secret. verifyRevenueCatSignature() returns true
+  // when it has nothing to verify against, which is the right default for a
+  // helper but the wrong one here — it would turn an unset env var into an
+  // unauthenticated path that writes paid tiers. The secret itself is never
+  // logged, only the fact that it is absent.
+  const signatureSecret = process.env.REVENUECAT_WEBHOOK_SIGNATURE_SECRET?.trim();
+  if (!signatureSecret) {
+    console.error(
+      '[revenuecat] rejecting webhook: REVENUECAT_WEBHOOK_SIGNATURE_SECRET is not set, so the signature cannot be verified',
+    );
+    return json({ error: 'invalid_signature' }, 401);
+  }
+  if (
+    !verifyRevenueCatSignature(rawBody, req.headers.get('x-revenuecat-webhook-signature'), {
+      secret: signatureSecret,
+    })
+  ) {
     return json({ error: 'invalid_signature' }, 401);
   }
 

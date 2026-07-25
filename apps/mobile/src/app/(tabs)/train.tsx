@@ -29,10 +29,19 @@ import { WorkoutPreviewSheet } from '../../features/training/components/WorkoutP
 import { MuscleFocusSection, muscleFocusForWorkout } from '../../features/training/components/MuscleFocusSection';
 import { useCoachWorkouts } from '../../features/training/coachWorkouts';
 import { useTrainData } from '../../features/training/hooks';
-import { estimateMinutesForExercises, estimateWorkoutMinutes } from '../../features/training/logic';
+import {
+  estimateMinutesForExercises,
+  estimateWorkoutMinutes,
+  isSessionStale,
+  sessionAgeLabel,
+} from '../../features/training/logic';
 import { pushPath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
-import { useTemplates, type CustomTemplate } from '../../features/training/templates';
+import {
+  useAccountTemplates,
+  useTemplates,
+  type CustomTemplate,
+} from '../../features/training/templates';
 import type { CoachWorkoutRow } from '../../lib/api/client';
 import { useTrainingCatalog } from '../../lib/trainingCatalog';
 import { useProfile } from '../../state/profile';
@@ -128,6 +137,12 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   planMeta: { marginTop: spacing.md },
+  /** Quiet text link under the signed-out account block. Full 48dp target. */
+  signInLink: {
+    minHeight: touch.min,
+    justifyContent: 'center',
+    marginTop: spacing.xs,
+  },
 });
 
 /** Non-interactive outlined meta chip under the screen title (brief §5/§6). */
@@ -154,7 +169,7 @@ function PlanPill({
   return (
     <PressableScale
       accessibilityRole="button"
-      accessibilityLabel={`${plan.name} plan, ${plan.daysPerWeek} days a week${plan.isAvailable ? '' : ', upgrade required'}`}
+      accessibilityLabel={`${plan.name} program, ${plan.daysPerWeek} days a week${plan.isAvailable ? '' : ', upgrade required'}`}
       accessibilityState={{ selected }}
       onPress={onPress}
       style={[styles.planPill, selected && styles.planPillSelected]}
@@ -181,22 +196,31 @@ export default function TrainScreen() {
       : selectTrainingPlan(plans, goalType ?? 'muscle', daysPerWeek);
   const planId = plan?.id ?? '';
   const { nextWorkout, activeWorkout, loaded } = useTrainData(planId);
-  const templates = useTemplates((s) => s.templates);
+  const templates = useAccountTemplates();
   const coachWorkoutsSection = useCoachWorkouts();
 
   const workouts = plan?.workouts ?? [];
   const exerciseCount = catalogState.catalog?.exercises.length ?? 0;
+  /**
+   * Signed out, there is no catalog: no programs, no exercises, nothing to add
+   * to a workout. This tab used to keep every section on screen anyway, so
+   * "Quick start", the muscle map and the 0-exercise library all promised
+   * things they couldn't do. Show the one honest thing instead.
+   */
+  const needsAccount = catalogState.status === 'authRequired';
 
   useEffect(() => {
     if (plan && plan.id !== storedPlanId) update({ planId: plan.id });
   }, [plan, storedPlanId, update]);
   const initialMuscleFocus = muscleFocusForWorkout(nextWorkout);
   const trainStatus = activeWorkout ? 'ACTIVE' : nextWorkout ? `DAY ${nextWorkout.day}` : 'FREESTYLE';
-  const trainDescription = activeWorkout
-    ? 'Your workout is open. Pick up exactly where you left off.'
-    : nextWorkout
-      ? `${nextWorkout.exercises.length} movements are ready when you are.`
-      : 'Choose a plan or build a workout around the muscles you want to train.';
+  const trainDescription = needsAccount
+    ? 'Your coach publishes programs and the exercise library to your account. Set one up and they load straight in here.'
+    : activeWorkout
+      ? 'Your workout is open. Pick up exactly where you left off.'
+      : nextWorkout
+        ? `${nextWorkout.exercises.length} movements are ready when you are.`
+        : 'Choose a program or build a workout around the muscles you want to train.';
 
   // Tap a rotation row to peek before committing; the sheet's "Start" navigates
   // once its exit finishes (so the modal never lingers over the pushed screen).
@@ -258,20 +282,24 @@ export default function TrainScreen() {
         eyebrow={plan?.name ?? 'Your training'}
         title="Train"
         action={
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel="Open exercise library"
-            onPress={() => pushPath('/exercises')}
-            style={styles.headerAction}
-          >
-            <Ionicons name="search" size={20} color={colors.text} />
-          </PressableScale>
+          needsAccount ? undefined : (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Open exercise library"
+              onPress={() => pushPath('/exercises')}
+              style={styles.headerAction}
+            >
+              <Ionicons name="search" size={20} color={colors.text} />
+            </PressableScale>
+          )
         }
         meta={
-          <>
-            <MetaChip label={trainStatus} />
-            {workouts.length > 0 ? <MetaChip label={`${workouts.length}-day rotation`} /> : null}
-          </>
+          needsAccount ? undefined : (
+            <>
+              <MetaChip label={trainStatus} />
+              {workouts.length > 0 ? <MetaChip label={`${workouts.length}-day rotation`} /> : null}
+            </>
+          )
         }
       />
       <Animated.View entering={enterDown(1)}>
@@ -291,15 +319,29 @@ export default function TrainScreen() {
           stays ≥4.5:1 inside the scrim. Resume if a session is live,
           otherwise the next plan workout. */}
       <Animated.View entering={enterUp(0)}>
-        {catalogState.status === 'authRequired' ? (
-          <EmptyState
-            icon="cloud-offline-outline"
-            title="Sign in for training plans"
-            body="Plans and exercises are published from your coach's live catalog."
-            actionLabel="Sign in"
-            onAction={() => pushPath('/auth/sign-in')}
-            style={styles.hero}
-          />
+        {needsAccount ? (
+          <>
+            <EmptyState
+              icon="person-add-outline"
+              title="Programs come with your account"
+              body="It is free, it takes a moment, and your programs and the exercise library load as soon as it exists."
+              actionLabel="Create account"
+              actionVariant="primary"
+              onAction={() => pushPath('/auth/sign-up')}
+              style={styles.hero}
+            />
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="I already have an account"
+              accessibilityHint="Opens sign in"
+              onPress={() => pushPath('/auth/sign-in')}
+              style={styles.signInLink}
+            >
+              <AppText variant="body" color={colors.accent} center>
+                I already have an account
+              </AppText>
+            </PressableScale>
+          </>
         ) : catalogState.status === 'error' && !catalogState.catalog ? (
           <EmptyState
             icon="refresh-outline"
@@ -312,8 +354,8 @@ export default function TrainScreen() {
         ) : catalogState.status === 'ready' && !plan ? (
           <EmptyState
             icon="barbell-outline"
-            title="No published plan yet"
-            body="Your coach has not published an available plan for this account."
+            title="No published program yet"
+            body="Your coach has not published an available program for this account."
             actionLabel="Refresh"
             onAction={() => void catalogState.refresh()}
             style={styles.hero}
@@ -326,7 +368,11 @@ export default function TrainScreen() {
             accessibilityLabel="Training photo"
             chip={{ label: 'In progress' }}
             title={activeWorkout.name}
-            caption="Pick up where you left off"
+            caption={
+              isSessionStale(activeWorkout.startedAt)
+                ? `Left open ${sessionAgeLabel(activeWorkout.startedAt)} ago`
+                : 'Pick up where you left off'
+            }
             cta={{ label: 'Resume workout', onPress: () => pushPath('/workout') }}
             style={styles.hero}
           />
@@ -338,7 +384,7 @@ export default function TrainScreen() {
             accessibilityLabel="Training photo"
             chip={{ label: 'Up next' }}
             title={nextWorkout.name}
-            caption={`${plan?.name ?? 'Your plan'} · ${nextWorkout.exercises.length} exercises · ~${estimateWorkoutMinutes(nextWorkout)} min`}
+            caption={`${plan?.name ?? 'Your program'} · ${nextWorkout.exercises.length} exercises · ~${estimateWorkoutMinutes(nextWorkout)} min`}
             captionTabular
             cta={{
               label: 'Start workout',
@@ -349,8 +395,8 @@ export default function TrainScreen() {
         ) : loaded ? (
           <EmptyState
             icon="barbell-outline"
-            title="No plan selected"
-            body="Pick a plan below to get started."
+            title="No program selected"
+            body="Pick a program below to get started."
             art={<EmptyArt variant="train" />}
             style={styles.hero}
           />
@@ -359,173 +405,188 @@ export default function TrainScreen() {
         )}
       </Animated.View>
 
-      {/* Native, touchable anatomy map. The selected muscle immediately filters
-          the bundled offline exercise library below it. */}
-      <Animated.View entering={enterUp(1)}>
-        <MuscleFocusSection key={initialMuscleFocus} initialMuscle={initialMuscleFocus} />
-      </Animated.View>
-
-      {/* This plan's weekly rotation — charcoal block rows, gaps instead of hairlines */}
-      {workouts.length > 0 ? (
+      {/* Everything below needs the catalog: the muscle map filters it, the
+          rotation and program pills come from it, and Quick start opens a
+          logger whose exercise picker reads it. Signed out they'd all be empty
+          promises, so the account block above stands alone until the catalog
+          can load. */}
+      {needsAccount ? null : (
         <>
-          <Animated.View entering={enterUp(2)}>
-            <SectionLabel>This plan</SectionLabel>
-          </Animated.View>
-          {workouts.map((w, i) => {
-            const isNext = !activeWorkout && nextWorkout?.id === w.id;
-            return (
-              <Animated.View
-                key={w.id}
-                entering={enterUp(rowIdx(i))}
-                style={i > 0 ? styles.rowGap : undefined}
-              >
-                <PressableScale
-                  accessibilityRole="button"
-                  accessibilityLabel={`${w.name}, day ${w.day}, ${w.exercises.length} exercises. Preview this workout.`}
-                  onPress={() => {
-                    setPreview(w);
-                    setPreviewOpen(true);
-                  }}
-                  pressScale={0.985}
-                  style={styles.planRow}
-                >
-                  <View style={styles.dayBlock}>
-                    <AppText style={styles.dayNum} tabular>
-                      {w.day}
-                    </AppText>
-                  </View>
-                  <View style={styles.planRowText}>
-                    <AppText variant="bodyBold" numberOfLines={1}>
-                      {w.name}
-                    </AppText>
-                    <AppText variant="caption" color={colors.textDim}>
-                      {`${w.exercises.length} exercises`}
-                    </AppText>
-                  </View>
-                  {isNext ? <Tag label="Up next" /> : null}
-                  <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-                </PressableScale>
-              </Animated.View>
-            );
-          })}
-        </>
-      ) : null}
+        {/* Native, touchable anatomy map. The selected muscle immediately filters
+            the exercise library below it. */}
+        <Animated.View entering={enterUp(1)}>
+          <MuscleFocusSection key={initialMuscleFocus} initialMuscle={initialMuscleFocus} />
+        </Animated.View>
 
-      {/* Saved custom templates — tap to start, long-press to delete. */}
-      <Animated.View entering={enterUp(tail)}>
-        <SectionLabel>Your templates</SectionLabel>
-        {templates.length === 0 ? (
-          <AppText variant="caption" color={colors.textFaint}>
-            Finish a workout to save it as a template.
-          </AppText>
+        {/* This program's weekly rotation — charcoal block rows, gaps instead of hairlines */}
+        {workouts.length > 0 ? (
+          <>
+            <Animated.View entering={enterUp(2)}>
+              <SectionLabel>This program</SectionLabel>
+            </Animated.View>
+            {workouts.map((w, i) => {
+              const isNext = !activeWorkout && nextWorkout?.id === w.id;
+              return (
+                <Animated.View
+                  key={w.id}
+                  entering={enterUp(rowIdx(i))}
+                  style={i > 0 ? styles.rowGap : undefined}
+                >
+                  <PressableScale
+                    accessibilityRole="button"
+                    accessibilityLabel={`${w.name}, day ${w.day}, ${w.exercises.length} exercises. Preview this workout.`}
+                    onPress={() => {
+                      setPreview(w);
+                      setPreviewOpen(true);
+                    }}
+                    pressScale={0.985}
+                    style={styles.planRow}
+                  >
+                    <View style={styles.dayBlock}>
+                      <AppText style={styles.dayNum} tabular>
+                        {w.day}
+                      </AppText>
+                    </View>
+                    <View style={styles.planRowText}>
+                      <AppText variant="bodyBold" numberOfLines={1}>
+                        {w.name}
+                      </AppText>
+                      <AppText variant="caption" color={colors.textDim}>
+                        {`${w.exercises.length} exercises`}
+                      </AppText>
+                    </View>
+                    {isNext ? <Tag label="Up next" /> : null}
+                    <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+                  </PressableScale>
+                </Animated.View>
+              );
+            })}
+          </>
         ) : null}
-      </Animated.View>
-      {templates.map((t, i) => (
-        <Animated.View
-          key={t.id}
-          entering={enterUp(Math.min(tail + i, 8))}
-          style={i > 0 ? styles.rowGap : undefined}
-        >
+
+        {/* Saved custom templates — tap to start, long-press to delete. */}
+        <Animated.View entering={enterUp(tail)}>
+          <SectionLabel>Your templates</SectionLabel>
+          {templates.length === 0 ? (
+            <AppText variant="caption" color={colors.textFaint}>
+              Finish a workout to save it as a template.
+            </AppText>
+          ) : null}
+        </Animated.View>
+        {templates.map((t, i) => (
+          <Animated.View
+            key={t.id}
+            entering={enterUp(Math.min(tail + i, 8))}
+            style={i > 0 ? styles.rowGap : undefined}
+          >
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel={`${t.name} template, ${t.exercises.length} exercises. Tap to start, long press to delete.`}
+              onPress={() => guardStart(() => startTemplate(t))}
+              onLongPress={() => setDeleteTarget(t)}
+              pressScale={0.985}
+              style={styles.planRow}
+            >
+              <IconChip icon="bookmark" />
+              <View style={styles.planRowText}>
+                <AppText variant="bodyBold" numberOfLines={1}>
+                  {t.name}
+                </AppText>
+                <AppText variant="caption" color={colors.textDim} tabular>
+                  {`${t.exercises.length} exercises · ~${estimateMinutesForExercises(t.exercises)} min`}
+                </AppText>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+            </PressableScale>
+          </Animated.View>
+        ))}
+
+        <Animated.View entering={enterUp(Math.min(tail + 1, 8))}>
+          <Button
+            label="Quick start"
+            variant="secondary"
+            onPress={() => guardStart(() => pushPath('/workout/start'))}
+            style={styles.quickStart}
+            accessibilityLabel="Quick start an empty workout"
+          />
+        </Animated.View>
+
+        {/* Exercise library */}
+        <Animated.View entering={enterUp(Math.min(tail + 2, 8))}>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel={`${t.name} template, ${t.exercises.length} exercises. Tap to start, long press to delete.`}
-            onPress={() => guardStart(() => startTemplate(t))}
-            onLongPress={() => setDeleteTarget(t)}
-            pressScale={0.985}
-            style={styles.planRow}
+            accessibilityLabel={`Exercise library, ${exerciseCount} exercises`}
+            onPress={() => pushPath('/exercises')}
+            style={styles.libraryRow}
           >
-            <IconChip icon="bookmark" />
-            <View style={styles.planRowText}>
-              <AppText variant="bodyBold" numberOfLines={1}>
-                {t.name}
-              </AppText>
+            <IconChip icon="search" />
+            <View style={styles.libraryText}>
+              <AppText variant="bodyBold">Exercise library</AppText>
               <AppText variant="caption" color={colors.textDim} tabular>
-                {`${t.exercises.length} exercises · ~${estimateMinutesForExercises(t.exercises)} min`}
+                {`${exerciseCount} exercises`}
               </AppText>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
           </PressableScale>
         </Animated.View>
-      ))}
 
-      <Animated.View entering={enterUp(Math.min(tail + 1, 8))}>
-        <Button
-          label="Quick start"
-          variant="secondary"
-          onPress={() => guardStart(() => pushPath('/workout/start'))}
-          style={styles.quickStart}
-          accessibilityLabel="Quick start an empty workout"
-        />
-      </Animated.View>
+        {/* Coach video library — a standalone browse of published form-check
+            videos, tier-gated server-side. */}
+        <Animated.View entering={enterUp(Math.min(tail + 2, 8))}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Coach videos library"
+            onPress={() => pushPath('/videos')}
+            style={styles.libraryRow}
+          >
+            <IconChip icon="videocam" />
+            <View style={styles.libraryText}>
+              <AppText variant="bodyBold">Coach videos</AppText>
+              <AppText variant="caption" color={colors.textDim}>
+                Form-check demos from your coach
+              </AppText>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+          </PressableScale>
+        </Animated.View>
 
-      {/* Exercise library */}
-      <Animated.View entering={enterUp(Math.min(tail + 2, 8))}>
-        <PressableScale
-          accessibilityRole="button"
-          accessibilityLabel={`Exercise library, ${exerciseCount} exercises`}
-          onPress={() => pushPath('/exercises')}
-          style={styles.libraryRow}
-        >
-          <IconChip icon="search" />
-          <View style={styles.libraryText}>
-            <AppText variant="bodyBold">Exercise library</AppText>
-            <AppText variant="caption" color={colors.textDim} tabular>
-              {`${exerciseCount} exercises`}
+        {/* Coach-assigned workouts (SCALE-UP-PLAN §4.3) — sits above the program
+            switcher; hidden entirely when there's nothing to show yet. */}
+        <Animated.View entering={enterUp(Math.min(tail + 3, 8))}>
+          {/* Same guard as every other start path — a coach-assigned workout
+              started on top of an open session would silently resume the OLD
+              one (session.startFromCoachPlan resumes when one is active). */}
+          <CoachWorkoutsSection
+            section={coachWorkoutsSection}
+            onStart={(w) => guardStart(() => startCoachWorkout(w))}
+          />
+        </Animated.View>
+
+        {/* Program switcher — pill chips; selected = red fill (chips may be red,
+            the one-red-BLOCK law is about cards). */}
+        <Animated.View entering={enterUp(Math.min(tail + 4, 8))}>
+          <SectionLabel>Programs</SectionLabel>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.planPills}>
+            {plans.map((p) => (
+              <PlanPill
+                key={p.id}
+                plan={p}
+                selected={p.id === planId}
+                onPress={() => {
+                  if (p.isAvailable) update({ planId: p.id });
+                  else pushPath('/subscribe');
+                }}
+              />
+            ))}
+          </ScrollView>
+          {plan ? (
+            <AppText variant="caption" color={colors.textDim} tabular style={styles.planMeta}>
+              {`${plan.name} · ${plan.daysPerWeek} days/wk · ${plan.weeks} weeks`}
             </AppText>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-        </PressableScale>
-      </Animated.View>
-
-      {/* Coach video library — a standalone browse of published form-check
-          videos, tier-gated server-side. */}
-      <Animated.View entering={enterUp(Math.min(tail + 2, 8))}>
-        <PressableScale
-          accessibilityRole="button"
-          accessibilityLabel="Coach videos library"
-          onPress={() => pushPath('/videos')}
-          style={styles.libraryRow}
-        >
-          <IconChip icon="videocam" />
-          <View style={styles.libraryText}>
-            <AppText variant="bodyBold">Coach videos</AppText>
-            <AppText variant="caption" color={colors.textDim}>
-              Form-check demos from your coach
-            </AppText>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-        </PressableScale>
-      </Animated.View>
-
-      {/* Coach-assigned workouts (SCALE-UP-PLAN §4.3) — sits above the plan
-          switcher; hidden entirely when there's nothing to show yet. */}
-      <Animated.View entering={enterUp(Math.min(tail + 3, 8))}>
-        <CoachWorkoutsSection section={coachWorkoutsSection} onStart={startCoachWorkout} />
-      </Animated.View>
-
-      {/* Plan switcher — pill chips; selected = red fill (chips may be red,
-          the one-red-BLOCK law is about cards). */}
-      <Animated.View entering={enterUp(Math.min(tail + 4, 8))}>
-        <SectionLabel>Plans</SectionLabel>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.planPills}>
-          {plans.map((p) => (
-            <PlanPill
-              key={p.id}
-              plan={p}
-              selected={p.id === planId}
-              onPress={() => {
-                if (p.isAvailable) update({ planId: p.id });
-                else pushPath('/subscribe');
-              }}
-            />
-          ))}
-        </ScrollView>
-        {plan ? (
-          <AppText variant="caption" color={colors.textDim} tabular style={styles.planMeta}>
-            {`${plan.name} · ${plan.daysPerWeek} days/wk · ${plan.weeks} weeks`}
-          </AppText>
-        ) : null}
-      </Animated.View>
+          ) : null}
+        </Animated.View>
+        </>
+      )}
 
       {/* Peek at a rotation workout before starting it. On "Start" the sheet
           closes first, then navigates — so the modal never sits over the logger. */}
@@ -557,7 +618,7 @@ export default function TrainScreen() {
         title="Workout in progress"
         message={
           activeWorkout
-            ? `"${activeWorkout.name}" is still open. Starting a new workout discards it — sets you logged stay in history only after you finish a workout.`
+            ? `"${activeWorkout.name}" has been open for ${sessionAgeLabel(activeWorkout.startedAt)}. Starting a new workout discards it. Sets you logged stay in history only after you finish a workout.`
             : undefined
         }
         confirmLabel="Discard & start new"

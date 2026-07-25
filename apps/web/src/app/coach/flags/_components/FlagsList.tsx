@@ -82,7 +82,7 @@ export function FlagsList() {
       setItems(data.items);
       setState('ready');
     } catch {
-      setLoadError('Network error. Check your connection and retry.');
+      setLoadError('Could not reach us just now. Check your connection and try again.');
       setState('error');
     }
   }, []);
@@ -126,7 +126,7 @@ export function FlagsList() {
       setBusyId(null);
       setBusyAction(null);
     } catch {
-      setRowError({ id: item.workoutId, msg: 'Network error. Check your connection and retry.' });
+      setRowError({ id: item.workoutId, msg: 'Could not reach us just now. Check your connection and try again.' });
       setBusyId(null);
       setBusyAction(null);
     }
@@ -171,7 +171,7 @@ export function FlagsList() {
       setBusyId(null);
       setBusyAction(null);
     } catch {
-      setRowError({ id: item.workoutId, msg: 'Network error. Check your connection and retry.' });
+      setRowError({ id: item.workoutId, msg: 'Could not reach us just now. Check your connection and try again.' });
       setBusyId(null);
       setBusyAction(null);
     }
@@ -286,7 +286,7 @@ export function FlagsList() {
               >
                 <span style={{ color: 'var(--gt-text-dim)' }}>Heaviest set logged: </span>
                 <span className="gt-numeric">
-                  {item.topSet.exerciseName} — {formatKg(item.topSet.weightKg)} × {item.topSet.reps}{' '}
+                  {item.topSet.exerciseName} · {formatKg(item.topSet.weightKg)} × {item.topSet.reps}{' '}
                   {item.topSet.reps === 1 ? 'rep' : 'reps'}
                 </span>
               </div>

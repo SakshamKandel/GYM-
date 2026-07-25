@@ -1,5 +1,6 @@
 import { accounts, admins, coachProfiles, walletLedger } from '@gym/db';
 import { asc, eq, inArray, or, sql } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -9,6 +10,7 @@ import { DownloadCsv } from '../_components/DownloadCsv';
 import { type WalletRow, WalletsManager } from './_components/WalletsManager';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Coach wallets' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -112,10 +114,13 @@ export default async function AdminWalletsPage() {
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Coach wallets"
-        subtitle="Commission balances from promo-coded purchases. Record manual adjustments or payouts here — payout rails are still manual."
+        subtitle="What each coach has earned from purchases made with their promo code. Payouts are still sent by hand, so record every adjustment and payment here."
         action={
           canManageWallets ? (
-            <DownloadCsv href="/api/admin/exports/wallet-ledger" label="Download ledger CSV" />
+            <DownloadCsv
+              href="/api/admin/exports/wallet-ledger"
+              label="Download money in and out"
+            />
           ) : undefined
         }
       />
@@ -139,6 +144,7 @@ export default async function AdminWalletsPage() {
 
       <WalletsManager
         wallets={wallets}
+        canViewMembers={permissions.has('members.read')}
         canManageWallets={canManageWallets}
         canReviewPayouts={canReviewPayouts}
       />

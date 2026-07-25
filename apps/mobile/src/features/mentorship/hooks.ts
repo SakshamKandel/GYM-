@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
+import { isCurrentSessionRequest } from '../../lib/sessionRequest';
 import { useAuth } from '../../state/auth';
 import {
   getCoachDirectory,
@@ -20,7 +21,22 @@ import {
  * token at render — so a response racing a sign-out is dropped, and a fresh
  * account can never see the previous account's coach data (no reset effects
  * needed; the pattern app/leaderboard.tsx uses, taken one step further).
+ *
+ * The token check alone isn't enough for the SAME session, though: a coach
+ * push arriving while a focus load is still in flight starts a second one, and
+ * whichever answers last wins. So each hook also carries the monotonic request
+ * sequence from lib/sessionRequest (the rule lib/useSessionScopedResource
+ * follows) — an older answer for the same session is dropped instead of
+ * overwriting the newer one, on success and on failure alike.
  */
+
+/**
+ * What an in-flight request is compared against before it may touch state:
+ * the session that is live RIGHT NOW plus the newest request this hook made.
+ */
+function liveSession(sequence: number): { token: string | null; sequence: number } {
+  return { token: useAuth.getState().token, sequence };
+}
 
 // ── Coach directory ───────────────────────────────────────────
 
@@ -39,17 +55,19 @@ export function useCoachDirectory(): CoachDirectoryState {
   const token = useAuth((s) => s.token);
   const [snap, setSnap] = useState<{ token: string; coaches: CoachCardData[] } | null>(null);
   const [errorToken, setErrorToken] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
   const reload = useCallback(() => {
     if (status !== 'signedIn' || token === null) return;
+    const request = { token, sequence: ++requestSequence.current };
     void (async () => {
       try {
         const next = await getCoachDirectory(token);
-        if (useAuth.getState().token !== token) return;
+        if (!isCurrentSessionRequest(request, liveSession(requestSequence.current))) return;
         setSnap({ token, coaches: next });
         setErrorToken(null);
       } catch {
-        if (useAuth.getState().token !== token) return;
+        if (!isCurrentSessionRequest(request, liveSession(requestSequence.current))) return;
         setErrorToken(token);
       }
     })();
@@ -123,13 +141,17 @@ export function useMyCoach(): MyCoachData {
     coach: AssignedCoach | null;
     request: PendingCoachRequest | null;
   } | null>(null);
+  const requestSequence = useRef(0);
 
   const reload = useCallback(() => {
     if (status !== 'signedIn' || token === null) return;
+    // A 'coach' push calls triggerMyCoachRefresh while the focus load may
+    // still be in flight, so the sequence decides which answer counts.
+    const request = { token, sequence: ++requestSequence.current };
     void (async () => {
       try {
         const next = await getMyCoach(token);
-        if (useAuth.getState().token !== token) return;
+        if (!isCurrentSessionRequest(request, liveSession(requestSequence.current))) return;
         setSnap({ token, coach: next.coach, request: next.request });
       } catch {
         // Keep the last-known state — surfaces stay quiet through blips.
@@ -191,17 +213,19 @@ export function useMyCoachApplication(): MyCoachApplicationData {
     application: CoachApplication | null;
   } | null>(null);
   const [errorToken, setErrorToken] = useState<string | null>(null);
+  const requestSequence = useRef(0);
 
   const reload = useCallback(() => {
     if (status !== 'signedIn' || token === null) return;
+    const request = { token, sequence: ++requestSequence.current };
     void (async () => {
       try {
         const next = await getMyCoachApplication(token);
-        if (useAuth.getState().token !== token) return;
+        if (!isCurrentSessionRequest(request, liveSession(requestSequence.current))) return;
         setSnap({ token, application: next });
         setErrorToken(null);
       } catch {
-        if (useAuth.getState().token !== token) return;
+        if (!isCurrentSessionRequest(request, liveSession(requestSequence.current))) return;
         setErrorToken(token);
       }
     })();
@@ -216,6 +240,10 @@ export function useMyCoachApplication(): MyCoachApplicationData {
   const setApplication = useCallback(
     (application: CoachApplication) => {
       if (token === null) return;
+      // The submit's own response is the newest truth there is, so it also
+      // retires any refetch still in flight — that older answer landing on top
+      // is exactly the regression this setter exists to prevent.
+      requestSequence.current += 1;
       setSnap({ token, application });
       setErrorToken(null);
     },
@@ -247,13 +275,15 @@ export function useMyMilestones(): MyMilestonesData {
   const [snap, setSnap] = useState<{ token: string; milestones: CoachMilestone[] } | null>(
     null,
   );
+  const requestSequence = useRef(0);
 
   const reload = useCallback(() => {
     if (status !== 'signedIn' || token === null) return;
+    const request = { token, sequence: ++requestSequence.current };
     void (async () => {
       try {
         const next = await getMyMilestones(token);
-        if (useAuth.getState().token !== token) return;
+        if (!isCurrentSessionRequest(request, liveSession(requestSequence.current))) return;
         setSnap({ token, milestones: next });
       } catch {
         // Keep the last-known list — the section simply stays as it was.

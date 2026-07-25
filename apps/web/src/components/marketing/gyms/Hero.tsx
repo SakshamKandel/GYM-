@@ -27,7 +27,7 @@ export function GymsHero() {
         </Reveal>
         <Reveal delay={160}>
           <p className="mx-auto mt-7 max-w-2xl text-[17px] leading-relaxed text-dim">
-            Curated, admin-verified gym listings across Kathmandu valley — real photos,
+            Curated, admin-verified gym listings across Kathmandu valley: real photos,
             current hours, exact location and contact. Browse the Gyms tab, compare
             what&rsquo;s nearby, and walk in already sure.
           </p>
@@ -39,7 +39,7 @@ export function GymsHero() {
           </PillLink>
         </Reveal>
         <Reveal delay={320}>
-          <p className="mt-8 font-mono text-[11.5px] uppercase tracking-[0.2em] text-faint">
+          <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-faint">
             Every listing checked by the GM team · No fake reviews
           </p>
         </Reveal>

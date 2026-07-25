@@ -80,7 +80,7 @@ export function MuscleBalanceSection({ data }: Props) {
       <SectionLabel>Hard sets this week</SectionLabel>
       <Card style={styles.blockGap}>
         <AppText variant="caption" color={colors.textDim}>
-          The raised zone is the {MUSCLE_TARGET_BAND.min}–{MUSCLE_TARGET_BAND.max} set weekly target
+          The raised zone is the {MUSCLE_TARGET_BAND.min} to {MUSCLE_TARGET_BAND.max} set weekly target
           band. Secondary muscles count half a set.
         </AppText>
         {data.perMuscle.map((m) => {
@@ -140,7 +140,7 @@ export function MuscleBalanceSection({ data }: Props) {
           <Card radius={radius.md} style={styles.callout}>
             <AppText variant="bodyBold">{data.neglected.map(muscleLabel).join(' · ')}</AppText>
             <AppText variant="caption">
-              You trained these in the last four weeks — there is still room for them before Sunday.
+              You trained these in the last four weeks. There is still room for them before Sunday.
             </AppText>
           </Card>
         </>

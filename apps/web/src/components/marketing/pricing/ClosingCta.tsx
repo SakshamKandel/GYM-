@@ -29,7 +29,7 @@ export function ClosingCta() {
           </Reveal>
           <Reveal delay={240} className="mt-9 flex flex-wrap items-center justify-center gap-5">
             <PillLink href="/download" variant="inkOnCream">
-              Get the app — free
+              Get the app, free
             </PillLink>
             <ArrowLink href="/coaching" className="text-ink">
               Meet the coaches

@@ -1,27 +1,35 @@
-import { accounts, devicePushTokens } from '@gym/db';
+import { accounts, devicePushTokens, notificationPrefs, notifications } from '@gym/db';
+import {
+  notificationDelivery,
+  type NotificationEvent,
+  type NotificationPrefs,
+} from '@gym/shared';
 import { cert, getApps, initializeApp, type App, type ServiceAccount } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { logAudit, requirePermission } from '@/lib/authz';
+import { auditIp, logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { ktmMinuteOfDay } from '@/lib/notify';
 
 export const runtime = 'nodejs';
-// Raise the Vercel serverless ceiling for this route: a large fan-out issues
-// many 500-token FCM batches and MUST finish inside one invocation so the
-// post-send audit row is always reached (a mid-fan-out timeout would deliver
-// real pushes but leave zero trace). Vercel clamps this to the plan's max.
+// Raise the Vercel serverless ceiling for this route: a large fan-out writes
+// many chunked inbox inserts and issues many 500-token FCM batches, and MUST
+// finish inside one invocation so the post-send audit row is always reached (a
+// mid-fan-out timeout would deliver real pushes but leave zero trace). Vercel
+// clamps this to the plan's max.
 export const maxDuration = 300;
 
 /**
  * Admin broadcast / announcements (gap build P0-4).
  *
- *  - POST → send a push notification to every device registered to accounts
- *           matching an optional { tier, country } filter. Fans out over
- *           device_push_tokens in batches (FCM multicast caps at 500 tokens per
- *           call), prunes tokens FCM reports dead, and writes ONE audit row
- *           carrying the recipient count.
+ *  - POST → announce to every account matching an optional { tier, country }
+ *           filter. Each recipient gets the SAME treatment notify() gives a
+ *           single account: the shared prefs/quiet-hours decision, a durable
+ *           inbox row, then the push. Fans out over device_push_tokens in
+ *           batches (FCM multicast caps at 500 tokens per call), prunes tokens
+ *           FCM reports dead, and writes ONE audit row carrying the tallies.
  *
  * Gated on the effective `broadcast.send` permission (role preset plus explicit
  * account overrides) through the same fail-closed guard as every admin API.
@@ -32,6 +40,9 @@ export const maxDuration = 300;
  * FIREBASE_SERVICE_ACCOUNT_B64; when that credential is absent it returns 503
  * push_not_configured so the operator gets an honest signal instead of a silent
  * no-op.
+ *
+ * The inbox rows are written already-resolved (sentAt stamped): this invocation
+ * owns the push leg, so `retry-unsent` must never adopt them.
  */
 
 const TIERS = ['starter', 'silver', 'gold', 'elite'] as const;
@@ -53,28 +64,51 @@ const broadcastSchema = z.object({
     .optional(),
 });
 
+/** The one event key this route sends under (its category is `engagement`). */
+const BROADCAST_EVENT: NotificationEvent = 'broadcast';
+
+/**
+ * The deep-link payload, identical on the inbox row and the FCM message so the
+ * mobile router keys on the same `type` whichever path delivered it.
+ */
+const BROADCAST_DATA = { type: 'broadcast' } as const;
+
 /** FCM multicast hard limit per call. */
 const FCM_MULTICAST_BATCH = 500;
 
+/** Rows per inbox insert / stale-token delete — keeps bind parameters bounded. */
+const INBOX_INSERT_CHUNK = 500;
+
+/**
+ * Upper bound on ACCOUNTS addressed in a single broadcast invocation. Both
+ * filters are optional, so an unfiltered send would otherwise pull every
+ * account into memory before a single row is written. Audiences past the cap
+ * are reported `truncated` (an honest signal to narrow the filter) instead of
+ * a silent partial send.
+ */
+const MAX_BROADCAST_RECIPIENTS = 20_000;
+
 /**
  * Upper bound on device tokens loaded and sent in a single broadcast
- * invocation. Both filters are optional, so an unfiltered send would otherwise
- * pull EVERY registered token into memory and fan out over an unbounded number
- * of sequential batches — at scale that overruns the serverless ceiling and the
- * send goes out with no audit trace. Capping the load bounds memory and
- * wall-clock; audiences past the cap are reported `truncated` (an honest signal
- * to narrow the filter) instead of a silent partial send.
+ * invocation. At scale an unbounded load overruns the serverless ceiling and
+ * the send goes out with no audit trace. Capping bounds memory and wall-clock;
+ * the overflow is reported as `truncated`, same as the recipient cap.
  */
 const MAX_BROADCAST_TOKENS = 20_000;
 
 /** How many 500-token FCM batches to dispatch concurrently (bounds wall-clock). */
 const SEND_CONCURRENCY = 8;
 
-/** Best-effort caller IP for the audit trail (proxy header, first hop). */
-function clientIp(req: Request): string | null {
-  const fwd = req.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]!.trim();
-  return req.headers.get('x-real-ip');
+/** Is per-account preference + quiet-hours gating enforced? (default: yes.) */
+function prefsEnforced(): boolean {
+  return process.env.NOTIF_PREFS_ENFORCED !== 'false';
+}
+
+/** Splits `items` into consecutive slices of at most `size`. */
+function chunked<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }
 
 /**
@@ -122,8 +156,7 @@ export async function POST(req: Request) {
 
   const db = getDb();
 
-  // Collect the target tokens: active accounts matching the optional filters,
-  // joined to their registered devices.
+  // ── 1. Audience ────────────────────────────────────────────────
   const filters = [eq(accounts.status, 'active')];
   // Match EFFECTIVE tier, not the raw column: a paid tier whose window has
   // lapsed (tierExpiresAt in the past) collapses to 'starter' — mirrors the
@@ -140,31 +173,136 @@ export async function POST(req: Request) {
   const countryCode = country?.toUpperCase();
   if (countryCode) filters.push(sql`upper(${accounts.country}) = ${countryCode}`);
 
-  // Load at most MAX_BROADCAST_TOKENS+1 rows: the +1 lets us detect (and report)
-  // an audience that exceeds the cap without unbounded memory growth.
-  const rows = await db
-    .select({ token: devicePushTokens.token, accountId: devicePushTokens.accountId })
-    .from(devicePushTokens)
-    .innerJoin(accounts, eq(accounts.id, devicePushTokens.accountId))
+  // Every matching account — NOT only the ones with a registered device. A
+  // member who denied push permission still reads the inbox, and that row is the
+  // whole point of routing through the pipeline. Ordered by id and capped at
+  // MAX_BROADCAST_RECIPIENTS+1 so the overflow is detectable without unbounded
+  // memory; the deterministic order also keeps this slice and the token slice
+  // below covering the same accounts.
+  const audienceRows = await db
+    .select({ id: accounts.id })
+    .from(accounts)
     .where(and(...filters))
-    .limit(MAX_BROADCAST_TOKENS + 1);
+    .orderBy(asc(accounts.id))
+    .limit(MAX_BROADCAST_RECIPIENTS + 1);
 
-  const truncated = rows.length > MAX_BROADCAST_TOKENS;
-  const usableRows = truncated ? rows.slice(0, MAX_BROADCAST_TOKENS) : rows;
+  const recipientsTruncated = audienceRows.length > MAX_BROADCAST_RECIPIENTS;
+  const audienceIds = (
+    recipientsTruncated ? audienceRows.slice(0, MAX_BROADCAST_RECIPIENTS) : audienceRows
+  ).map((r) => r.id);
+
+  // ── 2. Preferences (one set-based read, not one per member) ────
+  // Only accounts that HAVE a prefs row come back; a missing row is all-on, which
+  // is exactly what notificationDelivery(null, …) already means. Joined on the
+  // same audience filters (no giant IN list) and ordered/capped the same way.
+  const prefsById = new Map<string, NotificationPrefs>();
+  if (audienceIds.length > 0 && prefsEnforced()) {
+    const prefRows = await db
+      .select({
+        accountId: notificationPrefs.accountId,
+        categories: notificationPrefs.categories,
+        quietHoursStart: notificationPrefs.quietHoursStart,
+        quietHoursEnd: notificationPrefs.quietHoursEnd,
+      })
+      .from(notificationPrefs)
+      .innerJoin(accounts, eq(accounts.id, notificationPrefs.accountId))
+      .where(and(...filters))
+      .orderBy(asc(notificationPrefs.accountId))
+      .limit(MAX_BROADCAST_RECIPIENTS);
+    for (const row of prefRows) {
+      prefsById.set(row.accountId, {
+        categories: (row.categories ?? {}) as NotificationPrefs['categories'],
+        quietHoursStart: row.quietHoursStart,
+        quietHoursEnd: row.quietHoursEnd,
+      });
+    }
+  }
+
+  // ── 3. The shared delivery decision, per account ───────────────
+  // One KTM wall-clock reading for the whole send (quiet hours are evaluated on
+  // Nepal's fixed offset, same as notify()).
+  const nowMinutes = ktmMinuteOfDay(new Date());
+  const enforced = prefsEnforced();
+  const inboxIds: string[] = [];
+  const pushableIds = new Set<string>();
+  let suppressed = 0; // category off → nothing written, nothing sent
+  let quietHeld = 0; // inside quiet hours → inbox row only
+
+  for (const accountId of audienceIds) {
+    const delivery = enforced
+      ? notificationDelivery(prefsById.get(accountId) ?? null, BROADCAST_EVENT, nowMinutes)
+      : { writeInbox: true, sendPush: true };
+    if (!delivery.writeInbox) {
+      suppressed += 1;
+      continue;
+    }
+    inboxIds.push(accountId);
+    if (delivery.sendPush) pushableIds.add(accountId);
+    else quietHeld += 1;
+  }
+
+  // ── 4. Durable inbox rows FIRST, chunked ───────────────────────
+  // Written already-resolved (sentAt=now): this invocation owns the push leg, so
+  // `retry-unsent` must never adopt these rows (see the header note). Best-effort
+  // per chunk — a failed chunk is logged and the rest still land, mirroring
+  // notify()'s "one bad recipient can't block the others".
+  const sentAt = new Date();
+  let inboxWritten = 0;
+  let inboxFailed = 0;
+  for (const ids of chunked(inboxIds, INBOX_INSERT_CHUNK)) {
+    try {
+      await db.insert(notifications).values(
+        ids.map((accountId) => ({
+          accountId,
+          event: BROADCAST_EVENT,
+          title,
+          body,
+          data: { ...BROADCAST_DATA },
+          dedupeKey: null,
+          sentAt,
+        })),
+      );
+      inboxWritten += ids.length;
+    } catch (err) {
+      // Same rule as notify(): no durable row → no push. A pushed announcement
+      // whose deep-link opens an inbox that doesn't contain it is worse than a
+      // missed one, and the tally below reports the shortfall honestly.
+      inboxFailed += ids.length;
+      for (const accountId of ids) pushableIds.delete(accountId);
+      console.error('[broadcast] inbox insert chunk failed', err);
+    }
+  }
+
+  // ── 5. Devices of the accounts that are due a push ─────────────
+  // Same audience join as before (an indexed join beats a 20k-item IN list),
+  // ordered by account id so a truncated slice covers the same accounts as the
+  // audience slice, then filtered to the push-eligible set in memory.
+  const tokenRows: { token: string; accountId: string }[] =
+    pushableIds.size === 0
+      ? []
+      : await db
+          .select({ token: devicePushTokens.token, accountId: devicePushTokens.accountId })
+          .from(devicePushTokens)
+          .innerJoin(accounts, eq(accounts.id, devicePushTokens.accountId))
+          .where(and(...filters))
+          .orderBy(asc(devicePushTokens.accountId))
+          .limit(MAX_BROADCAST_TOKENS + 1);
+
+  const tokensTruncated = tokenRows.length > MAX_BROADCAST_TOKENS;
+  const usableRows = tokensTruncated ? tokenRows.slice(0, MAX_BROADCAST_TOKENS) : tokenRows;
+  const truncated = recipientsTruncated || tokensTruncated;
 
   const tokens = usableRows
+    .filter((r) => pushableIds.has(r.accountId))
     .map((r) => r.token)
     .filter((t): t is string => typeof t === 'string' && t.length > 0);
-  const accountCount = new Set(usableRows.map((r) => r.accountId)).size;
 
+  // ── 6. Bulk push ───────────────────────────────────────────────
   // Split into ≤500-token batches, then dispatch up to SEND_CONCURRENCY of them
   // at a time. Bounded concurrency keeps the total fan-out well inside the
   // serverless budget (vs. one slow sequential await chain) so the audit row is
   // always reached; the cap above guarantees a finite batch count.
-  const batches: string[][] = [];
-  for (let i = 0; i < tokens.length; i += FCM_MULTICAST_BATCH) {
-    batches.push(tokens.slice(i, i + FCM_MULTICAST_BATCH));
-  }
+  const batches = chunked(tokens, FCM_MULTICAST_BATCH);
 
   let delivered = 0;
   let failed = 0;
@@ -181,7 +319,10 @@ export async function POST(req: Request) {
         const res = await messaging.sendEachForMulticast({
           tokens: batch,
           notification: { title, body },
-          data: { type: 'broadcast' },
+          // `event` rides alongside `type` exactly as notify() sends it, so the
+          // mobile deep-link switch and the notification center key on the same
+          // fields whichever path delivered the message.
+          data: { ...BROADCAST_DATA, event: BROADCAST_EVENT },
           android: { priority: 'high', notification: { channelId: 'default', sound: 'default' } },
         });
         delivered += res.successCount;
@@ -210,13 +351,20 @@ export async function POST(req: Request) {
 
   if (staleTokens.length > 0) {
     try {
-      await db.delete(devicePushTokens).where(inArray(devicePushTokens.token, staleTokens));
+      // Chunked: a single delete with 20k bind parameters can blow the statement
+      // limit on a large fan-out.
+      for (const ids of chunked(staleTokens, INBOX_INSERT_CHUNK)) {
+        await db.delete(devicePushTokens).where(inArray(devicePushTokens.token, ids));
+      }
     } catch (err) {
       console.error('[broadcast] stale-token prune failed', err);
     }
   }
 
   // One audit row per broadcast, carrying the recipient count (P0-4 / §4.12).
+  // `recipients` = inbox rows written (the durable reach); `devices` = tokens the
+  // push actually went to. The prefs/quiet-hours tallies are additive keys the
+  // history view ignores until it wants them.
   await logAudit(
     principal,
     'broadcast.send',
@@ -226,17 +374,29 @@ export async function POST(req: Request) {
       title,
       tier: tier ?? null,
       country: countryCode ?? null,
-      recipients: accountCount,
+      recipients: inboxWritten,
       devices: tokens.length,
       delivered,
       failed,
       truncated,
+      suppressed,
+      quietHours: quietHeld,
+      inboxFailed,
     },
-    clientIp(req),
+    auditIp(req),
   );
 
   return json(
-    { ok: true, recipients: accountCount, devices: tokens.length, delivered, failed, truncated },
+    {
+      ok: true,
+      recipients: inboxWritten,
+      devices: tokens.length,
+      delivered,
+      failed,
+      truncated,
+      suppressed,
+      quietHours: quietHeld,
+    },
     200,
   );
 }

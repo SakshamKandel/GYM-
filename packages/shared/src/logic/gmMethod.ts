@@ -20,7 +20,27 @@ export interface GmTier {
   features: string[];
 }
 
-/** Tier catalog — mirrors Feature Blueprint §05 exactly. */
+/**
+ * Tier catalog — the paywall may only sell what the app actually unlocks.
+ *
+ * This list is kept line-for-line in step with the audited web bullet list
+ * (apps/web/src/components/marketing/pricing-format.ts TIER_BULLETS, fenced by
+ * apps/web/src/lib/marketingClaims.test.ts). If you add a line here, add the
+ * matching bullet there, and make sure a real screen delivers it.
+ *
+ * Deliberately absent, because nothing in the app does them:
+ *  - "No ads" — there are no ads at any tier, so charging for their absence
+ *    sells a perk every free member already has.
+ *  - "Video form checks" — no member video capture exists anywhere.
+ *  - "Meal plans & diet-break weeks" — gmPhaseForWeek below can describe a
+ *    diet-break week, but no screen or plan builder calls it yet.
+ *  - "Custom meal plan" — same reason; Gold's coach diet plan is the real one.
+ *  - "Monthly plan refresh" — nothing refreshes a plan on a schedule.
+ *
+ * Each tier lists what it ADDS: the paywall card and the detail sheet already
+ * print the "Everything in <tier below>" line themselves, so it is not repeated
+ * as a feature row here.
+ */
 export const GM_TIERS: GmTier[] = [
   {
     tier: 'starter',
@@ -37,19 +57,16 @@ export const GM_TIERS: GmTier[] = [
       'GM food suggestions',
       'All standard training programs',
       'Progress photos',
-      'No ads',
       'Coach-assigned workouts',
     ],
   },
   {
     tier: 'gold',
     name: 'Gold',
-    tagline: 'The GM Method — it adapts to you',
+    tagline: 'The GM Method adapts to you',
     features: [
       "Greece's signature specialized plans",
-      'Adaptive progression — targets adjust to your weekly trend',
-      'Meal plans & diet-break weeks',
-      'Monthly plan refresh',
+      'Adaptive progression: targets adjust to your weekly trend',
       'Coach diet plans',
     ],
   },
@@ -57,13 +74,7 @@ export const GM_TIERS: GmTier[] = [
     tier: 'elite',
     name: 'Elite',
     tagline: 'Coached by Greece himself',
-    features: [
-      'Everything in Gold',
-      '1-on-1 coach chat',
-      'Video form checks',
-      'Custom meal plan',
-      'Priority support',
-    ],
+    features: ['1-on-1 coach chat', 'Support that answers you first'],
   },
 ];
 
@@ -104,8 +115,8 @@ const GM_BANDS: Record<GoalType, GmBand> = {
     max: -0.4,
     belowPct: 0.05,
     abovePct: -0.05,
-    belowReason: 'Losing faster than the GM band — adding fuel to protect muscle',
-    aboveReason: 'Trend is stalling — trimming calories',
+    belowReason: 'Losing faster than the GM band, so adding fuel to protect muscle',
+    aboveReason: 'Trend is stalling, so trimming calories',
   },
   // Target +0.1%..+0.4%/wk. Faster gain is mostly fat; slower leaves gains on the table.
   muscle: {
@@ -113,8 +124,8 @@ const GM_BANDS: Record<GoalType, GmBand> = {
     max: 0.4,
     belowPct: 0.04,
     abovePct: -0.04,
-    belowReason: 'Gaining slower than the GM band — adding fuel to grow',
-    aboveReason: 'Gaining faster than the GM band — trimming to keep it lean',
+    belowReason: 'Gaining slower than the GM band, so adding fuel to grow',
+    aboveReason: 'Gaining faster than the GM band, so trimming to keep it lean',
   },
   // Strength: hold roughly steady (−0.2%..+0.3%/wk), small nudges toward the band.
   strength: {
@@ -122,8 +133,8 @@ const GM_BANDS: Record<GoalType, GmBand> = {
     max: 0.3,
     belowPct: 0.03,
     abovePct: -0.03,
-    belowReason: 'Dropping weight can cost strength — adding a little fuel',
-    aboveReason: 'Gaining more than strength needs — trimming a little',
+    belowReason: 'Dropping weight can cost strength, so adding a little fuel',
+    aboveReason: 'Gaining more than strength needs, so trimming a little',
   },
 };
 
@@ -132,7 +143,7 @@ const KCAL_FLOOR = 1200;
 const MAX_DRIFT = 0.2;
 const ROUND_STEP = 25;
 
-const ON_TRACK = 'On track — stay the course';
+const ON_TRACK = 'On track. Stay the course';
 
 function roundToStep(kcal: number): number {
   return Math.round(kcal / ROUND_STEP) * ROUND_STEP;
@@ -146,7 +157,7 @@ function roundToStep(kcal: number): number {
 export function gmWeeklyAdjustment(input: GmAdjustmentInput): GmAdjustment {
   const { goal, bodyweightKg, trendRatePerWeekKg, currentKcal, baseKcal } = input;
   if (bodyweightKg <= 0) {
-    return { newKcal: currentKcal, changed: false, reason: 'Not enough data — holding steady' };
+    return { newKcal: currentKcal, changed: false, reason: 'Not enough data, holding steady' };
   }
 
   const band = GM_BANDS[goal];
@@ -165,7 +176,7 @@ export function gmWeeklyAdjustment(input: GmAdjustmentInput): GmAdjustment {
   const newKcal = Math.max(KCAL_FLOOR, roundToStep(clamped));
 
   if (newKcal === currentKcal) {
-    return { newKcal, changed: false, reason: 'At the GM safety limit — holding steady' };
+    return { newKcal, changed: false, reason: 'At the GM safety limit, holding steady' };
   }
   return { newKcal, changed: true, reason: below ? band.belowReason : band.aboveReason };
 }
@@ -183,6 +194,12 @@ export interface GmPhase {
  * 4-week GM cycle, `week` is 1-based and cycles forever.
  * muscle/strength: 3 build weeks then 1 deload (volume ×0.6).
  * fat_loss: 3 deficit weeks then 1 diet-break week at maintenance.
+ *
+ * NOT WIRED UP YET. Nothing outside this file's own test calls this, so no
+ * member has ever seen a deload or a diet-break week. It stayed on the paywall
+ * as "Meal plans & diet-break weeks" for a long time regardless; that line is
+ * gone from GM_TIERS above. Give a screen this function before selling it
+ * again.
  */
 export function gmPhaseForWeek(week: number, goal: GoalType): GmPhase {
   const pos = ((Math.max(1, Math.floor(week)) - 1) % 4) + 1; // 1..4
@@ -192,14 +209,14 @@ export function gmPhaseForWeek(week: number, goal: GoalType): GmPhase {
       return {
         kind: 'dietBreak',
         label: 'Diet-break week',
-        note: 'Diet break — eat at maintenance this week',
+        note: 'Diet break: eat at maintenance this week',
         volumeMultiplier: 1,
       };
     }
     return {
       kind: 'build',
       label: `Deficit week ${pos} of 3`,
-      note: 'Hold the deficit — protein first, keep moving',
+      note: 'Hold the deficit. Protein first, keep moving',
       volumeMultiplier: 1,
     };
   }
@@ -208,14 +225,14 @@ export function gmPhaseForWeek(week: number, goal: GoalType): GmPhase {
     return {
       kind: 'deload',
       label: 'Deload week',
-      note: 'Deload — move light, recover hard',
+      note: 'Deload: move light, recover hard',
       volumeMultiplier: 0.6,
     };
   }
   return {
     kind: 'build',
     label: `Build week ${pos} of 3`,
-    note: 'Push it — add a rep or 2.5 kg where you can',
+    note: 'Push it. Add a rep or 2.5 kg where you can',
     volumeMultiplier: 1,
   };
 }

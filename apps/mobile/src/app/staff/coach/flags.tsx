@@ -49,14 +49,14 @@ const REASON_DETAIL: Record<string, string> = {
 };
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have coach access.";
   return "Couldn't load the flags list.";
 }
 
 function rowErrorLine(code: StaffErrorCode, action: 'acknowledge' | 'restore'): string {
   if (code === 'forbidden') return 'This client is no longer assigned to you.';
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   return action === 'restore'
     ? "Couldn't restore this workout. Try again."
     : "Couldn't acknowledge this flag. Try again.";
@@ -112,7 +112,7 @@ function FlagCard({
           <AppText variant="caption" color={colors.textDim}>
             Heaviest set logged:{' '}
             <AppText variant="caption" tabular color={colors.text}>
-              {item.topSet.exerciseName} — {formatKg(item.topSet.weightKg)} × {item.topSet.reps}{' '}
+              {item.topSet.exerciseName} · {formatKg(item.topSet.weightKg)} × {item.topSet.reps}{' '}
               {item.topSet.reps === 1 ? 'rep' : 'reps'}
             </AppText>
           </AppText>

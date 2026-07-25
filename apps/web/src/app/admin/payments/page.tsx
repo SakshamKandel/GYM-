@@ -1,6 +1,7 @@
 import { accounts, paymentRequests } from '@gym/db';
 import { resolveRegion } from '@gym/shared';
 import { desc, eq, ne, type SQL, sql } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { getDb } from '@/lib/db';
@@ -15,6 +16,7 @@ import {
 } from './_components/PaymentsQueue';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Membership payments' };
 export const dynamic = 'force-dynamic';
 
 // Pending is loaded UNBOUNDED (B7 — old pending requests must never starve
@@ -146,7 +148,7 @@ export default async function AdminPaymentsPage() {
   return (
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
-        title="Payments"
+        title="Membership payments"
         subtitle="Manual eSewa, Khalti, and bank-transfer payments awaiting review. Approving grants the tier for the paid window."
         action={<DownloadCsv href="/api/admin/exports/payment-requests" />}
       />
@@ -165,7 +167,11 @@ export default async function AdminPaymentsPage() {
         <StatTile label="Refunded" value={counts.refunded} />
       </div>
 
-      <PaymentsQueue requests={requests} counts={counts} />
+      <PaymentsQueue
+        requests={requests}
+        counts={counts}
+        canViewMembers={permissions.has('members.read')}
+      />
     </div>
   );
 }

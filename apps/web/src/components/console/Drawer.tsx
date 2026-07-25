@@ -110,7 +110,9 @@ export function Drawer({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '16px 18px',
+            // 8px rather than 16px: the close button now carries a 44px hit
+            // area, so the row keeps its old height instead of growing.
+            padding: '8px 18px',
             borderBottom: '1px solid var(--gt-border)',
             flexShrink: 0,
           }}
@@ -128,13 +130,20 @@ export function Drawer({
             onClick={onClose}
             aria-label="Close"
             style={{
+              width: 44,
+              height: 44,
+              flexShrink: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginRight: -8,
               background: 'none',
               border: 'none',
+              borderRadius: 'var(--gt-radius-sm)',
               color: 'var(--gt-text-dim)',
               fontSize: 22,
               lineHeight: 1,
               cursor: 'pointer',
-              padding: 4,
             }}
           >
             ×

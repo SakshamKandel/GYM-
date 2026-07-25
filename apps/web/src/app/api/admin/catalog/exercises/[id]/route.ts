@@ -2,7 +2,7 @@ import { exercises } from '@gym/db';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
-import { getDb } from '@/lib/db';
+import { getDb, pgErrorCode } from '@/lib/db';
 import { clientIp } from '@/lib/rateLimit';
 import { json, preflight, readJson } from '@/lib/http';
 
@@ -32,15 +32,6 @@ const patchSchema = z
     imageUrls: z.array(z.string().trim().url().max(2000)).max(10).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'empty' });
-
-/** Postgres/driver error shape carrying a SQLSTATE code, when present. */
-function pgErrorCode(err: unknown): string | null {
-  if (err && typeof err === 'object' && 'code' in err) {
-    const code = (err as { code?: unknown }).code;
-    return typeof code === 'string' ? code : null;
-  }
-  return null;
-}
 
 export function OPTIONS() {
   return preflight();

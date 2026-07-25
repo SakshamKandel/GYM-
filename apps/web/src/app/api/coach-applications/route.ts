@@ -1,6 +1,7 @@
 import { coachApplications } from '@gym/db';
 import { isCoachSpecialty, maskPii } from '@gym/shared';
 import { and, desc, eq } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { adminRoleOf } from '@/lib/authz';
@@ -152,14 +153,16 @@ export async function POST(req: Request) {
   // coach applications (WP-2 / Pack B). Fire-and-forget: never blocks or fails
   // the create. §7.2-S2 — the applicant's display name is member-authored, so
   // it is maskPii'd before it reaches a privileged (staff) recipient.
-  void notify(
-    'coach_application_staff',
-    { role: 'staff', permission: 'coach.application.review' },
-    {
-      title: 'New coach application',
-      body: `${maskPii(data.displayName)} applied to become a coach.`,
-      data: { type: 'coach_application', id: application.id },
-    },
+  after(() =>
+    notify(
+      'coach_application_staff',
+      { role: 'staff', permission: 'coach.application.review' },
+      {
+        title: 'New coach application',
+        body: `${maskPii(data.displayName)} applied to become a coach.`,
+        data: { type: 'coach_application', id: application.id },
+      },
+    ),
   );
 
   return json({ id: application.id, status: application.status }, 201);

@@ -58,7 +58,7 @@ async function request(opts: RequestOptions): Promise<unknown> {
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new GamificationApiError('network', "Can't reach the server");
+    throw new GamificationApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   if (res.ok) {

@@ -1,5 +1,6 @@
 import { coachMessages } from '@gym/db';
 import { maskPii } from '@gym/shared';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -16,7 +17,9 @@ export const runtime = 'nodejs';
  *                  coach. Deliberately does NOT call greeceCoachReply(): this
  *                  IS the human answer. The mobile MessageBubble renders any
  *                  sender!='user' row on the left as a "Greece" message, so
- *                  this appears with zero mobile changes.
+ *                  this appears with zero mobile changes. The response carries
+ *                  an additive `contactHidden` flag when the stored body
+ *                  differs from what was typed.
  *
  * Guards (both, fail closed): requirePermission('coach.message.user') +
  * requireCoachOwnsUser(principal, userId) → 403 if not owned.
@@ -45,7 +48,9 @@ export async function POST(
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
   // Masked BEFORE storage — the in-app-contact policy binds coaches too.
-  const body = maskPii(parsed.data.body);
+  const raw = parsed.data.body;
+  const body = maskPii(raw);
+  const contactHidden = body !== raw;
 
   const db = getDb();
 
@@ -78,17 +83,25 @@ export async function POST(
   // respects their prefs/quiet-hours, then pushes. Fire-and-forget — never
   // blocks or fails the reply. The body is already maskPii'd above; the coach is
   // the author, so it is the member's own coach speaking (no cross-user leak).
-  void notify(
-    'coach_message_client',
-    { accountId: userId },
-    {
-      title: 'New message from your coach',
-      body: body.length > 140 ? `${body.slice(0, 137)}...` : body,
-      data: { type: 'coach_chat', id: userId },
-    },
+  after(() =>
+    notify(
+      'coach_message_client',
+      { accountId: userId },
+      {
+        title: 'New message from your coach',
+        body: body.length > 140 ? `${body.slice(0, 137)}...` : body,
+        data: { type: 'coach_chat', id: userId },
+      },
+    ),
   );
 
-  await logAudit(principal, 'coach.reply', 'account', userId, { len: body.length });
+  await logAudit(principal, 'coach.reply', 'account', userId, {
+    len: body.length,
+    contactHidden,
+  });
 
-  return json({ message }, 201);
+  // `contactHidden` is additive: true when what we stored differs from what the
+  // coach typed, so the console can say so instead of leaving them to believe a
+  // phone number went through. Older clients ignore the extra key.
+  return json({ message, contactHidden }, 201);
 }

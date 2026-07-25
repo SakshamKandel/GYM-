@@ -9,6 +9,7 @@ import {
   ConfirmButton,
   TierChip,
 } from '@/components/console';
+import { formatDate } from '@/lib/format';
 import { AssignClient } from './AssignClient';
 import type {
   ClientAssignment,
@@ -24,21 +25,11 @@ function asTier(t: string): Tier {
   return (TIERS as readonly string[]).includes(t) ? (t as Tier) : 'starter';
 }
 
-const REQUEST_DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-});
-
 function formatAssigned(iso: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
+  return formatDate(d);
 }
 
 /**
@@ -151,7 +142,7 @@ export function CoachDetail({
       setSavingEdit(false);
       onChanged();
     } catch {
-      setEditError('Network error.');
+      setEditError('Could not reach us just now. Try again.');
       setSavingEdit(false);
     }
   }
@@ -184,7 +175,7 @@ export function CoachDetail({
       setDecidingId(null);
       onChanged();
     } catch {
-      setRequestError('Network error.');
+      setRequestError('Could not reach us just now. Try again.');
       setDecidingId(null);
     }
   }
@@ -211,7 +202,7 @@ export function CoachDetail({
       setEndingId(null);
       onChanged();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setEndingId(null);
     }
   }
@@ -448,7 +439,7 @@ export function CoachDetail({
                           marginTop: 4,
                         }}
                       >
-                        {REQUEST_DATE_FMT.format(new Date(r.createdAt))}
+                        {formatDate(r.createdAt)}
                       </div>
                     </div>
                     {canReview ? (

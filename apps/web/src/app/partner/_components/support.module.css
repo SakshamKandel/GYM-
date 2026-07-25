@@ -1,0 +1,110 @@
+/**
+ * Partner ↔ platform-team thread. Reading surface: roomy bubbles, the
+ * restaurant's own messages aligned right, the composer pinned underneath.
+ */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gt-space-4);
+}
+
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gt-space-3);
+  max-height: 56vh;
+  overflow-y: auto;
+  padding: var(--gt-space-4);
+  border: 1px solid var(--gt-border);
+  border-radius: var(--gt-radius);
+  background: var(--gt-surface-sunken);
+}
+
+.bubbleRow {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.bubbleRowOwn {
+  justify-content: flex-end;
+}
+
+.bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: min(560px, 88%);
+  padding: 10px 14px;
+  border: 1px solid var(--gt-border);
+  border-radius: var(--gt-radius);
+  background: var(--gt-card);
+}
+
+.bubbleOwn {
+  border-color: var(--gt-accent-strong);
+  background: var(--gt-accent-weak);
+}
+
+.bubbleWho {
+  color: var(--gt-text-dim);
+  font-family: var(--font-heading);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.bubbleBody {
+  margin: 0;
+  color: var(--gt-text);
+  font-size: 15px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bubbleWhen {
+  color: var(--gt-text-faint);
+  font-size: 11px;
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.composerLabel {
+  color: var(--gt-text-dim);
+  font-family: var(--font-heading);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.composerInput {
+  resize: vertical;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.composerFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gt-space-3);
+  flex-wrap: wrap;
+}
+
+.composerHint {
+  color: var(--gt-text-dim);
+  font-size: 13px;
+}
+
+.composerError {
+  color: var(--gt-danger);
+  font-size: 13px;
+}

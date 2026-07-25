@@ -30,7 +30,7 @@ export async function postMemberDataSync(
       signal: controller.signal,
     });
   } catch {
-    throw new SyncApiError('network', "Can't reach the server");
+    throw new SyncApiError('network', "We couldn't connect. Check your connection and try again");
   } finally {
     clearTimeout(timer);
   }

@@ -39,8 +39,8 @@ const MESSAGES = [
   {
     from: 'you',
     name: 'You → Coach Maya',
-    raw: 'Sure — just call me, 9851 022 334',
-    masked: 'Sure — just call me, ●●●● ●●● ●●●',
+    raw: 'Sure, just call me, 9851 022 334',
+    masked: 'Sure, just call me, ●●●● ●●● ●●●',
     kind: 'Phone number',
   },
   {
@@ -70,20 +70,18 @@ export function CoachingSafety() {
                 stays yours.
               </Display>
               <Lead tone="red" className="mt-6">
-                Every message between you and your coach passes through a server-side PII
-                mask before delivery. Phone numbers and emails are hidden automatically —
-                in both directions — so the relationship stays inside the app, where
-                it&rsquo;s covered.
+                Phone numbers and emails are hidden on their way through, in both directions, before
+                the other person ever sees the message. The relationship stays inside the app, where
+                it is covered.
               </Lead>
             </Reveal>
             <Reveal delay={120}>
               <ul className="mt-8 flex flex-col gap-3.5">
                 <CheckItem tone="red">
-                  Phone numbers and emails auto-masked, member → coach and coach → member
+                  Phone numbers and emails hidden, member to coach and coach to member
                 </CheckItem>
                 <CheckItem tone="red">
-                  Runs on the server and it&rsquo;s unit-tested — not a client-side filter
-                  you can switch off
+                  It happens on our side, not on the phone, so nobody can switch it off
                 </CheckItem>
                 <CheckItem tone="red">
                   Coaches are admin-verified before they ever appear in discovery
@@ -102,11 +100,11 @@ export function CoachingSafety() {
               <div ref={ref} className="relative rounded-block bg-ink p-6 shadow-pop sm:p-7">
                 <div className="flex items-center justify-between">
                   <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-dim">
-                    Coach chat · live mask
+                    Coach chat · hidden as it sends
                   </p>
-                  <span className="flex items-center gap-1.5 rounded-full bg-red/15 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-red-glow">
+                  <span className="flex items-center gap-1.5 rounded-full bg-red/15 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.12em] text-red-glow">
                     <Shield size={11} className="text-red-glow" />
-                    Server-side
+                    On our side
                   </span>
                 </div>
 
@@ -121,11 +119,11 @@ export function CoachingSafety() {
                           visible ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
                         } ${m.from === 'you' ? 'self-end text-right' : 'self-start'}`}
                       >
-                        <p className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-faint">
+                        <p className="mb-1.5 font-mono text-[11px] uppercase tracking-[0.14em] text-faint">
                           {m.name}
                         </p>
                         <div
-                          className={`inline-block max-w-[300px] rounded-[16px] px-4 py-3 text-left text-[13.5px] leading-snug ${
+                          className={`inline-block max-w-[300px] rounded-[16px] px-4 py-3 text-left text-[14.5px] leading-snug ${
                             m.from === 'you' ? 'bg-cream text-ink' : 'bg-charcoal-2 text-snow'
                           }`}
                         >
@@ -136,7 +134,7 @@ export function CoachingSafety() {
                             m.from === 'you' ? 'justify-end' : ''
                           } ${masked ? 'opacity-100' : 'opacity-0'}`}
                         >
-                          <span className="rounded-full bg-red px-2 py-[3px] font-mono text-[9.5px] font-semibold uppercase tracking-[0.1em] text-ink">
+                          <span className="rounded-full bg-red px-2 py-[3px] font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink">
                             {m.kind} masked
                           </span>
                         </div>
@@ -146,7 +144,7 @@ export function CoachingSafety() {
                 </div>
 
                 <div className="mkt-divider mt-5" />
-                <p className="mt-4 font-mono text-[10.5px] uppercase tracking-[0.16em] text-faint">
+                <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
                   maskPii() · @gym/shared · unit-tested
                 </p>
               </div>

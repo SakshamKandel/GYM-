@@ -1,7 +1,7 @@
 import { planVideos } from '@gym/db';
 import { and, eq, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { logAudit, type Principal, requireAnyPermission } from '@/lib/authz';
+import { auditIp, logAudit, type Principal, requireAnyPermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { getVideoProvider, NotConfiguredError } from '@/lib/video';
@@ -53,13 +53,6 @@ const patchSchema = z
     status: z.enum(['processing', 'ready', 'removed']).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'empty' });
-
-/** Best-effort caller IP for the audit trail (proxy header, first hop). */
-function clientIp(req: Request): string | null {
-  const fwd = req.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]!.trim();
-  return req.headers.get('x-real-ip');
-}
 
 /**
  * Resolve the caller and the row-scope predicate for a mutation. Returns a
@@ -208,7 +201,7 @@ export async function PATCH(
     'plan_video',
     video.id,
     { fields: Object.keys(fields) },
-    clientIp(req),
+    auditIp(req),
   );
 
   return json({ video }, 200);
@@ -256,7 +249,7 @@ export async function DELETE(
     'plan_video',
     video.id,
     {},
-    clientIp(req),
+    auditIp(req),
   );
 
   return json({ video: { id: video.id, status: video.status } }, 200);

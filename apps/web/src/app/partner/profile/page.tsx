@@ -1,5 +1,7 @@
 import { mealPartners } from '@gym/db';
 import { eq } from 'drizzle-orm';
+import type { Metadata } from 'next';
+import Link from 'next/link';
 import { Card, PageHeader } from '@/components/console';
 import type { LocationValue } from '@/components/console/LocationPicker';
 import { getDb } from '@/lib/db';
@@ -7,14 +9,19 @@ import { ServiceAreaView } from '../_components/ServiceAreaView';
 import { requirePartnerPage } from '../_data';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Restaurant profile' };
 export const dynamic = 'force-dynamic';
 
 /**
  * Partner profile — read-only view of the restaurant's own record, including
  * the delivery service area an admin drew on the map. A partner can SEE this
  * geometry but cannot change it here: service areas are admin-controlled, so
- * the page shows a "request changes" note pointing at admin support rather than
- * an editor.
+ * the page shows a "request changes" note rather than an editor.
+ *
+ * That note used to send restaurants to "admin support", which did not exist
+ * for them: support threads are opened from inside the member app and a
+ * restaurant has no member app, so the instruction pointed at nothing. It now
+ * links to /partner/support, which writes into the staff inbox for real.
  */
 export default async function PartnerProfilePage() {
   const { partnerId, partnerName } = await requirePartnerPage();
@@ -53,9 +60,12 @@ export default async function PartnerProfilePage() {
               Delivery service area
             </h2>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--gt-text-dim)' }}>
-              This is the delivery reach configured for your kitchen. It is managed by the platform
-              team — to request a change to your center point or radius, contact admin support with
-              the new area and we&apos;ll update it for you.
+              This is the delivery reach set for your kitchen. The platform team manages it. To
+              change your centre point or radius,{' '}
+              <Link href="/partner/support" style={{ color: 'var(--gt-accent-strong)' }}>
+                message the team
+              </Link>{' '}
+              with the area you want and they will update it for you.
             </p>
           </div>
 

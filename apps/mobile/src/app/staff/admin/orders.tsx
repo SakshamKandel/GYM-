@@ -108,11 +108,11 @@ const PAYMENT_STATUS_LABEL: Record<AdminOrderRow['paymentStatus'], string> = {
 };
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'not_found') return 'That order is no longer available.';
   if (code === 'conflict')
-    return 'This order already moved on — refresh the queue and try again.';
+    return 'This order already moved on. Refresh the queue and try again.';
   return "Couldn't load the queue.";
 }
 
@@ -404,7 +404,7 @@ export default function AdminOrdersScreen() {
               </PressableScale>
             ) : (
               <AppText variant="caption" color={colors.textFaint} style={styles.noteLine}>
-                No map pin — address is text-only.
+                No map pin. Address is text-only.
               </AppText>
             )}
             <AppText variant="caption" color={colors.textFaint} style={styles.slotLine}>
@@ -465,7 +465,7 @@ export default function AdminOrdersScreen() {
               </>
             ) : (
               <AppText variant="caption" color={colors.textFaint} style={styles.terminalLine}>
-                This order is in a terminal state — no further transitions.
+                This order is in a terminal state. No further transitions.
               </AppText>
             )}
           </ScrollView>
@@ -477,7 +477,7 @@ export default function AdminOrdersScreen() {
         title={pendingTarget ? `Force status to “${STATUS_LABEL[pendingTarget]}”?` : ''}
         message={
           pendingTarget === 'cancelled'
-            ? 'This cancels the order regardless of its current stage — this cannot be undone.'
+            ? 'This cancels the order regardless of its current stage, and it cannot be undone.'
             : "This overrides the order's fulfillment status directly, bypassing the partner's own console."
         }
         confirmLabel={acting ? 'Working…' : 'Confirm'}

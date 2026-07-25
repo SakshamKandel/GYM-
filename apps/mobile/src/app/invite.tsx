@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router } from 'expo-router';
@@ -16,28 +17,47 @@ import {
   ScreenHeader,
   stockImages,
 } from '../components/ui';
-import { sendReferral } from '../features/engagement/invite/actions';
+import { applyInviteCode, sendReferral } from '../features/engagement/invite/actions';
+import { RedeemCodeSection } from '../features/engagement/invite/components/RedeemCodeSection';
 import { ReferralSection } from '../features/engagement/invite/components/ReferralSection';
 import { useReferrals } from '../features/engagement/invite/hooks';
+import type { InviteInfo } from '../lib/api/client';
 import { useAuth } from '../state/auth';
 
 /**
  * /invite — the dedicated "Invite friends" screen (reached from Settings).
  * Same screen skeleton as /leaderboard and /badges: Screen scroll, back
  * header, load-on-focus, quiet stale/retry row instead of a blocking error
- * state. The body is the referral hero + email form + sent-invite status
- * list; a short "How it works" strip explains the two-sided discount.
+ * state. The body is the referral hero + shareable code + optional email
+ * form + invite list, then the "use a friend's code" block for members who
+ * are new enough to still claim one.
+ *
+ * Nothing on this screen sends anything to anyone: the member shares their
+ * code themselves. The old copy promised a delivered invite the app has never
+ * been able to make.
  */
 
-const HOW_IT_WORKS: { icon: 'mail-outline' | 'person-add-outline' | 'pricetag-outline'; line: string }[] = [
-  { icon: 'mail-outline', line: 'Send an invite to a friend who hasn’t joined yet.' },
-  { icon: 'person-add-outline', line: 'They create their account with that email.' },
-  { icon: 'pricetag-outline', line: 'You BOTH unlock a subscription discount.' },
-];
+type StepIcon = 'share-social-outline' | 'person-add-outline' | 'pricetag-outline';
+
+function howItWorks(invite: InviteInfo | null): { icon: StepIcon; line: string }[] {
+  return [
+    { icon: 'share-social-outline', line: 'Share your code with a friend.' },
+    { icon: 'person-add-outline', line: 'They join, then enter your code in the app.' },
+    {
+      icon: 'pricetag-outline',
+      line: invite
+        ? `You BOTH get ${invite.discountPct}% off a membership.`
+        : 'You BOTH unlock a membership discount.',
+    },
+  ];
+}
 
 export default function InviteScreen() {
   const status = useAuth((s) => s.status);
-  const { referrals, stale, reload } = useReferrals();
+  const { referrals, invite, stale, reload } = useReferrals();
+  // Keeps the "code accepted" block on screen after a redemption, which the
+  // reload below turns off (canRedeem flips false once the discount is on).
+  const [justRedeemed, setJustRedeemed] = useState(false);
 
   function goBack(): void {
     if (router.canGoBack()) router.back();
@@ -69,7 +89,7 @@ export default function InviteScreen() {
           recyclingKey="invite-banner"
           accessibilityLabel="Three runners silhouetted against a dawn sky"
           chip={{ label: 'Train together' }}
-          title="Invite a friend — you both save."
+          title="Invite a friend. You both save."
           style={styles.banner}
         />
       </Animated.View>
@@ -81,8 +101,8 @@ export default function InviteScreen() {
               Share the app, share the discount
             </AppText>
             <AppText variant="body" color={colors.onBlock}>
-              Sign in to invite friends — when they join, you both get a
-              subscription discount.
+              Sign in to invite friends. When they join, you both get a
+              membership discount.
             </AppText>
             <Button
               label="Sign in"
@@ -111,7 +131,7 @@ export default function InviteScreen() {
               >
                 <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
                 <AppText variant="caption" style={styles.staleText}>
-                  Showing last known state — tap to retry.
+                  Showing last known state. Tap to retry.
                 </AppText>
                 <Ionicons name="refresh" size={15} color={colors.textDim} />
               </PressableScale>
@@ -121,17 +141,30 @@ export default function InviteScreen() {
           <Animated.View entering={enterUp(1)}>
             <ReferralSection
               referrals={referrals}
+              invite={invite}
               onRefer={(email) => sendReferral(email)}
               onReload={reload}
             />
           </Animated.View>
 
+          {/* Only shown while the member can actually use a code. */}
+          {invite && (invite.canRedeem || justRedeemed) ? (
+            <Animated.View entering={enterUp(2)}>
+              <RedeemCodeSection
+                invite={invite}
+                onRedeem={(code) => applyInviteCode(code)}
+                onRedeemed={() => setJustRedeemed(true)}
+                onReload={reload}
+              />
+            </Animated.View>
+          ) : null}
+
           {/* ── How it works — quiet three-step explainer ─────── */}
-          <Animated.View entering={enterUp(2)} style={styles.howCard}>
+          <Animated.View entering={enterUp(3)} style={styles.howCard}>
             <AppText variant="label" color={colors.textDim}>
               How it works
             </AppText>
-            {HOW_IT_WORKS.map((step, i) => (
+            {howItWorks(invite).map((step, i) => (
               <View key={step.icon} style={styles.howRow}>
                 <View style={styles.howNum}>
                   <AppText variant="label" color={colors.accent} tabular>
@@ -145,8 +178,7 @@ export default function InviteScreen() {
               </View>
             ))}
             <AppText variant="caption" color={colors.textFaint}>
-              Invites are for friends who are new to the app — emails that
-              already have an account can’t be invited.
+              Invites only earn a discount for friends who are new to the app.
             </AppText>
           </Animated.View>
         </>

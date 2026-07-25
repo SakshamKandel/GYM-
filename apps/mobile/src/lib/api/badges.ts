@@ -33,7 +33,7 @@ async function get(path: string, token: string): Promise<unknown> {
       headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
     });
   } catch {
-    throw new GamificationApiError('network', "Can't reach the server");
+    throw new GamificationApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   if (res.ok) {

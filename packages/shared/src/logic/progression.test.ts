@@ -52,7 +52,7 @@ describe('suggestProgression — empty and thin history', () => {
     assert.equal(r.targetWeightKg, 60);
     assert.equal(r.targetRepsMin, 8);
     assert.equal(r.targetRepsMax, 12);
-    assert.equal(r.reason, 'Only one session logged — repeat 60 kg x 8–12 to set a baseline');
+    assert.equal(r.reason, 'Only one session logged. Repeat 60 kg x 8 to 12 to set a baseline');
   });
   it('never changes exercise selection — echoes id and name', () => {
     const r = must(suggestProgression(input([session('2026-07-01', [[60, 10, 7]])])));
@@ -72,7 +72,7 @@ describe('suggestProgression — increase', () => {
     assert.equal(r.targetWeightKg, 102.5);
     assert.equal(r.targetRepsMin, 8);
     assert.equal(r.targetRepsMax, 12);
-    assert.equal(r.reason, 'Hit 3x12 @ RPE 7 last time — +2.5 kg');
+    assert.equal(r.reason, 'Hit 3x12 @ RPE 7 last time, add 2.5 kg');
   });
   it('missing RPE counts as passing for increase (reason drops the RPE part)', () => {
     const r = must(
@@ -84,12 +84,12 @@ describe('suggestProgression — increase', () => {
       ),
     );
     assert.equal(r.action, 'increase');
-    assert.equal(r.reason, 'Hit 3x12 last time — +2.5 kg');
+    assert.equal(r.reason, 'Hit 3x12 last time, add 2.5 kg');
   });
   it('respects a configurable increment', () => {
     const r = must(suggestProgression(input(topped, { incrementKg: 1.25 })));
     assert.equal(r.targetWeightKg, 101.25);
-    assert.equal(r.reason, 'Hit 3x12 @ RPE 7 last time — +1.25 kg');
+    assert.equal(r.reason, 'Hit 3x12 @ RPE 7 last time, add 1.25 kg');
   });
   it('respects a template rep range', () => {
     const r = must(
@@ -105,12 +105,12 @@ describe('suggestProgression — increase', () => {
     );
     assert.equal(r.action, 'increase');
     assert.equal(r.targetWeightKg, 142.5);
-    assert.equal(r.reason, 'Hit 2x10 @ RPE 7 last time — +2.5 kg');
+    assert.equal(r.reason, 'Hit 2x10 @ RPE 7 last time, add 2.5 kg');
   });
   it('formats the reason in lb for lb users while keeping targetWeightKg canonical', () => {
     const r = must(suggestProgression(input(topped, { unitPref: 'lb' })));
     assert.equal(r.targetWeightKg, 102.5);
-    assert.equal(r.reason, 'Hit 3x12 @ RPE 7 last time — +5.5 lb');
+    assert.equal(r.reason, 'Hit 3x12 @ RPE 7 last time, add 5.5 lb');
   });
   it('average RPE above 8 blocks the increase even at top reps', () => {
     const r = must(
@@ -138,7 +138,7 @@ describe('suggestProgression — hold', () => {
     );
     assert.equal(r.action, 'hold');
     assert.equal(r.targetWeightKg, 100);
-    assert.equal(r.reason, 'Missed the rep target last time — hold 100 kg and own the 8–12 range');
+    assert.equal(r.reason, 'Missed the rep target last time. Hold 100 kg and own the 8 to 12 range');
   });
   it('average RPE >= 9.5 holds the weight even inside the range', () => {
     const r = must(
@@ -151,7 +151,7 @@ describe('suggestProgression — hold', () => {
     );
     assert.equal(r.action, 'hold');
     assert.equal(r.targetWeightKg, 100);
-    assert.equal(r.reason, 'RPE 9.5 last time — hold 100 kg and recover before adding weight');
+    assert.equal(r.reason, 'RPE 9.5 last time. Hold 100 kg and recover before adding weight');
   });
   it('missing RPE never triggers the RPE hold — mid-range defaults to add-reps', () => {
     const r = must(
@@ -164,7 +164,7 @@ describe('suggestProgression — hold', () => {
     );
     assert.equal(r.action, 'hold');
     assert.equal(r.targetWeightKg, 100);
-    assert.equal(r.reason, 'In the 8–12 range — add reps before adding weight');
+    assert.equal(r.reason, 'In the 8 to 12 range. Add reps before adding weight');
   });
   it('averages only the non-null RPEs', () => {
     // RPEs [8, null, 9] average 8.5 — blocks increase, below the 9.5 hold floor.
@@ -179,7 +179,7 @@ describe('suggestProgression — hold', () => {
     assert.equal(r.action, 'hold');
     assert.equal(
       r.reason,
-      'RPE 8.5 at the top of the 8–12 range — hold 100 kg and recover before adding weight',
+      'RPE 8.5 at the top of the 8 to 12 range. Hold 100 kg and recover before adding weight',
     );
   });
 });
@@ -190,14 +190,14 @@ describe('suggestProgression — stall and deload', () => {
     const r = must(suggestProgression(input(flat(['2026-06-17', '2026-06-24', '2026-07-01']))));
     assert.equal(r.action, 'deload');
     assert.equal(r.targetWeightKg, 90); // 100 * 0.9 on the 2.5 grid
-    assert.equal(r.reason, 'No e1RM progress in 3 sessions — deload ~10% and rebuild');
+    assert.equal(r.reason, 'No e1RM progress in 3 sessions. Deload ~10% and rebuild');
   });
   it('reports the full stall length when it runs longer than 3 sessions', () => {
     const r = must(
       suggestProgression(input(flat(['2026-06-10', '2026-06-17', '2026-06-24', '2026-07-01']))),
     );
     assert.equal(r.action, 'deload');
-    assert.equal(r.reason, 'No e1RM progress in 4 sessions — deload ~10% and rebuild');
+    assert.equal(r.reason, 'No e1RM progress in 4 sessions. Deload ~10% and rebuild');
   });
   it('rounds the deload target to the increment grid', () => {
     const sets: Array<[number, number, number | null]> = [[102.5, 10, 8]];
@@ -232,7 +232,7 @@ describe('suggestProgression — stall and deload', () => {
       ),
     );
     assert.equal(r.action, 'hold');
-    assert.equal(r.reason, 'In the 8–12 range — add reps before adding weight');
+    assert.equal(r.reason, 'In the 8 to 12 range. Add reps before adding weight');
   });
   it('rep progress above the 12-rep e1RM cap is not a stall (high-rep ranges)', () => {
     // epley1Rm caps reps at 12; a capped score would be flat across these
@@ -250,7 +250,7 @@ describe('suggestProgression — stall and deload', () => {
       ),
     );
     assert.equal(r.action, 'hold');
-    assert.equal(r.reason, 'In the 12–15 range — add reps before adding weight');
+    assert.equal(r.reason, 'In the 12 to 15 range. Add reps before adding weight');
   });
   it('topping a high-rep range after progressing above the cap earns the increase', () => {
     const r = must(
@@ -297,7 +297,7 @@ describe('suggestProgression — bodyweight', () => {
     assert.equal(r.targetWeightKg, 0);
     assert.equal(r.targetRepsMin, 10);
     assert.equal(r.targetRepsMax, 14);
-    assert.equal(r.reason, 'Hit 3x12 at bodyweight — aim for 10–14 reps next time');
+    assert.equal(r.reason, 'Hit 3x12 at bodyweight. Aim for 10 to 14 reps next time');
   });
   it('mid-range bodyweight work holds and keeps building reps', () => {
     const r = must(
@@ -310,7 +310,7 @@ describe('suggestProgression — bodyweight', () => {
     );
     assert.equal(r.action, 'hold');
     assert.equal(r.targetWeightKg, 0);
-    assert.equal(r.reason, 'Bodyweight work — build toward 2x12 before raising the target');
+    assert.equal(r.reason, 'Bodyweight work. Build toward 2x12 before raising the target');
   });
   it('flat bodyweight history never deloads (e1RM of 0 kg is meaningless)', () => {
     const sets: Array<[number, number, number | null]> = [[0, 10, 8]];
@@ -347,7 +347,7 @@ describe('suggestProgression — input robustness', () => {
       ),
     );
     assert.equal(r.action, 'increase');
-    assert.equal(r.reason, 'Hit 1x12 @ RPE 7 last time — +2.5 kg');
+    assert.equal(r.reason, 'Hit 1x12 @ RPE 7 last time, add 2.5 kg');
   });
   it('a non-positive increment falls back to the 2.5 kg default', () => {
     const r = must(

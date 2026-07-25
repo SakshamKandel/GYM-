@@ -1,20 +1,16 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Badge, Card, CardHeader, PageHeader, StatTile, TierChip } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
+import { formatDateTime } from '@/lib/format';
 import { loadMemberSnapshot } from '@/lib/memberSnapshot';
 import { staffFromCookie } from '@/lib/staffSession';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Member record' };
 export const dynamic = 'force-dynamic';
-
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-});
 
 /**
  * Read-only member snapshot page (P2-19). Standalone route so it works
@@ -55,7 +51,7 @@ export default async function MemberViewPage({
     <div style={{ maxWidth: 880 }}>
       <PageHeader
         title={profile.displayName || profile.email}
-        subtitle={`Read-only snapshot — ${profile.email}`}
+        subtitle={`Read-only snapshot · ${profile.email}`}
         action={
           <Link href="/admin/members" style={{ color: 'var(--gt-text-dim)', fontSize: 14 }}>
             ← Back to members
@@ -74,7 +70,7 @@ export default async function MemberViewPage({
         <StatTile
           label="Tier"
           value={<TierChip tier={profile.effectiveTier as 'starter' | 'silver' | 'gold' | 'elite'} />}
-          hint={isLapsed ? `Lapsed (was ${profile.tier})` : undefined}
+          hint={isLapsed ? `Lapsed, was ${tierLabel(profile.tier)}` : undefined}
         />
         <StatTile
           label="Status"
@@ -97,12 +93,12 @@ export default async function MemberViewPage({
           <div style={{ padding: 18, display: 'grid', gap: 10, fontSize: 14 }}>
             <Row label="Account id" value={profile.id} mono />
             <Row label="Email" value={profile.email} />
-            <Row label="Joined" value={DATE_FMT.format(new Date(profile.createdAt))} />
+            <Row label="Joined" value={formatDateTime(profile.createdAt)} />
             <Row label="Country" value={profile.country ?? '—'} />
             <Row label="Staff role" value={profile.staffRole ?? 'Not staff'} />
             <Row
               label="Tier expires"
-              value={profile.tierExpiresAt ? DATE_FMT.format(new Date(profile.tierExpiresAt)) : 'No expiry'}
+              value={profile.tierExpiresAt ? formatDateTime(profile.tierExpiresAt) : 'No expiry'}
             />
           </div>
         </Card>
@@ -131,7 +127,7 @@ export default async function MemberViewPage({
                       {h.action}
                     </span>
                     <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                      {DATE_FMT.format(new Date(h.createdAt))}
+                      {formatDateTime(h.createdAt)}
                     </span>
                   </div>
                   {Object.keys(h.meta ?? {}).length > 0 ? (

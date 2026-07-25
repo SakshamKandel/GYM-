@@ -11,7 +11,7 @@ function CrossItem({ children }: { children: ReactNode }) {
     <li className="flex items-start gap-3 text-[15px] leading-relaxed text-dim">
       <span
         aria-hidden
-        className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] font-bold text-faint"
+        className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[11px] font-bold text-faint"
       >
         ✕
       </span>
@@ -37,9 +37,8 @@ export function PrivacySection() {
           </Reveal>
           <Reveal delay={160}>
             <Lead className="mt-6">
-              The portal shows PII-minimal projections of each order — what to make, where it
-              goes, how it&rsquo;s paid. Member profiles, training data and chat never reach the
-              kitchen.
+              Each order card carries what to make, where it goes and how it is paid. That is all.
+              Nobody&rsquo;s profile, training or chat ever reaches the kitchen.
             </Lead>
           </Reveal>
         </div>
@@ -47,20 +46,20 @@ export function PrivacySection() {
         <div className="mt-14 grid gap-4 md:grid-cols-2">
           <Reveal delay={100}>
             <Card raised className="h-full">
-              <p className="font-mono text-[11.5px] font-medium uppercase tracking-[0.2em] text-dim">
+              <p className="font-mono text-[12px] font-medium uppercase tracking-[0.2em] text-dim">
                 On every order card
               </p>
               <ul className="mt-5 flex flex-col gap-3.5">
                 <CheckItem>Dishes and quantities to prepare</CheckItem>
                 <CheckItem>Delivery address and window</CheckItem>
-                <CheckItem>Payment type — prepaid or COD</CheckItem>
-                <CheckItem>The order code, for handoff and support</CheckItem>
+                <CheckItem>Paid already, or cash on delivery</CheckItem>
+                <CheckItem>The order code, for the handover and for us</CheckItem>
               </ul>
             </Card>
           </Reveal>
           <Reveal delay={200}>
             <Card className="h-full">
-              <p className="font-mono text-[11.5px] font-medium uppercase tracking-[0.2em] text-dim">
+              <p className="font-mono text-[12px] font-medium uppercase tracking-[0.2em] text-dim">
                 Never in the portal
               </p>
               <ul className="mt-5 flex flex-col gap-3.5">

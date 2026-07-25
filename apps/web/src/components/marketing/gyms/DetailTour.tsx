@@ -16,14 +16,14 @@ export function DetailTour() {
         <div className="grid items-center gap-16 lg:grid-cols-2">
           <div>
             <Reveal>
-              <Eyebrow>01 — The detail page</Eyebrow>
+              <Eyebrow>01 · The detail page</Eyebrow>
               <Display flavor="steel" className="mt-4">
                 The full picture,
                 <br />
                 before you visit.
               </Display>
               <Lead className="mt-6">
-                Tap any listing and the whole gym opens up — a real photo gallery,
+                Tap any listing and the whole gym opens up: a real photo gallery,
                 day-by-day hours, amenities and contact, with an exact pin and one-tap
                 directions. No guessing what&rsquo;s behind the door.
               </Lead>
@@ -31,11 +31,11 @@ export function DetailTour() {
             <Reveal delay={120}>
               <ul className="mt-8 flex flex-col gap-3.5">
                 <CheckItem>
-                  Photo galleries of the actual floor — the racks, the machines, the room
+                  Photo galleries of the actual floor: the racks, the machines, the room
                   you&rsquo;ll train in
                 </CheckItem>
                 <CheckItem>Opening hours for every day of the week, kept current by the GM team</CheckItem>
-                <CheckItem>Amenities, phone number and exact location — call or navigate in one tap</CheckItem>
+                <CheckItem>Amenities, phone number and exact location, so you can call or navigate in one tap</CheckItem>
               </ul>
             </Reveal>
             <Reveal delay={200}>

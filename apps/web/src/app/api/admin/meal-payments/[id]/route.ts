@@ -116,7 +116,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           title: 'Meal payment update',
           body: note
             ? `Your meal payment was not approved this time: ${note}`
-            : 'Your meal payment was not approved this time. Please resubmit a clear receipt.',
+            : 'Your meal payment was not approved this time. Send a clearer photo of the receipt and we will look again.',
           data: { type: 'meal_payment_decided', id: row.orderId ?? row.cycleId ?? undefined },
         },
       ),

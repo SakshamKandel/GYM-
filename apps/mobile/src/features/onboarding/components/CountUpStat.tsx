@@ -6,7 +6,7 @@ import { AnimatedNumber, AppText } from '../../../components/ui';
 
 /**
  * StatBlock-shaped hero number that counts UP to its value on mount — the
- * "here's your plan" reveal at the end of onboarding. Same count-up vocabulary
+ * "here's your program" reveal at the end of onboarding. Same count-up vocabulary
  * as the streak sheet (Oswald sweep). Reduced motion: lands on the value at
  * once. Passive content, so nothing slides — only the digits settle.
  * `onBlock` flips the ink to black for red/cream color blocks (brief §2).

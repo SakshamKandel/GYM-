@@ -1,9 +1,11 @@
 import { coachRequests } from '@gym/db';
 import { and, eq } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -53,6 +55,24 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     id,
     { userId: row.userId, coachId: row.coachId, reason },
     ip,
+  );
+
+  // The member's request just disappeared from their app with no explanation.
+  // Tell them, and point them back at the directory. The CAS above means at
+  // most one caller ever flips this row, so this fires exactly once — no
+  // dedupe key needed. `reason` is OPERATOR free text and is deliberately NOT
+  // echoed: notification copy is server-templated (§7.2-S2), and the member
+  // should never read an internal moderation note.
+  after(() =>
+    notify(
+      'coach_request_closed',
+      { accountId: row.userId },
+      {
+        title: 'Coach request closed',
+        body: 'Your coach request was closed. You can ask another coach whenever you are ready.',
+        data: { type: 'coach_request_decided' },
+      },
+    ),
   );
 
   return json({ ok: true }, 200);

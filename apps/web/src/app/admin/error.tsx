@@ -43,7 +43,7 @@ export default function AdminError({
         Something went wrong
       </h1>
       <p style={{ fontSize: 14, color: 'var(--gt-text-dim)', margin: 0 }}>
-        This section failed to load. It’s usually a transient issue — try again in
+        This section failed to load. It’s usually a transient issue, so try again in
         a moment.
       </p>
       <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>

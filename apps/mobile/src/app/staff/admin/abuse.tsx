@@ -47,7 +47,7 @@ const RESET_WORD = 'RESET';
 function errorLine(code: StaffErrorCode): string {
   switch (code) {
     case 'unauthorized':
-      return 'Your session expired — sign in again.';
+      return 'Your session expired. Sign in again.';
     case 'forbidden':
       return "You don't have permission to view abuse signals.";
     case 'not_found':

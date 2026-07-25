@@ -11,7 +11,7 @@ import { AboutPrinciples } from '@/components/marketing/about/Principles';
 import { AboutStory } from '@/components/marketing/about/Story';
 
 export const metadata: Metadata = {
-  title: 'About The GM Method — built in Kathmandu, built to be used',
+  title: 'About The GM Method: built in Kathmandu, built to be used',
   description:
     'The GM Method is a coach-built, offline-first fitness app made by coaches and engineers in Kathmandu. Our principles: offline-first, accessible, private and unit-tested. Nepal first, the world second.',
 };

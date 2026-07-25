@@ -35,7 +35,7 @@ export function OrderHistoryCard({ order, partnerName, onOpen }: Props) {
       onPress={() => onOpen(order)}
       accessibilityLabel={`${orderStatusLabel(order.status)} ${windowName(order.window)} order from ${
         partnerName ?? 'your partner'
-      }, ${formatMoney(order.totalMinor, order.currency)} — view details`}
+      }, ${formatMoney(order.totalMinor, order.currency)}. View details`}
       style={styles.card}
     >
       <View style={styles.row}>

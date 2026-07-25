@@ -38,14 +38,14 @@ const BADGE_NAME: Record<string, string> = Object.fromEntries(
 );
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have coach access.";
   return "Couldn't load the verification queue.";
 }
 
 function rowErrorLine(code: StaffErrorCode): string {
   if (code === 'forbidden') return 'This client is no longer assigned to you.';
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   return "Couldn't verify this badge. Try again.";
 }
 

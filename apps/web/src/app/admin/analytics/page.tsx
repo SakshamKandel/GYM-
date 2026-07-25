@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -14,6 +15,7 @@ import {
 } from './_components/ui';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Analytics' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -35,7 +37,7 @@ export default async function AdminAnalyticsPage() {
     <div>
       <PageHeader
         title="Analytics"
-        subtitle="Revenue, promo economy, coach output, and membership mix — net of refunds."
+        subtitle="Revenue, promo economy, coach output, and membership mix, net of refunds."
       />
 
       <DeltaTiles deltas={data.deltas} />

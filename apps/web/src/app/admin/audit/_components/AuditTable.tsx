@@ -9,6 +9,7 @@ import {
   Toolbar,
   type Column,
 } from '@/components/console';
+import { formatDateTime } from '@/lib/format';
 import { DownloadCsv } from '../../_components/DownloadCsv';
 
 /** One audit_log row as returned by GET /api/admin/audit. */
@@ -42,16 +43,9 @@ function toneForAction(action: string): 'neutral' | 'warning' | 'critical' | 'in
   return 'neutral';
 }
 
+/** One stamp shape for the whole console (see @/lib/format). */
 function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  return formatDateTime(iso);
 }
 
 /** Renders the free-form meta jsonb compactly; empty object shows a dim dash. */
@@ -155,7 +149,7 @@ export function AuditTable({
         // A superseded request was aborted by a newer one — leave state to that
         // newer run rather than flashing a spurious error.
         if (controller.signal.aborted) return;
-        setError('Network error.');
+        setError('Could not reach us just now. Try again.');
       } finally {
         // Only the current (non-superseded) request may clear the busy flags.
         if (abortRef.current === controller) {
@@ -373,7 +367,7 @@ export function AuditTable({
           </Button>
         ) : entries.length > 0 ? (
           <span style={{ color: 'var(--gt-text-dim)', fontSize: 13 }}>
-            End of log — {entries.length} event{entries.length === 1 ? '' : 's'} shown.
+            End of log · {entries.length} event{entries.length === 1 ? '' : 's'} shown.
           </span>
         ) : null}
       </div>

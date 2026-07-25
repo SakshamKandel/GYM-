@@ -52,8 +52,8 @@ export function CoachingMilestones() {
                 the record.
               </Display>
               <Lead className="mt-6">
-                When your coach logs a milestone — a first strict pull-up, a 16-week cut, a
-                100&nbsp;kg squat — it lands in your Progress portfolio with their name on
+                When your coach logs a milestone (a first strict pull-up, a 16-week cut, a
+                100&nbsp;kg squat), it lands in your Progress portfolio with their name on
                 it. And because coaches&rsquo; logged milestones are public, the next member
                 choosing a coach reads real receipts, not marketing.
               </Lead>
@@ -61,7 +61,7 @@ export function CoachingMilestones() {
             <Reveal delay={120}>
               <div className="mt-8 flex flex-col gap-3">
                 {[
-                  ['Logged by the coach', 'not self-reported — your mentor writes it'],
+                  ['Logged by the coach', 'not self-reported, your mentor writes it'],
                   ['Lands on your portfolio', 'lives in Progress next to PRs and trends'],
                   ['Builds their track record', 'the same entries power coach discovery'],
                 ].map(([title, sub], i) => (
@@ -71,7 +71,7 @@ export function CoachingMilestones() {
                     </span>
                     <p className="text-[14.5px] leading-snug">
                       <span className="font-semibold text-snow">{title}</span>
-                      <span className="text-dim"> — {sub}</span>
+                      <span className="text-dim">: {sub}</span>
                     </p>
                   </div>
                 ))}

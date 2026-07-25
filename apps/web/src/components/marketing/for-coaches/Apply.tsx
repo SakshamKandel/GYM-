@@ -16,7 +16,7 @@ const STEPS = [
   {
     n: '02',
     title: 'Get verified',
-    copy: 'The GM team reviews every application by hand. Verified means verified — only real coaches make the discovery hub.',
+    copy: 'The GM team reviews every application by hand. Verified means verified, and only real coaches make the discovery hub.',
   },
   {
     n: '03',

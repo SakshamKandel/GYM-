@@ -28,7 +28,7 @@ const FACTS = [
 function StepNode({ i, done, active }: { i: number; done: boolean; active: boolean }) {
   return (
     <span
-      className={`z-10 mx-1.5 flex size-9 shrink-0 items-center justify-center rounded-full font-display text-[13px] font-medium transition-all duration-500 ${
+      className={`z-10 mx-1.5 flex size-9 shrink-0 items-center justify-center rounded-full font-display text-[14.5px] font-medium transition-all duration-500 ${
         done
           ? 'bg-red text-ink'
           : active
@@ -66,7 +66,7 @@ export function OrderJourney() {
             <div className="mb-12 flex justify-center">
               <span className="mkt-card-light inline-flex items-center gap-2.5 rounded-full px-5 py-2.5 font-mono text-[11px] font-medium uppercase tracking-[0.2em] text-ink">
                 <span className="size-1.5 animate-pulse rounded-full bg-red shadow-ember" />
-                Order #GM-3057 — {STEPS[current].label}
+                Order #GM-3057 · {STEPS[current].label}
               </span>
             </div>
 
@@ -101,10 +101,10 @@ export function OrderJourney() {
                     >
                       {s.label}
                     </p>
-                    <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.16em] text-gravel-faint">
+                    <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.16em] text-gravel-faint">
                       {s.who}
                     </p>
-                    <p className="mt-2 px-2 text-[12.5px] leading-snug text-gravel">{s.blurb}</p>
+                    <p className="mt-2 px-2 text-[14.5px] leading-snug text-gravel">{s.blurb}</p>
                   </div>
                 );
               })}
@@ -137,11 +137,11 @@ export function OrderJourney() {
                           >
                             {s.label}
                           </span>
-                          <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-gravel-faint">
+                          <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-gravel-faint">
                             {s.who}
                           </span>
                         </div>
-                        <p className="mt-1 text-[13.5px] leading-relaxed text-gravel">{s.blurb}</p>
+                        <p className="mt-1 text-[14.5px] leading-relaxed text-gravel">{s.blurb}</p>
                       </div>
                     </div>
                   );
@@ -156,7 +156,7 @@ export function OrderJourney() {
             {FACTS.map((f) => (
               <span
                 key={f}
-                className="inline-flex items-center rounded-full border border-mist bg-white/70 px-4 py-2 font-mono text-[10.5px] font-medium uppercase tracking-[0.16em] text-gravel"
+                className="inline-flex items-center rounded-full border border-mist bg-white/70 px-4 py-2 font-mono text-[11px] font-medium uppercase tracking-[0.16em] text-gravel"
               >
                 {f}
               </span>

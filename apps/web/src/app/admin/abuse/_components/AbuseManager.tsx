@@ -3,13 +3,9 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Badge, Button, Card, CardHeader, type Column, DataTable, TextField } from '@/components/console';
+import { formatDate } from '@/lib/format';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import type { AbuseDashboard } from './types';
-
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-});
 
 const TRIAL_TIERS = ['silver', 'gold', 'elite'] as const;
 
@@ -98,14 +94,14 @@ export function AbuseManager({ dashboard }: { dashboard: AbuseDashboard }) {
                 header: 'Account',
                 render: (r) => <span style={{ fontSize: 13 }}>{r.displayName?.trim() || r.email}</span>,
               },
-              { key: 'tier', header: 'Tier', width: 90, render: (r) => <Badge tone="info">{r.tier}</Badge> },
+              { key: 'tier', header: 'Tier', width: 90, render: (r) => <Badge tone="info">{tierLabel(r.tier)}</Badge> },
               {
                 key: 'started',
                 header: 'Started',
                 width: 110,
                 render: (r) => (
                   <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                    {DATE_FMT.format(new Date(r.startedAt))}
+                    {formatDate(r.startedAt)}
                   </span>
                 ),
               },
@@ -115,7 +111,7 @@ export function AbuseManager({ dashboard }: { dashboard: AbuseDashboard }) {
                 width: 110,
                 render: (r) => (
                   <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                    {DATE_FMT.format(new Date(r.expiresAt))}
+                    {formatDate(r.expiresAt)}
                   </span>
                 ),
               },
@@ -169,7 +165,7 @@ function TrialResetCard() {
       setSaving(false);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }

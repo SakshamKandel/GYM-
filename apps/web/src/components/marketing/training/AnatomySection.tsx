@@ -23,14 +23,14 @@ export function AnatomySection() {
         <div className="grid items-center gap-16 lg:grid-cols-2">
           <div>
             <Reveal>
-              <Eyebrow tone="light">02 — 3-D anatomy</Eyebrow>
+              <Eyebrow tone="light">02 · 3-D anatomy</Eyebrow>
               <Display className="mt-4">
                 The body,
                 <br />
                 in true 3-D.
               </Display>
               <Lead tone="light" className="mt-6">
-                Not a flat diagram — a real three-dimensional body you can spin. Tap any of 17
+                Not a flat diagram, but a real three-dimensional body you can spin. Tap any of 17
                 heat-mapped muscle zones to see the exercises that hit it, orbit and zoom with a
                 finger, flip front to back.
               </Lead>
@@ -40,7 +40,7 @@ export function AnatomySection() {
                 {CHIPS.map((c) => (
                   <span
                     key={c}
-                    className="mkt-card-light inline-flex h-10 items-center rounded-full px-4 font-mono text-[11.5px] font-medium uppercase tracking-[0.14em] text-gravel"
+                    className="mkt-card-light inline-flex h-10 items-center rounded-full px-4 font-mono text-[12px] font-medium uppercase tracking-[0.14em] text-gravel"
                   >
                     {c}
                   </span>
@@ -49,7 +49,7 @@ export function AnatomySection() {
             </Reveal>
             <Reveal delay={200}>
               <p className="mt-8 max-w-md text-[14.5px] leading-relaxed text-gravel">
-                This isn&rsquo;t a mockup — it&rsquo;s the exact viewer that ships inside the
+                This isn&rsquo;t a mockup. It&rsquo;s the exact viewer that ships inside the
                 app, running right here. It loads no network assets on your phone, so it works
                 at the squat rack with zero signal.
               </p>

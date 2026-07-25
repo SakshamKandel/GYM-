@@ -5,7 +5,8 @@ import {
   coachProfiles,
   coachTierRequests,
 } from '@gym/db';
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -20,6 +21,7 @@ import {
 } from './_components/CoachRoster';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Coaches' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -79,8 +81,10 @@ async function loadCoaches(): Promise<CoachSummary[]> {
 
 /**
  * Loads every PENDING coach_tier_requests row, grouped by coach — mirrors
- * loadActiveClients below: one query, grouped client-side, so the roster can
- * render each coach's pending request(s) without a per-coach round trip.
+ * one query, grouped client-side, so the roster can render each coach's pending
+ * request(s) without a per-coach round trip. Unlike client assignments these
+ * rows carry no member data — just a coach id, a requested tier, and a note —
+ * so loading them all is cheap and leaks nothing.
  */
 async function loadPendingTierRequests(): Promise<Record<string, TierRequest[]>> {
   const db = getDb();
@@ -109,18 +113,23 @@ async function loadPendingTierRequests(): Promise<Record<string, TierRequest[]>>
 }
 
 /**
- * Loads every ACTIVE assignment (client + coach it belongs to) in one query,
- * so the roster can render each coach's client list without a per-coach round
- * trip. Grouped into a map<coachId, clients[]> for the client component. Joins
- * accounts to surface the client's name/email/tier alongside the assignment id
- * (the id is what DELETE /api/admin/assignments/[id] needs to end it).
+ * Loads the ACTIVE assignments for ONE coach — the coach whose detail pane is
+ * open. This used to load every active assignment on the platform and ship the
+ * whole map to the browser, so every visit to this page serialized the name,
+ * email, and tier of every coached member into the HTML payload: personal data
+ * for thousands of people to render at most one coach's list, growing linearly
+ * with the roster. The roster only needs `activeClients` COUNTS (already a
+ * correlated subquery in loadCoaches); the list itself is fetched on demand,
+ * one coach at a time, via the `?coach=` param.
+ *
+ * Joins accounts to surface the client's name/email/tier alongside the
+ * assignment id (the id is what DELETE /api/admin/assignments/[id] needs).
  */
-async function loadActiveClients(): Promise<Record<string, ClientAssignment[]>> {
+async function loadActiveClientsFor(coachId: string): Promise<ClientAssignment[]> {
   const db = getDb();
   const rows = await db
     .select({
       assignmentId: coachAssignments.id,
-      coachId: coachAssignments.coachId,
       userId: accounts.id,
       email: accounts.email,
       displayName: accounts.displayName,
@@ -129,29 +138,32 @@ async function loadActiveClients(): Promise<Record<string, ClientAssignment[]>> 
     })
     .from(coachAssignments)
     .innerJoin(accounts, eq(accounts.id, coachAssignments.userId))
-    .where(eq(coachAssignments.status, 'active'))
+    .where(
+      and(eq(coachAssignments.coachId, coachId), eq(coachAssignments.status, 'active')),
+    )
     .orderBy(asc(accounts.displayName));
 
-  const byCoach: Record<string, ClientAssignment[]> = {};
-  for (const r of rows) {
-    (byCoach[r.coachId] ??= []).push({
-      assignmentId: r.assignmentId,
-      userId: r.userId,
-      email: r.email,
-      displayName: r.displayName,
-      tier: r.tier,
-      assignedAt:
-        r.assignedAt instanceof Date
-          ? r.assignedAt.toISOString()
-          : r.assignedAt
-            ? String(r.assignedAt)
-            : null,
-    });
-  }
-  return byCoach;
+  return rows.map((r) => ({
+    assignmentId: r.assignmentId,
+    userId: r.userId,
+    email: r.email,
+    displayName: r.displayName,
+    tier: r.tier,
+    assignedAt:
+      r.assignedAt instanceof Date
+        ? r.assignedAt.toISOString()
+        : r.assignedAt
+          ? String(r.assignedAt)
+          : null,
+  }));
 }
 
-export default async function AdminCoachesPage() {
+export default async function AdminCoachesPage({
+  searchParams,
+}: {
+  /** `?coach=<accountId>` selects which coach's client list to load. */
+  searchParams: Promise<{ coach?: string | string[] }>;
+}) {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
   const permissions = await effectivePermissionSet(principal);
@@ -165,11 +177,20 @@ export default async function AdminCoachesPage() {
   const canReview = permissions.has('coach.application.review');
   const canModerate = permissions.has('moderation.manage');
 
-  const [coaches, clientsByCoach, tierRequestsByCoach] = await Promise.all([
+  const [coaches, tierRequestsByCoach] = await Promise.all([
     loadCoaches(),
-    loadActiveClients(),
     loadPendingTierRequests(),
   ]);
+
+  // Resolve `?coach=` against the real roster (an unknown/absent id falls back
+  // to the first coach, matching what the roster previously highlighted). This
+  // also means an arbitrary id in the URL can never make us load assignments
+  // for an account that isn't a coach.
+  const coachParam = (await searchParams).coach;
+  const requestedCoachId = Array.isArray(coachParam) ? coachParam[0] : coachParam;
+  const selectedCoach =
+    coaches.find((c) => c.id === requestedCoachId) ?? coaches[0] ?? null;
+  const selectedClients = selectedCoach ? await loadActiveClientsFor(selectedCoach.id) : [];
 
   // Console-wide summary numbers for the stat row.
   const totalCoaches = coaches.length;
@@ -206,7 +227,8 @@ export default async function AdminCoachesPage() {
 
       <CoachRoster
         coaches={coaches}
-        clientsByCoach={clientsByCoach}
+        selectedCoachId={selectedCoach?.id ?? null}
+        selectedClients={selectedClients}
         tierRequestsByCoach={tierRequestsByCoach}
         canAssign={canAssign}
         canReview={canReview}

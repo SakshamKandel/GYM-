@@ -336,7 +336,7 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
       setCreateOpen(false);
       router.refresh();
     } catch {
-      setCreateError('Network error.');
+      setCreateError('Could not reach us just now. Try again.');
       setCreating(false);
     }
   }
@@ -390,7 +390,7 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
       setEditForm(null);
       router.refresh();
     } catch {
-      setEditError('Network error.');
+      setEditError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
@@ -429,7 +429,7 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
       setEditForm(null);
       router.refresh();
     } catch {
-      setEditError('Network error.');
+      setEditError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
@@ -553,7 +553,7 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-            Creates a new web-only login for this restaurant AND its partner row together — this is
+            Creates a new web-only login for this restaurant AND its partner row together. This is
             the only way a partner account is ever minted.
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
@@ -772,7 +772,7 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
                   ) : (
                     <>
                       <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginBottom: 8 }}>
-                        Deactivating ends every live session for this login immediately — the partner is
+                        Deactivating ends every live session for this login immediately. The partner is
                         logged out everywhere and can no longer sign in.
                       </div>
                       <ConfirmButton

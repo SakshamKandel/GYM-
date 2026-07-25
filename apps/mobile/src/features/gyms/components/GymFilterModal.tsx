@@ -1,57 +1,51 @@
-import { useState } from 'react';
-import { Modal, ScrollView, StyleSheet, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { GYM_AMENITIES, GYM_CATEGORIES } from '@gym/shared';
-import { colors, radius, spacing, touch } from '@gym/ui-tokens';
-import { AppText, Button, Chip, PressableScale, SectionLabel } from '../../../components/ui';
-import { amenityLabel } from '../amenities';
+import { useEffect, useState } from 'react';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { GYM_CATEGORIES } from '@gym/shared';
+import { colors, spacing } from '@gym/ui-tokens';
+import { AppText, Button, Chip, SectionLabel, Sheet } from '../../../components/ui';
+import { useGymDistancesKnown } from '../location';
+import { pushPath } from '../nav';
+
+/**
+ * Filters for the nearby-gyms list. Built on the shared `Sheet` so it inherits
+ * drag-to-dismiss, keyboard avoidance and the bottom system-bar clearance —
+ * "Reset all"/"Apply filters" used to sit under the Android 3-button bar.
+ *
+ * Only filters the list can actually apply live here: the list payload
+ * (`gymPublicCardSchema`) carries category and distance, but NOT amenities or
+ * opening hours, so an "Amenities"/"Open now" chip would have silently done
+ * nothing. Those belong here again once the list card carries that data.
+ *
+ * Distance is the same rule, and it is a live one: the radius chips only appear
+ * while the loaded list actually carries distances (features/gyms/location.ts).
+ * Otherwise every gym has no distance to compare, "Within 5 km" matches the
+ * whole list, and the member is left with a filter that lights up and changes
+ * nothing. In that state the section says what it needs instead, and any radius
+ * already chosen is dropped rather than left sitting there doing nothing.
+ */
 
 const RADIUS_OPTIONS = [1, 3, 5, 10, 20];
 
 const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: colors.bg,
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
-    padding: spacing.gutter,
-    gap: spacing.lg,
-    maxHeight: '85%',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  closeBtn: {
-    width: touch.min,
-    height: touch.min,
-    borderRadius: radius.full,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  scroll: { flexShrink: 1 },
+  scrollContent: { gap: spacing.lg, paddingBottom: spacing.md },
   chipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.xs,
   },
+  note: { gap: spacing.md, alignItems: 'flex-start' },
   actionsRow: {
     flexDirection: 'row',
     gap: spacing.md,
     marginTop: spacing.md,
   },
+  action: { flex: 1 },
 });
 
 export interface GymFilterState {
   radiusKm: number | null;
   category: string | null;
-  amenities: string[];
-  openNow: boolean;
 }
 
 export function GymFilterModal({
@@ -65,100 +59,86 @@ export function GymFilterModal({
   initialState: GymFilterState;
   onApply: (state: GymFilterState) => void;
 }) {
+  const distancesKnown = useGymDistancesKnown();
   const [radiusKm, setRadiusKm] = useState<number | null>(initialState.radiusKm);
   const [category, setCategory] = useState<string | null>(initialState.category);
-  const [amenities, setAmenities] = useState<string[]>(initialState.amenities);
-  const [openNow, setOpenNow] = useState<boolean>(initialState.openNow);
+  // A radius the list can no longer honour is cleared, so "Apply filters" can
+  // never send back a distance rule that quietly matches everything.
+  useEffect(() => {
+    if (!distancesKnown) setRadiusKm(null);
+  }, [distancesKnown]);
+  const appliedRadiusKm = distancesKnown ? radiusKm : null;
 
   if (!visible) return null;
-
-  function toggleAmenity(a: string) {
-    if (amenities.includes(a)) {
-      setAmenities(amenities.filter((item) => item !== a));
-    } else {
-      setAmenities([...amenities, a]);
-    }
-  }
 
   function handleReset() {
     setRadiusKm(null);
     setCategory(null);
-    setAmenities([]);
-    setOpenNow(false);
   }
 
   function handleApply() {
-    onApply({ radiusKm, category, amenities, openNow });
+    onApply({ radiusKm: appliedRadiusKm, category });
     onClose();
   }
 
+  function handleAddAddress() {
+    onClose();
+    pushPath('/addresses');
+  }
+
   return (
-    <Modal visible animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <View style={styles.sheet}>
-          <View style={styles.header}>
-            <AppText variant="title">Filter Nearby Gyms</AppText>
-            <PressableScale accessibilityRole="button" accessibilityLabel="Close filter" onPress={onClose} style={styles.closeBtn}>
-              <Ionicons name="close" size={22} color={colors.text} />
-            </PressableScale>
-          </View>
+    <Sheet visible={visible} onClose={onClose} title="Filter nearby gyms">
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+      >
+        {/* Distance radius — offered only while distances are known. */}
+        <View>
+          <SectionLabel>Distance</SectionLabel>
+          {distancesKnown ? (
+            <View style={styles.chipRow}>
+              <Chip label="Any distance" selected={radiusKm === null} onPress={() => setRadiusKm(null)} />
+              {RADIUS_OPTIONS.map((r) => (
+                <Chip key={r} label={`Within ${r} km`} selected={radiusKm === r} onPress={() => setRadiusKm(r)} />
+              ))}
+            </View>
+          ) : (
+            <View style={styles.note}>
+              <AppText variant="body" color={colors.textDim}>
+                We need somewhere to measure from before we can filter by distance. Pin one of your
+                saved addresses on the map and gyms will show how far away they are.
+              </AppText>
+              <Button label="Open saved addresses" variant="secondary" onPress={handleAddAddress} />
+            </View>
+          )}
+        </View>
 
-          <ScrollView contentContainerStyle={{ gap: spacing.lg }}>
-            {/* Open Now toggle */}
-            <View>
-              <SectionLabel>Status</SectionLabel>
-              <Chip label="Open Now Only" selected={openNow} onPress={() => setOpenNow(!openNow)} />
-            </View>
-
-            {/* Distance radius */}
-            <View>
-              <SectionLabel>Distance Radius</SectionLabel>
-              <View style={styles.chipRow}>
-                <Chip label="Any Distance" selected={radiusKm === null} onPress={() => setRadiusKm(null)} />
-                {RADIUS_OPTIONS.map((r) => (
-                  <Chip key={r} label={`Within ${r} km`} selected={radiusKm === r} onPress={() => setRadiusKm(r)} />
-                ))}
-              </View>
-            </View>
-
-            {/* Category */}
-            <View>
-              <SectionLabel>Category</SectionLabel>
-              <View style={styles.chipRow}>
-                <Chip label="All Categories" selected={category === null} onPress={() => setCategory(null)} />
-                {GYM_CATEGORIES.map((cat) => (
-                  <Chip
-                    key={cat}
-                    label={cat.replace(/_/g, ' ')}
-                    selected={category === cat}
-                    onPress={() => setCategory(cat)}
-                  />
-                ))}
-              </View>
-            </View>
-
-            {/* Amenities */}
-            <View>
-              <SectionLabel>Amenities & Facilities</SectionLabel>
-              <View style={styles.chipRow}>
-                {GYM_AMENITIES.map((a) => {
-                  const active = amenities.includes(a);
-                  return <Chip key={a} label={amenityLabel(a)} selected={active} onPress={() => toggleAmenity(a)} />;
-                })}
-              </View>
-            </View>
-          </ScrollView>
-
-          <View style={styles.actionsRow}>
-            <View style={{ flex: 1 }}>
-              <Button label="Reset All" variant="secondary" onPress={handleReset} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Button label="Apply Filters" variant="primary" onPress={handleApply} />
-            </View>
+        {/* Category */}
+        <View>
+          <SectionLabel>Category</SectionLabel>
+          <View style={styles.chipRow}>
+            <Chip label="All categories" selected={category === null} onPress={() => setCategory(null)} />
+            {GYM_CATEGORIES.map((cat) => (
+              <Chip
+                key={cat}
+                label={cat.replace(/_/g, ' ')}
+                selected={category === cat}
+                onPress={() => setCategory(cat)}
+              />
+            ))}
           </View>
         </View>
+      </ScrollView>
+
+      <View style={styles.actionsRow}>
+        <View style={styles.action}>
+          <Button label="Reset all" variant="secondary" onPress={handleReset} />
+        </View>
+        <View style={styles.action}>
+          <Button label="Apply filters" variant="primary" onPress={handleApply} />
+        </View>
       </View>
-    </Modal>
+    </Sheet>
   );
 }

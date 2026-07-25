@@ -27,7 +27,10 @@ import { useTrainingCatalog } from '../../lib/trainingCatalog';
 import { useBottomClearance } from '../../lib/systemBars';
 
 /**
- * Exercise library — 873 bundled exercises, fully offline.
+ * Exercise library. The rows come from the account's training catalog (Neon,
+ * cached on device after the first load) — nothing is bundled with the app, so
+ * signed out this list is empty by construction and the empty state asks for
+ * the account rather than pointing at a library that isn't there.
  * ?select=1 → picker mode: tapping adds to the active session and returns.
  *
  * Revamp (REVAMP-BRIEF): eyebrow + big Oswald title, pill search, pill filter
@@ -159,6 +162,8 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   emptyTitle: { marginTop: spacing.sm },
+  /** Quiet link under the signed-out empty state. Full 48dp target. */
+  emptySignIn: { minHeight: touch.min, justifyContent: 'center' },
 });
 
 /** Gap between block rows — replaces the old Divider hairline. */
@@ -444,7 +449,7 @@ export default function ExerciseLibraryScreen() {
               )}
               <AppText variant="bodyBold" center style={styles.emptyTitle}>
                 {catalogState.status === 'authRequired'
-                  ? 'Sign in for exercises'
+                  ? 'The library comes with your account'
                   : catalogState.status === 'error'
                     ? 'Catalog unavailable'
                     : catalogState.status === 'loading' || catalogState.refreshing
@@ -455,7 +460,7 @@ export default function ExerciseLibraryScreen() {
               </AppText>
               <AppText variant="body" color={colors.textDim} center>
                 {catalogState.status === 'authRequired'
-                  ? 'The exercise library comes from your coach’s live catalog.'
+                  ? 'Your coach publishes the exercises to your account. Making one is free and takes a moment.'
                   : catalogState.status === 'error'
                     ? 'Check your connection and try again.'
                     : totalCount === 0
@@ -463,7 +468,24 @@ export default function ExerciseLibraryScreen() {
                       : 'Try a different name or muscle group.'}
               </AppText>
               {catalogState.status === 'authRequired' ? (
-                <Button label="Sign in" variant="secondary" onPress={() => pushPath('/auth/sign-in')} />
+                <>
+                  <Button
+                    label="Create account"
+                    variant="secondary"
+                    onPress={() => pushPath('/auth/sign-up')}
+                  />
+                  <PressableScale
+                    accessibilityRole="button"
+                    accessibilityLabel="I already have an account"
+                    accessibilityHint="Opens sign in"
+                    onPress={() => pushPath('/auth/sign-in')}
+                    style={styles.emptySignIn}
+                  >
+                    <AppText variant="body" color={colors.accent} center>
+                      I already have an account
+                    </AppText>
+                  </PressableScale>
+                </>
               ) : catalogState.status === 'error' ? (
                 <Button label="Try again" variant="secondary" onPress={() => void catalogState.refresh()} />
               ) : null}

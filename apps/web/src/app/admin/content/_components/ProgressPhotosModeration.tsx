@@ -8,6 +8,7 @@ import {
   DataTable,
   SkeletonRows,
 } from '@/components/console';
+import { MemberLink } from '../../_components/MemberLink';
 
 /**
  * Admin moderation of member progress_photos (ADMIN-MASTER-PLAN §3 P1-9) —
@@ -29,7 +30,12 @@ interface Photo {
   account: { id: string; email: string; displayName: string };
 }
 
-export function ProgressPhotosModeration() {
+export function ProgressPhotosModeration({
+  canViewMembers,
+}: {
+  /** Viewer holds `members.read`, so member names can link to the record. */
+  canViewMembers: boolean;
+}) {
   const [photos, setPhotos] = useState<Photo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -39,7 +45,7 @@ export function ProgressPhotosModeration() {
     try {
       const res = await fetch('/api/admin/moderation/progress-photos');
       if (res.status === 503) {
-        setError('Image hosting is not configured yet.');
+        setError('Photos are switched off for this platform, so there is nothing to review.');
         setPhotos([]);
         return;
       }
@@ -50,7 +56,7 @@ export function ProgressPhotosModeration() {
       const data = (await res.json()) as { photos: Photo[] };
       setPhotos(data.photos);
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
     }
   }, []);
 
@@ -68,14 +74,14 @@ export function ProgressPhotosModeration() {
       );
       if (!res.ok) {
         setError(
-          res.status === 404 ? 'Already removed — refreshing.' : "Couldn't remove that.",
+          res.status === 404 ? 'Already removed. Refreshing.' : "Couldn't remove that.",
         );
         await load();
         return;
       }
       setPhotos((prev) => (prev ? prev.filter((p) => p.id !== row.id) : prev));
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
     } finally {
       setBusyId(null);
     }
@@ -118,9 +124,12 @@ export function ProgressPhotosModeration() {
       header: 'Member',
       render: (p) => (
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>
-            {p.account.displayName || p.account.email}
-          </div>
+          <MemberLink
+            id={p.account.id}
+            name={p.account.displayName}
+            email={p.account.email}
+            canView={canViewMembers}
+          />
           <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{p.account.email}</div>
         </div>
       ),

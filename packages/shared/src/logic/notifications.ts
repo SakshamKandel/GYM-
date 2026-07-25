@@ -31,23 +31,48 @@ export const NOTIFICATION_EVENTS = {
   order_placed_partner: 'orders',
   order_status: 'orders',
   order_cancelled_partner: 'orders',
+  /** A meal SUBSCRIPTION (not a single order) was paused/resumed/cancelled. */
+  subscription_status: 'orders',
   // Disputes / support (Pack E / Q)
   order_dispute_staff: 'support',
   support_message_staff: 'support',
   support_reply_member: 'support',
   gym_enquiry_staff: 'support',
   gym_report_staff: 'support',
+  /** A member wrote into a thread that routes to their assigned human coach —
+   * the notice the COACH receives (the member-facing counterpart is
+   * `coach_message_client`). */
   coach_message_staff: 'support',
   // Payments / payouts (Pack I / J)
   payment_request_staff: 'payments',
   payment_reviewed_member: 'payments',
   payout_status_partner: 'payments',
+  /** Coach-rail payout decision (approve/reject) → the coach. */
+  payout_status_coach: 'payments',
   // Coaching (Pack K / L)
   coach_application_staff: 'coaching',
+  /** An admin approved or rejected a coach application → the applicant. */
+  coach_application_decided: 'coaching',
   coach_message_client: 'coaching',
   coach_checkin: 'coaching',
+  coach_assigned: 'coaching',
   coach_unassigned: 'coaching',
+  /** A member asked a coach to take them on → the COACH's inbound queue. */
+  coach_request_received: 'coaching',
+  /** A coach declined an inbound request → the member. (An ACCEPT is notified
+   * as `coach_assigned`, the same event the admin-assign path uses.) */
+  coach_request_declined: 'coaching',
+  /** A pending coach request closed WITHOUT a coach decision — force-cancelled
+   * by an admin, or auto-expired by the 14-day staleness rule. (An accept /
+   * decline is the coach's own decision and is notified from that flow.) */
+  coach_request_closed: 'coaching',
   coach_milestone: 'coaching',
+  /** A coach assigned or edited one of the member's workout / diet plans. */
+  coach_plan: 'coaching',
+  /** A coach approved or adjusted a member's next progression suggestion. */
+  coach_suggestion_reviewed: 'coaching',
+  /** An admin decided a coach's seniority-tier upgrade request → the coach. */
+  coach_tier_decided: 'coaching',
   // Billing lifecycle (Pack G / J — mostly cron-driven)
   trial_expiry: 'billing',
   renewal_nudge: 'billing',
@@ -55,8 +80,20 @@ export const NOTIFICATION_EVENTS = {
   tier_payment_submitted: 'billing',
   // Engagement (Pack O / N — cron-driven)
   day2_reengage: 'engagement',
-  macro_nudge: 'engagement',
-  streak_reminder: 'engagement',
+  /** A badge landed in the member's collection (coach's pick, milestones…). */
+  badge_awarded: 'engagement',
+  /** A coach signed off a member's logged strength-club badge. */
+  badge_verified: 'engagement',
+  /**
+   * Admin announcement fan-out (POST /api/admin/broadcast). Filed under
+   * `engagement` rather than a category of its own: categories are the toggle
+   * unit members already see, so a new one would silently appear unlabelled in
+   * every prefs surface. An announcement therefore obeys the same opt-out as the
+   * other broadcast-style nudges — an operator who must reach EVERY member
+   * (incident, outage, safety) uses the existing NOTIF_PREFS_ENFORCED escape
+   * hatch that `notify()` honours; there is no per-send override.
+   */
+  broadcast: 'engagement',
 } as const satisfies Record<string, NotificationCategory>;
 
 /** The closed set of notification events every `notify()` call-site uses. */

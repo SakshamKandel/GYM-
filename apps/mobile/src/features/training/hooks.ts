@@ -11,6 +11,7 @@ import { getRepo } from '../../lib/repo';
 import type { AnalyticsSet } from '../../lib/repo/types';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
+import { useSession } from './session';
 
 /** Small data hooks — refresh on focus so tabs update after logging. */
 
@@ -46,6 +47,44 @@ export function useTrainData(planId: string): TrainData {
   );
 
   return data;
+}
+
+/**
+ * Is a workout open right now? True while the logger's store is live, and —
+ * crucially — also after a cold start, when the store is empty but the
+ * workout row is still sitting in the repo. Surfaces that live outside the
+ * logger (the tab bar's live dot) need the second case, otherwise a workout
+ * silently loses its marker the moment the app restarts.
+ *
+ * Re-reads the repo whenever the session's active-workout identity may have
+ * moved (`revision`) or the account changes, so finishing, discarding or
+ * signing out clears the marker immediately.
+ */
+export function useHasActiveWorkout(): boolean {
+  const sessionActive = useSession((s) => s.status === 'active');
+  const revision = useSession((s) => s.revision);
+  const accountId = useAuth((s) => s.user?.id ?? null);
+  const [storedActive, setStoredActive] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    void (async () => {
+      const repo = await getRepo();
+      const active = await repo.getActiveWorkout();
+      if (!mounted) return;
+      // Two reads can overlap (finish, then start). Whichever finishes last
+      // must not be the one that wins, so a stale read drops itself — same
+      // re-check-after-await guard the account-scoped stores use.
+      if (useSession.getState().revision !== revision) return;
+      if ((useAuth.getState().user?.id ?? null) !== accountId) return;
+      setStoredActive(active !== null);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [revision, accountId]);
+
+  return sessionActive || storedActive;
 }
 
 /** Wide-open lower bound — the detail screen wants all-time records. */
@@ -205,16 +244,22 @@ export function useRecentExercises(limit: number): RecentExercise[] {
  * Resolved coach-video state for an exercise. The API is the source of truth
  * for a signed, per-tier-gated stream. No bundled URL can bypass the backend.
  *
- *  - 'loading'  → still resolving.
- *  - 'ready'    → play `url` (signed, disposable) with `label`.
- *  - 'locked'   → the caller should render the paywall/upgrade affordance for
- *                 `requiredTier`.
- *  - 'none'     → no real video is available; render nothing/tease.
+ *  - 'loading'      → still resolving.
+ *  - 'ready'        → play `url` (signed, disposable) with `label`.
+ *  - 'locked'       → the caller should render the paywall/upgrade affordance
+ *                     for `requiredTier`.
+ *  - 'unavailable'  → the video host isn't set up server-side (503), so we
+ *                     genuinely can't tell whether a video exists. A member
+ *                     shouldn't read that as "no video" — the caller says the
+ *                     video is temporarily unavailable instead.
+ *  - 'none'         → no video for this exercise (or we couldn't ask); render
+ *                     nothing/tease.
  */
 export type PlanVideoState =
   | { status: 'loading' }
   | { status: 'ready'; url: string; label: string; source: 'api' }
   | { status: 'locked'; requiredTier: Tier }
+  | { status: 'unavailable' }
   | { status: 'none' };
 
 /**
@@ -256,8 +301,12 @@ export function usePlanVideo(exerciseId: string): PlanVideoState {
         case 'locked':
           setState({ status: 'locked', requiredTier: result.requiredTier });
           break;
-        case 'not_found':
+        // Provider keys absent server-side: the video may well exist, we just
+        // can't mint a stream — say so rather than implying there's nothing.
         case 'not_configured':
+          setState({ status: 'unavailable' });
+          break;
+        case 'not_found':
         case 'unavailable':
           setState({ status: 'none' });
           break;

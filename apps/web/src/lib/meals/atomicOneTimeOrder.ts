@@ -1,5 +1,6 @@
 import type { MealMacrosSnapshot } from '@gym/db';
 import { sql, type SQL } from 'drizzle-orm';
+import { pgTextArray } from './pgArray.ts';
 
 export interface AtomicOneTimeOrderItem {
   id: string;
@@ -40,8 +41,14 @@ export interface AtomicOneTimeOrderWrite {
 /**
  * Build the one-statement persistence half of a one-time order creation.
  * Callers must execute it after `partnerOperationLockSql(partnerId)` in the
- * same Neon batch transaction. Zero returned rows means the partner stopped
- * accepting orders before the write snapshot.
+ * same Neon batch transaction. Zero returned rows means the order was refused
+ * at write time: the partner stopped accepting orders, or one of the lines is
+ * flagged SOLD OUT for the requested slot.
+ *
+ * Sold-out is enforced here as well as in the caller's pre-flight because it is
+ * a live kitchen flag: a partner can flip it while a member is checking out,
+ * and this statement runs under the partner mutex, so it is the last point that
+ * can still refuse the sale rather than take money for food that is gone.
  */
 export function atomicOneTimeOrderSql(args: AtomicOneTimeOrderWrite): SQL {
   const itemPayload = JSON.stringify(
@@ -55,11 +62,21 @@ export function atomicOneTimeOrderSql(args: AtomicOneTimeOrderWrite): SQL {
     })),
   );
 
+  const mealIds = [...new Set(args.items.map((item) => item.mealId))];
+
   return sql`
     with active_partner as materialized (
       select id
       from meal_partners
       where id = ${args.partnerId} and is_active = true and accepting_orders = true
+    ),
+    sold_out_lines as materialized (
+      select slot.meal_id
+      from meal_availability slot
+      where slot.meal_id = any(${pgTextArray(mealIds)})
+        and slot.sold_out = true
+        and slot.day_of_week = extract(dow from ${args.deliveryDate}::date)::int
+        and slot.window = ${args.window}
     ),
     inserted_order as (
       insert into meal_orders (
@@ -79,6 +96,7 @@ export function atomicOneTimeOrderSql(args: AtomicOneTimeOrderWrite): SQL {
         ${args.smallOrderFeeMinor}, ${args.tipMinor}, ${args.totalMinor}, ${args.currency},
         ${args.paymentMethod}, 'unpaid', 'pending', 0, ${args.cutoffAt}
       from active_partner
+      where not exists (select 1 from sold_out_lines)
       returning id
     ),
     inserted_items as (

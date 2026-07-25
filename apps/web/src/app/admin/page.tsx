@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import {
   Card,
@@ -13,7 +14,10 @@ import {
   type Column,
 } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
+import { billingMode } from '@/lib/billing';
+import { loadPublicCatalog } from '@/lib/publicCatalog';
 import { staffFromCookie } from '@/lib/staffSession';
+import { isImageConfigured, isVideoConfigured } from '@/lib/video';
 import {
   loadOverview,
   type OverviewPerms,
@@ -30,6 +34,7 @@ import {
 } from './_overview/ui';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Overview' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -102,6 +107,103 @@ const SIGNUP_COLUMNS: Column<RecentSignup>[] = [
   },
 ];
 
+/**
+ * Parts of the platform that are switched off because this deployment is
+ * missing their setup. Server-rendered from the SAME helpers as
+ * GET /api/admin/system/config, so the card and the API can never drift.
+ *
+ * Booleans only: a key, prefix or length must never reach the page. Each entry
+ * is written for an operator, not an engineer — what stopped working first, the
+ * fix second.
+ */
+async function loadConfigIssues(): Promise<string[]> {
+  const issues: string[] = [];
+
+  if (billingMode() === 'disabled') {
+    issues.push(
+      'Paid plans are turned off. Billing keys are not set, so members cannot buy a subscription.',
+    );
+  }
+  if (!isImageConfigured()) {
+    issues.push(
+      'Photo uploads are turned off. Avatars, payment receipts and progress photos cannot be saved.',
+    );
+  }
+  if (!isVideoConfigured()) {
+    issues.push('Video uploads are turned off. Coaches cannot publish plan videos.');
+  }
+  if (
+    !process.env.CRON_SECRET?.trim() ||
+    process.env.NOTIFICATIONS_CRON_ENABLED !== 'true'
+  ) {
+    issues.push(
+      'Automatic reminders are turned off. Renewal notices, payment reminders and welcome-back nudges are not being sent.',
+    );
+  }
+
+  const catalog = await loadPublicCatalog();
+  if (!catalog.NP.available) {
+    issues.push(
+      'Nepal prices are incomplete, so the public pricing page cannot show them. Add a price for every plan under Pricing.',
+    );
+  }
+  if (!catalog.INTL.available) {
+    issues.push(
+      'International prices are incomplete, so the public pricing page cannot show them. Add a price for every plan under Pricing.',
+    );
+  }
+
+  return issues;
+}
+
+/** Compact "what is switched off" card. Renders only when something is missing. */
+function ConfigurationCard({ issues }: { issues: string[] }) {
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <Card padded={false} style={{ borderColor: 'var(--gt-warning)' }}>
+        <CardHeader
+          title="Configuration"
+          action={
+            <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+              {issues.length === 1 ? '1 thing is off' : `${issues.length} things are off`}
+            </span>
+          }
+        />
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {issues.map((issue, i) => (
+            <li
+              key={issue}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10,
+                padding: '12px 18px',
+                borderBottom: i === issues.length - 1 ? 'none' : '1px solid var(--gt-border)',
+                fontSize: 14,
+                lineHeight: 1.45,
+                color: 'var(--gt-text)',
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 999,
+                  background: 'var(--gt-warning)',
+                  flexShrink: 0,
+                  marginTop: 6,
+                }}
+              />
+              <span>{issue}</span>
+            </li>
+          ))}
+        </ul>
+      </Card>
+    </div>
+  );
+}
+
 function ActivityRow({ item, last }: { item: RecentActivity; last: boolean }) {
   return (
     <li
@@ -167,12 +269,18 @@ export default async function AdminOverviewPage() {
   const data = await loadOverview(perms);
   const { membership, recentActivity } = data;
 
+  // Setup gaps are platform-wide, so they follow the same super/main-only gate
+  // as the other whole-platform readouts (analytics.read).
+  const configIssues = permissions.has('analytics.read') ? await loadConfigIssues() : [];
+
   return (
     <div>
       <PageHeader
         title="Overview"
-        subtitle="A live snapshot of the platform — membership, coaching, and content at a glance."
+        subtitle="A live snapshot of the platform: membership, coaching, and content at a glance."
       />
+
+      {configIssues.length > 0 ? <ConfigurationCard issues={configIssues} /> : null}
 
       <OpsTiles ops={data.ops} />
 

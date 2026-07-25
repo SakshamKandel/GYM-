@@ -76,7 +76,21 @@ export interface AdminOrderFilters {
    * (B14 — matched server-side against the FULL table, not just the already-
    * fetched page). */
   q?: string;
+  /** Row ceiling; defaults to ADMIN_ORDERS_PAGE_SIZE. Additive — every existing
+   * caller (incl. GET /api/admin/orders) omits it and keeps the same cap. */
+  limit?: number;
 }
+
+/**
+ * Hard ceiling on how many orders one load returns. The board is a working
+ * queue, not an archive, but a silent cut is still a lie: a truncated board
+ * looks exactly like a complete one, so the UI must SAY it truncated and point
+ * the operator at the filters (date / partner / status / scope / search) that
+ * bring the dropped rows back into range. Exported so the page can hand the
+ * number to the client component — `_data.ts` is server-only and must never be
+ * value-imported from a 'use client' module.
+ */
+export const ADMIN_ORDERS_PAGE_SIZE = 300;
 
 /** All-partner order oversight (§3/§7 "filters by date/partner/status"). */
 export async function loadAdminOrders(
@@ -117,7 +131,7 @@ export async function loadAdminOrders(
     .leftJoin(savedAddresses, eq(savedAddresses.id, mealOrders.addressId))
     .where(predicates.length > 0 ? and(...predicates) : undefined)
     .orderBy(desc(mealOrders.placedAt))
-    .limit(300);
+    .limit(filters.limit ?? ADMIN_ORDERS_PAGE_SIZE);
 
   if (rows.length === 0) return [];
 

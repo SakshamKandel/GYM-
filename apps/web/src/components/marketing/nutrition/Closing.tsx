@@ -18,7 +18,7 @@ export function MealsCrossSell() {
           <Reveal>
             <Display size="md">Too busy to cook?</Display>
             <p className="mt-3 max-w-xl text-[16px] leading-relaxed text-ink/75">
-              Macro-counted meals from partner kitchens, delivered across Kathmandu valley —
+              Macro-counted meals from partner kitchens, delivered across Kathmandu valley,
               and every GM Meals order logs itself to your food diary.
             </p>
           </Reveal>
@@ -59,7 +59,7 @@ const LINKS = [
     n: '01',
     title: 'Training',
     href: '/training',
-    blurb: 'Coach-built plans and a gym mode that flows set to set — the other half of the equation.',
+    blurb: 'Coach-built plans and a gym mode that flows set to set, the other half of the equation.',
   },
   {
     n: '02',
@@ -133,7 +133,7 @@ export function NutritionClosing() {
           </Reveal>
           <Reveal delay={160}>
             <p className="mx-auto mt-6 max-w-xl text-[17px] leading-relaxed text-cream-dim">
-              Barcode scan, two-database search, computed targets and water tracking — all of
+              Barcode scan, two-database search, computed targets and water tracking, all of
               it offline-first, none of it behind an ad.
             </p>
           </Reveal>
@@ -144,7 +144,7 @@ export function NutritionClosing() {
             </PillLink>
           </Reveal>
           <Reveal delay={320}>
-            <p className="mt-8 font-mono text-[11.5px] uppercase tracking-[0.2em] text-cream-dim">
+            <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-cream-dim">
               iOS · Android · Offline-first
             </p>
           </Reveal>

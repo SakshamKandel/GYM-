@@ -4,7 +4,14 @@ import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { displayWeight, hasEntitlement, unitLabel, type PlanWorkout, type Tier } from '@gym/shared';
+import {
+  displayWeight,
+  hasEntitlement,
+  unitLabel,
+  type PlanWorkout,
+  type Tier,
+  type WorkoutLog,
+} from '@gym/shared';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AITipCard,
@@ -43,6 +50,7 @@ import {
   weightHeadline,
 } from '../../features/body/logic';
 import { CheckInCard } from '../../features/checkin/components/CheckInCard';
+import { isSessionStale, sessionAgeLabel } from '../../features/training/logic';
 import { FirstWorkoutsQuest } from '../../features/engagement/components/FirstWorkoutsQuest';
 import {
   PrDetail,
@@ -146,6 +154,7 @@ const styles = StyleSheet.create({
   tileCell: { flex: 1 },
   tileWide: { marginBottom: spacing.md },
   tipCard: { marginBottom: spacing.md },
+  tipNote: { marginTop: spacing.xs, paddingHorizontal: spacing.xs },
   // Last-session zone: gap-separated rounded charcoal rows replace Divider
   // hairlines (brief §11c).
   rowStack: { gap: spacing.sm },
@@ -211,28 +220,62 @@ function nextWorkoutMuscle(workout: PlanWorkout | null): MuscleGroup | null {
 /**
  * Hero block — the screen's single energetic center, now a Train-style
  * photographic hero (dark stock photo + scrim + red chip → Oswald title →
- * dim caption → one red pill CTA). Three states share the PhotoHero geometry:
- * done (celebratory), no-plan (inviting), and next-workout (energetic, photo
- * varied by muscle focus). The photo is decorative; chip/title/caption/CTA
- * carry the meaning.
+ * dim caption → one red pill CTA). Four states share the PhotoHero geometry:
+ * in-progress (resume), done (celebratory), no-plan (inviting), and
+ * next-workout (energetic, photo varied by muscle focus). The photo is
+ * decorative; chip/title/caption/CTA carry the meaning.
  */
 const Hero = memo(function Hero({
   planName,
   nextWorkout,
+  activeWorkout,
   doneToday,
   volume,
   unit,
   muscle,
+  signedOut,
 }: {
   planName: string | null;
   nextWorkout: PlanWorkout | null;
+  /** An open session — outranks every other state (see below). */
+  activeWorkout: WorkoutLog | null;
   doneToday: DoneToday | null;
   /** Done-state volume, already converted to the display unit. */
   volume: number;
   unit: string;
   /** Next-workout muscle focus — drives the energetic photo. */
   muscle: MuscleGroup | null;
+  /**
+   * No account yet. Programs and exercises are published to the account, so
+   * "Choose a program" would push the member to a Train tab with nothing to
+   * choose from — the loop this state exists to break.
+   */
+  signedOut: boolean;
 }) {
+  // An open workout wins over everything: "Start workout" here would land on
+  // /workout/start, which resumes the live session anyway — so the button
+  // would lie about what it does. Say Resume and go straight to the logger,
+  // exactly like the Train tab's hero. (Same treatment for a stale session:
+  // /workout/start is where the keep-or-start-fresh choice is offered.)
+  if (activeWorkout !== null) {
+    const stale = isSessionStale(activeWorkout.startedAt);
+    return (
+      <PhotoHero
+        source={homeHeroImage('next', null, activeWorkout.name)}
+        recyclingKey="home-hero-active"
+        accessibilityLabel="Training photo"
+        chip={{ label: 'In progress' }}
+        title={activeWorkout.name}
+        caption={
+          stale
+            ? `Left open ${sessionAgeLabel(activeWorkout.startedAt)} ago`
+            : 'Pick up where you left off'
+        }
+        cta={{ label: 'Resume workout', onPress: () => router.push(toHref('/workout')) }}
+      />
+    );
+  }
+
   if (doneToday !== null) {
     return (
       <PhotoHero
@@ -256,15 +299,28 @@ const Hero = memo(function Hero({
   }
 
   if (nextWorkout === null) {
-    return (
+    return signedOut ? (
+      <PhotoHero
+        source={homeHeroImage('noPlan', null)}
+        recyclingKey="home-hero-noaccount"
+        accessibilityLabel="A calm, empty gym"
+        chip={{ label: 'Next workout' }}
+        title="Your program needs an account"
+        caption="Programs and the exercise library come with your free account."
+        cta={{
+          label: 'Create account',
+          onPress: () => router.push(toHref('/auth/sign-up')),
+        }}
+      />
+    ) : (
       <PhotoHero
         source={homeHeroImage('noPlan', null)}
         recyclingKey="home-hero-noplan"
         accessibilityLabel="A calm, empty gym"
         chip={{ label: 'Next workout' }}
-        title="No plan yet"
-        caption="Pick a plan to get your next workout here."
-        cta={{ label: 'Choose a plan', onPress: () => router.push('/(tabs)/train') }}
+        title="No program yet"
+        caption="Pick a training program to get your next workout here."
+        cta={{ label: 'Choose a program', onPress: () => router.push('/(tabs)/train') }}
       />
     );
   }
@@ -422,11 +478,18 @@ export default function HomeScreen() {
   const goalType = useProfile((s) => s.goalType);
   const startWeightKg = useProfile((s) => s.startWeightKg);
   const targetWeightKg = useProfile((s) => s.targetWeightKg);
+  // Height rides along with the coach tip so the server can sanity-check the
+  // goal weight before it coaches anyone towards it.
+  const heightCm = useProfile((s) => s.heightCm);
   // Server-authoritative tier for the greeting ring and coach-chat gate —
   // never useProfile.tier (local upgrade-only mirror, known to drift above
   // the server's value, which would route downgraded users into a dead-end).
   const serverTier = useAuth((s) => s.user?.tier ?? 'starter');
   const accountId = useAuth((s) => s.user?.id ?? null);
+  // No account = no published programs or exercises to reach (the catalog is
+  // read per account), so the hero and the copy below must not send anyone
+  // looking for them in Train.
+  const signedOut = useAuth((s) => s.status === 'signedOut');
   const targets = useProfile((s) => s.targets);
   const nutrition = useNutritionDay(todayIso());
   const totals = sumDayTotals(nutrition.logs);
@@ -495,19 +558,25 @@ export default function HomeScreen() {
     () =>
       data === null
         ? null
-        : data.doneToday !== null
-          ? homeHeroImageKey('done', null)
-          : data.nextWorkout === null
-            ? homeHeroImageKey('noPlan', null)
-            : homeHeroImageKey('next', heroMuscle, data.nextWorkout.name),
+        : data.activeWorkout !== null
+          ? homeHeroImageKey('next', null, data.activeWorkout.name)
+          : data.doneToday !== null
+            ? homeHeroImageKey('done', null)
+            : data.nextWorkout === null
+              ? homeHeroImageKey('noPlan', null)
+              : homeHeroImageKey('next', heroMuscle, data.nextWorkout.name),
     [data, heroMuscle],
   );
   const showQuest = quest !== null && !quest.expired && !questDismissed;
-  const todayDescription = data?.doneToday
-    ? 'You showed up today. Keep the momentum going with one clear next step.'
-    : data?.nextWorkout
-      ? `${data.nextWorkout.name} is ready. Everything you need for today is below.`
-      : 'Set your plan, then let this screen keep your next move obvious.';
+  const todayDescription = data?.activeWorkout
+    ? 'Your workout is still open. Pick it back up whenever you are ready.'
+    : data?.doneToday
+      ? 'You showed up today. Keep the momentum going with one clear next step.'
+      : data?.nextWorkout
+        ? `${data.nextWorkout.name} is ready. Everything you need for today is below.`
+        : signedOut
+          ? 'Food, water and weight are ready to log right now. Your programs arrive with your free account.'
+          : 'Set your training program, then let this screen keep your next move obvious.';
   const sessionsThisWeek = data?.weekSessions ?? 0;
 
   // Stable nav handlers so the memoized report/weight cards don't re-render
@@ -515,27 +584,55 @@ export default function HomeScreen() {
   const openProgress = useCallback(() => router.push('/(tabs)/progress'), []);
   const logWeight = useCallback(() => router.push(toHref('/body/log-weight')), []);
 
-  const { state: tipState, refresh } = useAiTip(() => {
-    const streak = weeklyStreak?.weeks ?? 0;
-    const weekSessions = data?.weekSessions ?? 0;
-    const goal = goalType ?? 'muscle';
-    const bodyWeight =
-      startWeightKg != null ? `${displayWeight(startWeightKg, unitPref)} ${unit}` : 'unknown';
-    const goalWeight =
-      targetWeightKg != null ? `${displayWeight(targetWeightKg, unitPref)} ${unit}` : 'unset';
+  // Days since the last finished session, so the tip can speak to a quiet
+  // week without the model having to guess at a date.
+  const daysSinceLastSession = useMemo(() => {
+    const date = data?.lastSession?.date;
+    if (date === undefined) return null;
+    const days = Math.round(
+      (new Date(todayIso()).getTime() - new Date(date).getTime()) / 86_400_000,
+    );
+    return Number.isFinite(days) ? Math.max(0, Math.min(3650, days)) : null;
+  }, [data?.lastSession?.date]);
 
-    return [
-      {
-        role: 'system' as const,
-        content:
-          "You are an energetic gym coach who shares ONE surprising, TRUE fitness fact each time — fascinating, motivating, and specific. Whenever you can, tie the fact to the athlete's bodyweight or goal (e.g. calories a body their size burns, how much muscle they carry, strength-to-bodyweight feats, what moving their bodyweight achieves). Keep it under 35 words, upbeat, and always a fresh, different fact. No medical, diet, or weight-loss advice — keep it fun, factual, and about training and the body.",
+  // Closed payload: numbers and enums only, never prose. The prompt lives on
+  // the server; this screen just hands over what it already has on show.
+  const { state: tipState, refresh } = useAiTip(
+    () => ({
+      kind: 'home' as const,
+      context: {
+        goalType: goalType ?? null,
+        unitPref,
+        bodyweightKg: headline.trendKg ?? startWeightKg ?? null,
+        goalWeightKg: targetWeightKg ?? null,
+        heightCm: heightCm ?? null,
+        trendDirection: headline.trendKg === null ? null : headline.summary.direction,
+        ratePerWeekKg: headline.trendKg === null ? null : headline.summary.ratePerWeekKg,
+        sessionsThisWeek: data?.weekSessions ?? null,
+        streakWeeks: weeklyStreak?.weeks ?? null,
+        daysSinceLastSession,
+        weekVolumeKg: data?.weekVolumeKg ?? null,
+        personalBestsLast30Days: data?.prCount ?? null,
+        trainedToday: data === null ? null : data.doneToday !== null,
       },
-      {
-        role: 'user' as const,
-        content: `My bodyweight is ${bodyWeight}. Goal weight: ${goalWeight}. Goal: ${goal}. This week: ${weekSessions} sessions, ${streak}-week streak. Share one amazing fitness fact, tied to my bodyweight or training when you can.`,
-      },
-    ];
-  }, [weeklyStreak?.weeks, data?.weekSessions, goalType, startWeightKg, targetWeightKg, unitPref, unit]);
+    }),
+    [
+      weeklyStreak?.weeks,
+      data?.weekSessions,
+      data?.weekVolumeKg,
+      data?.prCount,
+      data?.doneToday,
+      daysSinceLastSession,
+      goalType,
+      headline.trendKg,
+      headline.summary.direction,
+      headline.summary.ratePerWeekKg,
+      startWeightKg,
+      targetWeightKg,
+      heightCm,
+      unitPref,
+    ],
+  );
 
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
@@ -568,7 +665,7 @@ export default function HomeScreen() {
           The old CommandHeader content survives: badge → eyebrow, poster date
           + sessions status → chips, description → the dim line below. */}
       <ScreenHeader
-        eyebrow={data?.doneToday ? 'Done' : 'Focus'}
+        eyebrow={data?.activeWorkout ? 'In progress' : data?.doneToday ? 'Done' : 'Focus'}
         title="Today"
         meta={
           <>
@@ -604,10 +701,12 @@ export default function HomeScreen() {
             <Hero
               planName={data.planName}
               nextWorkout={data.nextWorkout}
+              activeWorkout={data.activeWorkout}
               doneToday={data.doneToday}
               volume={displayWeight(data.doneToday?.volumeKg ?? 0, unitPref)}
               unit={unit}
               muscle={heroMuscle}
+              signedOut={signedOut}
             />
           </Animated.View>
 
@@ -766,6 +865,13 @@ export default function HomeScreen() {
               error={tipState.status === 'error'}
               onRefresh={refresh}
             />
+            {/* Say where the words came from, and only when they really are
+                the AI coach's. Our own safety note is not captioned as one. */}
+            {tipState.status === 'done' && tipState.source === 'coach' ? (
+              <AppText variant="caption" style={styles.tipNote}>
+                Written by an AI coach from your training numbers.
+              </AppText>
+            ) : null}
           </Animated.View>
 
           {last !== null ? (

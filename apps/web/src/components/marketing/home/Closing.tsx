@@ -1,74 +1,17 @@
 'use client';
 
 /**
- * Home closing v3 — testimonials on paper, then the dark cinematic CTA band:
- * full-bleed barbell photo with a slow scroll parallax and a masked headline.
+ * Home closing — the dark cinematic CTA band: full-bleed barbell photo with a
+ * slow scroll parallax and a masked headline.
+ *
+ * There is no testimonials section here on purpose: we don't have real,
+ * attributable member quotes yet, and made-up ones are not an option. When
+ * members give us quotes we can name, this is where they go.
  */
 import { motion, useScroll, useTransform } from 'motion/react';
 import { useRef } from 'react';
-import { Magnetic, Reveal, Stagger, StaggerItem, WordStagger } from '../motion';
-import { Container, Display, Eyebrow, PillLink, Section } from '../ui';
-
-const QUOTES = [
-  {
-    quote:
-      'The rest timer starting by itself sounds tiny until you realise you never touch your phone between sets anymore.',
-    name: 'Prakash',
-    meta: 'Member · Lalitpur',
-  },
-  {
-    quote:
-      'My coach adjusted my plan the same evening I flagged a shoulder niggle. That’s the difference between an app and a coach.',
-    name: 'Sneha',
-    meta: 'Gold member · Kathmandu',
-  },
-  {
-    quote:
-      'I stopped guessing dinner. Macro-counted dal bhat shows up, I log nothing, the rings just fill.',
-    name: 'Dawa',
-    meta: 'Meals subscriber · Bhaktapur',
-  },
-] as const;
-
-export function Testimonials() {
-  return (
-    <Section tone="paper" id="reviews">
-      <Container wide>
-        <Reveal>
-          <Eyebrow tone="light">From the floor</Eyebrow>
-          <Display className="mt-4">People keep showing up.</Display>
-        </Reveal>
-        <Stagger className="mt-14 grid gap-4 md:grid-cols-3" gap={0.1}>
-          {QUOTES.map((q) => (
-            <StaggerItem key={q.name}>
-              <figure className="mkt-card-light mkt-card-light-hover flex min-h-[260px] flex-col justify-between rounded-block p-7">
-                <div>
-                  <span aria-hidden className="font-display text-5xl leading-none text-red">
-                    &ldquo;
-                  </span>
-                  <blockquote className="mt-3 text-[16px] leading-relaxed text-ink">
-                    {q.quote}
-                  </blockquote>
-                </div>
-                <figcaption className="mt-8 flex items-center gap-3">
-                  <span className="flex size-10 items-center justify-center rounded-full bg-red font-display text-[16px] font-medium text-ink">
-                    {q.name[0]}
-                  </span>
-                  <span>
-                    <span className="block text-[14px] font-semibold text-ink">{q.name}</span>
-                    <span className="block font-mono text-[11px] uppercase tracking-[0.14em] text-gravel-faint">
-                      {q.meta}
-                    </span>
-                  </span>
-                </figcaption>
-              </figure>
-            </StaggerItem>
-          ))}
-        </Stagger>
-      </Container>
-    </Section>
-  );
-}
+import { Magnetic, Reveal, WordStagger } from '../motion';
+import { Container, Eyebrow, PillLink } from '../ui';
 
 export function CtaBand() {
   const ref = useRef<HTMLElement | null>(null);

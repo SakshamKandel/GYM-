@@ -15,7 +15,7 @@ export function GymsInterlude() {
           <PhotoBlock
             src="/stock/gym-dumbbells.jpg"
             alt="Rows of dumbbells lined up on a rack in a well-lit gym"
-            caption="Pick your floor — then go lift on it"
+            caption="Pick your floor, then go lift on it"
             className="aspect-[16/9] w-full sm:aspect-[21/9]"
           />
         </Reveal>

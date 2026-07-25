@@ -275,7 +275,7 @@ export function PartnerDashboardOverview({
               <div className={styles.insightHint}>active items available to members</div>
             </div>
             <div className={styles.insightItem}>
-              <div className={styles.insightLabel}>COD in queue</div>
+              <div className={styles.insightLabel}>Cash still to collect</div>
               <div className={styles.insightValue}>{formatMoney(codExposureMinor, currency)}</div>
               <div className={styles.insightHint}>
                 {codOrders.length} cash {codOrders.length === 1 ? 'order' : 'orders'} to collect

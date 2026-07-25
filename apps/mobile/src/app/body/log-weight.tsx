@@ -162,7 +162,7 @@ export default function LogWeightScreen() {
           <>
             {error ? (
               <AppText variant="caption" color={colors.error} center style={styles.error}>
-                {"Couldn't save — please try again."}
+                {"Couldn't save. Please try again."}
               </AppText>
             ) : null}
             <Button

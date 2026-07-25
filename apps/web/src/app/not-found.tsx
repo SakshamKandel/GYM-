@@ -112,7 +112,7 @@ export default function NotFound() {
 
       {/* ------- Nav */}
       <header className="relative z-20 flex items-center justify-between px-4 py-4 sm:px-6 sm:py-5 md:px-12">
-        <Link href="/" className="flex items-center gap-2" aria-label="The GM Method — home">
+        <Link href="/" className="flex items-center gap-2" aria-label="The GM Method home">
           <GmMark />
           <span className="ml-1 text-lg font-bold text-ink sm:text-xl">The GM Method</span>
         </Link>
@@ -214,7 +214,7 @@ export default function NotFound() {
       {/* ------- Bottom content */}
       <div className="relative z-30 mt-auto flex flex-col items-center px-4 pb-8 text-center sm:pb-16">
         <h1 className="mb-3 text-lg font-medium text-ink sm:mb-4 sm:text-xl md:text-2xl">
-          Oops — that page didn&rsquo;t make the cut.
+          Oops. That page didn&rsquo;t make the cut.
         </h1>
         <Link
           href="/"

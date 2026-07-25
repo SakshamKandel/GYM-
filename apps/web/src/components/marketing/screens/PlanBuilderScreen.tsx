@@ -104,7 +104,7 @@ export function PlanBuilderScreen() {
         <BlockCard tone="charcoal" className="mt-0.5">
           <div className="flex items-baseline justify-between">
             <span className="text-[14px] font-semibold">
-              {split.day} — {split.name}
+              {split.day} · {split.name}
             </span>
             <span className="font-display text-[11.5px] uppercase tracking-[0.12em] text-dim">
               {split.mins}

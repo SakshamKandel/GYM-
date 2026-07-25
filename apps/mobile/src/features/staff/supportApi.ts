@@ -137,7 +137,7 @@ async function supportRequest(opts: SupportRequestOptions): Promise<unknown> {
       SUPPORT_REQUEST_TIMEOUT_MS,
     );
   } catch {
-    throw new SupportApiError('network', "Can't reach the server");
+    throw new SupportApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   if (res.ok) {

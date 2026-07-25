@@ -23,7 +23,10 @@ const styles = StyleSheet.create({
   row: { gap: spacing.sm, paddingVertical: spacing.xs },
   cell: {
     width: 56,
-    height: 84,
+    // minHeight, not height — a large font scale grows the date/day lines and
+    // a fixed height would clip the day name.
+    minHeight: 84,
+    paddingVertical: spacing.sm,
     borderRadius: radius.full,
     alignItems: 'center',
     justifyContent: 'center',

@@ -101,7 +101,7 @@ export function MembershipCardVisual({ initialTier = 'gold' }: { initialTier?: C
           style={cardStyle}
           className="relative aspect-[1.586] w-full overflow-hidden rounded-[24px] shadow-pop will-change-transform"
           role="img"
-          aria-label={`GM Method membership card in the ${tier} metal`}
+          aria-label={`GM Method membership card in the ${TIERS.find((t) => t.tier === tier)?.label ?? 'Starter'} metal`}
         >
           {/* Brushed-metal grain */}
           <div

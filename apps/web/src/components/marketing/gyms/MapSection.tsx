@@ -18,7 +18,7 @@ export function MapSection() {
         <div className="grid items-center gap-14 lg:grid-cols-[0.85fr_1.15fr]">
           <div>
             <Reveal>
-              <Eyebrow>02 — The map</Eyebrow>
+              <Eyebrow>02 · The map</Eyebrow>
               <Display flavor="steel" className="mt-4">
                 Near home.
                 <br />
@@ -29,7 +29,7 @@ export function MapSection() {
               <Lead className="mt-6">
                 The best gym is the one you can actually reach. Listings sort by distance
                 from where you are, show what&rsquo;s open right now, and hand the pin
-                straight to your maps app — so the decision takes a minute, not a week.
+                straight to your maps app, so the decision takes a minute, not a week.
               </Lead>
             </Reveal>
             <Reveal delay={140} className="mt-8 flex flex-wrap gap-2.5">

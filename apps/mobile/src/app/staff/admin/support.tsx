@@ -54,6 +54,18 @@ function threadAssignee(row: SupportThreadRow): string | null {
 }
 
 /**
+ * Does this ticket belong in the Open queue? Status OR unread — a member
+ * replying to a resolved ticket reopens it server-side, but the reply itself is
+ * the work signal, so an unread inbound message keeps the ticket in the queue
+ * even if its lifecycle row lags (or was never written). Without the unread
+ * clause a follow-up on a closed ticket sat invisible behind the Resolved
+ * filter forever. Mirrors the web console's inOpenQueue exactly.
+ */
+function inOpenQueue(row: SupportThreadRow): boolean {
+  return threadStatus(row) !== 'resolved' || row.unread > 0;
+}
+
+/**
  * Admin · Support — every account with a support ticket (SCALE-UP-PLAN §4.4).
  * A flat list, unread-first (server-sorted), opens a bottom Sheet with the
  * full thread (chat bubbles, client-side mirroring the coach console's
@@ -64,7 +76,7 @@ function threadAssignee(row: SupportThreadRow): string | null {
 const MAX_LEN = 2000;
 
 function loadErrorLine(code: SupportErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   return "Couldn't load the inbox.";
 }
@@ -72,7 +84,7 @@ function loadErrorLine(code: SupportErrorCode): string {
 function sendErrorLine(code: SupportErrorCode): string {
   if (code === 'forbidden') return "You don't have permission to reply.";
   if (code === 'invalid') return 'That message is too long to send.';
-  return "Couldn't send — check your connection and try again.";
+  return "Couldn't send. Check your connection and try again.";
 }
 
 /** Short relative age ("3m", "2h", "5d") with an absolute fallback. */
@@ -171,9 +183,12 @@ export default function AdminSupportScreen() {
 
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
-      if (filter === 'resolved') return threadStatus(r) === 'resolved';
+      // Resolved is the exact complement of Open, so the two filters stay a
+      // partition: a resolved ticket with an unread member reply is waiting on
+      // staff, so it shows under Open and not here.
+      if (filter === 'resolved') return !inOpenQueue(r);
       if (filter === 'mine') return threadAssignee(r) === myAccountId && myAccountId !== null;
-      return threadStatus(r) !== 'resolved';
+      return inOpenQueue(r);
     });
   }, [rows, filter, myAccountId]);
 

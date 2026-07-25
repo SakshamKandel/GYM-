@@ -138,9 +138,15 @@ export function useFavoriteFoods(limit: number): {
 
   const toggle = useCallback(
     async (item: FoodItem) => {
-      const repo = await getRepo();
-      await repo.toggleFavoriteFood(item.id);
-      await refresh();
+      try {
+        const repo = await getRepo();
+        await repo.toggleFavoriteFood(item.id);
+        await refresh();
+      } catch {
+        // Never let a tap on the star throw (callers fire-and-forget it).
+        // Best effort: re-read what actually persisted so the star can't lie.
+        await refresh().catch(() => undefined);
+      }
     },
     [refresh],
   );

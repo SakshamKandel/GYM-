@@ -50,7 +50,7 @@ export function CoachRequestsOversight() {
       const data = (await res.json()) as { requests: OversightRequest[] };
       setRequests(data.requests);
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
     }
   }, []);
 
@@ -73,7 +73,7 @@ export function CoachRequestsOversight() {
       if (!res.ok) {
         setError(
           res.status === 404
-            ? 'Already decided — refreshing.'
+            ? 'Already decided. Refreshing.'
             : "Couldn't cancel that request.",
         );
         await load();
@@ -81,7 +81,7 @@ export function CoachRequestsOversight() {
       }
       setRequests((prev) => (prev ? prev.filter((r) => r.id !== row.id) : prev));
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
     } finally {
       setBusyId(null);
     }

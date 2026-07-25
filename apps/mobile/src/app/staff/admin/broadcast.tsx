@@ -52,9 +52,9 @@ const TITLE_MAX = 120;
 const BODY_MAX = 500;
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
-  if (code === 'not_configured') return 'Push is not configured on the server — no broadcast was sent.';
+  if (code === 'not_configured') return 'Push is not configured on the server, so no broadcast was sent.';
   return "Couldn't reach the server.";
 }
 
@@ -115,7 +115,7 @@ function HistoryRow({ entry }: { entry: BroadcastHistoryEntry }) {
       </AppText>
       {entry.truncated ? (
         <AppText variant="caption" color={colors.warning}>
-          Audience exceeded the send cap — only the first {entry.devices.toLocaleString()} devices
+          Audience exceeded the send cap. Only the first {entry.devices.toLocaleString()} devices
           were reached.
         </AppText>
       ) : null}
@@ -277,7 +277,7 @@ export default function AdminBroadcastScreen() {
           <AppTextInput
             value={body}
             onChangeText={setBody}
-            placeholder="Keep it short — this shows as a push notification."
+            placeholder="Keep it short. This shows as a push notification."
             multiline
             maxLength={BODY_MAX}
             editable={!sending}

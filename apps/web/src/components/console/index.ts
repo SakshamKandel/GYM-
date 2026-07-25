@@ -5,8 +5,8 @@
  * Server-component friendly: PageHeader, Card, CardHeader, StatTile, Badge,
  * TierChip, StatusChip, TierBadge, DataTable, TableThumb, SkeletonBar,
  * SkeletonRows, EmptyState, Toolbar, ChartCard, GaugeArc, HeatGrid.
- * Client ('use client'): Button, TextField, SearchField, Drawer, Modal,
- * ConfirmButton, ConsoleShell, SidebarNav, TopBar.
+ * Client ('use client'): Button, FilterPill, FilterPills, TextField,
+ * SearchField, Drawer, Modal, ConfirmButton, ConsoleShell, SidebarNav, TopBar.
  */
 export { PageHeader } from './PageHeader';
 export { Card, CardHeader } from './Card';
@@ -14,6 +14,7 @@ export { StatTile } from './StatTile';
 export { Badge, TierChip, StatusChip } from './Badge';
 export { TierBadge } from './TierBadge';
 export { Button } from './Button';
+export { FilterPill, FilterPills } from './FilterPill';
 export { TextField, SearchField } from './TextField';
 export { DataTable, TableThumb } from './DataTable';
 export type { Column } from './DataTable';

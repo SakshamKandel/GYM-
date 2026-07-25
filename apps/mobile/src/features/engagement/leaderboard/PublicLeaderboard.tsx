@@ -49,8 +49,8 @@ export function PublicLeaderboard({ rows, me, month, final = false }: Props) {
         <Ionicons name="podium-outline" size={32} color={colors.textFaint} />
         <AppText variant="caption" center style={styles.emptyText}>
           {final
-            ? `No ranked sessions in ${monthLabel(month)} — the board was empty that month.`
-            : `No ranked sessions yet in ${monthLabel(month)} — first session puts you on the board.`}
+            ? `No ranked sessions in ${monthLabel(month)} . The board was empty that month.`
+            : `No ranked sessions yet in ${monthLabel(month)} . Your first session puts you on the board.`}
         </AppText>
       </View>
     );
@@ -65,8 +65,8 @@ export function PublicLeaderboard({ rows, me, month, final = false }: Props) {
     <View style={styles.list}>
       <AppText variant="caption" style={styles.hint}>
         {final
-          ? `${monthLabel(month)} final standings — session-days, one per day.`
-          : `Session-days in ${monthLabel(month)} — one per day, whole gym.`}
+          ? `${monthLabel(month)} final standings. Session-days, one per day.`
+          : `Session-days in ${monthLabel(month)} . One per day, whole gym.`}
       </AppText>
 
       {rows.map((row) => (
@@ -127,7 +127,7 @@ export function PublicLeaderboard({ rows, me, month, final = false }: Props) {
           </View>
           <View style={styles.info}>
             <AppText variant="bodyBold" color={colors.onBlock}>
-              You — {ordinalLabel(me.position)} · {me.sessionDays} session
+              You · {ordinalLabel(me.position)} · {me.sessionDays} session
               {me.sessionDays === 1 ? '' : 's'}
             </AppText>
           </View>

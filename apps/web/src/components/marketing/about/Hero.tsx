@@ -14,7 +14,7 @@ export function AboutHero() {
         <div className="grid items-end gap-14 lg:grid-cols-[1.05fr_0.95fr]">
           <div>
             <Reveal>
-              <Eyebrow tone="light">About — The GM Method</Eyebrow>
+              <Eyebrow tone="light">About · The GM Method</Eyebrow>
             </Reveal>
             <Reveal delay={80}>
               <Display as="h1" size="xl" className="mt-5 text-ink">
@@ -26,7 +26,7 @@ export function AboutHero() {
             <Reveal delay={160}>
               <Lead tone="light" className="mt-7">
                 We&rsquo;re coaches and engineers who got tired of juggling four apps and a
-                chat thread. So we built one calm place to train, eat and keep going — for
+                chat thread. So we built one calm place to train, eat and keep going, for
                 Nepal first, the world second.
               </Lead>
             </Reveal>

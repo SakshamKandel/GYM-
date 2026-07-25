@@ -45,13 +45,13 @@ function WritePathCard() {
               </div>
               <div className="pb-6">
                 <p
-                  className={`text-[15px] font-semibold leading-7 transition-colors duration-300 ${
+                  className={`text-[16px] font-semibold leading-7 transition-colors duration-300 ${
                     on ? 'text-snow' : 'text-faint'
                   }`}
                 >
                   {s.title}
                 </p>
-                <p className="text-[12px] text-dim">
+                <p className="text-[14.5px] text-dim">
                   {s.caption}
                 </p>
               </div>
@@ -61,10 +61,10 @@ function WritePathCard() {
       </div>
       <div className="mkt-divider" />
       <div className="mt-5 flex items-center justify-between gap-4">
-        <p className="text-[13px] leading-relaxed text-dim">
+        <p className="text-[14.5px] leading-relaxed text-dim">
           Personal Record (PR) detection highlights your biggest milestones in real time.
         </p>
-        <span className="shrink-0 rounded-full bg-red px-3.5 py-1.5 font-display text-[13px] font-medium text-ink">
+        <span className="shrink-0 rounded-full bg-red px-3.5 py-1.5 font-display text-[14.5px] font-medium text-ink">
           80 KG × 5
         </span>
       </div>
@@ -85,7 +85,7 @@ export function OfflinePrSection() {
                 for signal.
               </Display>
               <Lead tone="red" className="mt-6">
-                Basement gym, dead zone, airplane mode — doesn&rsquo;t matter. Every
+                Basement gym, dead zone, airplane mode: none of it matters. Every
                 set is saved on your phone instantly and syncs to the cloud whenever
                 you have signal. You never wait on a loading spinner.
               </Lead>
@@ -96,7 +96,7 @@ export function OfflinePrSection() {
                   Every set is logged instantly on your phone with zero delay
                 </CheckItem>
                 <CheckItem tone="red">
-                  Automatic background sync saves your workout history securely
+                  Your history is saved to your account as soon as you have signal
                 </CheckItem>
                 <CheckItem tone="red">
                   Instant PR detection celebrates personal records the second you finish a set

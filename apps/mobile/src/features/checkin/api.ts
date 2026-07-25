@@ -118,7 +118,7 @@ async function request(opts: {
       signal: controller.signal,
     });
   } catch {
-    throw new CheckInApiError('network', "Can't reach the server");
+    throw new CheckInApiError('network', "We couldn't connect. Check your connection and try again");
   } finally {
     clearTimeout(timer);
   }
@@ -171,4 +171,32 @@ export async function getCheckIns(token: string, limit = 10): Promise<ServerChec
     token,
   });
   return parse(listResponseSchema, data).checkIns;
+}
+
+// ── Who (if anyone) reads this check-in ───────────────────────
+
+/**
+ * Just enough of GET /api/me/coach to tell the member the truth about where a
+ * check-in goes. The server only pushes a check-in to a coach when an ACTIVE
+ * assignment exists (see the /api/check-ins docblock), so the card must know
+ * whether that's the case before it says "sent to your coach".
+ *
+ * Deliberately its own tiny client rather than a reach into the mentorship
+ * feature: feature modules never import each other, and this reads one field.
+ * The unknown case is modelled as a THROW, never as "no coach" — telling a
+ * coached member they have no coach is worse than saying nothing.
+ */
+const myCoachSchema = z.object({
+  coach: z
+    .object({ displayName: z.string().catch('') })
+    .nullable(),
+});
+
+/**
+ * GET /api/me/coach → the assigned coach's display name, `''` when assigned
+ * but unnamed, or null when the member has no coach. Throws on any failure.
+ */
+export async function getAssignedCoachName(token: string): Promise<string | null> {
+  const data = await request({ method: 'GET', path: '/api/me/coach', token });
+  return parse(myCoachSchema, data).coach?.displayName ?? null;
 }

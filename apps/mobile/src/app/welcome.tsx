@@ -224,7 +224,7 @@ export default function WelcomeScreen() {
 
           <Animated.View entering={nativeOnly(FadeIn.delay(800))}>
             <AppText variant="body" color={colors.onBlock} style={styles.tagline}>
-              Workouts, food and progress — one app, one coach.
+              Workouts, food and progress. One app, one coach.
             </AppText>
           </Animated.View>
 
@@ -232,7 +232,7 @@ export default function WelcomeScreen() {
           <Animated.View entering={nativeOnly(FadeInUp.springify().delay(880))} style={styles.actions}>
             <PressableScale
               accessibilityRole="button"
-              accessibilityLabel="Get started — about 2 minutes to set up"
+              accessibilityLabel="Get started, about 2 minutes to set up, ending with a free account"
               pressScale={0.98}
               onPress={start}
               style={styles.cta}
@@ -245,9 +245,18 @@ export default function WelcomeScreen() {
               </View>
             </PressableScale>
 
+            {/* The truth about the primary path, AT the primary path: setup
+                ends with a free account, because the programs and the exercise
+                library are published to your account. Saying it two screens
+                later (on an empty Train tab) is how the loop started. */}
+            <AppText variant="caption" center color={colors.onBlock} style={styles.ctaNote}>
+              About 2 minutes, ending with a free account. Your programs and exercises
+              come with it.
+            </AppText>
+
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="I already have an account — sign in"
+              accessibilityLabel="I already have an account, sign in"
               hitSlop={8}
               onPress={signIn}
               style={styles.signIn}
@@ -457,5 +466,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  ctaNote: { marginTop: spacing.xs },
   signIn: { minHeight: 48, alignItems: 'center', justifyContent: 'center' },
 });

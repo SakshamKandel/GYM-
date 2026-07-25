@@ -111,7 +111,7 @@ async function request(opts: {
       signal: controller.signal,
     });
   } catch {
-    throw new ProgressionApiError('network', "Can't reach the server");
+    throw new ProgressionApiError('network', "We couldn't connect. Check your connection and try again");
   } finally {
     clearTimeout(timer);
   }

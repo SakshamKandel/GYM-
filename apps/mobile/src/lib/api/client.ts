@@ -1,8 +1,15 @@
 import { z } from 'zod';
+import { supportsRail, type Payee } from './payeeLogic';
 import {
   ACCOUNT_DELETION_BLOCKER_CODES,
+  aiTipOutcome,
+  aiTipResponseSchema,
+  appleAuthNonceResponseSchema,
+  appleAuthRequestSchema,
   trainingCatalogSchema,
   type AccountDeletionImpact,
+  type AiTipOutcome,
+  type AiTipRequest,
   type Tier,
   type TrainingCatalog,
 } from '@gym/shared';
@@ -17,10 +24,48 @@ import {
  */
 
 /**
+ * Address of the account service, from EXPO_PUBLIC_API_URL at build time.
+ *
+ * A build with this missing used to fall back to localhost in silence, so a
+ * shipped app pointed at nothing and every single request died as "check your
+ * connection" — advice that could never work. Now: in development we fall
+ * back (a web dev server on this same machine is the normal case) and say so
+ * loudly, and in a release build we refuse to pretend. See `fetchWithTimeout`.
+ */
+const DEV_FALLBACK_URL = 'http://localhost:3000';
+const CONFIGURED_API_URL = process.env.EXPO_PUBLIC_API_URL?.trim() ?? '';
+
+/** True when this build was given a real address. */
+export const API_URL_CONFIGURED = CONFIGURED_API_URL !== '';
+
+/**
  * API base URL. Exported so sibling clients (e.g. features/staff/api.ts) build
  * their own request plumbing against the SAME host without re-reading the env.
  */
-export const BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000';
+export const BASE_URL = API_URL_CONFIGURED ? CONFIGURED_API_URL : DEV_FALLBACK_URL;
+
+if (!API_URL_CONFIGURED) {
+  if (__DEV__) {
+    console.warn(
+      [
+        '',
+        '══════════════════════════════════════════════════════════════',
+        ' EXPO_PUBLIC_API_URL is not set.',
+        ` Falling back to ${DEV_FALLBACK_URL}, which only reaches a web`,
+        ' app running on THIS machine — a phone on wi-fi cannot see it.',
+        ' Set it in apps/mobile/.env, and in eas.json for every build',
+        ' profile. A release build without it refuses all requests.',
+        '══════════════════════════════════════════════════════════════',
+        '',
+      ].join('\n'),
+    );
+  } else {
+    // Release build: nothing here can work, and the first request will say so.
+    console.error(
+      '[api] EXPO_PUBLIC_API_URL is missing from this build — every request is refused.',
+    );
+  }
+}
 
 export type ApiErrorCode =
   | 'email_taken'
@@ -31,6 +76,12 @@ export type ApiErrorCode =
   | 'network'
   | 'unauthorized'
   | 'not_configured'
+  /**
+   * The sign-in provider's own service couldn't be reached from our server
+   * (503). Distinct from 'network': the phone is online, the provider isn't
+   * answering, so "check your connection" would be the wrong advice.
+   */
+  | 'auth_unavailable'
   /** Live billing: paid tiers require a store purchase, not a self-serve pick. */
   | 'billing_required'
   /** 403 — signed in, but not allowed (e.g. a non-coach reserving a coach-only upload kind). */
@@ -50,7 +101,15 @@ export type ApiErrorCode =
   | 'account_deletion_blocked'
   | 'confirmation_required'
   | 'private_asset_cleanup_pending'
-  | 'account_deletion_conflict';
+  | 'account_deletion_conflict'
+  /**
+   * This BUILD has no address for the account service (EXPO_PUBLIC_API_URL was
+   * missing when it was made), so nothing that needs an account can work here.
+   * Never comes from the server — the request is refused before it leaves the
+   * phone, because "check your connection" would send the member chasing a
+   * fault that isn't theirs.
+   */
+  | 'app_not_configured';
 
 export class ApiError extends Error {
   readonly code: ApiErrorCode;
@@ -178,6 +237,7 @@ function serverErrorCode(raw: string): ApiErrorCode | null {
     raw === 'link_required' ||
     raw === 'invalid' ||
     raw === 'not_configured' ||
+    raw === 'auth_unavailable' ||
     raw === 'billing_required' ||
     raw === 'forbidden' ||
     raw === 'invalid_code' ||
@@ -202,16 +262,31 @@ function serverErrorCode(raw: string): ApiErrorCode | null {
 const REQUEST_TIMEOUT_MS = 10_000;
 
 /**
+ * What a member is told when the build has no address for the account
+ * service. It names the one thing that can actually help (a newer build) and
+ * doesn't blame their connection for something that was never sent.
+ */
+const APP_NOT_CONFIGURED_MESSAGE =
+  "This version of the app can't reach your account. Please update the app";
+
+/**
  * fetch with a timeout; the abort surfaces as a rejection the callers already
  * map to their typed 'network' errors. Exported so sibling clients
  * (features/staff/api.ts, features/staff/supportApi.ts) share the same
  * hang-proofing instead of issuing bare `fetch` calls (defect H1/H2/H4).
+ *
+ * Also the single gate for a release build made without EXPO_PUBLIC_API_URL:
+ * every request is refused here, with a message that is at least true, rather
+ * than thrown at a localhost address no phone can reach.
  */
 export async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<Response> {
+  if (!API_URL_CONFIGURED && !__DEV__) {
+    throw new ApiError('app_not_configured', APP_NOT_CONFIGURED_MESSAGE);
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -234,8 +309,11 @@ async function request(opts: RequestOptions): Promise<unknown> {
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
-  } catch {
-    throw new ApiError('network', "Can't reach the server");
+  } catch (err: unknown) {
+    // A typed refusal (nothing was ever sent) keeps its own honest message —
+    // only a genuine transport failure becomes "check your connection".
+    if (err instanceof ApiError) throw err;
+    throw new ApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   if (res.ok) {
@@ -293,6 +371,12 @@ export async function login(input: { email: string; password: string }): Promise
   return parseAs(sessionSchema, data);
 }
 
+// The password-reset request lives in features/auth/AuthScreen.tsx
+// (`askForResetLink`), the only screen that offers it. A second copy used to
+// sit here with no callers, and it had already drifted: it ignored the server's
+// `delivery` field, so it would have told members instructions were on the way
+// on a deployment that cannot send email at all.
+
 /**
  * Exchange a Google ID token (from expo-auth-session) for a session.
  * Throws 'not_configured' until the server has GOOGLE_CLIENT_ID set.
@@ -312,6 +396,56 @@ export async function loginWithGoogle(
   return parseAs(sessionSchema, data);
 }
 
+/**
+ * Ask the server for the one-time challenge that ties ONE Apple sign-in
+ * attempt to ONE backend exchange. Its value is opaque to the app: hand it
+ * to the Apple prompt as-is and send the SAME raw value back with
+ * loginWithApple — Apple hashes it into the signed credential itself, and the
+ * server compares against the raw value it issued.
+ *
+ * Throws 'not_configured' until the server has its Apple app ids set, and
+ * 'auth_unavailable' when the challenge couldn't be issued right now.
+ */
+export async function requestAppleNonce(): Promise<string> {
+  const data = await request({ method: 'POST', path: '/api/auth/apple/nonce' });
+  return parseAs(appleAuthNonceResponseSchema, data).nonce;
+}
+
+/**
+ * Exchange a signed Apple credential (from expo-apple-authentication) for a
+ * session. `nonce` must be the RAW value requestAppleNonce returned and the
+ * same one passed to the Apple prompt. `displayName` is Apple's one-time
+ * name — it's only ever profile metadata (the server re-sanitises it and
+ * never matches on it), and Apple supplies it on the FIRST authorization only.
+ *
+ * Throws 'not_configured' until the server has its Apple app ids set, and
+ * 'link_required' when the Apple email already belongs to a password
+ * account — retry with the SAME identityToken and nonce plus that account's
+ * `password` to link Apple onto it (both sign-in methods then open the SAME
+ * account). The server deliberately keeps the challenge unspent on
+ * link_required so that retry works.
+ */
+export async function loginWithApple(
+  identityToken: string,
+  nonce: string,
+  displayName?: string,
+  password?: string,
+): Promise<AuthSession> {
+  // Validated against the SAME shared schema the API route parses with, so a
+  // malformed payload fails here instead of costing a round trip (rule 8).
+  const trimmedName = displayName?.trim() ?? '';
+  const body = appleAuthRequestSchema.safeParse({
+    identityToken,
+    nonce,
+    ...(trimmedName !== '' ? { displayName: trimmedName } : null),
+    ...(password !== undefined ? { password } : null),
+  });
+  if (!body.success) throw new ApiError('invalid');
+  const payload: Record<string, unknown> = { ...body.data };
+  const data = await request({ method: 'POST', path: '/api/auth/apple', body: payload });
+  return parseAs(sessionSchema, data);
+}
+
 export async function me(token: string): Promise<AuthUser> {
   const data = await request({ method: 'GET', path: '/api/me', token });
   return parseAs(meSchema, data).user;
@@ -320,7 +454,7 @@ export async function me(token: string): Promise<AuthUser> {
 const healthSchema = z.object({ ok: z.literal(true), app: z.literal('gym-tracker') });
 
 /**
- * True only when GET /api/health identifies the host as the real GYM Tracker
+ * True only when GET /api/health identifies the host as the real GM Method
  * server. In dev, BASE_URL is a LAN host:port — if another app ever squats
  * that port, its blanket 401s must not read as "session revoked" (a foreign
  * 401 once signed users out — see state/auth.ts refresh()). Returns false on
@@ -409,10 +543,18 @@ export async function logoutAll(token: string): Promise<void> {
 
 export type RewardsErrorCode =
   | 'invalid'
-  /** Referrals: you already invited this email yourself. */
+  /** Referrals: you already saved this email yourself. */
   | 'already_linked'
-  /** Referrals: the invited email already belongs to an existing account. */
-  | 'already_enrolled'
+  /** Invite codes: that code isn't one we recognise. */
+  | 'invalid_code'
+  /** Invite codes: that's the caller's own code. */
+  | 'own_code'
+  /** Invite codes: this account has already used an invite code. */
+  | 'code_already_used'
+  /** Invite codes: past the new-member window for using a code. */
+  | 'not_new_member'
+  /** Invite codes: the link was made but the discount didn't land; safe to retry. */
+  | 'grant_failed'
   /** Trial: this tier's one-time trial is already spent. */
   | 'trial_used'
   /** Trial: the requested tier isn't above the account's current tier. */
@@ -441,7 +583,11 @@ export function toRewardsError(err: unknown): RewardsApiError {
 function rewardsServerErrorCode(raw: string): RewardsErrorCode | null {
   return raw === 'invalid' ||
     raw === 'already_linked' ||
-    raw === 'already_enrolled' ||
+    raw === 'invalid_code' ||
+    raw === 'own_code' ||
+    raw === 'code_already_used' ||
+    raw === 'not_new_member' ||
+    raw === 'grant_failed' ||
     raw === 'trial_used' ||
     raw === 'not_an_upgrade'
     ? (raw as RewardsErrorCode)
@@ -469,7 +615,7 @@ async function rewardsRequest(opts: RewardsRequestOptions): Promise<unknown> {
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new RewardsApiError('network', "Can't reach the server");
+    throw new RewardsApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   if (res.ok) {
@@ -509,23 +655,56 @@ const referralSchema = z.object({
   status: z.enum(['pending', 'joined', 'rewarded']),
   createdAt: z.string(),
   rewardedAt: z.string().nullable().optional(),
+  /**
+   * True only when a discount actually landed for this invite. A friend who
+   * already had an account is recorded but earns nobody anything, and reads
+   * `false` here even though the status says joined. Optional: a server that
+   * predates the field leaves it undefined, and undefined must never be read
+   * as "earned".
+   */
+  discountEarned: z.boolean().optional(),
 });
 
 export type Referral = z.infer<typeof referralSchema>;
 
-const referralListSchema = z.object({ referrals: z.array(referralSchema) });
+/** The member's own shareable code plus the reward terms, straight from the server. */
+const inviteInfoSchema = z.object({
+  /** null on the rare account whose id isn't shaped like a code. */
+  code: z.string().nullable(),
+  /** Public page to point a friend at — the member shares it themselves. */
+  shareUrl: z.string(),
+  discountPct: z.number(),
+  rewardDays: z.number(),
+  redeemWindowDays: z.number(),
+  /** False once this account has had a referral discount, or is past the window. */
+  canRedeem: z.boolean(),
+});
 
-/** Get this user's referrals. */
-export async function getReferrals(token: string): Promise<Referral[]> {
+export type InviteInfo = z.infer<typeof inviteInfoSchema>;
+
+const referralListSchema = z.object({
+  referrals: z.array(referralSchema),
+  invite: inviteInfoSchema.optional(),
+});
+
+export interface ReferralsSnapshot {
+  referrals: Referral[];
+  /** null when talking to a server that predates shareable codes. */
+  invite: InviteInfo | null;
+}
+
+/** Get this user's invite code and the invites they've recorded. */
+export async function getReferrals(token: string): Promise<ReferralsSnapshot> {
   const data = await rewardsRequest({ method: 'GET', path: '/api/buddy/referrals', token });
-  return parseRewards(referralListSchema, data).referrals;
+  const parsed = parseRewards(referralListSchema, data);
+  return { referrals: parsed.referrals, invite: parsed.invite ?? null };
 }
 
 /**
- * Create a referral invite for a friend's email. Throws RewardsApiError
- * 'already_enrolled' when the email already belongs to an existing account
- * (invites are only for people new to the app) and 'already_linked' when the
- * caller already invited that email.
+ * Record a friend's email so the discount lands automatically when they sign
+ * up with it. Nothing is sent to that address — the member still passes the
+ * invite on themselves. Throws RewardsApiError 'already_linked' when the
+ * caller already saved that email.
  */
 export async function createReferral(token: string, inviteeEmail: string): Promise<void> {
   await rewardsRequest({
@@ -533,6 +712,20 @@ export async function createReferral(token: string, inviteeEmail: string): Promi
     path: '/api/buddy/referrals',
     token,
     body: { inviteeEmail },
+  });
+}
+
+/**
+ * Use a friend's shared invite code. Throws RewardsApiError: 'invalid_code'
+ * (unrecognised), 'own_code', 'code_already_used', 'not_new_member' (past the
+ * window), or 'grant_failed' (nothing was linked — safe to try again).
+ */
+export async function redeemInviteCode(token: string, inviteCode: string): Promise<void> {
+  await rewardsRequest({
+    method: 'POST',
+    path: '/api/buddy/referrals',
+    token,
+    body: { inviteCode },
   });
 }
 
@@ -683,6 +876,13 @@ const coachMessagesSchema = z.object({
       return parsed.success ? [parsed.data] : [];
     }),
   ),
+  /**
+   * Send responses only, and additive: true when the stored message differs
+   * from what was typed because contact details were taken out of it (coach
+   * chat only, never support). `.optional()` keeps an older server's payload
+   * valid, in which case the app just never mentions it.
+   */
+  contactHidden: z.boolean().optional(),
 });
 
 interface CoachRequestOptions {
@@ -706,7 +906,7 @@ async function coachRequest(opts: CoachRequestOptions): Promise<unknown> {
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new CoachApiError('network', "Can't reach the server");
+    throw new CoachApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   if (res.ok) {
@@ -750,47 +950,58 @@ export async function getCoachMessages(
   return parseCoach(coachMessagesSchema, data).messages;
 }
 
+export interface SentCoachMessages {
+  /** Only the rows the server actually inserted. */
+  messages: CoachMessage[];
+  /** The stored message differs from what was typed, because contact details
+   * were taken out of it. Coach chat only. Undefined on an older server. */
+  contactHidden?: boolean;
+}
+
 /**
  * Send a persisted human-owned message. Coach chat requires an active coach
  * assignment and throws `coach_unavailable` otherwise; support routes to the
- * staff inbox. Returns only rows that the server actually inserted.
+ * staff inbox. Returns only rows that the server actually inserted, plus
+ * whether contact details were taken out of the message on the way in.
  */
 export async function sendCoachMessage(
   kind: CoachThreadKind,
   body: string,
   token: string,
-): Promise<CoachMessage[]> {
+): Promise<SentCoachMessages> {
   const data = await coachRequest({
     method: 'POST',
     path: '/api/coach/messages',
     token,
     body: { kind, body },
   });
-  return parseCoach(coachMessagesSchema, data).messages;
+  const parsed = parseCoach(coachMessagesSchema, data);
+  return { messages: parsed.messages, contactHidden: parsed.contactHidden };
 }
 
 // ── AI coach tips ─────────────────────────────────────────────
 
-/** A single tip-prompt turn (built by the caller, sent to the server). */
-export interface AiTipMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
-const aiTipSchema = z.object({ text: z.string().nullable() });
-
 /**
- * Fetch a short AI coach tip. Generated SERVER-SIDE with the server's Groq
- * key (no key in the app bundle), so it requires a signed-in `token`. Never
- * throws — any failure (offline, signed-out server error, missing key) resolves
- * to null so the tip card degrades quietly.
+ * Fetch a short AI coach tip. The request is CLOSED: a card `kind` plus a small
+ * bag of training and body numbers (packages/shared aiCoachTip.ts). We never
+ * send prose, so nothing a member typed anywhere in the app can reach the
+ * model, and the prompt itself is owned by the server.
+ *
+ * Written SERVER-SIDE with the server's provider key (no key in the app
+ * bundle), so it needs a signed-in `token`. Never throws: any failure (offline,
+ * server error, no key configured) resolves to 'unavailable' and the card shows
+ * its quiet empty state.
  */
-export async function getAiTip(messages: AiTipMessage[], token: string): Promise<string | null> {
+export async function getAiTip(
+  input: AiTipRequest,
+  token: string,
+): Promise<AiTipOutcome> {
   try {
-    const data = await request({ method: 'POST', path: '/api/ai/tip', body: { messages }, token });
-    return aiTipSchema.parse(data).text;
+    const data = await request({ method: 'POST', path: '/api/ai/tip', body: input, token });
+    const parsed = aiTipResponseSchema.safeParse(data);
+    return parsed.success ? aiTipOutcome(parsed.data) : { kind: 'unavailable' };
   } catch {
-    return null;
+    return { kind: 'unavailable' };
   }
 }
 
@@ -1054,6 +1265,77 @@ export async function getMyCoachDiet(token: string): Promise<MyCoachDietResult> 
 
 export type PriceRegion = 'NP' | 'INTL';
 
+// ── Payee: where a member sends money before uploading a receipt ──
+//
+// The server publishes the configured payee on the two member routes these
+// screens already call — GET /api/subscription/catalog (membership) and
+// GET /api/meals/partners (meals) — so it rides along with the response the
+// screen is already waiting for instead of costing a second request.
+//
+// `null` is a first-class answer and means NO rail is configured. Every caller
+// must then hide the manual-payment option and say so in one line rather than
+// asking for a transfer to nobody. An older server that doesn't send the key,
+// or a body we can't read, lands on the same `null`, so a stale API can never
+// invent a destination for money. The pure "is this rail payable" rules live in
+// ./payeeLogic (no React, no network) and are shared with every payment surface.
+
+const payeeWalletSchema = z.object({
+  /** Wallet id money is sent to (an eSewa/Khalti mobile number). */
+  id: z.string().min(1),
+  /** Registered holder name, when the operator filled it in. */
+  name: z.string().nullish(),
+});
+
+const payeeBankSchema = z.object({
+  bankName: z.string().nullish(),
+  accountName: z.string().min(1),
+  accountNumber: z.string().min(1),
+});
+
+// Each rail falls back to "not configured" on its own: a half-filled bank
+// record must not take a perfectly good wallet down with it.
+const payeeSchema = z.object({
+  esewa: payeeWalletSchema.nullish().catch(null),
+  khalti: payeeWalletSchema.nullish().catch(null),
+  bank: payeeBankSchema.nullish().catch(null),
+  /** Optional scan-to-pay image. */
+  qrImageUrl: z.string().nullish().catch(null),
+  /** Optional extra line from the operator. */
+  instructions: z.string().nullish().catch(null),
+});
+
+/**
+ * Read a response's `payee` value. NEVER throws and never fails the parse of
+ * the response it travels on: anything unreadable is "nothing configured".
+ *
+ * A QR image or an extra instruction line names no destination, so neither can
+ * make a rail payable on its own — the same rule the server applies before
+ * sending this.
+ */
+export function parsePayee(raw: unknown): Payee | null {
+  const parsed = payeeSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const payee: Payee = {
+    esewa: parsed.data.esewa ? { id: parsed.data.esewa.id, name: parsed.data.esewa.name ?? null } : null,
+    khalti: parsed.data.khalti ? { id: parsed.data.khalti.id, name: parsed.data.khalti.name ?? null } : null,
+    bank: parsed.data.bank
+      ? {
+          bankName: parsed.data.bank.bankName ?? null,
+          accountName: parsed.data.bank.accountName,
+          accountNumber: parsed.data.bank.accountNumber,
+        }
+      : null,
+    qrImageUrl: parsed.data.qrImageUrl ?? null,
+    instructions: parsed.data.instructions ?? null,
+  };
+  const payable =
+    supportsRail(payee, 'esewa') || supportsRail(payee, 'khalti') || supportsRail(payee, 'bank');
+  return payable ? payee : null;
+}
+
+/** The `payee` key as it sits inside a response schema. Unreadable → null. */
+export const payeeFieldSchema = z.unknown().transform((raw): Payee | null => parsePayee(raw));
+
 const catalogTierSchema = z.object({
   tier: tierSchema,
   /** Pre-discount catalog price, minor units. */
@@ -1078,14 +1360,22 @@ const catalogSchema = z.object({
    * older server response still parses (absent → treated as 'preview').
    */
   billingMode: z.enum(['disabled', 'preview', 'live']),
+  /**
+   * Where a member sends money for a manual payment, or null when the operator
+   * has configured nothing payable. Rides along with the prices the paywall is
+   * already waiting for, so the screen never has to ask twice. See
+   * {@link parsePayee}.
+   */
+  payee: payeeFieldSchema,
 });
 export type SubscriptionCatalog = z.infer<typeof catalogSchema>;
 
 /**
  * GET /api/subscription/catalog?region= → regional pricing + this account's
- * best active discount. `region` is a raw ISO-3166 alpha-2 hint (e.g. from
- * expo-localization) — the server clamps it to NP/INTL and persists it onto
- * the account for next time. Requires a signed-in `token`.
+ * best active discount + the payee for manual payments. `region` is a raw
+ * ISO-3166 alpha-2 hint (e.g. from expo-localization) — the server clamps it to
+ * NP/INTL and persists it onto the account for next time. Requires a signed-in
+ * `token`.
  */
 export async function getSubscriptionCatalog(
   token: string,
@@ -1097,7 +1387,9 @@ export async function getSubscriptionCatalog(
     path: `/api/subscription/catalog${query}`,
     token,
   });
-  return parseAs(catalogSchema, data);
+  // Resilient: the payee field transforms an unknown value into `Payee | null`,
+  // so the schema's input and output shapes differ (see parseAsResilient).
+  return parseAsResilient(catalogSchema, data);
 }
 
 const promoRedeemSchema = z.object({ code: z.string(), discountPct: z.number() });
@@ -1125,7 +1417,14 @@ export type PaymentMethod = 'esewa' | 'khalti' | 'bank' | 'other';
 export type PayableTier = 'silver' | 'gold' | 'elite';
 
 const paymentMethodSchema = z.enum(['esewa', 'khalti', 'bank', 'other']);
-const paymentStatusSchema = z.enum(['pending', 'approved', 'rejected']);
+/**
+ * Mirrors payment_requests.status exactly. 'refunded' is terminal and set by
+ * POST /api/admin/payment-requests/[id]/refund (approved→refunded, rolling the
+ * tier back). It was missing here, so every admin-refunded row failed to parse
+ * and — because the list drops unparseable rows — silently VANISHED from the
+ * member's in-app payment history, leaving no record of a payment they made.
+ */
+const paymentStatusSchema = z.enum(['pending', 'approved', 'rejected', 'refunded']);
 
 export interface PaymentRequestInput {
   tier: PayableTier;

@@ -14,6 +14,7 @@ import {
   TierChip,
   Toolbar,
 } from '@/components/console';
+import { formatDate } from '@/lib/format';
 import { staffRoleLabel } from '@/app/admin/_lib/staffRoleLabel';
 import type { StaffRole } from '@/lib/auth';
 import { DownloadCsv } from '../../_components/DownloadCsv';
@@ -110,7 +111,7 @@ export function MembersDirectory({
         setCursor(data.nextCursor);
       } catch {
         if (mySeq !== reqSeq.current) return;
-        setError('Network error.');
+        setError('Could not reach us just now. Try again.');
       } finally {
         if (mySeq === reqSeq.current) {
           setLoading(false);
@@ -189,11 +190,7 @@ export function MembersDirectory({
       align: 'right',
       render: (r) => (
         <span style={{ color: 'var(--gt-text-dim)', whiteSpace: 'nowrap' }}>
-          {new Date(r.createdAt).toLocaleDateString(undefined, {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-          })}
+          {formatDate(r.createdAt)}
         </span>
       ),
     },
@@ -307,7 +304,7 @@ export function MembersDirectory({
           </Button>
         ) : members.length > 0 ? (
           <span style={{ color: 'var(--gt-text-dim)', fontSize: 13 }}>
-            End of list — {members.length} member{members.length === 1 ? '' : 's'} shown.
+            End of list · {members.length} member{members.length === 1 ? '' : 's'} shown.
           </span>
         ) : null}
       </div>

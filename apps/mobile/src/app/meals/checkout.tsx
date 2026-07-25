@@ -21,6 +21,7 @@ import {
   ScreenHeader,
   Sheet,
 } from '../../components/ui';
+import { SlotChip } from '../../features/meals/components/SlotChip';
 import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { useAuth } from '../../state/auth';
 import { cartSubtotalMinor, useMealCart } from '../../features/meals/cartStore';
@@ -36,11 +37,15 @@ import {
 import { AddressSheet } from '../../features/meals/components/AddressSheet';
 import { deliveryStatus, DeliveryBadge } from '../../features/meals/components/DeliveryBadge';
 import { ReceiptUploadPanel } from '../../features/meals/components/ReceiptUploadPanel';
+import { PayeeDetailsCard } from '../../components/payments/PayeeDetailsCard';
+import { supportsRail, usePayee } from '../../lib/api/payee';
 import {
+  firstOrderableSlotIndex,
   isDigitalMethod,
   mealErrorMessage,
   mealUnavailableLineMessage,
   priceChangeMessage,
+  slotKey,
   slotLabel,
   tipOptions,
   tipPresetLabel,
@@ -59,6 +64,12 @@ import { pushPath, replacePath } from '../../features/meals/nav';
  * (slot → address → payment → notes → tip), payment methods as tappable
  * radio rows with per-method hints, and a receipt-style summary card with an
  * Oswald total mirrored into the Place-order CTA.
+ *
+ * Payment honesty: eSewa and Khalti are offered ONLY when the operator has
+ * published a wallet for them, and picking one shows that wallet right here,
+ * before the order is placed. The step used to promise "Transfer first, then
+ * upload the receipt" with no wallet configured anywhere in the product, so the
+ * member had nowhere to send the money.
  */
 
 const styles = StyleSheet.create({
@@ -175,7 +186,7 @@ function PaymentOption({
   return (
     <PressableScale
       accessibilityRole="radio"
-      accessibilityState={{ selected }}
+      accessibilityState={{ checked: selected }}
       accessibilityLabel={`${label}. ${hint}`}
       onPress={onPress}
       style={[styles.payOption, selected && styles.payOptionSelected]}
@@ -204,8 +215,17 @@ export default function CheckoutScreen() {
   const partner = partners?.find((p) => p.id === partnerId) ?? null;
 
   const slots = useMemo(() => upcomingSlots(new Date(), 6), []);
-  const [slotIdx, setSlotIdx] = useState(0);
+  // Slots the SERVER has refused as past-cutoff. The client's own cutoff math
+  // uses the frozen default hours (no member-facing route exposes the
+  // admin-edited ones — see `upcomingSlots`), so the authoritative "no" is
+  // remembered here and the chip retired rather than offered again.
+  const [closedSlotKeys, setClosedSlotKeys] = useState<ReadonlySet<string>>(() => new Set<string>());
+  // The slot list starts at TODAY's lunch, which has usually passed its cutoff
+  // already — defaulting to index 0 opened checkout on a dead slot every time.
+  // Start on the first slot that can actually be ordered instead.
+  const [slotIdx, setSlotIdx] = useState(() => Math.max(0, firstOrderableSlotIndex(slots)));
   const slot = slots[slotIdx] ?? slots[0];
+  const slotOpen = !!slot?.orderable && !closedSlotKeys.has(slotKey(slot.date, slot.window));
 
   const { data: addresses, reload: reloadAddresses } = useMealAddresses(token);
   const [addressId, setAddressId] = useState<string | null>(null);
@@ -229,10 +249,32 @@ export default function CheckoutScreen() {
     [partner, selectedAddress],
   );
 
+  // Which rails can actually take this order's money. A wallet with no
+  // published id is not offered at all — the member would have nowhere to send
+  // the transfer the receipt step then asks them to prove.
+  const { payee, loading: payeeLoading } = usePayee(token, 'meals');
+  const codAvailable = partner?.acceptsCod !== false;
+  const esewaAvailable = supportsRail(payee, 'esewa');
+  const khaltiAvailable = supportsRail(payee, 'khalti');
+  const anyMethodAvailable = codAvailable || esewaAvailable || khaltiAvailable;
+
   const [method, setMethod] = useState<MealPaymentMethod>('cod');
+  const methodAvailable =
+    method === 'cod' ? codAvailable : method === 'esewa' ? esewaAvailable : khaltiAvailable;
+  // Move off a method this kitchen or this payee can't take, rather than
+  // letting the member submit against it. Nothing to move to = no payment
+  // method at all, which the section below states plainly.
   useEffect(() => {
-    if (partner && !partner.acceptsCod && method === 'cod') setMethod('esewa');
-  }, [partner, method]);
+    if (payeeLoading || methodAvailable) return;
+    const next: MealPaymentMethod | null = codAvailable
+      ? 'cod'
+      : esewaAvailable
+        ? 'esewa'
+        : khaltiAvailable
+          ? 'khalti'
+          : null;
+    if (next && next !== method) setMethod(next);
+  }, [payeeLoading, methodAvailable, codAvailable, esewaAvailable, khaltiAvailable, method]);
   const [notes, setNotes] = useState('');
 
   // Checkout gratuity preview (Pack D) — server-repriced on both quote and
@@ -271,7 +313,7 @@ export default function CheckoutScreen() {
     // A delivery address is mandatory at order creation, and the quote route
     // runs the same delivery-eligibility rule. Do not issue a guaranteed 400
     // while saved addresses are still hydrating (or before one is selected).
-    if (!partnerId || !selectedAddress || items.length === 0 || !slot?.orderable) return null;
+    if (!partnerId || !selectedAddress || items.length === 0 || !slotOpen) return null;
     return {
       partnerId,
       items: items.map((l) => ({ mealId: l.meal.id, qty: l.qty })),
@@ -281,7 +323,7 @@ export default function CheckoutScreen() {
       tipMinor,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [partnerId, lines, selectedAddress?.id, slot?.date, slot?.window, slot?.orderable, tipMinor]);
+  }, [partnerId, lines, selectedAddress?.id, slot?.date, slot?.window, slotOpen, tipMinor]);
   const {
     quote,
     status: quoteStatus,
@@ -302,6 +344,8 @@ export default function CheckoutScreen() {
 
   function place(expectedTotalOverride?: number): void {
     if (placing || !token || !partnerId || !slot || !addressId || items.length === 0) return;
+    // Never send an order on a rail that can't take the money.
+    if (!methodAvailable) return;
     // The shown total must be a fresh server quote before we let money move.
     if (quoteStatus !== 'ready' || !quote) return;
     setPlacing(true);
@@ -331,10 +375,30 @@ export default function CheckoutScreen() {
         if (isDigitalMethod(order.paymentMethod)) {
           setPlacedOrder(order);
         } else {
-          pushPath(`/meals/order-confirmation?orderId=${encodeURIComponent(order.id)}`);
+          // replace, not push: the cart is cleared and the form is spent, so
+          // back must never return to it.
+          replacePath(`/meals/order-confirmation?orderId=${encodeURIComponent(order.id)}`);
         }
       } catch (err) {
         const apiError = toMealsError(err);
+        // The server owns the cutoff and its hours are admin-editable, so it
+        // can close a slot this screen still believes is open. Retire that chip
+        // and move the member onto the next live slot instead of leaving them
+        // pressing a button that will keep failing.
+        if (apiError.code === 'past_cutoff' && slot) {
+          const nextClosed = new Set(closedSlotKeys);
+          nextClosed.add(slotKey(slot.date, slot.window));
+          setClosedSlotKeys(nextClosed);
+          const nextIdx = firstOrderableSlotIndex(slots, nextClosed);
+          if (nextIdx !== -1) setSlotIdx(nextIdx);
+          setError(
+            nextIdx === -1
+              ? 'That delivery time just closed. Pick another one.'
+              : `That delivery time just closed. We moved you to ${slots[nextIdx].label}. Check the total and place again.`,
+          );
+          warnHaptic();
+          return;
+        }
         if (apiError.code === 'price_changed') {
           const quotedMinor = Number(apiError.details?.quotedMinor ?? 0);
           const currentMinor = Number(apiError.details?.currentMinor ?? 0);
@@ -389,7 +453,7 @@ export default function CheckoutScreen() {
   }
 
   return (
-    <Screen scroll>
+    <Screen scroll keyboardAware>
       <Animated.View entering={enterDown()} style={styles.backRow}>
         <PressableScale accessibilityRole="button" accessibilityLabel="Go back" onPress={goBack} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color={colors.text} />
@@ -401,18 +465,23 @@ export default function CheckoutScreen() {
       <Animated.View entering={enterUp(0)} style={styles.section}>
         <StepLabel n={1}>Delivery slot</StepLabel>
         <View style={styles.chipRow}>
-          {slots.map((s, i) => (
-            <Chip
-              key={`${s.date}-${s.window}`}
-              label={slotLabel(s.date, s.window)}
-              selected={slotIdx === i}
-              onPress={() => s.orderable && setSlotIdx(i)}
-            />
-          ))}
+          {slots.map((s, i) => {
+            const open = s.orderable && !closedSlotKeys.has(slotKey(s.date, s.window));
+            return (
+              <SlotChip
+                key={`${s.date}-${s.window}`}
+                label={slotLabel(s.date, s.window)}
+                selected={slotIdx === i}
+                disabled={!open}
+                disabledHint="Ordering has closed for this time"
+                onPress={() => setSlotIdx(i)}
+              />
+            );
+          })}
         </View>
-        {!slot?.orderable ? (
-          <AppText variant="caption" color={colors.error}>
-            That slot has passed its cutoff — pick another.
+        {!slotOpen ? (
+          <AppText variant="body" color={colors.error}>
+            Ordering has closed for that time. Pick another.
           </AppText>
         ) : null}
       </Animated.View>
@@ -448,8 +517,8 @@ export default function CheckoutScreen() {
               </View>
             ) : null}
             {deliveryState === 'out' ? (
-              <AppText variant="caption" color={colors.warning}>
-                This address looks outside {partner?.name ?? "this partner's"} usual delivery area — the order
+              <AppText variant="body" color={colors.warning}>
+                This address looks outside {partner?.name ?? "this partner's"} usual delivery area, so the order
                 may be refused. Double-check before paying.
               </AppText>
             ) : null}
@@ -461,7 +530,7 @@ export default function CheckoutScreen() {
 
       <Animated.View entering={enterUp(2)} style={styles.section}>
         <StepLabel n={3}>Pay with</StepLabel>
-        {partner?.acceptsCod !== false ? (
+        {codAvailable ? (
           <PaymentOption
             icon="cash-outline"
             label="Cash on delivery"
@@ -470,20 +539,43 @@ export default function CheckoutScreen() {
             onPress={() => setMethod('cod')}
           />
         ) : null}
-        <PaymentOption
-          icon="wallet-outline"
-          label="eSewa"
-          hint="Transfer first, then upload the receipt"
-          selected={method === 'esewa'}
-          onPress={() => setMethod('esewa')}
-        />
-        <PaymentOption
-          icon="wallet-outline"
-          label="Khalti"
-          hint="Transfer first, then upload the receipt"
-          selected={method === 'khalti'}
-          onPress={() => setMethod('khalti')}
-        />
+        {esewaAvailable ? (
+          <PaymentOption
+            icon="wallet-outline"
+            label="eSewa"
+            hint="Send the money, then upload the receipt"
+            selected={method === 'esewa'}
+            onPress={() => setMethod('esewa')}
+          />
+        ) : null}
+        {khaltiAvailable ? (
+          <PaymentOption
+            icon="wallet-outline"
+            label="Khalti"
+            hint="Send the money, then upload the receipt"
+            selected={method === 'khalti'}
+            onPress={() => setMethod('khalti')}
+          />
+        ) : null}
+        {payeeLoading && !anyMethodAvailable ? (
+          <AppText variant="caption" color={colors.textDim}>
+            Checking how you can pay…
+          </AppText>
+        ) : null}
+        {!payeeLoading && !anyMethodAvailable ? (
+          <AppText variant="body" color={colors.warning}>
+            We can’t take payment for this order in the app yet. Please check back soon.
+          </AppText>
+        ) : null}
+        {/* The wallet, right where the choice is made — not after the order is
+            already placed. Same details the receipt step shows next. */}
+        {payee && method !== 'cod' && methodAvailable ? (
+          <PayeeDetailsCard
+            payee={payee}
+            rails={[method]}
+            {...(quote ? { amountLabel: formatMoney(quote.totalMinor, currency) } : {})}
+          />
+        ) : null}
       </Animated.View>
 
       <Animated.View entering={enterUp(3)} style={styles.section}>
@@ -552,8 +644,8 @@ export default function CheckoutScreen() {
             </AppText>
           </View>
           {quote && quote.subtotalMinor !== subtotal ? (
-            <AppText variant="caption" color={colors.warning}>
-              Prices may have changed since you added these — the total above is the current, accurate one.
+            <AppText variant="body" color={colors.warning}>
+              Prices may have changed since you added these. The total above is the current, accurate one.
             </AppText>
           ) : null}
           <View style={styles.summaryLine}>
@@ -604,12 +696,12 @@ export default function CheckoutScreen() {
               Updating totals…
             </AppText>
           ) : quoteStatus === 'error' ? (
-            <AppText variant="caption" color={colors.error}>
+            <AppText variant="body" color={colors.error}>
               {quoteMealUnavailable ?? mealErrorMessage(quoteErrorCode ?? 'network')}
             </AppText>
           ) : quote?.deliversTo === false ? (
-            <AppText variant="caption" color={colors.warning}>
-              This address is outside {partner?.name ?? "this partner's"} delivery area — the order may be
+            <AppText variant="body" color={colors.warning}>
+              This address is outside {partner?.name ?? "this partner's"} delivery area, so the order may be
               refused.
             </AppText>
           ) : null}
@@ -617,7 +709,7 @@ export default function CheckoutScreen() {
       </Animated.View>
 
       {error ? (
-        <AppText variant="caption" color={colors.error} style={styles.errorText}>
+        <AppText variant="body" color={colors.error} style={styles.errorText}>
           {error}
         </AppText>
       ) : null}
@@ -625,7 +717,14 @@ export default function CheckoutScreen() {
       <Button
         label={quote && quoteStatus === 'ready' ? `Place order · ${formatMoney(quote.totalMinor, currency)}` : 'Place order'}
         onPress={() => place()}
-        disabled={!token || !slot?.orderable || !addressId || items.length === 0 || quoteStatus !== 'ready'}
+        disabled={
+          !token ||
+          !slotOpen ||
+          !addressId ||
+          items.length === 0 ||
+          quoteStatus !== 'ready' ||
+          !methodAvailable
+        }
         loading={placing}
         style={{ marginTop: spacing.gutter }}
       />

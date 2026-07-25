@@ -23,6 +23,10 @@ import {
   type ModerationItemType,
   type StaffErrorCode,
 } from '../../../features/staff/api';
+import {
+  getCustomFoodQueue,
+  removeCustomFood,
+} from '../../../features/staff/customFoodModeration';
 import { replaceStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
 
@@ -44,16 +48,31 @@ const TABS: { key: ModerationItemType; label: string }[] = [
 function errorLine(code: StaffErrorCode): string {
   switch (code) {
     case 'unauthorized':
-      return 'Your session expired — sign in again.';
+      return 'Your session expired. Sign in again.';
     case 'forbidden':
       return "You don't have permission to moderate content.";
     case 'not_found':
       return 'That item no longer exists.';
     case 'not_configured':
-      return "Custom food moderation isn't built yet — check back in a future update.";
+      return "That part of the console isn't set up on the server yet.";
     default:
       return "Couldn't reach the server. Check your connection and retry.";
   }
+}
+
+/** Custom foods route through their own client (see customFoodModeration.ts). */
+function loadQueue(kind: ModerationItemType, token: string): Promise<ModerationItem[]> {
+  return kind === 'custom-foods' ? getCustomFoodQueue(token) : getModerationQueue(kind, token);
+}
+
+function removeQueueItem(
+  kind: ModerationItemType,
+  item: ModerationItem,
+  token: string,
+): Promise<void> {
+  return kind === 'custom-foods'
+    ? removeCustomFood(item, token)
+    : removeModerationItem(kind, item.id, token);
 }
 
 function ModerationRow({
@@ -128,7 +147,7 @@ export default function AdminModerationScreen() {
       setError(null);
       setErrorCode(null);
       try {
-        setItems(await getModerationQueue(k, token));
+        setItems(await loadQueue(k, token));
       } catch (err) {
         const code = toStaffError(err).code;
         setErrorCode(code);
@@ -150,7 +169,7 @@ export default function AdminModerationScreen() {
     setRemoveTarget(null);
     setBusyId(target.id);
     try {
-      await removeModerationItem(kind, target.id, token);
+      await removeQueueItem(kind, target, token);
       await load(kind);
     } catch (err) {
       const code = toStaffError(err).code;

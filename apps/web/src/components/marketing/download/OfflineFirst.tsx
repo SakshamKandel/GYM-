@@ -88,7 +88,7 @@ export function OfflineFirst() {
               Keep <span className="mkt-text-ember">lifting.</span>
             </Display>
             <p className="mt-7 max-w-xl text-[17px] leading-relaxed text-dim">
-              Basement gyms, thick concrete, dead zones near the squat rack — none of it
+              Basement gyms, thick concrete, dead zones near the squat rack. None of it
               matters. Every set writes to your phone first and confirms in under 100&nbsp;
               milliseconds. When signal comes back, it syncs quietly in the background.
             </p>

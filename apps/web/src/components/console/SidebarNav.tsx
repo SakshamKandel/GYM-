@@ -104,7 +104,10 @@ export function SidebarNav({
               style={{
                 width: 22,
                 height: 22,
-                borderRadius: 7,
+                // 8px, matching the collapsed mark below. The radius scale
+                // starts at 10px, which on a 22px tile is all corner and no
+                // edge — this is the one mark that stays off-scale.
+                borderRadius: 8,
                 background: 'var(--gt-accent)',
                 flexShrink: 0,
                 display: 'inline-flex',
@@ -298,7 +301,7 @@ function Badge({ count, collapsed }: { count: number; collapsed: boolean }) {
           right: 10,
           width: 8,
           height: 8,
-          borderRadius: 999,
+          borderRadius: 'var(--gt-radius-pill)',
           background: 'var(--gt-accent)',
         }}
       />
@@ -313,7 +316,7 @@ function Badge({ count, collapsed }: { count: number; collapsed: boolean }) {
         minWidth: 20,
         textAlign: 'center',
         padding: '1px 6px',
-        borderRadius: 999,
+        borderRadius: 'var(--gt-radius-pill)',
         background: 'var(--gt-accent-weak)',
         color: 'var(--gt-accent-strong)',
         fontSize: 11,
@@ -340,12 +343,12 @@ function Chevron({ dir }: { dir: 'left' | 'right' }) {
 }
 
 const iconBtn: React.CSSProperties = {
-  width: 32,
-  height: 32,
+  width: 44,
+  height: 44,
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  borderRadius: 8,
+  borderRadius: 'var(--gt-radius-sm)',
   border: '1px solid var(--gt-border)',
   background: 'var(--gt-surface)',
   color: 'var(--gt-text-dim)',

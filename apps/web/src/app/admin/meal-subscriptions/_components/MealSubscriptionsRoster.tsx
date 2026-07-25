@@ -1,8 +1,8 @@
 'use client';
 
-import { formatMoney } from '@gym/shared';
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Button,
   type Column,
   ConfirmButton,
   DataTable,
@@ -12,6 +12,9 @@ import {
   StatTile,
   StatusChip,
 } from '@/components/console';
+import { formatDate, formatDateLabel, formatMoney } from '@/lib/format';
+import { ConfirmDialog } from '../../_components/ConfirmDialog';
+import { MemberLink } from '../../_components/MemberLink';
 
 type SubStatus = 'active' | 'paused' | 'cancelled';
 type CycleStatus = 'open' | 'awaiting_payment' | 'paid' | 'void';
@@ -68,8 +71,6 @@ const PAYMENT_LABEL: Record<SubscriptionRow['paymentMethod'], string> = {
   cod: 'Cash on delivery',
 };
 
-const DATE_FMT = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-
 function scheduleLabel(days: number[], window: SubscriptionRow['window']): string {
   const sorted = [...days].sort((a, b) => a - b);
   const dayStr = sorted.length ? sorted.map((d) => DAY_LABELS[d] ?? '?').join(' ') : '—';
@@ -92,7 +93,12 @@ function planLabel(row: SubscriptionRow): string {
  * route (never the member-authed `/api/meals/subscriptions/[id]`), then
  * reload the roster.
  */
-export function MealSubscriptionsRoster() {
+export function MealSubscriptionsRoster({
+  canViewMembers,
+}: {
+  /** Viewer holds `members.read`, so member names can link to the record. */
+  canViewMembers: boolean;
+}) {
   const [rows, setRows] = useState<SubscriptionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +107,7 @@ export function MealSubscriptionsRoster() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -115,7 +122,7 @@ export function MealSubscriptionsRoster() {
       const data = (await res.json()) as { subscriptions: SubscriptionRow[] };
       setRows(data.subscriptions);
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setRows([]);
     } finally {
       setLoading(false);
@@ -150,11 +157,13 @@ export function MealSubscriptionsRoster() {
   function openRow(row: SubscriptionRow) {
     setSelectedId(row.id);
     setActionError(null);
+    setConfirmingCancel(false);
   }
 
   function closeDrawer() {
     if (busy) return;
     setSelectedId(null);
+    setConfirmingCancel(false);
   }
 
   async function act(action: 'pause' | 'resume' | 'cancel') {
@@ -188,7 +197,7 @@ export function MealSubscriptionsRoster() {
         }
         setActionError(
           res.status === 409
-            ? 'This plan already changed state — refreshing…'
+            ? 'This plan already changed state. Refreshing…'
             : res.status === 403
               ? 'You are not allowed to manage meal subscriptions.'
               : 'Could not save that change. Try again.',
@@ -206,7 +215,7 @@ export function MealSubscriptionsRoster() {
       setSelectedId(null);
       await load();
     } catch {
-      setActionError('Network error.');
+      setActionError('Could not reach us just now. Try again.');
       setBusy(false);
     }
   }
@@ -217,18 +226,12 @@ export function MealSubscriptionsRoster() {
       header: 'Member',
       render: (r) => (
         <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              fontFamily: 'var(--font-heading)',
-              fontWeight: 600,
-              fontSize: 14,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {r.account.displayName || r.account.email}
-          </div>
+          <MemberLink
+            id={r.account.id}
+            name={r.account.displayName}
+            email={r.account.email}
+            canView={canViewMembers}
+          />
           <div
             style={{
               fontSize: 12,
@@ -290,7 +293,7 @@ export function MealSubscriptionsRoster() {
       align: 'right',
       render: (r) => (
         <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {DATE_FMT.format(new Date(r.startDate))}
+          {formatDate(r.startDate)}
         </span>
       ),
     },
@@ -390,7 +393,7 @@ export function MealSubscriptionsRoster() {
               <Row label="Schedule">{scheduleLabel(selected.daysOfWeek, selected.window)}</Row>
               <Row label="Price/day">{formatMoney(selected.pricePerDayMinor, selected.currency)}</Row>
               <Row label="Payment method">{PAYMENT_LABEL[selected.paymentMethod]}</Row>
-              <Row label="Started">{DATE_FMT.format(new Date(selected.startDate))}</Row>
+              <Row label="Started">{formatDate(selected.startDate)}</Row>
             </div>
 
             {selected.currentCycle ? (
@@ -417,7 +420,8 @@ export function MealSubscriptionsRoster() {
                   This week&apos;s billing cycle
                 </div>
                 <div>
-                  {selected.currentCycle.weekStart} – {selected.currentCycle.weekEnd}
+                  {formatDateLabel(selected.currentCycle.weekStart)} –{' '}
+                  {formatDateLabel(selected.currentCycle.weekEnd)}
                 </div>
                 <div>
                   {CYCLE_LABEL[selected.currentCycle.status]} ·{' '}
@@ -445,17 +449,60 @@ export function MealSubscriptionsRoster() {
                 ) : (
                   <ConfirmButton label="Resume plan" onConfirm={() => void act('resume')} busy={busy} />
                 )}
-                <ConfirmButton
-                  label="Cancel plan"
-                  confirmLabel="Confirm cancel"
-                  onConfirm={() => void act('cancel')}
-                  busy={busy}
-                />
+                {/* Ending someone's meal plan takes food off their week, so the
+                    confirm names the member and the schedule (FIX 5). */}
+                <Button variant="danger" disabled={busy} onClick={() => setConfirmingCancel(true)}>
+                  {busy ? 'Working…' : 'Cancel plan'}
+                </Button>
               </div>
             ) : null}
           </div>
         ) : null}
       </Drawer>
+
+      <ConfirmDialog
+        open={selected != null && confirmingCancel}
+        title="Cancel this meal plan?"
+        summary={
+          selected ? (
+            <>
+              <strong>{selected.account.displayName || selected.account.email}</strong> stops
+              getting these meals. Orders already placed for this week stay as they are, and the
+              plan cannot be switched back on from here.
+            </>
+          ) : (
+            ''
+          )
+        }
+        details={
+          selected
+            ? [
+                { label: 'Member', value: selected.account.displayName || selected.account.email },
+                { label: 'Restaurant', value: selected.partner.name },
+                {
+                  label: 'Schedule',
+                  value: scheduleLabel(selected.daysOfWeek, selected.window),
+                },
+                {
+                  label: 'Price/day',
+                  value: (
+                    <span className="gt-numeric">
+                      {formatMoney(selected.pricePerDayMinor, selected.currency)}
+                    </span>
+                  ),
+                },
+              ]
+            : undefined
+        }
+        confirmLabel="Cancel plan"
+        cancelLabel="Keep the plan"
+        busy={busy}
+        onCancel={() => setConfirmingCancel(false)}
+        onConfirm={() => {
+          setConfirmingCancel(false);
+          void act('cancel');
+        }}
+      />
     </>
   );
 }

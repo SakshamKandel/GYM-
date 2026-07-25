@@ -41,7 +41,7 @@ export function ProgressHero() {
               </PillLink>
             </Reveal>
             <Reveal delay={320}>
-              <p className="mt-8 font-mono text-[11.5px] uppercase tracking-[0.2em] text-faint">
+              <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-faint">
                 Weight · Tape · PRs · Streaks · Photos
               </p>
             </Reveal>

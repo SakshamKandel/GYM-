@@ -27,6 +27,23 @@ export interface RatingAggregate {
 }
 
 /**
+ * Fold an already-summed set of valid stars into the display aggregate. This is
+ * the ONE place the average is rounded and the never-rated case is decided, so
+ * a database roll-up (`count(*)` + `sum(stars)` grouped per partner, filtered to
+ * `stars between 1 and 5`) and the in-memory row fold below always produce the
+ * same displayed number.
+ *
+ * `sumStars`/`count` must already EXCLUDE out-of-range stars — the SQL predicate
+ * is what does that filtering for the grouped path.
+ */
+export function ratingAggregateFromTotals(sumStars: number, count: number): RatingAggregate {
+  if (!Number.isFinite(count) || !Number.isFinite(sumStars) || count <= 0) {
+    return { average: 0, count: 0 };
+  }
+  return { average: Math.round((sumStars / count) * 10) / 10, count };
+}
+
+/**
  * Fold rating rows into a partner (or coach/gym) aggregate. Invalid star values
  * are ignored (never crash on dirty data). Empty input → `{average:0,count:0}`
  * so a never-rated partner renders "no reviews yet", not NaN.
@@ -39,8 +56,7 @@ export function partnerRatingAggregate(rows: readonly RatingRow[]): RatingAggreg
     sum += row.stars;
     count += 1;
   }
-  if (count === 0) return { average: 0, count: 0 };
-  return { average: Math.round((sum / count) * 10) / 10, count };
+  return ratingAggregateFromTotals(sum, count);
 }
 
 /**

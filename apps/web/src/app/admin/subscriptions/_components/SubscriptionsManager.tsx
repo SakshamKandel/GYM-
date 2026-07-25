@@ -12,6 +12,8 @@ import {
   StatusChip,
   TierChip,
 } from '@/components/console';
+import { formatDate, formatDateTime } from '@/lib/format';
+import { MemberLink } from '../../_components/MemberLink';
 
 export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
 
@@ -30,12 +32,6 @@ export interface MemberRow {
 const TIERS: readonly Tier[] = ['starter', 'silver', 'gold', 'elite'];
 
 /** Short, locale-stable date label for the expiry column + modal summary. */
-const DATE_LABEL = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-});
-
 /**
  * Formats an ISO timestamp for a `datetime-local` input value (local time,
  * `YYYY-MM-DDTHH:mm`). Returns '' for null/empty so the field renders blank.
@@ -101,7 +97,14 @@ function toMemberRow(m: ApiMember): MemberRow {
  * window but a BLANK end date and "No expiry" UNticked is blocked (B10) so a
  * missing date can never silently grant a permanent tier.
  */
-export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
+export function SubscriptionsManager({
+  members,
+  canViewMembers,
+}: {
+  members: MemberRow[];
+  /** Viewer holds `members.read`, so member names can link to the record. */
+  canViewMembers: boolean;
+}) {
   const router = useRouter();
   const [filter, setFilter] = useState('');
   // null = show the SSR roster; an array = live search results.
@@ -143,7 +146,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
       setSearching(false);
     } catch {
       if (seq === reqSeq.current) {
-        setSearchError('Network error while searching.');
+        setSearchError('Could not reach us just now, so the search did not run. Try again.');
         setSearching(false);
       }
     }
@@ -233,7 +236,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
       const q = filter.trim();
       if (q) void runSearch(q, null);
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
@@ -244,18 +247,7 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
       header: 'Member',
       render: (m) => (
         <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              fontFamily: 'var(--font-heading)',
-              fontWeight: 600,
-              fontSize: 14,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {m.displayName || m.email}
-          </div>
+          <MemberLink id={m.id} name={m.displayName} email={m.email} canView={canViewMembers} />
           <div
             style={{
               fontSize: 12,
@@ -299,10 +291,10 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
               color: lapsed ? 'var(--gt-danger)' : 'var(--gt-text)',
               whiteSpace: 'nowrap',
             }}
-            title={new Date(m.tierExpiresAt).toLocaleString()}
+            title={formatDateTime(m.tierExpiresAt)}
           >
             {lapsed ? 'Lapsed · ' : ''}
-            {DATE_LABEL.format(new Date(m.tierExpiresAt))}
+            {formatDate(m.tierExpiresAt)}
           </span>
         );
       },
@@ -507,8 +499,8 @@ export function SubscriptionsManager({ members }: { members: MemberRow[] }) {
                 ? 'This tier will never lapse. Any existing expiry is cleared.'
                 : expiresAtLocal
                   ? isLapsed(fromLocalInput(expiresAtLocal))
-                    ? 'This end date is in the past — the tier lapses immediately (the member signs in as starter).'
-                    : `Tier lapses on ${DATE_LABEL.format(new Date(fromLocalInput(expiresAtLocal) as string))}. Elite auto-assign only applies while the tier is active.`
+                    ? 'This end date is in the past, so the tier lapses immediately (the member signs in as starter).'
+                    : `Tier lapses on ${formatDate(fromLocalInput(expiresAtLocal))}. Elite auto-assign only applies while the tier is active.`
                   : 'Set an end date, or tick "No expiry" for a permanent tier.'}
             </p>
 

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { Shell } from '@/components/marketing/Shell';
-import { CtaBand, Testimonials } from '@/components/marketing/home/Closing';
+import { CtaBand } from '@/components/marketing/home/Closing';
 import { HomeHero } from '@/components/marketing/home/Hero';
 import { HomeModules } from '@/components/marketing/home/Modules';
 import { PricingTeaser } from '@/components/marketing/home/PricingTeaser';
@@ -15,7 +15,7 @@ import {
 import { loadPublicCatalog } from '@/lib/publicCatalog';
 
 export const metadata: Metadata = {
-  title: 'The GM Method — every rep, every meal, one app',
+  title: 'The GM Method: every rep, every meal, one app',
   description:
     'Workouts, food, meal delivery, gyms and real human coaching in one offline-first fitness app. Built by coaches in Kathmandu, priced for Nepal and the world.',
 };
@@ -36,7 +36,6 @@ export default async function Home() {
       <MealsSpotlight />
       <ProgressSpotlight />
       <CoachingSpotlight />
-      <Testimonials />
       <PricingTeaser catalog={catalog} />
       <CtaBand />
     </Shell>

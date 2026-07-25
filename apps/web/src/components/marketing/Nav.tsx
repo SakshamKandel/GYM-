@@ -112,7 +112,7 @@ export function Nav() {
               type="button"
               aria-expanded={featuresOpen}
               onClick={() => setFeaturesOpen((v) => !v)}
-              className={`flex h-10 items-center gap-1.5 rounded-full px-4 text-[14px] font-medium transition-colors ${linkColor(onFeaturePage)}`}
+              className={`flex h-10 items-center gap-1.5 rounded-full px-4 text-[14.5px] font-medium transition-colors ${linkColor(onFeaturePage)}`}
             >
               Features
               <svg
@@ -147,11 +147,11 @@ export function Nav() {
                       }`}
                     >
                       <span
-                        className={`block text-[14px] font-semibold ${light ? 'text-ink' : 'text-snow'}`}
+                        className={`block text-[16px] font-semibold ${light ? 'text-ink' : 'text-snow'}`}
                       >
                         {f.label}
                       </span>
-                      <span className={`block text-[12.5px] ${light ? 'text-gravel' : 'text-dim'}`}>
+                      <span className={`block text-[14.5px] ${light ? 'text-gravel' : 'text-dim'}`}>
                         {f.blurb}
                       </span>
                     </Link>
@@ -165,7 +165,7 @@ export function Nav() {
             <Link
               key={l.href}
               href={l.href}
-              className={`flex h-10 items-center rounded-full px-4 text-[14px] font-medium transition-colors ${linkColor(Boolean(pathname?.startsWith(l.href)))}`}
+              className={`flex h-10 items-center rounded-full px-4 text-[14.5px] font-medium transition-colors ${linkColor(Boolean(pathname?.startsWith(l.href)))}`}
             >
               {l.label}
             </Link>
@@ -175,7 +175,7 @@ export function Nav() {
         <div className="flex items-center gap-3">
           <Link
             href="/download"
-            className="mkt-shine hidden h-11 items-center rounded-full bg-red px-6 text-[14px] font-semibold text-ink shadow-ember transition-all hover:bg-red-glow hover:shadow-ember-lg sm:inline-flex"
+            className="mkt-shine hidden h-11 items-center rounded-full bg-red px-6 text-[14.5px] font-semibold text-ink shadow-ember transition-all hover:bg-red-glow hover:shadow-ember-lg sm:inline-flex"
           >
             Get the app
           </Link>

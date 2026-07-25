@@ -25,14 +25,14 @@ export function PlansSection() {
 
           <div className="order-1 lg:order-2">
             <Reveal>
-              <Eyebrow tone="light">03 — Plans</Eyebrow>
+              <Eyebrow tone="light">03 · Plans</Eyebrow>
               <Display className="mt-4">
                 Your coach&rsquo;s plan.
                 <br />
                 Or yours.
               </Display>
               <Lead tone="light" className="mt-6">
-                Follow a program your coach built and assigned — or build your own
+                Follow a program your coach built and assigned, or build your own
                 from a 650+ exercise library. Either way it lands in Train, laid
                 out week by week, ready for gym mode.
               </Lead>
@@ -62,7 +62,7 @@ export function PlansSection() {
                     Total control
                   </h3>
                   <p className="mt-2.5 text-[14.5px] leading-relaxed text-gravel">
-                    Drag exercises into any split — Push · Pull · Legs or something
+                    Drag exercises into any split: Push, Pull, Legs or something
                     stranger. Reorder with a thumb, edit mid-block.
                   </p>
                 </div>

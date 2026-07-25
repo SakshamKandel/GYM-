@@ -7,7 +7,7 @@ import { Reveal } from '../motion';
 import { Container, Section, StatBig } from '../ui';
 
 const STATS = [
-  { value: 'EWMA', caption: 'trend smoothing — unit-tested' },
+  { value: 'EWMA', caption: 'trend smoothing, unit-tested' },
   { value: 'Auto', caption: 'PR detection on every saved set' },
   { value: 'Signed', caption: 'URLs guard every progress photo' },
   { value: 'Weekly', caption: 'progress report on your Home screen' },

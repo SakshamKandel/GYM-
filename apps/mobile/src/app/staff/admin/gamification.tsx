@@ -53,7 +53,7 @@ import { useAuth } from '../../../state/auth';
  */
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'not_found') return 'Account not found.';
   if (code === 'invalid') return 'Enter a non-zero XP amount.';
@@ -262,7 +262,7 @@ export default function AdminGamificationScreen() {
       return;
     }
     if (!adjustReason.trim()) {
-      setAdjustError('A reason is required — it is audited verbatim.');
+      setAdjustError('A reason is required. It is audited verbatim.');
       return;
     }
     setConfirmAdjust(true);

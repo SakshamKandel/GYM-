@@ -85,7 +85,7 @@ export function AssignClient({
         setSearching(false);
       } catch {
         if (seq !== reqSeq.current) return;
-        setError('Network error.');
+        setError('Could not reach us just now. Try again.');
         setSearching(false);
       }
     }, 250);
@@ -147,7 +147,7 @@ export function AssignClient({
       reqSeq.current++;
       onAssigned();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setAssigningId(null);
     }
   }
@@ -183,7 +183,7 @@ export function AssignClient({
 
       {notAccepting ? (
         <div style={{ fontSize: 12, color: 'var(--gt-warning)', marginTop: 6 }}>
-          This coach is marked as not accepting new clients — assign only if
+          This coach is marked as not accepting new clients. Assign only if
           intentional.
         </div>
       ) : null}
@@ -233,7 +233,7 @@ export function AssignClient({
               }}
             >
               {results.length > 0
-                ? 'No assignable members match — matches are staff or already assigned.'
+                ? 'No assignable members match. Matches are staff or already assigned.'
                 : 'No members match.'}
             </div>
           ) : (

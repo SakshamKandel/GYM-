@@ -1,6 +1,6 @@
 'use client';
 
-import { ORDER_STATUSES, canActorAdvance, formatMoney, orderNumber, type OrderStatus } from '@gym/shared';
+import { ORDER_STATUSES, canActorAdvance, orderNumber, type OrderStatus } from '@gym/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
@@ -11,10 +11,23 @@ import {
   DataTable,
   Drawer,
   SearchField,
-  StatusChip,
   Toolbar,
 } from '@/components/console';
+import {
+  formatDateLabel,
+  formatMoney,
+  formatShortDateTime,
+  ORDER_STATUS_COLOR,
+  ORDER_STATUS_LABEL,
+  ORDER_STATUS_TONE,
+  PAYMENT_LABEL,
+  PAYMENT_STATUS_LABEL,
+  windowLabel,
+  windowShort,
+} from '@/lib/format';
+import { ConfirmDialog } from '../../_components/ConfirmDialog';
 import { DownloadCsv } from '../../_components/DownloadCsv';
+import { MemberLink } from '../../_components/MemberLink';
 import type { AdminOrderRow } from '../_data';
 import { OrderTimeline } from './OrderTimeline';
 
@@ -33,45 +46,28 @@ const LocationPicker = dynamic(
  * directory). The Drawer's action buttons are computed from
  * `canActorAdvance(from, to, 'admin')` — this UI can never offer a transition
  * the server would reject, and `POST …/override` re-validates it anyway.
+ *
+ * The board is capped at `pageSize` rows per load. A FULL page is reported
+ * explicitly (banner + a one-click date narrow) rather than passed off as the
+ * complete set: an oversight surface that silently drops the oldest matching
+ * orders is worse than one that admits it, because nothing on screen
+ * distinguishes "300 orders" from "the newest 300 of thousands".
  */
 
-const STATUS_LABEL: Record<OrderStatus, string> = {
-  pending: 'Pending',
-  confirmed: 'Confirmed',
-  preparing: 'Preparing',
-  out_for_delivery: 'Out for delivery',
-  delivered: 'Delivered',
-  cancelled: 'Cancelled',
-  refused: 'Refused',
-};
+/**
+ * Status words, tones and dot colours come from the SHARED meal display layer
+ * (`@/lib/format`, re-exporting the partner portal's maps) — the restaurant and
+ * the admin reviewing that restaurant now read the same label for the same row,
+ * and a status renamed once is renamed everywhere.
+ */
 
-const STATUS_TONE: Record<OrderStatus, 'neutral' | 'positive' | 'warning' | 'critical' | 'info'> = {
-  pending: 'warning',
-  confirmed: 'info',
-  preparing: 'info',
-  out_for_delivery: 'info',
-  delivered: 'positive',
-  cancelled: 'neutral',
-  refused: 'critical',
-};
-
-/** Same semantic status-color language as the partner ops board (CSS vars). */
-const STATUS_COLOR: Record<OrderStatus, string> = {
-  pending: 'var(--gt-warning)',
-  confirmed: 'var(--gt-info)',
-  preparing: 'var(--gt-info)',
-  out_for_delivery: 'var(--gt-accent)',
-  delivered: 'var(--gt-success)',
-  cancelled: 'var(--gt-text-faint)',
-  refused: 'var(--gt-danger)',
-};
-
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-});
+/** Today as the local `YYYY-MM-DD` the delivery-date filter expects. */
+function todayInput(): string {
+  const d = new Date();
+  const month = `${d.getMonth() + 1}`.padStart(2, '0');
+  const day = `${d.getDate()}`.padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+}
 
 async function parseErrorCode(res: Response): Promise<string | null> {
   try {
@@ -87,22 +83,43 @@ function friendlyError(status: number, code: string | null): string {
     case 'illegal_transition':
       return 'That status change is no longer valid for this order.';
     case 'conflict':
-      return 'This order changed elsewhere — refreshing.';
+      return 'This order changed elsewhere. Refreshing.';
     case 'not_found':
       return 'This order no longer exists.';
+    // The order has been paid for, so plain cancelling would strand the
+    // customer's money. Name the action that actually handles it.
+    case 'refund_required':
+      return 'This order is paid. Use Cancel and refund so the money goes back.';
+    case 'payment_review_required':
+      return 'The payment receipt is still being checked. Decide it on the payments queue first.';
+    case 'not_paid':
+      return 'Nothing has been paid on this order, so there is nothing to send back. Use Mark cancelled.';
     default:
       break;
   }
-  if (status === 403) return 'You are not allowed to review orders.';
+  if (status === 403) return 'You are not allowed to do that.';
   return 'Something went wrong. Try again.';
 }
 
 export function OrdersOversight({
   initialOrders,
   partners,
+  pageSize,
+  canViewMembers,
+  canReverseMoney,
 }: {
   initialOrders: AdminOrderRow[];
   partners: { id: string; name: string }[];
+  /** Row ceiling the server applies (ADMIN_ORDERS_PAGE_SIZE, passed down
+   * because `_data.ts` is server-only and can't be value-imported here). A full
+   * page means older matching orders were dropped — say so instead of showing a
+   * truncated board that looks complete. */
+  pageSize: number;
+  /** Viewer holds `members.read`, so member names can link to the record. */
+  canViewMembers: boolean;
+  /** Viewer holds `payments.review` as well as `orders.review`, so the
+   * cancel-and-refund action on a paid order is theirs to use. */
+  canReverseMoney: boolean;
 }) {
   const router = useRouter();
   const [orders, setOrders] = useState<AdminOrderRow[]>(initialOrders);
@@ -117,6 +134,13 @@ export function OrdersOversight({
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [drawerError, setDrawerError] = useState<string | null>(null);
+  // Cancelling or refusing a live food order used to fire on a single click
+  // that never said whose order it was. Both now route through a confirm that
+  // names the order, the member and the money.
+  const [pendingStatus, setPendingStatus] = useState<OrderStatus | null>(null);
+  // Cancel-and-refund is its own confirmation: it is the only action here that
+  // moves money, so it must never share a dialog with the ordinary cancel.
+  const [pendingRefund, setPendingRefund] = useState(false);
 
   // Re-fetch from the guarded API whenever a server-side filter changes,
   // debouncing the free-text search box so each keystroke doesn't fire a
@@ -183,24 +207,80 @@ export function OrdersOversight({
   // client-side re-filtering here — `orders` IS the filtered set.
   const filtered = orders;
 
+  // A full page means the server hit its ceiling and OLDER matching orders were
+  // dropped. Without this the board silently lies: 300 rows and 30,000 rows
+  // render identically. Narrowing any server-side filter brings them back into
+  // range, so name that explicitly.
+  const truncated = !loading && orders.length >= pageSize;
+
   const selected = orders.find((o) => o.id === selectedId) ?? null;
 
-  const availableTargets = useMemo(() => {
+  const availableTargets = useMemo<OrderStatus[]>(() => {
     if (!selected) return [];
     return ORDER_STATUSES.filter(
       (to) => to !== selected.status && canActorAdvance(selected.status, to, 'admin'),
     );
   }, [selected]);
 
+  /**
+   * Money already captured on this order. While it sits there, the ordinary
+   * override rail refuses to cancel or refuse (it will not strand a customer's
+   * cash), which is exactly the state the cancel-and-refund action exists for.
+   */
+  const paymentHeld = selected?.paymentStatus === 'paid';
+  /** Receipt uploaded, nobody has decided it yet. Payments queue owns this one. */
+  const paymentInReview = selected?.paymentStatus === 'receipt_submitted';
+
+  /**
+   * Targets the plain override route would actually accept. While money is held
+   * or under review it rejects cancel and refuse, so offering those buttons only
+   * ever produced a 409 and a confused operator.
+   */
+  const overrideTargets = useMemo(
+    () =>
+      paymentHeld || paymentInReview
+        ? availableTargets.filter((t) => t !== 'cancelled' && t !== 'refused')
+        : availableTargets,
+    [availableTargets, paymentHeld, paymentInReview],
+  );
+
+  /**
+   * The escape hatch for a paid order that has to stop: one compare-and-set that
+   * cancels it AND marks the payment refunded, so the money is never stranded on
+   * a dead order. It has existed and been reachable by nobody; this is its
+   * button. Needs `payments.review` on top of `orders.review`, same as the route.
+   */
+  const canCancelAndRefund =
+    paymentHeld && availableTargets.includes('cancelled') && canReverseMoney;
+  const reasonRequired = overrideTargets.some(isDestructive) || canCancelAndRefund;
+  const hasReason = reason.trim().length > 0;
+
   function openRow(row: AdminOrderRow) {
     setSelectedId(row.id);
     setReason('');
     setDrawerError(null);
+    setPendingStatus(null);
+    setPendingRefund(false);
   }
 
   function closeDrawer() {
     if (busy) return;
     setSelectedId(null);
+    setPendingStatus(null);
+    setPendingRefund(false);
+  }
+
+  /** Only the two that take food away from a member need a confirm step. */
+  function isDestructive(to: OrderStatus): boolean {
+    return to === 'cancelled' || to === 'refused';
+  }
+
+  function requestOverride(to: OrderStatus) {
+    if (isDestructive(to)) {
+      setPendingStatus(to);
+      return;
+    }
+    void override(to);
   }
 
   async function override(toStatus: OrderStatus) {
@@ -227,6 +307,7 @@ export function OrdersOversight({
         const code = await parseErrorCode(res);
         setDrawerError(friendlyError(res.status, code));
         setBusy(false);
+        setPendingStatus(null);
         if (code === 'conflict' || code === 'not_found') {
           setSelectedId(null);
           router.refresh();
@@ -234,11 +315,55 @@ export function OrdersOversight({
         return;
       }
       setBusy(false);
+      setPendingStatus(null);
       setSelectedId(null);
       router.refresh();
     } catch {
-      setDrawerError('Network error.');
+      setDrawerError('Could not reach us just now. Try again.');
       setBusy(false);
+      setPendingStatus(null);
+    }
+  }
+
+  /**
+   * Cancel a PAID order and send the money back, in one guarded server call.
+   * The reason is required by the route, is written into the order history, and
+   * is relayed to the member with the cancellation, so it is never optional here
+   * either — the button stays disabled until one is typed.
+   */
+  async function cancelAndRefund() {
+    if (!selected || !hasReason) return;
+    setBusy(true);
+    setDrawerError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/orders/${encodeURIComponent(selected.id)}/force-cancel`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ reason: reason.trim() }),
+        },
+      );
+      if (!res.ok) {
+        const code = await parseErrorCode(res);
+        setDrawerError(friendlyError(res.status, code));
+        setBusy(false);
+        setPendingRefund(false);
+        if (code === 'conflict' || code === 'not_found') {
+          setSelectedId(null);
+          router.refresh();
+        }
+        return;
+      }
+      setBusy(false);
+      setPendingRefund(false);
+      setSelectedId(null);
+      router.refresh();
+    } catch {
+      setDrawerError('Could not reach us just now. Try again.');
+      setBusy(false);
+      setPendingRefund(false);
     }
   }
 
@@ -262,7 +387,7 @@ export function OrdersOversight({
       width: 130,
       render: (r) => (
         <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {DATE_FMT.format(new Date(r.placedAt))}
+          {formatShortDateTime(r.placedAt)}
         </span>
       ),
     },
@@ -276,7 +401,12 @@ export function OrdersOversight({
       header: 'Member',
       render: (r) => (
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>{r.accountDisplayName || r.accountEmail}</div>
+          <MemberLink
+            id={r.accountId}
+            name={r.accountDisplayName}
+            email={r.accountEmail}
+            canView={canViewMembers}
+          />
           <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{r.accountEmail}</div>
         </div>
       ),
@@ -284,10 +414,10 @@ export function OrdersOversight({
     {
       key: 'delivery',
       header: 'Delivery',
-      width: 140,
+      width: 150,
       render: (r) => (
         <span style={{ fontSize: 12 }}>
-          {r.deliveryDate} · {r.window}
+          {formatDateLabel(r.deliveryDate)} · {windowShort(r.window)}
         </span>
       ),
     },
@@ -303,11 +433,11 @@ export function OrdersOversight({
               width: 8,
               height: 8,
               borderRadius: '50%',
-              background: STATUS_COLOR[r.status],
+              background: ORDER_STATUS_COLOR[r.status],
               flexShrink: 0,
             }}
           />
-          <StatusChip status={r.status === 'delivered' ? 'live' : r.status === 'pending' ? 'pending' : r.status === 'cancelled' || r.status === 'refused' ? 'ended' : 'active'} label={STATUS_LABEL[r.status]} />
+          <Badge tone={ORDER_STATUS_TONE[r.status]}>{ORDER_STATUS_LABEL[r.status]}</Badge>
         </span>
       ),
     },
@@ -365,7 +495,7 @@ export function OrdersOversight({
               <option value="">All statuses</option>
               {ORDER_STATUSES.map((s) => (
                 <option key={s} value={s}>
-                  {STATUS_LABEL[s]}
+                  {ORDER_STATUS_LABEL[s]}
                 </option>
               ))}
             </select>
@@ -384,6 +514,36 @@ export function OrdersOversight({
         }
       />
 
+      {truncated ? (
+        <div
+          role="status"
+          style={{
+            marginBottom: 12,
+            padding: '10px 12px',
+            borderRadius: 10,
+            border: '1px solid color-mix(in srgb, var(--gt-warning) 40%, transparent)',
+            background: 'color-mix(in srgb, var(--gt-warning) 10%, transparent)',
+            color: 'var(--gt-text)',
+            fontSize: 13,
+            display: 'flex',
+            gap: 10,
+            alignItems: 'center',
+            flexWrap: 'wrap',
+          }}
+        >
+          <span>
+            Showing only the {pageSize} most recent orders that match these filters. Older ones
+            are not on this page. Pick a delivery date, partner, status, or search a member to
+            bring them into view.
+          </span>
+          {date ? null : (
+            <Button variant="ghost" size="sm" onClick={() => setDate(todayInput())}>
+              Narrow to today
+            </Button>
+          )}
+        </div>
+      ) : null}
+
       <DataTable
         columns={columns}
         rows={filtered}
@@ -395,30 +555,41 @@ export function OrdersOversight({
       <Drawer
         open={selected != null}
         onClose={closeDrawer}
-        title={selected ? `${selected.partnerName} · ${selected.deliveryDate}` : 'Order'}
+        title={selected ? `Order ${orderNumber(selected.id)}` : 'Order'}
         width={460}
       >
         {selected ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <StatusChip
-                status={selected.status === 'delivered' ? 'live' : selected.status === 'pending' ? 'pending' : selected.status === 'cancelled' || selected.status === 'refused' ? 'ended' : 'active'}
-                label={STATUS_LABEL[selected.status]}
-              />
+              <Badge tone={ORDER_STATUS_TONE[selected.status]}>
+                {ORDER_STATUS_LABEL[selected.status]}
+              </Badge>
               <Badge tone="info">{selected.source === 'subscription' ? 'Subscription' : 'One-time'}</Badge>
-              <Badge tone="neutral">{selected.window}</Badge>
+              <Badge tone="neutral">{windowShort(selected.window)}</Badge>
             </div>
 
             <Row label="Member">
-              {selected.accountDisplayName || selected.accountEmail}
+              <MemberLink
+                id={selected.accountId}
+                name={selected.accountDisplayName}
+                email={selected.accountEmail}
+                canView={canViewMembers}
+                strong={false}
+              />
               <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{selected.accountEmail}</div>
             </Row>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 14 }}>
-              <Row label="Delivery date">{selected.deliveryDate}</Row>
-              <Row label="Delivery window">{selected.window}</Row>
-              <Row label="Payment method">{selected.paymentMethod}</Row>
-              <Row label="Payment status">{selected.paymentStatus}</Row>
+              <Row label="Restaurant">{selected.partnerName}</Row>
+              <Row label="Placed">{formatShortDateTime(selected.placedAt)}</Row>
+              <Row label="Delivery date">{formatDateLabel(selected.deliveryDate)}</Row>
+              <Row label="Delivery window">{windowLabel(selected.window)}</Row>
+              <Row label="Payment method">
+                {PAYMENT_LABEL[selected.paymentMethod] ?? selected.paymentMethod}
+              </Row>
+              <Row label="Payment status">
+                {PAYMENT_STATUS_LABEL[selected.paymentStatus] ?? selected.paymentStatus}
+              </Row>
               <Row label="Subtotal">{formatMoney(selected.subtotalMinor, selected.currency)}</Row>
               <Row label="Total">{formatMoney(selected.totalMinor, selected.currency)}</Row>
             </div>
@@ -456,7 +627,7 @@ export function OrdersOversight({
                 </div>
               ) : (
                 <div style={{ marginTop: 6, fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                  No map pin — customer address is text-only.
+                  No map pin. Customer address is text-only.
                 </div>
               )}
             </Row>
@@ -504,7 +675,7 @@ export function OrdersOversight({
               <OrderTimeline orderId={selected.id} />
             </div>
 
-            {availableTargets.length > 0 ? (
+            {overrideTargets.length > 0 || canCancelAndRefund ? (
               <div
                 style={{
                   paddingTop: 16,
@@ -514,10 +685,10 @@ export function OrdersOversight({
                   gap: 10,
                 }}
               >
-                {availableTargets.includes('cancelled') || availableTargets.includes('refused') ? (
+                {reasonRequired ? (
                   <textarea
                     className="gt-input"
-                    placeholder="Reason (shown in the order history)"
+                    placeholder="Reason (shown in the order history and sent to the member)"
                     value={reason}
                     onChange={(e) => setReason(e.target.value)}
                     rows={2}
@@ -527,29 +698,174 @@ export function OrdersOversight({
                   />
                 ) : null}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {availableTargets.map((to) => (
+                  {overrideTargets.map((to) => (
                     <Button
                       key={to}
-                      variant={to === 'cancelled' || to === 'refused' ? 'danger' : 'primary'}
+                      variant={isDestructive(to) ? 'danger' : 'primary'}
                       size="sm"
                       disabled={busy}
-                      onClick={() => void override(to)}
+                      onClick={() => requestOverride(to)}
                     >
-                      {busy ? 'Working…' : `Mark ${STATUS_LABEL[to].toLowerCase()}`}
+                      {busy ? 'Working…' : `Mark ${ORDER_STATUS_LABEL[to].toLowerCase()}`}
                     </Button>
                   ))}
+                  {canCancelAndRefund ? (
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      disabled={busy || !hasReason}
+                      title={
+                        hasReason
+                          ? undefined
+                          : 'Type a reason first. The member is told why their order stopped.'
+                      }
+                      onClick={() => setPendingRefund(true)}
+                    >
+                      {busy ? 'Working…' : 'Cancel and refund'}
+                    </Button>
+                  ) : null}
                 </div>
+                {canCancelAndRefund && !hasReason ? (
+                  <p style={{ margin: 0, fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                    Type a reason to cancel and refund. The member is told why.
+                  </p>
+                ) : null}
               </div>
-            ) : (
+            ) : null}
+
+            {/* Money-held states: say why cancel is missing, and where it lives. */}
+            {paymentInReview && availableTargets.includes('cancelled') ? (
               <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-                This order is in a terminal state — no further action.
+                This order&apos;s payment receipt is still being checked. Decide it on the payments
+                queue, then come back and cancel.
               </div>
-            )}
+            ) : null}
+            {paymentHeld && availableTargets.includes('cancelled') && !canReverseMoney ? (
+              <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                This order is paid, so stopping it means sending{' '}
+                {formatMoney(selected.totalMinor, selected.currency)} back. That takes someone who
+                can review payments.
+              </div>
+            ) : null}
+            {availableTargets.length === 0 ? (
+              <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                This order is finished. Nothing left to change.
+              </div>
+            ) : null}
 
             {drawerError ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{drawerError}</div> : null}
           </div>
         ) : null}
       </Drawer>
+
+      <ConfirmDialog
+        open={selected != null && pendingStatus != null}
+        title={pendingStatus === 'refused' ? 'Refuse this order?' : 'Cancel this order?'}
+        summary={
+          selected && pendingStatus ? (
+            <>
+              {pendingStatus === 'refused' ? 'Refusing' : 'Cancelling'} order{' '}
+              {orderNumber(selected.id)} stops the delivery for{' '}
+              <strong>{selected.accountDisplayName || selected.accountEmail}</strong> and tells them
+              why. It cannot be undone.
+            </>
+          ) : (
+            ''
+          )
+        }
+        details={
+          selected
+            ? [
+                { label: 'Member', value: selected.accountDisplayName || selected.accountEmail },
+                { label: 'Restaurant', value: selected.partnerName },
+                {
+                  label: 'Delivery',
+                  value: `${formatDateLabel(selected.deliveryDate)} · ${windowShort(selected.window)}`,
+                },
+                {
+                  label: 'Order total',
+                  value: (
+                    <span className="gt-numeric">
+                      {formatMoney(selected.totalMinor, selected.currency)}
+                    </span>
+                  ),
+                },
+              ]
+            : undefined
+        }
+        confirmLabel={pendingStatus === 'refused' ? 'Refuse order' : 'Cancel order'}
+        busyLabel="Working…"
+        cancelLabel="Keep this order"
+        busy={busy}
+        onCancel={() => setPendingStatus(null)}
+        onConfirm={() => {
+          if (pendingStatus) void override(pendingStatus);
+        }}
+      >
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--gt-text-dim)' }}>
+          {reason.trim()
+            ? `Reason shown to the member: “${reason.trim()}”`
+            : 'No reason typed. Close this and add one if the member should know why.'}
+        </p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={selected != null && pendingRefund}
+        title="Cancel this order and send the money back?"
+        summary={
+          selected ? (
+            <>
+              Order {orderNumber(selected.id)} stops, and the{' '}
+              <strong>{formatMoney(selected.totalMinor, selected.currency)}</strong>{' '}
+              {selected.accountDisplayName || selected.accountEmail} paid is returned. They are told
+              why. It cannot be undone.
+            </>
+          ) : (
+            ''
+          )
+        }
+        details={
+          selected
+            ? [
+                { label: 'Member', value: selected.accountDisplayName || selected.accountEmail },
+                { label: 'Restaurant', value: selected.partnerName },
+                {
+                  label: 'Delivery',
+                  value: `${formatDateLabel(selected.deliveryDate)} · ${windowShort(selected.window)}`,
+                },
+                {
+                  label: 'Paid with',
+                  value: PAYMENT_LABEL[selected.paymentMethod] ?? selected.paymentMethod,
+                },
+                {
+                  label: 'Amount returned',
+                  value: (
+                    <span className="gt-numeric">
+                      {formatMoney(selected.totalMinor, selected.currency)}
+                    </span>
+                  ),
+                },
+              ]
+            : undefined
+        }
+        confirmLabel="Cancel and refund"
+        busyLabel="Working…"
+        cancelLabel="Keep this order"
+        busy={busy}
+        onCancel={() => setPendingRefund(false)}
+        onConfirm={() => void cancelAndRefund()}
+      >
+        {reason.trim() ? (
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--gt-text-dim)' }}>
+            Reason shown to the member: “{reason.trim()}”
+          </p>
+        ) : null}
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--gt-text-dim)' }}>
+          {selected?.paymentMethod === 'cod'
+            ? 'Cash was collected at the door, so the restaurant hands it back. Marking it here records that and closes the order.'
+            : 'The order is marked refunded here. Moving the money itself is still done by hand, the same way every other refund is.'}
+        </p>
+      </ConfirmDialog>
     </>
   );
 }

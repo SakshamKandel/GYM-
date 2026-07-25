@@ -71,7 +71,7 @@ function relativeTime(iso: string): string {
 }
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   return "Couldn't load analytics.";
 }

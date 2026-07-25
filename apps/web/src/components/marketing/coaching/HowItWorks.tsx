@@ -11,19 +11,19 @@ const STEPS = [
   {
     n: '01',
     title: 'Browse & request',
-    body: 'Every coach profile is public — headline, specialties, certifications, years of practice and live capacity. Pick one and send a request. You can only hold one pending request at a time, so choose like it matters.',
+    body: 'Every coach profile is public: headline, specialties, certifications, years of practice and live capacity. Pick one and send a request. You can only hold one pending request at a time, so choose like it matters.',
     tag: 'One pending request per member',
   },
   {
     n: '02',
     title: 'Coach accepts',
-    body: 'Coaches run real rosters with hard capacity caps — no overselling. When yours accepts, the assignment goes live instantly. If a roster is full, the card says so before you waste a week waiting.',
+    body: 'Coaches run real rosters with hard capacity caps, so no overselling. When yours accepts, the assignment goes live instantly. If a roster is full, the card says so before you waste a week waiting.',
     tag: 'Capacity-gated rosters',
   },
   {
     n: '03',
     title: 'Get programmed',
-    body: 'Assigned workouts land in your Train tab, diet plans in Food, and chat opens the moment the assignment is active. Your coach logs your milestones as you hit them — dated, on the record.',
+    body: 'Assigned workouts land in your Train tab, diet plans in Food, and chat opens the moment the assignment is active. Your coach logs your milestones as you hit them, dated and on the record.',
     tag: 'Workouts · diet · chat',
   },
 ] as const;
@@ -38,8 +38,8 @@ export function CoachingHowItWorks() {
             Three steps to coached.
           </Display>
           <Lead className="mt-6">
-            No forms, no phone calls, no sales chat. The whole loop — request, accept,
-            program — runs inside the app.
+            No forms, no phone calls, no sales chat. The whole loop, from request to accept to
+            program, runs inside the app.
           </Lead>
         </Reveal>
 
@@ -68,8 +68,8 @@ export function CoachingHowItWorks() {
 
         <Reveal delay={200}>
           <div className="mkt-divider mt-14" />
-          <p className="mt-6 text-center font-mono text-[11.5px] uppercase tracking-[0.2em] text-faint">
-            Decline or withdraw any time — requests never lock you in
+          <p className="mt-6 text-center font-mono text-[12px] uppercase tracking-[0.2em] text-faint">
+            Decline or withdraw any time. Requests never lock you in
           </p>
         </Reveal>
       </Container>

@@ -13,6 +13,7 @@ import {
   TextField,
   Toolbar,
 } from '@/components/console';
+import { formatDate } from '@/lib/format';
 
 export interface PromoCodeRow {
   id: string;
@@ -32,12 +33,6 @@ export interface CoachOption {
   id: string;
   label: string;
 }
-
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-});
 
 /** How many rows are shown before "Load more" reveals another page. The full
  * roster is already server-loaded (page.tsx has no cap today), so this is a
@@ -167,7 +162,7 @@ export function PromoManager({
         }
         setError(
           code2 === 'code_taken'
-            ? 'That code is already in use — try another.'
+            ? 'That code is already in use. Try another.'
             : res.status === 403
               ? 'You are not allowed to manage promo codes.'
               : 'Could not create that code. Try again.',
@@ -179,7 +174,7 @@ export function PromoManager({
       setCreateOpen(false);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
@@ -211,7 +206,7 @@ export function PromoManager({
       setToggling(null);
       router.refresh();
     } catch {
-      setRowError({ id: row.id, msg: 'Network error.' });
+      setRowError({ id: row.id, msg: 'Could not reach us just now. Try again.' });
       setToggling(null);
     }
   }
@@ -292,7 +287,7 @@ export function PromoManager({
       render: (r) =>
         r.expiresAt ? (
           <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-            {DATE_FMT.format(new Date(r.expiresAt))}
+            {formatDate(r.expiresAt)}
           </span>
         ) : (
           <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>Never</span>

@@ -38,6 +38,7 @@ import { EmptyArt } from '../../components/visual';
 import { logHaptic, tapHaptic } from '../../lib/haptics';
 import { posterDate, todayIso } from '../../lib/dates';
 import { uid } from '../../lib/id';
+import { tierName } from '../../lib/tier';
 import { useProfile } from '../../state/profile';
 import {
   MEALS,
@@ -209,15 +210,17 @@ function macroLine(protein: number, carbs: number, fat: number): string {
 function coachDietCaption(section: CoachDietSection): string {
   switch (section.kind) {
     case 'locked':
-      return 'Unlock with the Gold plan';
+      // Named from the gate's OWN required tier, not a hardcoded one, and
+      // spelled by the shared helper so it can never read as a raw slug.
+      return `Unlock with the ${tierName(section.requiredTier)} membership`;
     case 'no-coach':
       return 'Get a coach for a custom diet plan';
     case 'ready':
       return section.plans.length > 0
-        ? `${section.plans.length} active plan${section.plans.length === 1 ? '' : 's'} from ${section.coach.displayName}`
+        ? `${section.plans.length} active diet plan${section.plans.length === 1 ? '' : 's'} from ${section.coach.displayName}`
         : `${section.coach.displayName} hasn't assigned one yet`;
     case 'error':
-      return "Couldn't load — tap to retry";
+      return "Couldn't load. Tap to retry";
     case 'hidden':
       return '';
   }
@@ -463,7 +466,7 @@ export default function FoodScreen() {
           <View style={styles.copyInfo}>
             <AppText variant="bodyBold">Order meals</AppText>
             <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
-              Delivery from local partners — one-time or weekly
+              Delivery from local partners, one-time or weekly
             </AppText>
           </View>
           <Ionicons name="chevron-forward" size={20} color={colors.textDim} />

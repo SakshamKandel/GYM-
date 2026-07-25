@@ -1,5 +1,6 @@
 import { accounts, challengeMembers, coachAssignments, coachChallenges, syncedWorkouts } from '@gym/db';
-import { and, eq, gte } from 'drizzle-orm';
+import { maskPii } from '@gym/shared';
+import { and, countDistinct, eq, gte, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -15,7 +16,9 @@ export const runtime = 'nodejs';
  *  - GET → the current month's challenge (if any), with a per-assigned-client
  *    progress list: joined?, session-days this month (ranked only), complete?
  *  - POST {title, targetDays, monthKey} → creates it; 201, or 409
- *    {error:'exists'} if the coach already has one this month.
+ *    {error:'exists'} if the coach already has one this month. The title is
+ *    coach-written text seen by every client on the roster, so it is masked on
+ *    write like every other coach-authored field.
  */
 
 const postSchema = z.object({
@@ -65,31 +68,40 @@ export async function GET(req: Request) {
   const joinedSet = new Set(memberRows.map((m) => m.accountId));
 
   const monthStart = `${monthKey}-01`;
-  const members = [];
-  for (const client of clientRows) {
+
+  // Session-days for EVERY joined client in one grouped query (a per-client
+  // query here meant one round-trip per roster member — a 60-client coach paid
+  // 60 sequential queries to open the page). Distinct ranked dates this month,
+  // grouped by account; clients with no sessions simply don't come back and
+  // fall through to 0.
+  const joinedClientIds = clientRows.map((c) => c.userId).filter((id) => joinedSet.has(id));
+  const daysByClient = new Map<string, number>();
+  if (joinedClientIds.length > 0) {
+    const dayRows = await db
+      .select({ accountId: syncedWorkouts.accountId, days: countDistinct(syncedWorkouts.date) })
+      .from(syncedWorkouts)
+      .where(
+        and(
+          inArray(syncedWorkouts.accountId, joinedClientIds),
+          eq(syncedWorkouts.ranked, true),
+          gte(syncedWorkouts.date, monthStart),
+        ),
+      )
+      .groupBy(syncedWorkouts.accountId);
+    for (const r of dayRows) daysByClient.set(r.accountId, Number(r.days));
+  }
+
+  const members = clientRows.map((client) => {
     const joined = joinedSet.has(client.userId);
-    let days = 0;
-    if (joined) {
-      const workoutRows = await db
-        .select({ date: syncedWorkouts.date })
-        .from(syncedWorkouts)
-        .where(
-          and(
-            eq(syncedWorkouts.accountId, client.userId),
-            eq(syncedWorkouts.ranked, true),
-            gte(syncedWorkouts.date, monthStart),
-          ),
-        );
-      days = new Set(workoutRows.map((r) => r.date)).size;
-    }
-    members.push({
+    const days = joined ? daysByClient.get(client.userId) ?? 0 : 0;
+    return {
       userId: client.userId,
       displayName: client.displayName,
       joined,
       days,
       complete: joined && days >= challenge.targetDays,
-    });
-  }
+    };
+  });
 
   return json(
     {
@@ -111,7 +123,14 @@ export async function POST(req: Request) {
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { title, targetDays, monthKey } = parsed.data;
+  const { targetDays, monthKey } = parsed.data;
+
+  // The title is coach-authored free text that gets broadcast to every client
+  // on the roster, so it goes through the same mask as every other
+  // coach-written field (workouts, diet plans, milestones, notes). The length
+  // limit above is checked on the RAW title, because the mask is longer than
+  // the text it replaces and would otherwise reject a legitimate short title.
+  const title = maskPii(parsed.data.title);
 
   if (monthKey !== currentMonthKey()) return json({ error: 'wrong_month' }, 409);
 

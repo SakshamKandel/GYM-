@@ -35,7 +35,7 @@ export function PrepQueueMock() {
     <div ref={ref} className="p-4">
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[12px] font-bold text-[#1b1c1e]">Prep queue</span>
+        <span className="text-[12px] font-bold text-[#1b1c1e]">Prep summary</span>
         <span className="rounded-full bg-[#fdece5] px-2.5 py-1 text-[9.5px] font-bold text-[#c2410c]">
           Lunch cutoff 10:30
         </span>

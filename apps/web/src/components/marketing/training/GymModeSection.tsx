@@ -95,7 +95,7 @@ const FEATURES = [
   {
     n: '01',
     title: 'Auto rest timer',
-    body: 'Log a set and the clock starts itself — 90 seconds by default, adjustable mid-rest without leaving the screen.',
+    body: 'Log a set and the clock starts itself at 90 seconds by default, adjustable mid-rest without leaving the screen.',
   },
   {
     n: '02',
@@ -132,7 +132,7 @@ export function GymModeSection() {
 
           <div className="order-1 lg:order-2">
             <Reveal>
-              <Eyebrow tone="light">01 — Gym mode</Eyebrow>
+              <Eyebrow tone="light">01 · Gym mode</Eyebrow>
               <Display className="mt-4">
                 Set. Rest.
                 <br />

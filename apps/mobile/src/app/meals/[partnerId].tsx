@@ -9,6 +9,7 @@ import {
   Button,
   Card,
   Chip,
+  ConfirmDialog,
   EmptyState,
   enterDown,
   enterFade,
@@ -34,11 +35,11 @@ import type { MealDietType, MealGoalTag, MealPartner, MealWindow, MenuMeal } fro
  * /meals/[partnerId] — a partner's menu (plan §6: "menu browse: macro badges
  * kcal/P/C/F, diet/goal filters, partner grouping"). Quantity pickers build
  * an in-memory cart (features/meals/cartStore) shared with /meals/checkout;
- * a "Set up a weekly plan" link hands off to /meals/subscribe for the same
- * partner without needing a cart.
+ * a "Set up a weekly meal plan" link hands off to /meals/subscribe for the
+ * same partner without needing a cart.
  *
  * Visual language (2026-07-21 professional pass): partner hero block up top,
- * the weekly-plan promo as the screen's single cream counterpoint block, meal
+ * the weekly meal-plan promo as the screen's single cream counterpoint block, meal
  * cards with macro-dot pills + Oswald pricing, and the red floating cart bar
  * as the one red action element.
  *
@@ -241,6 +242,9 @@ function PartnerHero({ partner }: { partner: MealPartner | null }) {
         </View>
       </View>
       <View style={styles.heroBadges}>
+        {partner !== null && !partner.acceptingOrders ? (
+          <Tag label="Closed right now" variant="dim" />
+        ) : null}
         {partner?.acceptsCod ? <Tag label="Cash on delivery" variant="dim" /> : null}
         <Tag label={`Lunch ${windowTimeRange('lunch')}`} variant="dim" />
         <Tag label={`Dinner ${windowTimeRange('dinner')}`} variant="dim" />
@@ -249,21 +253,33 @@ function PartnerHero({ partner }: { partner: MealPartner | null }) {
   );
 }
 
-function MealItemCard({ meal, index }: { meal: MenuMeal; index: number }) {
+function MealItemCard({
+  meal,
+  index,
+  closed,
+}: {
+  meal: MenuMeal;
+  index: number;
+  /** The whole kitchen has paused orders — everything on it is unorderable. */
+  closed: boolean;
+}) {
   const qty = useMealCart((s) => s.lines[meal.id]?.qty ?? 0);
   const setQty = useMealCart((s) => s.setQty);
   // Pack F real inventory (B... sold-out surfacing): disable ordering instead
   // of hiding the meal outright, and zero any quantity already in the cart —
   // a partner toggling sold-out mid-browse must not leave a stale cart line.
+  // A kitchen-wide pause behaves identically, so a partner that closes while a
+  // member is browsing empties the cart rather than leaving a doomed checkout.
   const soldOut = meal.soldOut;
+  const unavailable = soldOut || closed;
   useEffect(() => {
-    if (soldOut && qty > 0) setQty(meal, 0);
+    if (unavailable && qty > 0) setQty(meal, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [soldOut]);
+  }, [unavailable]);
 
   return (
     <Animated.View entering={enterUp(Math.min(index, 5))}>
-      <Card style={[styles.card, soldOut && styles.cardSoldOut]}>
+      <Card style={[styles.card, unavailable && styles.cardSoldOut]}>
         <View style={styles.cardTop}>
           <View style={styles.thumbWrap}>
             <MealThumb imageUrl={meal.imageUrl} size={88} />
@@ -298,13 +314,13 @@ function MealItemCard({ meal, index }: { meal: MenuMeal; index: number }) {
         </View>
 
         <View style={styles.qtyRow}>
-          <AppText variant="caption" color={colors.textFaint} numberOfLines={1} style={{ flex: 1 }}>
+          <AppText variant="caption" color={colors.textDim} numberOfLines={1} style={{ flex: 1 }}>
             {dietLabel(meal.dietType)}
             {meal.goalTags.length > 0 ? ` · ${meal.goalTags.map(goalLabel).join(', ')}` : ''}
           </AppText>
-          {soldOut ? (
-            <AppText variant="caption" color={colors.textDim}>
-              Not available for this slot
+          {unavailable ? (
+            <AppText variant="body" color={colors.textDim}>
+              {closed ? 'Closed right now' : 'Not available for this slot'}
             </AppText>
           ) : (
             <View style={styles.qtyControls}>
@@ -317,7 +333,7 @@ function MealItemCard({ meal, index }: { meal: MenuMeal; index: number }) {
               >
                 <Ionicons name="remove" size={20} color={qty === 0 ? colors.textFaint : colors.text} />
               </PressableScale>
-              <AppText style={styles.qtyValue} color={qty > 0 ? colors.accent : colors.textFaint} tabular>
+              <AppText style={styles.qtyValue} color={qty > 0 ? colors.accent : colors.textDim} tabular>
                 {qty}
               </AppText>
               <PressableScale
@@ -348,10 +364,17 @@ export default function PartnerMenuScreen() {
   const [diet, setDiet] = useState<MealDietType | null>(null);
   const [goal, setGoal] = useState<MealGoalTag | null>(null);
   const setPartner = useMealCart((s) => s.setPartner);
+  const cartPartnerId = useMealCart((s) => s.partnerId);
   const lines = useMealCart((s) => s.lines);
 
   const { data: partners } = useMealPartners(authedToken);
   const partner = partners?.find((p) => p.id === partnerId) ?? null;
+  // The kitchen has paused orders (independent of admin deactivation and of
+  // per-meal sold-out). Members may still read the menu, but nothing can be
+  // added to the cart — previously the pause was invisible until checkout was
+  // rejected. Unknown partner (list still loading) reads as OPEN so the menu
+  // never flickers into a closed state while the partner list arrives.
+  const closed = partner !== null && !partner.acceptingOrders;
 
   // Filter the menu by the delivery window the member intends to order for —
   // otherwise a meal unavailable for that slot reaches the cart and only
@@ -370,9 +393,45 @@ export default function PartnerMenuScreen() {
     window: windowFilter,
   });
 
+  // Adopting this menu empties any cart built at a DIFFERENT kitchen (one order
+  // can only ever hold one partner's meals). That used to happen silently, so a
+  // member who tapped another restaurant out of curiosity lost the basket they
+  // had just filled. Ask first, and keep the cart when they say no.
+  const [switchPrompt, setSwitchPrompt] = useState<{ fromPartnerId: string; itemCount: number } | null>(
+    null,
+  );
   useEffect(() => {
-    if (partnerId) setPartner(partnerId);
+    if (!partnerId) return;
+    const cart = useMealCart.getState();
+    if (cart.partnerId === partnerId) return;
+    const carried = cartLineCount(cart.lines);
+    if (cart.partnerId !== null && carried > 0) {
+      setSwitchPrompt({ fromPartnerId: cart.partnerId, itemCount: carried });
+      return;
+    }
+    setPartner(partnerId);
   }, [partnerId, setPartner]);
+
+  const switchFromName = switchPrompt
+    ? (partners?.find((p) => p.id === switchPrompt.fromPartnerId)?.name ?? 'another kitchen')
+    : null;
+
+  function confirmSwitch(): void {
+    if (!partnerId) return;
+    // Switching partner is exactly what empties the cart (cartStore.setPartner).
+    setPartner(partnerId);
+    setSwitchPrompt(null);
+  }
+
+  function keepExistingCart(): void {
+    const previous = switchPrompt?.fromPartnerId ?? null;
+    setSwitchPrompt(null);
+    // Send them back to where their cart actually lives rather than leaving
+    // them on a menu they can't add anything from.
+    if (previous) replacePath(`/meals/${previous}`);
+    else if (router.canGoBack()) router.back();
+    else replacePath('/meals');
+  }
 
   // B12/Pack F: the menu only ever loaded on-focus, so a partner edit made
   // while a member is browsing was invisible until they navigated away and
@@ -417,7 +476,7 @@ export default function PartnerMenuScreen() {
 
   return (
     <View style={styles.root}>
-      <Screen scroll bottomInset={count > 0 ? CART_BAR_SPACE : FLOATING_TAB_SPACE}>
+      <Screen scroll bottomInset={count > 0 && !closed ? CART_BAR_SPACE : FLOATING_TAB_SPACE}>
         <Animated.View entering={enterDown()} style={styles.backRow}>
           <PressableScale
             accessibilityRole="button"
@@ -445,28 +504,45 @@ export default function PartnerMenuScreen() {
               <PartnerHero partner={partner} />
             </Animated.View>
 
-            <Animated.View entering={enterUp(1)}>
-              <Card
-                variant="cream"
-                onPress={() => pushPath(`/meals/subscribe?partnerId=${partnerId}`)}
-                accessibilityLabel="Set up a weekly meal plan with this partner"
-                padding={spacing.lg}
-                style={styles.subscribeBlock}
-              >
-                <View style={styles.subscribeIcon} accessible={false} importantForAccessibility="no-hide-descendants">
-                  <Ionicons name="repeat" size={20} color={colors.text} />
-                </View>
-                <View style={styles.subscribeText}>
-                  <AppText variant="bodyBold" color={colors.onBlock}>
-                    Set up a weekly plan
-                  </AppText>
-                  <AppText variant="caption" color={colors.creamDim}>
-                    Pick delivery days, prepay each week
+            {closed ? (
+              <Animated.View entering={enterFade(0)}>
+                <View style={styles.noticeRow} accessibilityRole="text">
+                  <Ionicons name="pause-circle" size={18} color={colors.textDim} />
+                  <AppText variant="caption" style={styles.noticeText}>
+                    Closed right now. This kitchen isn&apos;t taking orders, but have a look at the
+                    menu and check back later.
                   </AppText>
                 </View>
-                <Ionicons name="chevron-forward" size={20} color={colors.onBlock} />
-              </Card>
-            </Animated.View>
+              </Animated.View>
+            ) : null}
+
+            {/* A weekly plan can't be started while the kitchen is paused (the
+                server refuses it too), so the promo is hidden rather than
+                offered as a dead end. */}
+            {closed ? null : (
+              <Animated.View entering={enterUp(1)}>
+                <Card
+                  variant="cream"
+                  onPress={() => pushPath(`/meals/subscribe?partnerId=${partnerId}`)}
+                  accessibilityLabel="Set up a weekly meal plan with this partner"
+                  padding={spacing.lg}
+                  style={styles.subscribeBlock}
+                >
+                  <View style={styles.subscribeIcon} accessible={false} importantForAccessibility="no-hide-descendants">
+                    <Ionicons name="repeat" size={20} color={colors.text} />
+                  </View>
+                  <View style={styles.subscribeText}>
+                    <AppText variant="bodyBold" color={colors.onBlock}>
+                      Set up a weekly meal plan
+                    </AppText>
+                    <AppText variant="caption" color={colors.creamDim}>
+                      Pick delivery days, prepay each week
+                    </AppText>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={colors.onBlock} />
+                </Card>
+              </Animated.View>
+            )}
 
             <Animated.View entering={enterUp(2)} style={styles.filterGroup}>
               <View style={styles.filterLabelRow}>
@@ -517,13 +593,13 @@ export default function PartnerMenuScreen() {
               <Animated.View entering={enterFade(0)}>
                 <PressableScale
                   accessibilityRole="button"
-                  accessibilityLabel="Menu updated — tap to dismiss"
+                  accessibilityLabel="Menu updated. Tap to dismiss"
                   onPress={() => setMenuUpdated(false)}
                   style={styles.noticeRow}
                 >
                   <Ionicons name="refresh-circle" size={18} color={colors.accent} />
                   <AppText variant="caption" style={styles.noticeText}>
-                    Menu updated — prices or availability changed.
+                    Menu updated. Prices or availability changed.
                   </AppText>
                 </PressableScale>
               </Animated.View>
@@ -539,7 +615,7 @@ export default function PartnerMenuScreen() {
                 >
                   <Ionicons name="cloud-offline" size={16} color={colors.textDim} />
                   <AppText variant="caption" style={styles.noticeText}>
-                    Couldn&apos;t load the menu — tap to retry.
+                    Couldn&apos;t load the menu. Tap to retry.
                   </AppText>
                   <Ionicons name="refresh" size={15} color={colors.textDim} />
                 </PressableScale>
@@ -566,7 +642,7 @@ export default function PartnerMenuScreen() {
                 </View>
                 <View style={styles.list}>
                   {meals.map((m, i) => (
-                    <MealItemCard key={m.id} meal={m} index={i} />
+                    <MealItemCard key={m.id} meal={m} index={i} closed={closed} />
                   ))}
                 </View>
               </>
@@ -575,7 +651,10 @@ export default function PartnerMenuScreen() {
         )}
       </Screen>
 
-      {count > 0 ? (
+      {/* A closed kitchen never shows the checkout bar: the per-card effects
+          already empty the cart, but a line whose meal is hidden by the active
+          diet/goal/window filter has no card to run that effect. */}
+      {count > 0 && !closed && cartPartnerId === partnerId ? (
         <Animated.View
           entering={enterFade(0)}
           style={[styles.cartBar, { bottom: bottomClearance + FLOATING_TAB_SPACE }]}
@@ -591,6 +670,21 @@ export default function PartnerMenuScreen() {
           <Button label="Checkout" variant="onBlock" onPress={() => pushPath('/meals/checkout')} />
         </Animated.View>
       ) : null}
+
+      <ConfirmDialog
+        visible={switchPrompt !== null}
+        title="Start a new cart?"
+        message={
+          switchPrompt
+            ? `You have ${switchPrompt.itemCount} ${switchPrompt.itemCount === 1 ? 'item' : 'items'} from ${switchFromName}. One order can only come from one kitchen, so ordering here empties that cart.`
+            : undefined
+        }
+        confirmLabel="Start new cart"
+        cancelLabel="Keep my cart"
+        danger
+        onConfirm={confirmSwitch}
+        onCancel={keepExistingCart}
+      />
     </View>
   );
 }

@@ -22,9 +22,11 @@ import {
   enterFade,
   enterUp,
 } from '../../components/ui';
+import { PayeeDetailsCard } from '../../components/payments/PayeeDetailsCard';
+import { supportsRail, usePayee, type Payee, type PayeeRail } from '../../lib/api/payee';
 import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { syncProfileNow } from '../../lib/profileSync';
-import { useEffectiveTier } from '../../lib/tier';
+import { tierName, useEffectiveTier } from '../../lib/tier';
 import { applyServerUser, useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
 import { activateTrial, trialErrorLine, TRIAL_TIERS } from './trial';
@@ -55,6 +57,8 @@ import {
 } from './logic';
 import { TierCard } from './components/TierCard';
 import { TierDetailSheet, type TierDetail } from './TierDetailSheet';
+import { useStoreBilling, type StoreBilling } from './storeBilling';
+import { StorePurchaseSheet, StoreRestoreCard } from './StorePurchase';
 
 /**
  * The GM Method paywall in the color-block language (REVAMP-BRIEF): huge
@@ -69,13 +73,35 @@ import { TierDetailSheet, type TierDetail } from './TierDetailSheet';
  * feature copy only; price is never read from compiled data.
  *
  * A promo code can be redeemed inline (refetches the catalog on success).
- * Nepal-region accounts additionally see a manual eSewa/Khalti/bank payment
- * flow: pick a plan + duration, attach a receipt photo, submit for admin
- * review — the amount is always computed server-side from the live catalog.
+ *
+ * Whenever the server is NOT in preview mode, every signed-in member sees the
+ * manual payment flow: pick a plan + duration, attach a receipt photo, submit
+ * for admin review — the amount is always computed server-side from the live
+ * catalog. It used to be shown to Nepal accounts only, while everyone else was
+ * pointed at an app store that does not exist yet, so a member outside Nepal
+ * could not buy any paid tier at all. The rail itself was never regional (the
+ * server takes these requests from anywhere); only the METHODS are, so Nepal
+ * sees the local wallets and everywhere else sees bank transfer.
  *
  * A paid tier is applied optimistically only when the server explicitly
  * advertises non-production preview mode; otherwise the real store/manual
  * payment path is required.
+ *
+ * Store purchases (2026-07-25): when the server reports live billing AND this
+ * build can really sell through Apple or Google (see storeBilling.ts), a tap on
+ * a tier opens the store sheet instead, and a restore row appears under the
+ * cards. This screen still never grants a tier: the payment happens in the
+ * store, RevenueCat's webhook tells the server, and the sheet says plainly when
+ * that confirmation has not landed yet. The receipt rail below is untouched and
+ * keeps working exactly as before, including alongside the stores.
+ *
+ * Where the money goes (2026-07-25): the manual rail is offered only for
+ * methods the operator has actually published a destination for, and the
+ * destination is shown right above the receipt uploader. This screen used to
+ * name eSewa, Khalti or "bank transfer" and ask for a receipt while no wallet
+ * or account existed anywhere in the product — the instruction could not be
+ * carried out. With nothing configured the section now says so in one line
+ * instead of asking for a transfer to nobody.
  */
 
 export function SubscribeScreen() {
@@ -101,6 +127,14 @@ export function SubscribeScreen() {
 
   const [catalog, setCatalog] = useState<SubscriptionCatalog | null>(null);
   const [paymentRequests, setPaymentRequests] = useState<PaymentRequestRow[]>([]);
+  // App-store purchases. Reports itself unavailable unless a membership can
+  // really be bought right now, so nothing below turns into a dead button.
+  const store = useStoreBilling(catalog);
+  const [storeTier, setStoreTier] = useState<Tier | null>(null);
+  // Where members send the money. Null with `payeeLoading` false means nothing
+  // is published, and the manual rail is not offered at all.
+  const { payee, loading: payeeLoading } = usePayee(token, 'membership');
+  const methods = payableMethods(catalog?.region ?? null, payee);
 
   const fetchTrials = useCallback(async () => {
     if (status !== 'signedIn' || !token) return;
@@ -150,6 +184,16 @@ export function SubscribeScreen() {
     }, [fetchTrials, fetchCatalog, fetchPaymentRequests]),
   );
 
+  // Resolved once per render and used in both places: the notice above the
+  // cards (before the tap) and `choose`'s backstop (after it).
+  const purchaseBlock = purchaseBlockMessage(
+    status === 'signedIn' && Boolean(token),
+    catalog,
+    methods,
+    payeeLoading,
+    store,
+  );
+
   function goBack(): void {
     if (router.canGoBack()) router.back();
     else router.replace('/');
@@ -169,14 +213,14 @@ export function SubscribeScreen() {
       const keepsAccess =
         !info.expired && info.dateLabel !== null && (info.daysLeft ?? 0) > 0;
       Alert.alert(
-        'Cancel your plan?',
+        'Cancel your membership?',
         keepsAccess
-          ? `You'll keep your current benefits until ${info.dateLabel}, then move to the free plan. You won't be charged again.`
-          : "You'll move to the free plan. You can re-subscribe any time.",
+          ? `You'll keep your current benefits until ${info.dateLabel}, then move to the free Starter membership. You won't be charged again.`
+          : "You'll move to the free Starter membership. You can re-subscribe any time.",
         [
-          { text: 'Keep plan', style: 'cancel' },
+          { text: 'Keep membership', style: 'cancel' },
           {
-            text: 'Cancel plan',
+            text: 'Cancel membership',
             style: 'destructive',
             onPress: () => applyTierChange('starter'),
           },
@@ -185,30 +229,39 @@ export function SubscribeScreen() {
       return;
     }
 
+    // The stores can sell this. Take the tap there: the payment happens in the
+    // App Store or Google Play, and the membership is switched on by the server
+    // when the store confirms it (never by this screen).
+    if (store.available) {
+      if (!store.canBuy(tier)) {
+        warnHaptic();
+        setPlanError(
+          `${tierName(tier)} isn’t on sale in your store yet. Please check back soon.`,
+        );
+        return;
+      }
+      store.reset();
+      setStoreTier(tier);
+      return;
+    }
+
     // Paid pick while the server runs LIVE billing → the self-serve endpoint
     // 402s every paid tier. Pre-detect it (B23): show the honest affordance
-    // instead of optimistically applying then reverting on the rejection.
-    if (status !== 'signedIn' || !token) {
+    // instead of optimistically applying then reverting on the rejection. The
+    // same message is already on screen above the cards — this is the backstop
+    // for a card that was tapped before the catalog changed underneath it.
+    if (purchaseBlock !== null) {
       warnHaptic();
-      setPlanError('Sign in to view live pricing and choose a plan.');
+      setPlanError(purchaseBlock);
       return;
     }
 
-    if (!catalog) {
+    // Same price authority the card CTA uses to disable itself: a tier with no
+    // published price for this region can't be started even when the rest of
+    // the catalog is fine.
+    if (!tierPriceDisplay(tier, catalog).available) {
       warnHaptic();
-      setPlanError('Live pricing is unavailable. Check your connection and try again.');
-      return;
-    }
-
-    if (catalog.billingMode !== 'preview') {
-      warnHaptic();
-      setPlanError(
-        catalog.region === 'NP'
-          ? 'Pay for this plan with eSewa or Khalti below, then upload your receipt for review.'
-          : catalog.billingMode === 'live'
-            ? 'This plan must be purchased through the app store.'
-            : 'Purchases are temporarily unavailable on this server.',
-      );
+      setPlanError('That membership isn’t available in your region right now.');
       return;
     }
 
@@ -239,7 +292,7 @@ export function SubscribeScreen() {
     if (status !== 'signedIn' || !token) {
       if (optimistic && useProfile.getState().tier === tier) update({ tier: previousTier });
       setPreviewActive(false);
-      setPlanError('Sign in to change your plan.');
+      setPlanError('Sign in to change your membership.');
       return;
     }
 
@@ -254,8 +307,8 @@ export function SubscribeScreen() {
           const info = tierExpiryInfo(effectiveAt);
           setCancelNote(
             !info.expired && info.dateLabel !== null && (info.daysLeft ?? 0) > 0
-              ? `Plan cancelled — you keep access until ${info.dateLabel}.`
-              : 'Your plan has been cancelled.',
+              ? `Membership cancelled. You keep access until ${info.dateLabel}.`
+              : 'Your membership has been cancelled.',
           );
           successHaptic();
         }
@@ -270,8 +323,12 @@ export function SubscribeScreen() {
         setPreviewActive(false);
         setPlanError(
           ['billing_required', 'billing_unavailable'].includes(toApiError(err).code)
-            ? 'Paid plan activation is unavailable here. Use the configured store or manual-payment flow.'
-            : "Couldn't update your plan on the server — check your connection and try again.",
+            ? // Only point at the payment section when there IS one — with no
+              // published payment details it is not on screen.
+              methods.length > 0
+              ? 'We could not start this membership in the app. Please use the payment options shown below, or contact support.'
+              : 'We could not start this membership in the app. Please contact support.'
+            : "Your membership couldn't be updated. Check your connection and try again.",
         );
         warnHaptic();
       }
@@ -329,8 +386,8 @@ export function SubscribeScreen() {
     expiry.dateLabel !== null &&
     (expiry.expired || (expiry.daysLeft !== null && expiry.daysLeft <= 14));
   const expiryBannerText = expiry.expired
-    ? `Your membership ended on ${expiry.dateLabel}. Choose a plan below to renew.`
-    : `Your ${gmTierName(currentTier)} plan ends in ${expiry.daysLeft} ${
+    ? `Your membership ended on ${expiry.dateLabel}. Choose a membership below to renew.`
+    : `Your ${tierName(currentTier)} membership ends in ${expiry.daysLeft} ${
         expiry.daysLeft === 1 ? 'day' : 'days'
       } (${expiry.dateLabel}). Renew to keep your benefits.`;
 
@@ -369,17 +426,17 @@ export function SubscribeScreen() {
         <HeroCard mascot variant="charcoal">
           <AppText variant="title">Train the way Greece Maharjan grows</AppText>
           <AppText variant="caption">
-            Not generic macros — a method that adapts to your body every week.
+            Not generic macros. A method that adapts to your body every week.
           </AppText>
         </HeroCard>
         <AppText variant="caption" color={colors.textDim} style={styles.pricingNote}>
-          {trialDays}-day free trial on every plan · monthly or discounted annual billing
+          {trialDays}-day free trial on every membership · monthly or discounted annual billing
         </AppText>
         {previewActive ? (
           <Animated.View entering={enterFade()}>
             <AppText variant="caption" style={styles.previewNote}>
-              Payments launch with the app-store release — your plan is active
-              for preview.
+              Payments launch with the app-store release. Your membership is
+              active for preview.
             </AppText>
           </Animated.View>
         ) : null}
@@ -427,7 +484,7 @@ export function SubscribeScreen() {
           <View style={styles.activeTrialBanner}>
             <Ionicons name="time" size={16} color={colors.success} />
             <AppText variant="caption" color={colors.success}>
-              {activeTrial.tier.charAt(0).toUpperCase() + activeTrial.tier.slice(1)} trial active until{' '}
+              {tierName(activeTrial.tier)} trial active until{' '}
               {new Date(activeTrial.expiresAt).toLocaleDateString()}
             </AppText>
           </View>
@@ -441,6 +498,17 @@ export function SubscribeScreen() {
       ) : null}
 
       <View style={styles.cards}>
+        {/* Honest before the tap: when the catalog says memberships can't be started
+            in the app, say so here rather than letting a Choose tap bounce off
+            an error the member has to scroll back up to read. */}
+        {purchaseBlock ? (
+          <View style={styles.planNotice}>
+            <Ionicons name="information-circle-outline" size={16} color={colors.textDim} />
+            <AppText variant="caption" color={colors.textDim} style={styles.planNoticeText}>
+              {purchaseBlock}
+            </AppText>
+          </View>
+        ) : null}
         {GM_TIERS.map((t, i) => (
           <TierCard
             key={t.tier}
@@ -460,27 +528,112 @@ export function SubscribeScreen() {
         ))}
       </View>
 
-      {status === 'signedIn' && token && catalog?.region === 'NP' ? (
+      {/* Shown only when the stores can really sell a membership here. */}
+      <StoreRestoreCard store={store} />
+
+      {/* Every signed-in member, every region: the receipt rail, which stays
+          exactly as it was. Hidden in preview (a tap on a tier card
+          already applies it, so asking for a receipt would be odd), and hidden
+          when the region has no published paid price, because then there is no
+          amount to pay. The form inside also needs somewhere to send the money:
+          with no published payment details it is replaced by one honest line. */}
+      {status === 'signedIn' &&
+      token &&
+      catalog &&
+      catalog.billingMode !== 'preview' &&
+      catalog.tiers.some((t) => t.tier !== 'starter') ? (
         <Animated.View entering={enterUp(GM_TIERS.length + 1)} style={styles.paymentWrap}>
-          <SectionLabel>Pay via eSewa / Khalti</SectionLabel>
-          <AppText variant="caption" color={colors.textDim}>
-            Pick a plan, pay outside the app, then upload your receipt for review.
-            Reviews are usually completed within 24 hours.
-          </AppText>
+          <SectionLabel>{paymentSectionTitle(methods)}</SectionLabel>
+          {payeeLoading ? (
+            <AppText variant="caption" color={colors.textDim}>
+              Getting the payment details…
+            </AppText>
+          ) : methods.length === 0 ? (
+            // Nothing published to pay INTO. Say so once, plainly, and don't
+            // ask anyone to transfer money or attach a receipt.
+            <AppText variant="caption" color={colors.textDim}>
+              You can’t pay for a membership in the app just yet. Please check back soon.
+            </AppText>
+          ) : (
+            <AppText variant="caption" color={colors.textDim}>
+              Pick a membership, send the money to the details below, then upload your receipt for
+              review. Reviews are usually completed within 24 hours.
+            </AppText>
+          )}
           {paymentRequests.length > 0 ? (
             <PaymentHistory requests={paymentRequests} />
           ) : null}
-          <NepalPaymentSection
-            token={token}
-            catalog={catalog}
-            onSubmitted={fetchPaymentRequests}
-          />
+          {payee && methods.length > 0 ? (
+            <ManualPaymentSection
+              token={token}
+              catalog={catalog}
+              payee={payee}
+              methods={methods}
+              onSubmitted={fetchPaymentRequests}
+            />
+          ) : null}
         </Animated.View>
       ) : null}
 
       <TierDetailSheet detail={detail} onClose={() => setDetail(null)} />
+
+      <StorePurchaseSheet store={store} tier={storeTier} onClose={() => setStoreTier(null)} />
     </Screen>
   );
+}
+
+/**
+ * Why a paid membership can't be started with a tap right now, in plain words — or
+ * `null` when paid picks work normally.
+ *
+ * The catalog is the authority (published prices for the region + the server's
+ * billing mode). The screen renders this ABOVE the tier cards so the paywall is
+ * honest BEFORE the tap, and `choose` reuses the very same copy as its
+ * backstop, so the pre-tap notice and the tap-time error can never disagree.
+ */
+function purchaseBlockMessage(
+  signedIn: boolean,
+  catalog: SubscriptionCatalog | null,
+  methods: PaymentMethodOption[],
+  payeeLoading: boolean,
+  store: StoreBilling,
+): string | null {
+  if (!signedIn) return 'Sign in to view live pricing and choose a membership.';
+  // No validated catalog for this account (offline, or nothing published) —
+  // the cards already render their price as unavailable.
+  if (!catalog) return 'Live pricing is unavailable. Check your connection and try again.';
+  // A region with no published paid prices at all can't sell anything here.
+  if (!catalog.tiers.some((t) => t.tier !== 'starter')) {
+    return 'Memberships aren’t available in your region yet. Please check back soon.';
+  }
+  if (catalog.billingMode === 'preview') return null;
+  // Still finding out what the stores can sell — claim nothing either way yet.
+  if (store.loading) return null;
+  // A tap on a tier card opens the store, so there is nothing to warn about.
+  if (store.available) return null;
+  // Still finding out where money can be sent — claim nothing either way yet.
+  if (payeeLoading) return null;
+  // Outside preview a tap can't start a membership anywhere, so point at the
+  // section that CAN. This used to send everyone outside Nepal to an app store
+  // that isn't live yet, which left them with no way to pay at all — and then
+  // pointed everyone at payment rails with no destination behind them.
+  if (methods.length === 0) {
+    return 'You can’t buy a membership in the app just yet. Please check back soon.';
+  }
+  return `Pay for this membership with ${methodPhrase(methods)} below, then upload your receipt for review.`;
+}
+
+/** Heading for the manual payment section, named after the live rails. */
+function paymentSectionTitle(methods: PaymentMethodOption[]): string {
+  if (methods.length === 0) return 'Paying for a membership';
+  return `Pay with ${methodPhrase(methods)}`;
+}
+
+/** "eSewa", "eSewa or Khalti", "eSewa, Khalti or bank transfer". */
+function methodPhrase(methods: PaymentMethodOption[]): string {
+  const names = methods.map((m) => m.phrase);
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`;
 }
 
 // ── Promo code entry ──────────────────────────────────────────────
@@ -495,9 +648,9 @@ function promoErrorLine(code: string): string {
     case 'expired':
       return 'This code has expired or reached its redemption limit.';
     case 'unauthorized':
-      return 'Your session expired — sign in again to continue.';
+      return 'Your session expired. Sign in again to continue.';
     default:
-      return "Couldn't reach the server — try again.";
+      return "That code couldn't be checked. Check your connection and try again.";
   }
 }
 
@@ -523,7 +676,7 @@ function PromoCodeCard({
       try {
         const result = await redeemPromoCode(token, trimmed);
         setCode('');
-        setLine({ text: `Code applied — ${result.discountPct}% off.`, tone: 'success' });
+        setLine({ text: `Code applied: ${result.discountPct}% off.`, tone: 'success' });
         successHaptic();
         onRedeemed();
       } catch (err) {
@@ -577,10 +730,12 @@ function PromoCodeCard({
   );
 }
 
-// ── Nepal manual payment (eSewa/Khalti/bank) ──────────────────────
+// ── Manual payment (receipt review) ───────────────────────────────
 
 const PAYABLE_TIERS: PayableTier[] = ['silver', 'gold', 'elite'];
 const MONTH_OPTIONS: (1 | 3 | 12)[] = [1, 3, 12];
+/** Every method the server accepts, with the label used wherever one is shown
+ * (including history rows for a method no longer offered in this region). */
 const PAYMENT_METHOD_OPTIONS: { value: PaymentMethod; label: string }[] = [
   { value: 'esewa', label: 'eSewa' },
   { value: 'khalti', label: 'Khalti' },
@@ -588,8 +743,38 @@ const PAYMENT_METHOD_OPTIONS: { value: PaymentMethod; label: string }[] = [
   { value: 'other', label: 'Other' },
 ];
 
-function gmTierName(tier: Tier): string {
-  return GM_TIERS.find((g) => g.tier === tier)?.name ?? tier;
+/** A method the member may pick, with the wording used inside a sentence. */
+interface PaymentMethodOption {
+  value: PayeeRail;
+  label: string;
+  phrase: string;
+}
+
+/** Rails, by region, with a sentence-friendly name for each. */
+const REGION_RAILS: Record<SubscriptionCatalog['region'], PaymentMethodOption[]> = {
+  // eSewa and Khalti are Nepali wallets and would be dead ends anywhere else,
+  // so everywhere else gets bank transfer. 'other' was dropped: it named no
+  // destination, so it could never be paid.
+  NP: [
+    { value: 'esewa', label: 'eSewa', phrase: 'eSewa' },
+    { value: 'khalti', label: 'Khalti', phrase: 'Khalti' },
+    { value: 'bank', label: 'Bank transfer', phrase: 'bank transfer' },
+  ],
+  INTL: [{ value: 'bank', label: 'Bank transfer', phrase: 'bank transfer' }],
+};
+
+/**
+ * What the member can actually pick: the region's rails, minus every rail the
+ * operator has published no destination for. An empty list means the manual
+ * payment form is not shown at all — the screen says so instead of asking for a
+ * transfer to nobody.
+ */
+function payableMethods(
+  region: SubscriptionCatalog['region'] | null,
+  payee: Payee | null,
+): PaymentMethodOption[] {
+  if (!region || !payee) return [];
+  return REGION_RAILS[region].filter((m) => supportsRail(payee, m.value));
 }
 
 function paymentMethodLabel(method: PaymentMethod): string {
@@ -605,9 +790,9 @@ function receiptFileName(asset: ImagePicker.ImagePickerAsset): string {
 function paymentErrorLine(code: string): string {
   switch (code) {
     case 'unauthorized':
-      return 'Your session expired — sign in again to continue.';
+      return 'Your session expired. Sign in again to continue.';
     case 'invalid':
-      return 'Check your plan, duration and receipt, then try again.';
+      return 'Check your membership, duration and receipt, then try again.';
     case 'forbidden':
       return "You don't have permission to do that.";
     case 'image_not_configured':
@@ -617,19 +802,23 @@ function paymentErrorLine(code: string): string {
     case 'receipt_already_used':
       return 'That receipt has already been submitted.';
     default:
-      return "Couldn't reach the server — check your connection and try again.";
+      return "Your payment couldn't be sent. Check your connection and try again.";
   }
 }
 
 function paymentStatusTone(status: PaymentRequestRow['status']): string {
   if (status === 'approved') return colors.success;
   if (status === 'rejected') return colors.error;
+  // Refunded isn't a failure the member caused — the money went back. Keep it
+  // neutral (quiet ink) rather than alarm-red, but clearly not a live benefit.
+  if (status === 'refunded') return colors.textDim;
   return colors.warning;
 }
 
 function paymentStatusLabel(status: PaymentRequestRow['status']): string {
   if (status === 'approved') return 'Approved';
   if (status === 'rejected') return 'Rejected';
+  if (status === 'refunded') return 'Refunded';
   return 'Pending review';
 }
 
@@ -652,7 +841,7 @@ function PaymentRequestCard({ request }: { request: PaymentRequestRow }) {
     <View style={styles.pendingCard}>
       <View style={styles.pendingHeader}>
         <AppText variant="bodyBold">
-          {gmTierName(request.tier)} · {request.months}mo
+          {tierName(request.tier)} · {request.months}mo
         </AppText>
         <Tag
           label={paymentStatusLabel(request.status)}
@@ -667,6 +856,12 @@ function PaymentRequestCard({ request }: { request: PaymentRequestRow }) {
       {request.reviewNote ? (
         <AppText variant="caption" color={colors.textDim}>
           {request.reviewNote}
+        </AppText>
+      ) : request.status === 'refunded' ? (
+        // A refund with no admin reason still needs to say what happened,
+        // otherwise the row reads as a payment that just stopped counting.
+        <AppText variant="caption" color={colors.textDim}>
+          This payment was refunded and the membership it paid for was removed.
         </AppText>
       ) : null}
     </View>
@@ -690,18 +885,24 @@ function PaymentHistory({ requests }: { requests: PaymentRequestRow[] }) {
   );
 }
 
-function NepalPaymentSection({
+function ManualPaymentSection({
   token,
   catalog,
+  payee,
+  methods,
   onSubmitted,
 }: {
   token: string;
   catalog: SubscriptionCatalog;
+  /** Never rendered without one — the parent hides this form when it is null. */
+  payee: Payee;
+  /** Non-empty: only rails with a published destination reach this form. */
+  methods: PaymentMethodOption[];
   onSubmitted: () => void;
 }) {
   const [tier, setTier] = useState<PayableTier>('silver');
   const [months, setMonths] = useState<1 | 3 | 12>(1);
-  const [method, setMethod] = useState<PaymentMethod>('esewa');
+  const [method, setMethod] = useState<PayeeRail>(() => methods[0]?.value ?? 'bank');
   const [note, setNote] = useState('');
   const [asset, setAsset] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -712,6 +913,16 @@ function NepalPaymentSection({
   const catalogTier = catalog.tiers.find((t) => t.tier === tier);
   const unitMinor = catalogTier ? (catalogTier.discountedMinor ?? catalogTier.amountMinor) : 0;
   const totalMinor = unitMinor * months;
+
+  // A catalog refresh can move the account between regions (the server persists
+  // the country it resolves), and an operator can retire a wallet at any time.
+  // Deriving the live choice rather than storing it means a Nepali wallet can
+  // never stay selected on an international submission, and a rail whose
+  // destination just disappeared can never be submitted — no effect, no stale
+  // state, no invalid submit.
+  const activeMethod: PayeeRail = methods.some((m) => m.value === method)
+    ? method
+    : (methods[0]?.value ?? 'bank');
 
   async function pick(): Promise<void> {
     setLine(null);
@@ -749,7 +960,7 @@ function NepalPaymentSection({
           {
             tier,
             months,
-            method,
+            method: activeMethod,
             receiptUrl: reservation.uid,
             ...(note.trim() ? { note: note.trim() } : {}),
             region: catalog.region,
@@ -759,7 +970,7 @@ function NepalPaymentSection({
         setAsset(null);
         setNote('');
         setLine({
-          text: 'Payment submitted — an admin will review your receipt within 24 hours. We’ll notify you once it’s approved.',
+          text: 'Payment submitted. An admin will review your receipt within 24 hours. We’ll notify you once it’s approved.',
           tone: 'success',
         });
         successHaptic();
@@ -780,7 +991,7 @@ function NepalPaymentSection({
         {PAYABLE_TIERS.map((t) => (
           <Chip
             key={t}
-            label={gmTierName(t)}
+            label={tierName(t)}
             selected={tier === t}
             onPress={() => !submitting && setTier(t)}
           />
@@ -801,11 +1012,11 @@ function NepalPaymentSection({
 
       <AppText variant="label">Pay with</AppText>
       <View style={styles.chipRow}>
-        {PAYMENT_METHOD_OPTIONS.map((m) => (
+        {methods.map((m) => (
           <Chip
             key={m.value}
             label={m.label}
-            selected={method === m.value}
+            selected={activeMethod === m.value}
             onPress={() => !submitting && setMethod(m.value)}
           />
         ))}
@@ -817,6 +1028,14 @@ function NepalPaymentSection({
         </AppText>
         <AppText variant="title">{formatMoney(totalMinor, catalog.currency)}</AppText>
       </View>
+
+      {/* The destination, directly above the receipt step that asks the member
+          to prove they sent it. */}
+      <PayeeDetailsCard
+        payee={payee}
+        rails={[activeMethod]}
+        amountLabel={formatMoney(totalMinor, catalog.currency)}
+      />
 
       <AppTextInput
         value={note}
@@ -913,6 +1132,18 @@ const styles = StyleSheet.create({
   // Premium metal tier cards (components/TierCard) — stacked with block gaps.
   cards: { gap: spacing.md, marginTop: spacing.xl },
 
+  // "You can't buy this here right now" notice — rides at the top of the card
+  // stack (so it inherits the stack's spacing) in the quiet banner language.
+  planNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+  },
+  planNoticeText: { flex: 1 },
+
   activeTrialBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -933,7 +1164,7 @@ const styles = StyleSheet.create({
   expiryBannerExpired: { backgroundColor: colors.surface },
   expiryText: { flex: 1 },
 
-  // Nepal manual-payment section — borderless charcoal block.
+  // Manual-payment section — borderless charcoal block.
   paymentWrap: { marginTop: spacing.md },
   paymentPanel: {
     backgroundColor: colors.surface,

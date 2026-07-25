@@ -72,7 +72,7 @@ const CURRENCIES: readonly string[] = ['NPR', 'USD'];
 type EntryKind = 'adjustment' | 'payout';
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'not_found') return 'That coach is no longer available.';
   // Defensive fallback — EntryForm.submit() special-cases this to arm the
@@ -213,7 +213,7 @@ function EntryForm({
         </View>
       ) : (
         <AppText variant="caption" color={colors.textFaint}>
-          Recorded as money paid OUT — always a debit.
+          Recorded as money paid OUT, always a debit.
         </AppText>
       )}
 

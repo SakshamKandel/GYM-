@@ -6,7 +6,7 @@ import {
   gymPassOptionSchema,
   gymSocialLinkSchema,
   gymWeeklyHoursSchema,
-  partnerRatingAggregate,
+  ratingAggregateFromTotals,
   type GymAmenity,
   type GymCrowdStatus,
   type GymEquipmentItem,
@@ -14,8 +14,9 @@ import {
   type GymSocialLink,
   type GymWeeklyHours,
 } from '@gym/shared';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, between, eq, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/lib/db';
+import { optimizedImageUrl } from '@/lib/video/cloudinaryProvider';
 
 /**
  * Shared read helpers for the public gym-discovery surface (Pack M / plan
@@ -25,11 +26,11 @@ import { getDb } from '@/lib/db';
  *
  * B17 fix: a gym's displayed `rating`/`reviewCount` are computed HERE, from
  * real `gym_reviews` rows (status='visible' only) via the shared
- * `partnerRatingAggregate` fold (same pure function the meal-partner rating
- * uses — `RatingRow` is generic). The admin-authored `gyms.rating` /
- * `gyms.reviewCount` columns are intentionally never read by these routes
- * again: a gym shows NO rating/count at all until it has at least one genuine
- * member review (Pack C — "stop rendering admin numbers as social proof").
+ * `ratingAggregateFromTotals` fold (same pure rounding the meal-partner and
+ * coach ratings use). The admin-authored `gyms.rating` / `gyms.reviewCount`
+ * columns are intentionally never read by these routes again: a gym shows NO
+ * rating/count at all until it has at least one genuine member review (Pack C —
+ * "stop rendering admin numbers as social proof").
  */
 
 export interface GymRatingAgg {
@@ -40,25 +41,38 @@ export interface GymRatingAgg {
 const NO_RATING: GymRatingAgg = { rating: null, reviewCount: null };
 
 /** Real rating aggregate per gym id, keyed by gym id. Gyms with zero visible
- * reviews are simply absent from the map (callers default to NO_RATING). */
+ * reviews are simply absent from the map (callers default to NO_RATING).
+ *
+ * One grouped aggregate, not one row per review: the list surface used to pull
+ * every individual `gym_reviews` row for every gym on the page and average them
+ * in JavaScript, so a popular gym's whole review history crossed the wire on
+ * each discovery request. `between 1 and 5` is the same out-of-range guard the
+ * old client-side fold applied (the column is an integer, so range is the only
+ * way a star value can be invalid), and the rounding stays in the shared helper
+ * so the displayed number is unchanged. */
 export async function loadRatingAggregates(gymIds: string[]): Promise<Map<string, GymRatingAgg>> {
   const out = new Map<string, GymRatingAgg>();
   if (gymIds.length === 0) return out;
 
   const rows = await getDb()
-    .select({ gymId: gymReviews.gymId, stars: gymReviews.stars })
+    .select({
+      gymId: gymReviews.gymId,
+      reviewCount: sql<number>`count(*)::int`,
+      sumStars: sql<number>`coalesce(sum(${gymReviews.stars}), 0)::int`,
+    })
     .from(gymReviews)
-    .where(and(inArray(gymReviews.gymId, gymIds), eq(gymReviews.status, 'visible')));
+    .where(
+      and(
+        inArray(gymReviews.gymId, gymIds),
+        eq(gymReviews.status, 'visible'),
+        between(gymReviews.stars, 1, 5),
+      ),
+    )
+    .groupBy(gymReviews.gymId);
 
-  const byGym = new Map<string, { stars: number }[]>();
-  for (const r of rows) {
-    const list = byGym.get(r.gymId) ?? [];
-    list.push({ stars: r.stars });
-    byGym.set(r.gymId, list);
-  }
-  for (const [gymId, gymRows] of byGym) {
-    const agg = partnerRatingAggregate(gymRows);
-    if (agg.count > 0) out.set(gymId, { rating: agg.average, reviewCount: agg.count });
+  for (const row of rows) {
+    const agg = ratingAggregateFromTotals(Number(row.sumStars), Number(row.reviewCount));
+    if (agg.count > 0) out.set(row.gymId, { rating: agg.average, reviewCount: agg.count });
   }
   return out;
 }
@@ -67,9 +81,19 @@ export function ratingFor(agg: Map<string, GymRatingAgg>, gymId: string): GymRat
   return agg.get(gymId) ?? NO_RATING;
 }
 
-/** Cover photos per gym id, sorted by `sortOrder` (ascending). */
+/**
+ * Widest a gym photo is ever painted (full-bleed hero on a large screen). Rows
+ * hold whatever the operator uploaded, often a 12 MP phone original, so the cap
+ * is applied on the way out rather than migrating stored URLs.
+ */
+const GYM_PHOTO_MAX_WIDTH = 1280;
+
+/** Cover photos per gym id, sorted by `sortOrder` (ascending). Delivery URLs
+ * are size-capped and format/quality negotiated on the way out
+ * (`optimizedImageUrl`); a signed or foreign URL is passed through untouched. */
 export async function loadPhotosByGym(
   gymIds: string[],
+  maxWidth: number = GYM_PHOTO_MAX_WIDTH,
 ): Promise<Map<string, { id: string; deliveryUrl: string }[]>> {
   const out = new Map<string, { id: string; deliveryUrl: string }[]>();
   if (gymIds.length === 0) return out;
@@ -81,7 +105,7 @@ export async function loadPhotosByGym(
     .orderBy(asc(gymPhotos.sortOrder));
   for (const p of rows) {
     const list = out.get(p.gymId) ?? [];
-    list.push({ id: p.id, deliveryUrl: p.deliveryUrl });
+    list.push({ id: p.id, deliveryUrl: optimizedImageUrl(p.deliveryUrl, { maxWidth }) });
     out.set(p.gymId, list);
   }
   return out;

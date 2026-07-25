@@ -38,6 +38,13 @@ export interface AdvanceOrderParams {
   scope?: { partnerId?: string; accountId?: string };
   /** Persisted onto cancelReason when cancelling. */
   cancelReason?: string | null;
+  /**
+   * Admin forced money reversal (paid → refunded) folded into the SAME CAS as
+   * the cancel. Omit it everywhere except the payments.review-guarded admin
+   * force-cancel route: with the flag off, the destructive-transition guard is
+   * byte-for-byte the historical one (`unpaid`/`refunded` only).
+   */
+  reversePayment?: boolean;
   now?: Date;
 }
 
@@ -88,7 +95,7 @@ function pushCopyFor(
     case 'out_for_delivery':
       return {
         title: 'Out for delivery',
-        body: `Order ${code} is on the way — arriving in your ${slot} window.`,
+        body: `Order ${code} is on the way, arriving in your ${slot} window.`,
       };
     case 'delivered':
       return { title: 'Delivered', body: `Order ${code} has been delivered. Enjoy!` };
@@ -136,6 +143,7 @@ export async function advanceOrderStatus(
       actorId,
       scope,
       cancelReason,
+      reversePayment: params.reversePayment,
       now,
       eventId: crypto.randomUUID(),
     }),

@@ -50,8 +50,8 @@ export const SEX_OPTIONS: Option<Sex>[] = [
 ];
 
 export const UNIT_OPTIONS: Option<UnitPref>[] = [
-  { value: 'kg', title: 'Kilograms', subtitle: 'kg — plates in most gyms' },
-  { value: 'lb', title: 'Pounds', subtitle: 'lb — common in the US' },
+  { value: 'kg', title: 'Kilograms', subtitle: 'kg · plates in most gyms' },
+  { value: 'lb', title: 'Pounds', subtitle: 'lb · common in the US' },
 ];
 
 export const GOAL_OPTIONS: Option<GoalType>[] = [

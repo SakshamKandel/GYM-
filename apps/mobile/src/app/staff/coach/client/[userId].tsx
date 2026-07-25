@@ -30,6 +30,8 @@ import {
   type Tier,
 } from '../../../../features/staff/api';
 import { AssignedWorkoutsSection } from '../../../../features/staff/AssignedWorkoutsSection';
+import { ClientNotesSection } from '../../../../features/staff/ClientNotesSection';
+import { ClientReadPanels } from '../../../../features/staff/ClientReadPanels';
 import { DietPlanSection } from '../../../../features/staff/DietPlanSection';
 import {
   defaultCustomDateParts,
@@ -40,7 +42,7 @@ import {
   tierAllowsExpiry,
   type DurationChoice,
 } from '../../../../features/staff/duration';
-import { pushStaff, STAFF_ROUTES } from '../../../../features/staff/nav';
+import { pushStaff, staffCan, STAFF_ROUTES } from '../../../../features/staff/nav';
 import { successHaptic } from '../../../../lib/haptics';
 import { useAuth } from '../../../../state/auth';
 
@@ -97,7 +99,7 @@ const isTier = (v: string | undefined): v is Tier =>
 function errorLine(code: StaffErrorCode): string {
   switch (code) {
     case 'unauthorized':
-      return 'Your session expired — sign in again.';
+      return 'Your session expired. Sign in again.';
     case 'forbidden':
       return 'This client is no longer assigned to you.';
     case 'not_found':
@@ -145,6 +147,10 @@ export default function CoachClientScreen() {
   // default), but the control must never even be tappable here so a coach
   // never learns the flow exists only to hit a 403 at the end of it.
   const canGrantTier = staffCan(staffPermissions, 'client.tier_grant');
+  // The write key behind the private note (the server enforces the same one on
+  // the PUT). Without it the note stays readable but not editable, rather than
+  // offering a save button that can only 403.
+  const canMessageClients = staffCan(staffPermissions, 'coach.message.user');
   const params = useLocalSearchParams<{ userId: string; name?: string; tier?: string }>();
   const userId = params.userId;
   const clientName = params.name?.trim() || 'Client';
@@ -434,7 +440,7 @@ export default function CoachClientScreen() {
               <View style={styles.permanentNote}>
                 <Ionicons name="infinite-outline" size={18} color={colors.textDim} />
                 <AppText variant="caption" color={colors.textDim} style={styles.permanentText}>
-                  Starter is the free tier — it never expires, so no duration is needed.
+                  Starter is the free tier. It never expires, so no duration is needed.
                 </AppText>
               </View>
             )}
@@ -487,6 +493,13 @@ export default function CoachClientScreen() {
           </>
         )}
 
+        {/* ── What the client has actually been doing. Read-only panels over
+            the coach read routes, loaded one at a time on tap. ── */}
+        <ClientReadPanels userId={userId} token={token} />
+
+        {/* ── The coach's own private note about this client. ── */}
+        <ClientNotesSection userId={userId} token={token} canWrite={canMessageClients} />
+
         {/* ── Milestones — the client's coach-logged wins. ── */}
         <SectionLabel>Milestones</SectionLabel>
         {milestonesLoading ? (
@@ -506,7 +519,7 @@ export default function CoachClientScreen() {
           </PressableScale>
         ) : milestones.length === 0 ? (
           <AppText variant="caption" color={colors.textDim}>
-            No milestones yet — log the first below.
+            No milestones yet. Log the first below.
           </AppText>
         ) : (
           <View style={styles.milestoneList}>
@@ -760,4 +773,3 @@ const styles = StyleSheet.create({
   },
   endBtn: { marginTop: spacing.xl, marginBottom: spacing.lg },
 });
-import { staffCan } from '../../../../features/staff/nav';

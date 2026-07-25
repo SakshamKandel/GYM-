@@ -1,24 +1,44 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+import { Button, Modal } from '@/components/console';
 import { AssignPanel } from './AssignPanel';
+import { BodyPanel } from './BodyPanel';
 import { NotesPanel } from './NotesPanel';
+import { NutritionPanel } from './NutritionPanel';
+import { fmtDate, PanelState, Sparkline, Stat, StatRow, usePanelData } from './panelKit';
 
 /**
  * The client-detail hub body (Pack K / WP-10). A tabbed, all-client-side view
  * that reads the coach read-layer routes (overview / workouts-log / weight /
- * prs / check-ins) and hosts the write panels (assign workout+diet, log
- * milestone, private note). Every request is a same-origin fetch — the httpOnly
- * `gt_staff` cookie rides along and each route re-runs requireCoachOwnsUser, so
- * the browser never holds authority. All copy the coach sees is server-masked
- * before it ever leaves the API.
+ * nutrition / body / prs / check-ins) and hosts the write panels (assign
+ * workout+diet, log milestone, private note). Every request is a same-origin
+ * fetch — the httpOnly `gt_staff` cookie rides along and each route re-runs
+ * requireCoachOwnsUser, so the browser never holds authority. All copy the
+ * coach sees is server-masked before it ever leaves the API.
+ *
+ * The Food and Body tabs live in their own files (NutritionPanel/BodyPanel) —
+ * this file was already long, and each renders a whole dashboard of its own.
+ * Shared fetch/state/number primitives live in ./panelKit.
  */
 
-type Tab = 'overview' | 'training' | 'weight' | 'prs' | 'checkins' | 'assign' | 'notes';
+type Tab =
+  | 'overview'
+  | 'training'
+  | 'nutrition'
+  | 'body'
+  | 'weight'
+  | 'prs'
+  | 'checkins'
+  | 'assign'
+  | 'notes';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'overview', label: 'Overview' },
   { key: 'training', label: 'Training' },
+  { key: 'nutrition', label: 'Food' },
+  { key: 'body', label: 'Body' },
   { key: 'weight', label: 'Weight' },
   { key: 'prs', label: 'PRs' },
   { key: 'checkins', label: 'Check-ins' },
@@ -26,7 +46,15 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'notes', label: 'Notes' },
 ];
 
-export function ClientDetail({ userId }: { userId: string }) {
+export function ClientDetail({
+  userId,
+  clientName,
+}: {
+  userId: string;
+  /** Used only in the end-coaching confirmation copy; falls back to a generic
+   * phrase when the page doesn't pass a name. */
+  clientName?: string;
+}) {
   const [tab, setTab] = useState<Tab>('overview');
 
   return (
@@ -73,83 +101,135 @@ export function ClientDetail({ userId }: { userId: string }) {
 
       {tab === 'overview' ? <OverviewPanel userId={userId} /> : null}
       {tab === 'training' ? <TrainingPanel userId={userId} /> : null}
+      {tab === 'nutrition' ? <NutritionPanel userId={userId} /> : null}
+      {tab === 'body' ? <BodyPanel userId={userId} /> : null}
       {tab === 'weight' ? <WeightPanel userId={userId} /> : null}
       {tab === 'prs' ? <PrsPanel userId={userId} /> : null}
       {tab === 'checkins' ? <CheckinsPanel userId={userId} /> : null}
       {tab === 'assign' ? <AssignPanel userId={userId} /> : null}
       {tab === 'notes' ? <NotesPanel userId={userId} /> : null}
+
+      <EndCoaching userId={userId} clientName={clientName} />
     </div>
   );
 }
 
-// --- Shared fetch helper + small primitives ----------------------------------
+// --- End coaching ------------------------------------------------------------
 
-/** GET a coach read route; typed, with a stable error string on failure. */
-function usePanelData<T>(path: string): { data: T | null; error: string | null; loading: boolean } {
-  const [data, setData] = useState<T | null>(null);
+/**
+ * The one destructive action on this page, at the very bottom — the web twin of
+ * the mobile client screen's danger action. DELETE /api/coach/users/[userId]
+ * ends the caller's OWN active assignment (rows are ended, never deleted) and
+ * is the ONLY path that tells the member their coaching ended, so a desktop
+ * coach who "just stops replying" leaves them hanging without it.
+ *
+ * Two steps: a modal restates the consequence in the mobile wording before
+ * anything is sent. On success the coach no longer owns this client, so the
+ * page would 404 on a refresh — go back to the roster instead.
+ */
+function EndCoaching({ userId, clientName }: { userId: string; clientName?: string }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const who = clientName?.trim() || 'this client';
+
+  async function end() {
+    if (busy) return;
+    setBusy(true);
     setError(null);
     try {
-      const res = await fetch(path, { headers: { Accept: 'application/json' } });
+      const res = await fetch(`/api/coach/users/${encodeURIComponent(userId)}`, {
+        method: 'DELETE',
+      });
       if (!res.ok) {
         setError(
           res.status === 403
-            ? 'You are not assigned to this client.'
+            ? 'You are no longer assigned to this client.'
             : res.status === 401
               ? 'Your session expired. Sign in again.'
-              : 'Could not load. Try again.',
+              : 'Could not end the coaching. Try again.',
         );
-        setLoading(false);
+        setBusy(false);
         return;
       }
-      setData((await res.json()) as T);
-      setLoading(false);
+      setOpen(false);
+      setBusy(false);
+      router.push('/coach/clients');
+      router.refresh();
     } catch {
-      setError('Network error. Check your connection and retry.');
-      setLoading(false);
+      setError('Could not reach us just now. Check your connection and try again.');
+      setBusy(false);
     }
-  }, [path]);
+  }
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  return { data, error, loading };
-}
-
-function PanelState({ error, loading }: { error: string | null; loading: boolean }) {
   return (
-    <div className="gt-card" style={{ padding: 20, color: 'var(--gt-text-dim)', fontSize: 14 }}>
-      {loading ? 'Loading…' : (error ?? 'No data.')}
-    </div>
-  );
-}
-
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="gt-card" style={{ padding: 14, minWidth: 0 }}>
-      <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{label}</div>
-      <div
-        className="gt-numeric"
-        style={{ fontSize: 22, fontWeight: 600, fontFamily: 'var(--font-heading)', marginTop: 4 }}
-      >
-        {value}
+    <div
+      className="gt-card"
+      style={{
+        marginTop: 8,
+        padding: 16,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        flexWrap: 'wrap',
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 14 }}>
+          End coaching
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--gt-text-dim)', marginTop: 2 }}>
+          Takes {who} off your roster and lets them know. They keep everything they have logged.
+        </div>
+        {error && !open ? (
+          <div style={{ fontSize: 13, color: 'var(--gt-danger)', marginTop: 6 }} role="alert">
+            {error}
+          </div>
+        ) : null}
       </div>
-      {hint ? (
-        <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 2 }}>{hint}</div>
-      ) : null}
+      <Button
+        variant="danger"
+        size="sm"
+        disabled={busy}
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+      >
+        End coaching
+      </Button>
+
+      <Modal
+        open={open}
+        onClose={() => {
+          if (!busy) setOpen(false);
+        }}
+        title="End coaching"
+        footer={
+          <>
+            <Button size="sm" disabled={busy} onClick={() => setOpen(false)}>
+              Keep coaching
+            </Button>
+            <Button variant="danger" size="sm" disabled={busy} onClick={() => void end()}>
+              {busy ? 'Ending…' : 'End coaching'}
+            </Button>
+          </>
+        }
+      >
+        <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>
+          End coaching with {who}? They keep their logs; the chat thread closes for you.
+        </p>
+        {error ? (
+          <p style={{ margin: '10px 0 0', fontSize: 13, color: 'var(--gt-danger)' }} role="alert">
+            {error}
+          </p>
+        ) : null}
+      </Modal>
     </div>
   );
-}
-
-function fmtDate(v: string | null | undefined): string {
-  if (!v) return '—';
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
 }
 
 // --- Overview ----------------------------------------------------------------
@@ -180,13 +260,7 @@ function OverviewPanel({ userId }: { userId: string }) {
   const { training, body, engagement, client } = data;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-          gap: 10,
-        }}
-      >
+      <StatRow>
         <Stat label="Sessions (30d)" value={String(training.sessionsLast30)} hint={`${training.totalSessions} all-time`} />
         <Stat label="Volume (30d)" value={`${training.volumeLast30Kg.toLocaleString()} kg`} />
         <Stat label="PRs" value={String(training.prCount)} />
@@ -197,7 +271,7 @@ function OverviewPanel({ userId }: { userId: string }) {
         />
         <Stat label="Weekly streak" value={`${engagement.streakWeeks}w`} hint={`best ${engagement.bestStreakWeeks}w`} />
         <Stat label="Check-ins" value={String(body.checkInCount)} hint={body.lastCheckInDate ? fmtDate(body.lastCheckInDate) : 'none'} />
-      </div>
+      </StatRow>
       <div className="gt-card" style={{ padding: 14, fontSize: 13, color: 'var(--gt-text-dim)' }}>
         <div>Last workout: {fmtDate(training.lastWorkoutAt)}</div>
         <div>Coaching since: {fmtDate(client.assignedAt)}</div>
@@ -270,7 +344,7 @@ function TrainingPanel({ userId }: { userId: string }) {
           </div>
           {!w.ranked ? (
             <div style={{ marginTop: 6, fontSize: 12, color: 'var(--gt-red)' }}>
-              Flagged as implausible — excluded from stats.
+              Flagged as implausible, so excluded from stats.
             </div>
           ) : null}
         </div>
@@ -296,25 +370,6 @@ interface WeightData {
   summary: { direction: 'up' | 'down' | 'flat'; deltaKg: number; ratePerWeekKg: number };
 }
 
-function Sparkline({ points }: { points: TrendPoint[] }) {
-  if (points.length < 2) return null;
-  const w = 320;
-  const h = 80;
-  const vals = points.map((p) => p.trendKg);
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
-  const range = max - min || 1;
-  const step = w / (points.length - 1);
-  const path = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${(h - ((p.trendKg - min) / range) * h).toFixed(1)}`)
-    .join(' ');
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} role="img" aria-label="Bodyweight trend">
-      <path d={path} fill="none" stroke="var(--gt-red)" strokeWidth={2} />
-    </svg>
-  );
-}
-
 function WeightPanel({ userId }: { userId: string }) {
   const { data, error, loading } = usePanelData<WeightData>(
     `/api/coach/clients/${encodeURIComponent(userId)}/weight`,
@@ -331,11 +386,11 @@ function WeightPanel({ userId }: { userId: string }) {
   const arrow = data.summary.direction === 'up' ? '▲' : data.summary.direction === 'down' ? '▼' : '→';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
+      <StatRow>
         <Stat label="Latest trend" value={`${latest.trendKg} kg`} hint={fmtDate(latest.date)} />
         <Stat label="7-day change" value={`${arrow} ${Math.abs(data.summary.deltaKg)} kg`} />
         <Stat label="Rate" value={`${data.summary.ratePerWeekKg} kg/wk`} />
-      </div>
+      </StatRow>
       <div className="gt-card" style={{ padding: 14 }}>
         <Sparkline points={data.points} />
         <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 4 }}>

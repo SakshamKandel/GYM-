@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -84,18 +84,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const suggestion = updated[0];
   if (!suggestion) return json({ error: 'not_found' }, 404);
 
-  // Best-effort notify; never blocks or fails the review (sendPushToAccount
-  // never throws and no-ops without FIREBASE_SERVICE_ACCOUNT_B64). Wrapped in
-  // after() so the serverless runtime keeps the FCM send alive past the
-  // response instead of freezing it mid-flight.
-  after(() => sendPushToAccount(row.accountId, {
-    title: body.action === 'approve' ? 'Progression approved' : 'Progression adjusted',
-    body:
-      body.action === 'approve'
-        ? 'Your coach approved your next progression.'
-        : 'Your coach adjusted your next progression.',
-    data: { type: 'suggestion_reviewed', suggestionId: id, action: body.action },
-  }));
+  // Best-effort notify; never blocks or fails the review (notify() never
+  // throws). Wrapped in after() so the serverless runtime keeps the dispatch
+  // alive past the response instead of freezing it mid-flight.
+  after(() =>
+    notify(
+      'coach_suggestion_reviewed',
+      { accountId: row.accountId },
+      {
+        title: body.action === 'approve' ? 'Progression approved' : 'Progression adjusted',
+        body:
+          body.action === 'approve'
+            ? 'Your coach approved your next progression.'
+            : 'Your coach adjusted your next progression.',
+        data: { type: 'suggestion_reviewed', suggestionId: id, action: body.action },
+      },
+    ),
+  );
 
   await logAudit(principal, 'coach.suggestion.review', 'progression_suggestion', id, {
     action: body.action,

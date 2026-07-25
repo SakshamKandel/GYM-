@@ -168,15 +168,19 @@ const styles = StyleSheet.create({
 export default function GymDetailScreen() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
   const gymSlug = typeof slug === 'string' ? slug : '';
-  const { gym, notFound, error, retry } = useGymDetail(gymSlug);
+  const status = useAuth((s) => s.status);
+  const token = useAuth((s) => s.token);
+  const isSignedIn = status === 'signedIn';
+  // The session goes with the request while signed in: the saved (heart) state
+  // rides on this response and the server can only fill it in for a request it
+  // can identify. Signed out it stays a public read.
+  const { gym, notFound, error, retry } = useGymDetail(gymSlug, isSignedIn ? token : null);
   const [now] = useState(() => new Date());
 
   // The member's default saved delivery address doubles as their "home base"
   // for distance (features/gyms never imports features/meals — this screen
   // composes the two).
-  const status = useAuth((s) => s.status);
-  const token = useAuth((s) => s.token);
-  const { data: addresses } = useMealAddresses(status === 'signedIn' ? token : null);
+  const { data: addresses } = useMealAddresses(isSignedIn ? token : null);
   const defaultAddress = addresses?.find((a) => a.isDefault) ?? addresses?.[0] ?? null;
   const memberPoint =
     defaultAddress && defaultAddress.lat !== null && defaultAddress.lng !== null
@@ -195,7 +199,6 @@ export default function GymDetailScreen() {
   const todayIdx = useMemo(() => new Date(now.getTime() + 345 * 60_000).getUTCDay(), [now]);
 
   // ── Favorite / share / enquire / report (Pack M — fixes B15/B17) ──
-  const isSignedIn = status === 'signedIn';
   const [favorited, setFavorited] = useState(false);
   const [favoriteBusy, setFavoriteBusy] = useState(false);
   const [enquireOpen, setEnquireOpen] = useState(false);
@@ -208,13 +211,14 @@ export default function GymDetailScreen() {
   );
   const hasBottomAction = Boolean(gym && (canOpenDirections || gym.phone || gym.website));
 
-  // Seed local favorite state from the detail payload once per gym (not on
-  // every focus refetch, so an optimistic toggle here never gets clobbered by
-  // the screen's own reload — see useGymDetail's useFocusEffect).
+  // Seed local favorite state from what the server last SAID, not from every
+  // reload: a focus refetch that reports the same flag leaves an optimistic
+  // toggle alone, while signing in (which is what finally makes the flag
+  // meaningful) or a change made on another screen re-seeds it.
   useEffect(() => {
     if (gym) setFavorited(gym.isFavorited);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gym?.id]);
+  }, [gym?.id, gym?.isFavorited]);
 
   function requireSignIn(): boolean {
     if (isSignedIn && token) return true;
@@ -242,7 +246,7 @@ export default function GymDetailScreen() {
     if (!gym || !canOpenDirections) return;
     const locationBit = [gym.addressText, gym.city].filter(Boolean).join(', ');
     void Share.share({
-      message: `${gym.name}${locationBit ? ` — ${locationBit}` : ''}\ngymtracker://gyms/${gym.slug}`,
+      message: `${gym.name}${locationBit ? `, ${locationBit}` : ''}\ngymtracker://gyms/${gym.slug}`,
       title: gym.name,
     });
   }

@@ -11,7 +11,7 @@ import {
   loadDeliveryConfig,
   mealCycleOperationLockSql,
 } from '@/lib/meals';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -101,11 +101,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       : null;
   if (cancelledOrderId) {
     after(() =>
-      sendPushToAccount(me.id, {
-        title: 'Order cancelled',
-        body: 'Your subscription meal was skipped and cancelled.',
-        data: { type: 'meal_order', orderId: cancelledOrderId, status: 'cancelled' },
-      }),
+      notify(
+        'order_status',
+        { accountId: me.id },
+        {
+          title: 'Order cancelled',
+          body: 'You skipped this day on your meal plan, so the order is cancelled.',
+          data: { type: 'meal_order', orderId: cancelledOrderId, status: 'cancelled' },
+        },
+      ),
     );
   }
 

@@ -58,13 +58,13 @@ function currentMonthKey(): string {
 }
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have coach access.";
   return "Couldn't load your challenge.";
 }
 
 function createErrorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'invalid') return 'Check the title and target, then try again.';
   return "Couldn't create the challenge. Try again.";
 }
@@ -243,7 +243,7 @@ export default function CoachChallengesScreen() {
               No challenge yet
             </AppText>
             <AppText variant="caption" center color={colors.textDim}>
-              Create one for {monthLabel(currentMonthKey())} — every client who reaches the
+              Create one for {monthLabel(currentMonthKey())}. Every client who reaches the
               target session-day count earns the badge. No winner, no ranking.
             </AppText>
             <Button label="Create challenge" onPress={openCreate} style={styles.createBtn} />

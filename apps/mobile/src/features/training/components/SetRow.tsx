@@ -53,7 +53,7 @@ const styles = StyleSheet.create({
   setNo: {
     fontFamily: type.display,
     fontSize: 16,
-    color: colors.textFaint,
+    color: colors.textDim,
     width: 28,
   },
   target: { flex: 1, marginLeft: spacing.sm },
@@ -83,7 +83,7 @@ const styles = StyleSheet.create({
   ghostNumbers: {
     fontFamily: type.display,
     fontSize: 26,
-    color: colors.textFaint,
+    color: colors.textDim,
   },
   right: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   prTag: {

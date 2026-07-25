@@ -1,15 +1,18 @@
 import { accounts } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
 import { eq } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { TierChip } from '@/components/console';
 import { requireCoachOwnsUser } from '@/lib/authz';
 import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
+import { memberLabel } from '../../_components/memberLabel';
 import { ClientDetail } from './_components/ClientDetail';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Client' };
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
@@ -38,7 +41,6 @@ export default async function CoachClientDetailPage({ params }: PageProps) {
     .select({
       id: accounts.id,
       displayName: accounts.displayName,
-      email: accounts.email,
       tier: accounts.tier,
       tierExpiresAt: accounts.tierExpiresAt,
       status: accounts.status,
@@ -49,7 +51,7 @@ export default async function CoachClientDetailPage({ params }: PageProps) {
   if (!user) notFound();
 
   const tier = effectiveTier(user.tier, user.tierExpiresAt, new Date());
-  const name = user.displayName || user.email;
+  const name = memberLabel(user.displayName);
 
   return (
     <div style={{ maxWidth: 940, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -107,17 +109,6 @@ export default async function CoachClientDetailPage({ params }: PageProps) {
               <span style={{ fontSize: 12, color: 'var(--gt-red)' }}>Suspended</span>
             ) : null}
           </div>
-          <div
-            style={{
-              fontSize: 12,
-              color: 'var(--gt-text-dim)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {user.email}
-          </div>
         </div>
         <Link
           href={`/coach/threads/${user.id}`}
@@ -136,7 +127,7 @@ export default async function CoachClientDetailPage({ params }: PageProps) {
         </Link>
       </header>
 
-      <ClientDetail userId={user.id} />
+      <ClientDetail userId={user.id} clientName={user.displayName || undefined} />
     </div>
   );
 }

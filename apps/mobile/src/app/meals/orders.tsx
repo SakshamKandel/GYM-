@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
+  Button,
   ConfirmDialog,
   EmptyState,
   enterDown,
@@ -20,13 +21,20 @@ import {
 import { EmptyArt } from '../../components/visual';
 import { warnHaptic } from '../../lib/haptics';
 import { useAuth } from '../../state/auth';
-import { useMealPartners, useMyMealOrders } from '../../features/meals/hooks';
-import { cancelMealOrder, toMealsError, type MealOrder } from '../../features/meals/api';
+import { useMealOrderHistory, useMealPartners, useMyMealOrders } from '../../features/meals/hooks';
+import {
+  cancelMealOrder,
+  fetchMealPaymentRequests,
+  toMealsError,
+  type MealOrder,
+  type MealPaymentRequestRow,
+} from '../../features/meals/api';
 import { ReceiptUploadPanel } from '../../features/meals/components/ReceiptUploadPanel';
 import { LiveOrderCard } from '../../features/meals/components/LiveOrderCard';
 import { LiveDot } from '../../features/meals/components/LiveDot';
 import { OrderHistoryCard } from '../../features/meals/components/OrderHistoryCard';
 import { OrderDetailSheet } from '../../features/meals/components/OrderDetailSheet';
+import { MealPaymentsSection } from '../../features/meals/components/MealPaymentsSection';
 import { dayGroupLabel } from '../../features/meals/components/orderView';
 import { mealErrorMessage, slotLabel } from '../../features/meals/logic';
 import { pushPath, replacePath } from '../../features/meals/nav';
@@ -57,6 +65,7 @@ const styles = StyleSheet.create({
   list: { gap: spacing.md },
   groupLabel: { marginTop: spacing.md, marginBottom: spacing.sm },
   historyList: { gap: spacing.sm },
+  loadMoreWrap: { gap: spacing.sm, marginTop: spacing.lg, alignItems: 'center' },
   skeletons: { gap: spacing.md },
   skeletonRow: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.lg, height: 96 },
   retryRow: {
@@ -84,6 +93,25 @@ const styles = StyleSheet.create({
   reorderPromptText: { flex: 1 },
 });
 
+/**
+ * Newest receipt per order, from the member's own receipt history. A rejected
+ * receipt quietly puts the order back to "Payment needed" and the reviewer's
+ * reason lives nowhere the member looks, so the orders screen loads the
+ * history once and hands each order its own answer.
+ */
+function newestByOrder(rows: MealPaymentRequestRow[]): Map<string, MealPaymentRequestRow> {
+  const byOrder = new Map<string, MealPaymentRequestRow>();
+  for (const row of rows) {
+    if (!row.orderId) continue; // a weekly-plan receipt belongs to no order
+    const seen = byOrder.get(row.orderId);
+    // The list arrives newest-first, but don't lean on it: compare the dates.
+    if (!seen || Date.parse(row.createdAt) > Date.parse(seen.createdAt)) {
+      byOrder.set(row.orderId, row);
+    }
+  }
+  return byOrder;
+}
+
 /** Group orders by delivery date, preserving the server's ordering. */
 function groupByDate(orders: MealOrder[]): { date: string; orders: MealOrder[] }[] {
   const groups: { date: string; orders: MealOrder[] }[] = [];
@@ -106,12 +134,48 @@ export default function MyMealOrdersScreen() {
   const authed = status === 'signedIn' ? token : null;
 
   const live = useMyMealOrders(authed, 'upcoming');
-  const past = useMyMealOrders(authed, 'history');
+  // History is paged — it's the only scope that grows without bound.
+  const past = useMealOrderHistory(authed);
   const partners = useMealPartners(authed);
 
   const partnerName = useCallback(
     (id: string): string | undefined => partners.data?.find((p) => p.id === id)?.name,
     [partners.data],
+  );
+
+  // Receipt reviews, keyed by order. Silent on failure: this is an
+  // explanation layered onto the orders, never a reason to block them. The
+  // snapshot carries the session it was fetched with and is derived against
+  // the live one at render, so another account's reviews can never show.
+  const [paymentSnap, setPaymentSnap] = useState<{
+    token: string;
+    byOrder: Map<string, MealPaymentRequestRow>;
+  } | null>(null);
+  const [paymentsKey, setPaymentsKey] = useState(0);
+  useEffect(() => {
+    if (!authed) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = await fetchMealPaymentRequests(authed);
+        if (!cancelled && useAuth.getState().token === authed) {
+          setPaymentSnap({ token: authed, byOrder: newestByOrder(rows) });
+        }
+      } catch {
+        // Keep the last-known reviews; the orders themselves still render.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authed, paymentsKey]);
+
+  const paymentFor = useCallback(
+    (orderId: string): MealPaymentRequestRow | null =>
+      paymentSnap !== null && paymentSnap.token === authed
+        ? (paymentSnap.byOrder.get(orderId) ?? null)
+        : null,
+    [paymentSnap, authed],
   );
 
   const [pendingCancel, setPendingCancel] = useState<MealOrder | null>(null);
@@ -133,6 +197,7 @@ export default function MyMealOrdersScreen() {
     live.reload();
     past.reload();
     partners.reload();
+    setPaymentsKey((k) => k + 1);
   }
 
   // Live tracking polling (Pack A): while there's at least one non-terminal
@@ -225,7 +290,7 @@ export default function MyMealOrdersScreen() {
               >
                 <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
                 <AppText variant="caption" style={styles.retryText}>
-                  Couldn&apos;t load your orders — tap to retry.
+                  Couldn&apos;t load your orders. Tap to retry.
                 </AppText>
                 <Ionicons name="refresh" size={15} color={colors.textDim} />
               </PressableScale>
@@ -266,6 +331,7 @@ export default function MyMealOrdersScreen() {
                         key={o.id}
                         order={o}
                         partnerName={partnerName(o.partnerId)}
+                        paymentRequest={paymentFor(o.id)}
                         onOpenDetail={setDetailOrder}
                         onCancel={setPendingCancel}
                         onReceipt={setReceiptOrder}
@@ -323,10 +389,37 @@ export default function MyMealOrdersScreen() {
                       </View>
                     </View>
                   ))}
+                  {/* History used to stop wherever the first page ended, with
+                      no way to reach anything older. */}
+                  {past.hasMore ? (
+                    <View style={styles.loadMoreWrap}>
+                      <Button
+                        label={past.moreError ? 'Try again' : 'Show older orders'}
+                        variant="secondary"
+                        onPress={past.loadMore}
+                        loading={past.loadingMore}
+                        accessibilityLabel={
+                          past.moreError
+                            ? "Couldn't load older orders. Tap to try again."
+                            : 'Show older orders'
+                        }
+                      />
+                      {past.moreError ? (
+                        <AppText variant="caption" color={colors.textDim}>
+                          Couldn&apos;t load older orders. Check your connection.
+                        </AppText>
+                      ) : null}
+                    </View>
+                  ) : null}
                 </Animated.View>
               ) : null}
             </>
           )}
+
+          {/* Every receipt the member has sent, order or weekly plan, with the
+              reviewer's reason when there is one. Renders nothing for members
+              who have never sent one (cash on delivery, card, everyone else). */}
+          {authed ? <MealPaymentsSection token={authed} refreshKey={paymentsKey} /> : null}
         </>
       )}
 
@@ -355,6 +448,9 @@ export default function MyMealOrdersScreen() {
             onDone={() => {
               setReceiptOrder(null);
               live.reload();
+              past.reload();
+              // The new receipt should read as "under review" straight away.
+              setPaymentsKey((k) => k + 1);
             }}
             onSkip={() => setReceiptOrder(null)}
           />
@@ -365,6 +461,11 @@ export default function MyMealOrdersScreen() {
         order={detailOrder}
         token={token}
         partnerName={detailOrder ? partnerName(detailOrder.partnerId) : undefined}
+        paymentRequest={detailOrder ? paymentFor(detailOrder.id) : null}
+        onSendReceiptAgain={(order) => {
+          setDetailOrder(null);
+          setReceiptOrder(order);
+        }}
         onClose={() => setDetailOrder(null)}
         onOrderChanged={(updated) => {
           if (updated) setDetailOrder(updated);

@@ -20,6 +20,7 @@ import {
   useVideoLibrary,
   type VideoLibraryItem,
 } from '../../features/training/videoLibrary';
+import { tierName } from '../../lib/tier';
 
 /**
  * Coach video library — a standalone browse of every `ready` form-check video.
@@ -63,7 +64,7 @@ function VideoRow({ item, index }: { item: VideoLibraryItem; index: number }) {
   const metaParts = [item.exerciseName ?? undefined, duration ?? undefined].filter(
     (p): p is string => !!p,
   );
-  const tierLabel = item.tierRequired.charAt(0).toUpperCase() + item.tierRequired.slice(1);
+  const tierLabel = tierName(item.tierRequired);
 
   return (
     <Animated.View entering={enterUp(Math.min(1 + index, 8))} style={index > 0 ? styles.rowGap : undefined}>
@@ -71,7 +72,7 @@ function VideoRow({ item, index }: { item: VideoLibraryItem; index: number }) {
         accessibilityRole="button"
         accessibilityLabel={
           item.locked
-            ? `${item.title}. Locked — unlock with the ${tierLabel} plan.`
+            ? `${item.title}. Locked. Unlock with the ${tierLabel} membership.`
             : `${item.title}. Play video.`
         }
         pressScale={0.985}
@@ -121,7 +122,7 @@ function VideoRow({ item, index }: { item: VideoLibraryItem; index: number }) {
 }
 
 export default function VideosScreen() {
-  const { status, videos } = useVideoLibrary();
+  const { status, videos, reload } = useVideoLibrary();
 
   return (
     <Screen scroll>
@@ -149,6 +150,8 @@ export default function VideosScreen() {
           icon="cloud-offline-outline"
           title="Couldn't load videos"
           body="Check your connection and try again in a moment."
+          actionLabel="Try again"
+          onAction={reload}
         />
       ) : videos.length === 0 ? (
         <EmptyState

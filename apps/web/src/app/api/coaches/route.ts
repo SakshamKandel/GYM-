@@ -4,6 +4,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { coachRatingFor, loadCoachRatings } from './_lib';
 
 export const runtime = 'nodejs';
 
@@ -11,11 +12,12 @@ export const runtime = 'nodejs';
  * Member-facing coach discovery hub.
  *
  *  - GET → every ACTIVE coach (admins.role='coach' + coach_profiles.isActive)
- *          with their public portfolio card, coachTier badge, and live
- *          capacity signal. Sorted elite > gold > silver, then by
- *          activeClients desc within a tier (SCALE-UP-PLAN §4.2). Emails are
- *          deliberately never selected — coach–member contact stays inside
- *          the app.
+ *          with their public portfolio card, coachTier badge, live capacity
+ *          signal, and — once enough members have rated them — their real
+ *          star average + review count (see ./_lib). Sorted elite > gold >
+ *          silver, then by activeClients desc within a tier (SCALE-UP-PLAN
+ *          §4.2). Emails are deliberately never selected — coach–member
+ *          contact stays inside the app.
  */
 
 const COACH_TIER_RANK: Record<'silver' | 'gold' | 'elite', number> = {
@@ -83,6 +85,11 @@ export async function GET(req: Request) {
       ),
     );
 
+  // Real member reviews, folded once for the whole page (additive keys —
+  // `rating`/`reviewCount` are null for any coach under the display
+  // threshold, so a shipped client that ignores them is unaffected).
+  const ratings = await loadCoachRatings(rows.map((r) => r.id));
+
   // capacity itself stays private on the list — members only see the boolean.
   // `photoUrl` mirrors `avatarUrl` — the canonical name going forward; the
   // legacy key stays so already-shipped mobile parsers keep working.
@@ -92,6 +99,7 @@ export async function GET(req: Request) {
       displayName: coach.displayName || 'Coach',
       photoUrl: coach.avatarUrl,
       hasCapacity: coach.activeClients < capacity,
+      ...coachRatingFor(ratings, coach.id),
     }))
     .sort((a, b) => {
       const rankDiff = COACH_TIER_RANK[b.coachTier] - COACH_TIER_RANK[a.coachTier];

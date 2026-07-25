@@ -10,7 +10,7 @@ import { CheckItem, Container, Display, Eyebrow, Lead, Section } from '../ui';
 const CHECKS = [
   {
     title: 'Photos verified',
-    body: 'Every photo shows the actual floor — the racks, the machines, the room you’ll train in. Nothing pulled off the internet.',
+    body: 'Every photo shows the actual floor: the racks, the machines, the room you’ll train in. Nothing pulled off the internet.',
   },
   {
     title: 'Hours kept current',
@@ -38,7 +38,7 @@ export function VerifiedBand() {
           <Reveal delay={100}>
             <Lead tone="light" className="mt-6">
               No scraped data, no stale directories. The GM team adds and maintains every
-              gym listing by hand — and nothing about a listing is for sale.
+              gym listing by hand, and nothing about a listing is for sale.
             </Lead>
           </Reveal>
         </div>

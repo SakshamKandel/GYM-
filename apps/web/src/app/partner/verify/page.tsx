@@ -1,8 +1,10 @@
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { VerifyMember } from '../_components/VerifyMember';
 import { requirePartnerPage } from '../_data';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Verify member' };
 export const dynamic = 'force-dynamic';
 
 /**

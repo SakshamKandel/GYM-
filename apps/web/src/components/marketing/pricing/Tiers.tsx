@@ -8,50 +8,26 @@
 import { useState } from 'react';
 import type { PublicCatalog } from '@/lib/publicCatalog';
 import { Reveal } from '../motion';
-import { priceFor, TIER_META, type Region } from '../pricing-format';
+import {
+  bulletsFor,
+  inheritsFrom,
+  priceFor,
+  TIER_META,
+  type Region,
+  type TierId,
+} from '../pricing-format';
 import { CheckItem, Container, Display, Eyebrow, Lead, PillLink, Section } from '../ui';
 
-type TierKey = (typeof TIER_META)[number]['tier'];
-
-const TIER_DETAILS: Record<TierKey, { cta: string; items: string[] }> = {
-  starter: {
-    cta: 'Start free',
-    items: [
-      'Log workouts offline — sets confirm in under 100 ms',
-      'Food diary with barcode scan + Nepali & global databases',
-      'True-3D anatomy with 17 muscle zones',
-      'Automatic PR detection + streaks',
-      'Weight trend smoothing + measurements',
-      'Order partner meals · discover nearby gyms',
-    ],
-  },
-  silver: {
-    cta: 'Choose Silver',
-    items: [
-      'Everything in Starter',
-      'A verified coach assigns your workouts',
-      'Programs adjusted by a human as you progress',
-      'Membership discount card — 10 selectable faces',
-    ],
-  },
-  gold: {
-    cta: 'Choose Gold',
-    items: [
-      'Everything in Silver',
-      'A personal diet plan, written for your goal',
-      'Macro targets tuned by your coach, not a formula',
-      'Membership discount card — 10 selectable faces',
-    ],
-  },
-  elite: {
-    cta: 'Choose Elite',
-    items: [
-      'Everything in Gold',
-      'Chat with your coach any time',
-      'Full mentorship with coach-logged milestones',
-      'Priority support',
-    ],
-  },
+/**
+ * Card copy only — the feature bullets come from TIER_BULLETS in
+ * pricing-format.ts so this page, the home teaser and the comparison table
+ * can never claim different things.
+ */
+const TIER_CTA: Record<TierId, string> = {
+  starter: 'Start free',
+  silver: 'Choose Silver',
+  gold: 'Choose Gold',
+  elite: 'Choose Elite',
 };
 
 export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
@@ -79,7 +55,7 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
           </Reveal>
           <Reveal delay={160}>
             <Lead className="mx-auto mt-7">
-              Set in NPR for Nepal and USD for everyone else — the exact live prices the
+              Set in NPR for Nepal and USD for everyone else. These are the exact live prices the
               app charges, from the same catalog. Start free. Add a coach when it gets
               serious.
             </Lead>
@@ -97,7 +73,7 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
                   type="button"
                   aria-pressed={region === key}
                   onClick={() => setRegion(key)}
-                  className={`h-11 rounded-full px-6 text-[13.5px] font-semibold transition-colors ${
+                  className={`h-11 rounded-full px-6 text-[14.5px] font-semibold transition-colors ${
                     region === key ? 'bg-red text-ink shadow-ember' : 'text-dim hover:text-snow'
                   }`}
                 >
@@ -113,7 +89,7 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
           {TIER_META.map((t, i) => {
             const highlight = t.tier === 'gold';
             const price = priceFor(regionCatalog, t.tier);
-            const details = TIER_DETAILS[t.tier];
+            const inherited = inheritsFrom(t.tier);
             return (
               <Reveal key={t.tier} delay={120 + i * 90} className="h-full">
                 <div
@@ -126,7 +102,7 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="font-display text-2xl font-medium uppercase">{t.name}</h2>
                     {highlight ? (
-                      <span className="rounded-full bg-red px-3 py-1 font-mono text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink">
+                      <span className="rounded-full bg-red px-3 py-1 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-ink">
                         Popular
                       </span>
                     ) : null}
@@ -148,7 +124,7 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
                   </div>
 
                   <p
-                    className={`mt-3 text-[13.5px] leading-relaxed ${
+                    className={`mt-3 text-[14.5px] leading-relaxed ${
                       highlight ? 'text-cream-dim' : 'text-dim'
                     }`}
                   >
@@ -156,9 +132,12 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
                   </p>
 
                   <ul className="mt-6 flex flex-col gap-3">
-                    {details.items.map((item) => (
-                      <CheckItem key={item} tone={highlight ? 'light' : 'dark'}>
-                        {item}
+                    {inherited ? (
+                      <CheckItem tone={highlight ? 'light' : 'dark'}>{inherited}</CheckItem>
+                    ) : null}
+                    {bulletsFor(t.tier).map((bullet) => (
+                      <CheckItem key={bullet.label} tone={highlight ? 'light' : 'dark'}>
+                        {bullet.label}
                       </CheckItem>
                     ))}
                   </ul>
@@ -171,7 +150,7 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
                         variant={highlight ? 'inkOnCream' : 'ghost'}
                         className="w-full"
                       >
-                        {details.cta}
+                        {TIER_CTA[t.tier]}
                       </PillLink>
                     ) : (
                       <span role="status" className="block text-center text-sm font-semibold">
@@ -186,7 +165,7 @@ export function PricingHero({ catalog }: { catalog: PublicCatalog }) {
         </div>
 
         <Reveal delay={200}>
-          <p className="mt-12 text-center font-mono text-[11.5px] uppercase tracking-[0.16em] text-faint">
+          <p className="mt-12 text-center font-mono text-[12px] uppercase tracking-[0.16em] text-faint">
             Cancel or downgrade anytime · eSewa &amp; Khalti in Nepal · 30% off with a
             verified coach&rsquo;s code
           </p>

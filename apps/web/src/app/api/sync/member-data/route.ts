@@ -17,7 +17,7 @@ import {
   type MemberDataRecord,
   type MemberDataSyncCursor,
 } from '@gym/shared';
-import { and, asc, eq, gt, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, or, sql, type Column } from 'drizzle-orm';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
@@ -167,14 +167,21 @@ async function applyMutation(accountId: string, mutation: MemberDataMutation): P
   }
 }
 
+// Keyset pagination predicate, shared by every entity's pull. Written against
+// the generic `Column` type (not one table's columns) so all six entities can
+// reuse it; the comparisons go through `sql` templates because drizzle's typed
+// operators would demand each call site's exact column type.
 function cursorCondition(
-  updatedAt: typeof memberWeightLogs.updatedAt,
-  recordId: typeof memberWeightLogs.date,
+  updatedAt: Column,
+  recordId: Column,
   cursor: MemberDataCursorPoint | null,
 ) {
   if (cursor === null) return undefined;
   const at = new Date(cursor.serverUpdatedAt);
-  return or(gt(updatedAt, at), and(eq(updatedAt, at), gt(recordId, cursor.recordId)));
+  return or(
+    sql`${updatedAt} > ${at}`,
+    and(sql`${updatedAt} = ${at}`, sql`${recordId} > ${cursor.recordId}`),
+  );
 }
 
 interface EntityPage {

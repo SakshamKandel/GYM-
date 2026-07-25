@@ -1,15 +1,22 @@
-import { accounts, meals, mealPartners } from '@gym/db';
+import { accounts, meals, mealDeliveryConfig, mealPartners } from '@gym/db';
 import { and, asc, count, eq, inArray } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
+import { loadDeliveryConfig } from '@/lib/meals';
 import { loadPartnerAdminSafeguards } from '@/lib/partnerAdminSafeguardsDb';
 import { staffFromCookie } from '@/lib/staffSession';
+import {
+  DeliverySettingsCard,
+  type DeliveryConfigValues,
+} from './_components/DeliverySettingsCard';
 import { PartnersManager } from './_components/PartnersManager';
 import type { PartnerRow } from './_components/types';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Meal partners' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -79,13 +86,42 @@ async function loadPartners(): Promise<PartnerRow[]> {
   });
 }
 
+/**
+ * The platform-wide delivery fee/cutoff singleton plus its save metadata. Read
+ * through the SAME `loadDeliveryConfig` the order engine and
+ * GET /api/admin/meal-config use, so the card always shows the values orders are
+ * actually priced with — including the frozen @gym/shared defaults on a fresh
+ * install, where no row exists yet (`persisted:false`).
+ */
+async function loadDeliverySettings(): Promise<{
+  config: DeliveryConfigValues;
+  updatedAt: string | null;
+  persisted: boolean;
+}> {
+  const db = getDb();
+  const [config, metaRows] = await Promise.all([
+    loadDeliveryConfig(db),
+    db
+      .select({ updatedAt: mealDeliveryConfig.updatedAt })
+      .from(mealDeliveryConfig)
+      .where(eq(mealDeliveryConfig.id, 'singleton'))
+      .limit(1),
+  ]);
+  const meta = metaRows[0];
+  return {
+    config,
+    updatedAt: meta ? meta.updatedAt.toISOString() : null,
+    persisted: Boolean(meta),
+  };
+}
+
 export default async function AdminPartnersPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
   const permissions = await effectivePermissionSet(principal);
   if (!permissions.has('partners.manage')) redirect('/admin');
 
-  const rows = await loadPartners();
+  const [rows, delivery] = await Promise.all([loadPartners(), loadDeliverySettings()]);
   const active = rows.filter((r) => r.isActive).length;
   const totalMenuItems = rows.reduce((sum, r) => sum + r.menuCount, 0);
   const totalActiveOrders = rows.reduce((sum, r) => sum + r.activeOrders, 0);
@@ -94,7 +130,7 @@ export default async function AdminPartnersPage() {
     <div style={{ maxWidth: 1200 }}>
       <PageHeader
         title="Meal partners"
-        subtitle="Restaurant accounts that fulfill meal-delivery orders. Creating a partner mints its own web-only login — never a generic staff role grant."
+        subtitle="Restaurant accounts that fulfill meal-delivery orders. Creating a partner mints its own web-only login, never a generic staff role grant."
       />
 
       <div
@@ -112,6 +148,16 @@ export default async function AdminPartnersPage() {
       </div>
 
       <PartnersManager partners={rows} />
+
+      {/* Fees + cutoffs are platform-wide, and `partners.manage` — the gate on
+          this page — is exactly what PATCH /api/admin/meal-config requires, so
+          the editor belongs here rather than behind a permission its own API
+          doesn't check. */}
+      <DeliverySettingsCard
+        config={delivery.config}
+        updatedAt={delivery.updatedAt}
+        persisted={delivery.persisted}
+      />
     </div>
   );
 }

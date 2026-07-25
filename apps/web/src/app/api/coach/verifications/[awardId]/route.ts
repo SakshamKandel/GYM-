@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -67,11 +67,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ awardId
 
   const badgeName = BADGE_NAME[row.badgeId] ?? row.badgeId;
   after(() =>
-    sendPushToAccount(row.accountId, {
-      title: 'Badge verified',
-      body: `Your coach verified your ${badgeName} badge.`,
-      data: { type: 'badge_verified', badgeId: row.badgeId },
-    }),
+    notify(
+      'badge_verified',
+      { accountId: row.accountId },
+      {
+        title: 'Badge verified',
+        body: `Your coach verified your ${badgeName} badge.`,
+        data: { type: 'badge_verified', badgeId: row.badgeId },
+      },
+    ),
   );
 
   await logAudit(principal, 'coach.badge.verify', 'awarded_badge', awardId, {

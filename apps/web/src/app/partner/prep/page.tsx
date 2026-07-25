@@ -1,4 +1,5 @@
 import { ktmDateString } from '@gym/shared';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Card, CardHeader, EmptyState, PageHeader } from '@/components/console';
 import { getDb } from '@/lib/db';
@@ -9,6 +10,7 @@ import { buildPrepSummary, formatDateLabel, windowLabel } from '../_format';
 import './print.css';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Prep summary' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -34,7 +36,7 @@ export default async function PartnerPrepPage() {
       <div className="pp-no-print">
         <PageHeader
           title="Prep summary"
-          subtitle="What the kitchen needs to cook today, aggregated by delivery window."
+          subtitle="Everything you need to cook today, added up by delivery window."
           secondaryAction={
             <Link
               href="/partner"

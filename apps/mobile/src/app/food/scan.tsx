@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Linking, Platform, StyleSheet, View } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -254,7 +254,23 @@ export default function ScanScreen() {
           <AppText variant="body" color={colors.textDim} center>
             The camera is only used to read barcodes on food packaging. Nothing is recorded.
           </AppText>
-          <Button label="Grant camera access" onPress={() => void requestPermission()} />
+          {/* Asked and denied for good — the app can't prompt again, so send
+              the user to the one place that can still turn it back on. */}
+          {permission.canAskAgain ? (
+            <Button label="Grant camera access" onPress={() => void requestPermission()} />
+          ) : (
+            <>
+              <AppText variant="body" color={colors.textDim} center>
+                Camera access is switched off in your phone settings.
+              </AppText>
+              <Button
+                label="Open Settings"
+                onPress={() => {
+                  void Linking.openSettings().catch(() => undefined);
+                }}
+              />
+            </>
+          )}
           <Button label="Go back" variant="ghost" onPress={() => router.back()} />
         </View>
       </Screen>
@@ -320,7 +336,9 @@ export default function ScanScreen() {
         >
           <Animated.View entering={enterUp(0)} style={styles.sheet}>
             <AppText variant="title" center>
-              {phase.kind === 'notFound' ? 'Not in the database' : 'Couldn’t reach food database'}
+              {phase.kind === 'notFound'
+                ? 'We don’t know this food yet'
+                : 'Couldn’t look up that barcode'}
             </AppText>
             <AppText variant="body" color={colors.textDim} center>
               {phase.kind === 'notFound'

@@ -1,5 +1,5 @@
-import { mealPartners, meals, savedAddresses } from '@gym/db';
-import { validateTipMinor } from '@gym/shared';
+import { mealAvailability, mealPartners, meals, savedAddresses } from '@gym/db';
+import { isMealAvailableForDate, validateTipMinor, type MealAvailabilitySlot } from '@gym/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
@@ -17,10 +17,16 @@ export const runtime = 'nodejs';
  * The server is authoritative for EVERY money field: it re-resolves each meal's
  * price against the partner's live menu and recomputes delivery + small-order
  * fees from `meal_delivery_config` (the same `lib/meals` config + fee logic the
- * order-create route uses). NOTHING is written and no slot/cutoff is enforced —
- * this is a pure preview so the member sees the full fee breakdown before
+ * order-create route uses). NOTHING is written and no cutoff is enforced — this
+ * is a pure preview so the member sees the full fee breakdown before
  * committing. The order-create route re-prices and re-freezes everything again
  * on submit, so a stale quote can never let a client dictate an amount.
+ *
+ * It does, however, run create's REJECTION checks (partner live, address owned
+ * and in range, meals on this partner's live menu, meals available for the
+ * requested date + window). A quote that skips a check the create enforces is
+ * worse than no quote: it shows a confident total that fails at the moment of
+ * paying.
  *
  * Delivery eligibility is authoritative here too: bounded geo coverage wins,
  * otherwise configured text service areas are used. Outside and indeterminate
@@ -62,7 +68,7 @@ export async function POST(req: Request) {
 
   const parsed = postSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { partnerId, items, addressId, tipMinor } = parsed.data;
+  const { partnerId, items, addressId, window, date, tipMinor } = parsed.data;
 
   const db = getDb();
   const cfg = await loadDeliveryConfig(db);
@@ -115,7 +121,7 @@ export async function POST(req: Request) {
   // deleted fails the whole quote — exactly as it would fail the create.
   const mealIds = [...new Set(items.map((i) => i.mealId))];
   const mealRows = await db
-    .select({ id: meals.id, priceMinor: meals.priceMinor, currency: meals.currency })
+    .select({ id: meals.id, name: meals.name, priceMinor: meals.priceMinor, currency: meals.currency })
     .from(meals)
     .where(
       and(
@@ -144,6 +150,39 @@ export async function POST(req: Request) {
   const currencies = new Set(mealRows.map((m) => m.currency));
   if (currencies.size !== 1) return json({ error: 'mixed_currency' }, 400);
   const currency = mealRows[0].currency;
+
+  // Per-slot availability, the SAME check order creation runs. Without it the
+  // quote happily priced a meal the partner doesn't serve on that weekday /
+  // window, so checkout showed a green total that the create route then
+  // rejected with a 400 at the moment of paying. Reported in the existing
+  // per-line shape ({mealId, mealName}) so the client names the offending meal.
+  const availRows = await db
+    .select({
+      mealId: mealAvailability.mealId,
+      dayOfWeek: mealAvailability.dayOfWeek,
+      window: mealAvailability.window,
+    })
+    .from(mealAvailability)
+    .where(inArray(mealAvailability.mealId, mealIds));
+  const availByMeal = new Map<string, MealAvailabilitySlot[]>();
+  for (const a of availRows) {
+    const list = availByMeal.get(a.mealId) ?? [];
+    list.push({ dayOfWeek: a.dayOfWeek, window: a.window });
+    availByMeal.set(a.mealId, list);
+  }
+  const unavailableId = mealIds.find(
+    (id) => !isMealAvailableForDate(availByMeal.get(id) ?? [], date, window),
+  );
+  if (unavailableId) {
+    return json(
+      {
+        error: 'meal_unavailable',
+        mealId: unavailableId,
+        mealName: mealById.get(unavailableId)?.name ?? null,
+      },
+      422,
+    );
+  }
 
   const lines: PricedLine[] = items.map((i) => ({ priceMinor: mealById.get(i.mealId)!.priceMinor, qty: i.qty }));
   const subtotalForTip = lines.reduce((sum, l) => sum + l.priceMinor * l.qty, 0);

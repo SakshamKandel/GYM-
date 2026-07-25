@@ -131,7 +131,7 @@ export default function MeasureScreen() {
       await repo.addMeasurement(entry);
     } catch {
       setSaving(false);
-      setError("Couldn't save your measurements — try again.");
+      setError("Couldn't save your measurements. Try again.");
       return;
     }
     successHaptic();
@@ -180,7 +180,7 @@ export default function MeasureScreen() {
             ) : (
               <>
                 <AppText variant="caption" style={styles.hint}>
-                  {`Only the fields you change are saved — everything is in ${
+                  {`Only the fields you change are saved. Everything is in ${
                     unitPref === 'kg' ? 'cm' : 'inches'
                   }.`}
                 </AppText>

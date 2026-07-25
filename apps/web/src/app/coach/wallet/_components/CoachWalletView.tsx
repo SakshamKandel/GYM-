@@ -163,7 +163,7 @@ export function CoachWalletView({
       setAmount('');
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
@@ -237,7 +237,7 @@ export function CoachWalletView({
             <strong style={{ color: 'var(--gt-text)' }}>
               {formatMoney(pending.amountMinor, pending.currency)}
             </strong>
-            . An admin will review it shortly — you can request another once it is decided.
+            . An admin will review it shortly. You can request another once it is decided.
           </div>
         ) : (
           <>
@@ -366,12 +366,12 @@ export function CoachWalletView({
             marginBottom: 10,
           }}
         >
-          Ledger
+          Money in and out
         </div>
         {entries.length === 0 ? (
           <EmptyState
-            title="No entries yet"
-            description="Commission credits and payouts will appear here."
+            title="Nothing here yet"
+            description="Commission you earn and payouts we send will show up here."
           />
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

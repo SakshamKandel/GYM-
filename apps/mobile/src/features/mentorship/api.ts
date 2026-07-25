@@ -74,6 +74,14 @@ const coachCardSchema = z.object({
   hasCapacity: z.boolean(),
   activeClients: z.number(),
   coachTier: coachTierSchema,
+  /**
+   * Real member-review aggregate (additive — Pack C). The server sends null
+   * (not a number) until the coach has enough genuine reviews to show as
+   * social proof, and a server that predates the field omits both keys, so
+   * every consumer must treat `null | undefined` as "no rating yet".
+   */
+  rating: z.number().min(0).max(5).nullable().catch(null).optional(),
+  reviewCount: z.number().int().nonnegative().nullable().catch(null).optional(),
 });
 export type CoachCardData = z.infer<typeof coachCardSchema>;
 
@@ -260,7 +268,7 @@ async function mentorshipRequest(opts: RequestOptions): Promise<unknown> {
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new MentorshipApiError('network', "Can't reach the server");
+    throw new MentorshipApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   if (res.ok) {

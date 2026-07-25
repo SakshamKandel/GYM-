@@ -14,7 +14,7 @@ import { Container, Lead, PillLink, StatBig } from '../ui';
 const PROOF = [
   { value: '7', caption: 'order states, tracked live' },
   { value: '05:45', caption: 'cutoffs on Kathmandu time' },
-  { value: '2', caption: 'ways to pay — COD or digital' },
+  { value: '2', caption: 'ways to pay, COD or digital' },
   { value: '0', caption: 'meals logged by hand' },
 ] as const;
 
@@ -48,7 +48,7 @@ export function MealsHero() {
             <Reveal delay={700}>
               <Lead tone="dark" className="mt-7">
                 Vetted partner kitchens across Kathmandu valley cook meals with the macros
-                already counted. Order once or subscribe for the week — the app tracks every
+                already counted. Order once or subscribe for the week. The app tracks every
                 order live and writes the calories into your Food diary for you.
               </Lead>
             </Reveal>
@@ -65,7 +65,7 @@ export function MealsHero() {
             </Reveal>
 
             <Reveal delay={920}>
-              <p className="mt-8 font-mono text-[11.5px] uppercase tracking-[0.2em] text-faint">
+              <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-faint">
                 Cash on delivery · eSewa · Khalti
               </p>
             </Reveal>

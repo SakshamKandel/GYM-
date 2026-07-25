@@ -1,5 +1,6 @@
 import { coachAssignments } from '@gym/db';
 import { and, eq } from 'drizzle-orm';
+import { after } from 'next/server';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
@@ -59,14 +60,16 @@ export async function DELETE(
   // ended, or admin acting without a row) must not tell the member their coach
   // left. WP-13 consumes `coach_unassigned` for the member-side banner.
   if (ended.length > 0) {
-    void notify(
-      'coach_unassigned',
-      { accountId: userId },
-      {
-        title: 'Coaching update',
-        body: 'Your coaching assignment has ended. You can request a new coach whenever you are ready.',
-        data: { type: 'coach' },
-      },
+    after(() =>
+      notify(
+        'coach_unassigned',
+        { accountId: userId },
+        {
+          title: 'Coaching update',
+          body: 'Your coaching assignment has ended. You can request a new coach whenever you are ready.',
+          data: { type: 'coach' },
+        },
+      ),
     );
   }
 

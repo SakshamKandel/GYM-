@@ -34,6 +34,37 @@ import { useAuth } from '../../state/auth';
  * never a blocking error screen.
  */
 
+/**
+ * A pending request older than this expires server-side — the same 14-day rule
+ * the oversight sweep and the coach-side inline check both enforce.
+ */
+const STALE_REQUEST_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * The next step for a request that ended WITHOUT the member getting a coach —
+ * or null when the row deserves no banner.
+ *
+ * 'canceled' is ambiguous on the wire: the member's own withdrawal, an admin
+ * force-cancel and the 14-day auto-expiry all land as 'canceled', and the row
+ * carries no cause field. Only an expiry is safely identifiable (it cannot
+ * happen before the request is 14 days old), so only that gets a banner —
+ * telling members a request went unanswered when they withdrew it themselves
+ * would be wrong, and dismissal is component state, so a wrong banner would
+ * come back on every single visit. An admin cancel still reaches the member as
+ * a push + notification-inbox row.
+ */
+function closedRequestNotice(row: CoachRequestRow): string | null {
+  if (row.status === 'declined') {
+    return `${row.coachName} couldn't take you on. Browse other coaches below.`;
+  }
+  if (row.status !== 'canceled' || row.decidedAt === null) return null;
+  const created = Date.parse(row.createdAt);
+  const decided = Date.parse(row.decidedAt);
+  if (Number.isNaN(created) || Number.isNaN(decided)) return null;
+  if (decided - created < STALE_REQUEST_MS) return null;
+  return `${row.coachName} didn't get back to you, so your request has closed. Nothing you did caused this. Pick another coach below and we'll pass your request straight on.`;
+}
+
 const styles = StyleSheet.create({
   backRow: { marginBottom: spacing.lg },
   backBtn: {
@@ -98,26 +129,36 @@ export default function CoachDirectoryScreen() {
   const token = useAuth((s) => s.token);
   const { coaches, loading, error, retry } = useCoachDirectory();
   const { coach, request } = useMyCoach();
-  const [lastDeclined, setLastDeclined] = useState<CoachRequestRow | null>(null);
+  const [lastClosed, setLastClosed] = useState<string | null>(null);
 
   // Pack L: "structured decline reason surfaced as a next step" — the coach
   // request history already carries every outcome; a member who was never
   // shown their most recent decline gets a quiet next-step banner here
   // (only when there's no pending request and no assigned coach — a
   // successful later outcome always takes priority over an old decline).
+  // Widened beyond 'declined': a request the 14-day sweep auto-expired used to
+  // disappear from this screen with no explanation at all.
   useFocusEffect(
     useCallback(() => {
       if (status !== 'signedIn' || token === null || coach !== null || request !== null) {
-        setLastDeclined(null);
+        setLastClosed(null);
         return;
       }
       let active = true;
       void listCoachRequests(token)
         .then((rows) => {
           if (!active) return;
-          // Rows arrive newest-first (server orders by createdAt desc).
-          const latest = rows.find((r) => r.status === 'declined') ?? null;
-          setLastDeclined(latest);
+          // Rows arrive newest-first (server orders by createdAt desc), so the
+          // first row that yields a notice is the most recent outcome.
+          let latest: string | null = null;
+          for (const row of rows) {
+            const notice = closedRequestNotice(row);
+            if (notice !== null) {
+              latest = notice;
+              break;
+            }
+          }
+          setLastClosed(latest);
         })
         .catch(() => {
           // Best-effort — the banner just doesn't show this visit.
@@ -159,7 +200,7 @@ export default function CoachDirectoryScreen() {
           accessibilityLabel="A coach pressing a barbell overhead"
           chip={{ label: 'Mentorship' }}
           title="Train with a real coach"
-          caption="Personal plans, weekly check-ins, honest feedback."
+          caption="Personal coaching, weekly check-ins, honest feedback."
           style={styles.banner}
         />
       </Animated.View>
@@ -177,17 +218,17 @@ export default function CoachDirectoryScreen() {
         </Animated.View>
       ) : (
         <>
-          {request === null && lastDeclined !== null ? (
+          {request === null && lastClosed !== null ? (
             <Animated.View entering={enterUp(0)}>
               <PressableScale
                 accessibilityRole="button"
-                accessibilityLabel={`Your request to ${lastDeclined.coachName} wasn't accepted. Tap to browse other coaches`}
-                onPress={() => setLastDeclined(null)}
+                accessibilityLabel={`${lastClosed} Tap to dismiss.`}
+                onPress={() => setLastClosed(null)}
                 style={styles.pendingRow}
               >
                 <Ionicons name="information-circle-outline" size={14} color={colors.textDim} />
                 <AppText variant="caption" style={styles.pendingText}>
-                  {`${lastDeclined.coachName} couldn't take you on — browse other coaches below.`}
+                  {lastClosed}
                 </AppText>
                 <Ionicons name="close" size={15} color={colors.textDim} />
               </PressableScale>
@@ -222,8 +263,8 @@ export default function CoachDirectoryScreen() {
                 <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
                 <AppText variant="caption" style={styles.retryText}>
                   {coaches === null
-                    ? "Couldn't load coaches — tap to retry."
-                    : 'Showing last known list — tap to retry.'}
+                    ? "Couldn't load coaches. Tap to retry."
+                    : 'Showing last known list. Tap to retry.'}
                 </AppText>
                 <Ionicons name="refresh" size={15} color={colors.textDim} />
               </PressableScale>
@@ -241,7 +282,7 @@ export default function CoachDirectoryScreen() {
               <EmptyState
                 icon="people"
                 title="No coaches yet"
-                body="Coach profiles are on the way — check back soon."
+                body="Coach profiles are on the way. Check back soon."
                 art={<EmptyArt variant="coach" />}
               />
             </Animated.View>
@@ -260,13 +301,13 @@ export default function CoachDirectoryScreen() {
             <Animated.View entering={enterUp(1)}>
               <PressableScale
                 accessibilityRole="button"
-                accessibilityLabel="Become a coach — apply to join the coach roster"
+                accessibilityLabel="Become a coach, apply to join the coach roster"
                 onPress={() => pushPath('/coaches/apply')}
                 style={styles.becomeCoachRow}
               >
                 <Ionicons name="ribbon-outline" size={18} color={colors.textDim} />
                 <AppText variant="caption" style={styles.becomeCoachText}>
-                  Become a coach — apply to join the roster
+                  Become a coach
                 </AppText>
                 <Ionicons name="chevron-forward" size={15} color={colors.textDim} />
               </PressableScale>

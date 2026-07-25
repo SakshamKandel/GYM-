@@ -286,7 +286,7 @@ export function SessionsDetail({
 
       {sessions.length === 0 ? (
         <AppText variant="body" color={colors.textDim} style={styles.empty}>
-          Your week is a blank page — finish a workout and it lands here.
+          Your week is a blank page. Finish a workout and it lands here.
         </AppText>
       ) : (
         <View style={styles.section}>
@@ -329,7 +329,7 @@ export function PrDetail({ prs, unitPref }: { prs: PrRecord[]; unitPref: UnitPre
 
       {prs.length === 0 ? (
         <AppText variant="body" color={colors.textDim} style={styles.empty}>
-          No PRs in the last 30 days — your next session is a chance to set one.
+          No PRs in the last 30 days. Your next session is a chance to set one.
         </AppText>
       ) : (
         <View style={styles.section}>

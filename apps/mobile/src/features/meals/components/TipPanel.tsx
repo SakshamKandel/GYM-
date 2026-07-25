@@ -75,7 +75,7 @@ export function TipPanel({ token, order, onDone }: Props) {
   return (
     <View style={styles.wrap}>
       <AppText variant="body" color={colors.textDim}>
-        Add a tip for your rider / kitchen — 100% goes to the partner.
+        Add a tip for your rider or kitchen. 100% goes to the partner.
       </AppText>
       <View style={styles.presetRow}>
         {options.map((opt) => {
@@ -84,7 +84,7 @@ export function TipPanel({ token, order, onDone }: Props) {
             <PressableScale
               key={opt.percent}
               accessibilityRole="button"
-              accessibilityLabel={`${tipPresetLabel(opt.percent)} tip — ${formatMoney(opt.amountMinor, order.currency)}`}
+              accessibilityLabel={`${tipPresetLabel(opt.percent)} tip, ${formatMoney(opt.amountMinor, order.currency)}`}
               onPress={() => setTipMinor(opt.amountMinor)}
               style={[styles.presetBtn, on && styles.presetBtnOn]}
             >

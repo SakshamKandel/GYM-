@@ -32,7 +32,7 @@ const LINKS = [
   {
     href: '/training',
     title: 'Train',
-    blurb: 'Where the PRs come from — coach-built plans, gym mode and a logger that keeps up.',
+    blurb: 'Where the PRs come from: coach-built plans, gym mode and a logger that keeps up.',
   },
   {
     href: '/coaching',
@@ -42,7 +42,7 @@ const LINKS = [
   {
     href: '/pricing',
     title: 'Pricing',
-    blurb: 'Nepal-fair, globally simple. See exactly what each tier unlocks.',
+    blurb: 'Nepal-fair, globally simple. See exactly what each tier includes.',
   },
 ] as const;
 
@@ -105,7 +105,7 @@ export function ClosingCta() {
           </Display>
         </Reveal>
         <Reveal delay={120}>
-          <p className="mx-auto mt-6 max-w-lg text-[16.5px] leading-relaxed text-snow/80">
+          <p className="mx-auto mt-6 max-w-lg text-[17px] leading-relaxed text-snow/80">
             Download the app, weigh in tomorrow morning, log one workout. The proof starts
             collecting itself.
           </p>

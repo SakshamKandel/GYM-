@@ -1,9 +1,11 @@
 import { accounts, coachRequests } from '@gym/db';
 import { and, desc, eq, lt } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
+import { after } from 'next/server';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -83,6 +85,22 @@ async function sweepStaleRequests(
         row.id,
         { userId: row.userId, coachId: row.coachId, pendingSince: row.createdAt.toISOString() },
         ip,
+      );
+
+      // Expiry was completely invisible to the member: their pending request
+      // just stopped existing. Only the CAS winner reaches this line, so the
+      // member is told exactly once even if this sweep races the coach-side
+      // inline expiry in /api/coach/requests/[id].
+      after(() =>
+        notify(
+          'coach_request_closed',
+          { accountId: row.userId },
+          {
+            title: 'Coach request timed out',
+            body: 'Your coach request timed out because it went unanswered. You can ask another coach whenever you are ready.',
+            data: { type: 'coach_request_decided' },
+          },
+        ),
       );
     } catch (err) {
       console.error(`coach-requests stale sweep failed for ${row.id}:`, err);

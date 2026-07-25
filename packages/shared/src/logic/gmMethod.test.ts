@@ -22,7 +22,7 @@ describe('gmWeeklyAdjustment — fat loss band (−0.8..−0.4 %/wk)', () => {
     const r = gmWeeklyAdjustment({ ...base, goal: 'fat_loss', trendRatePerWeekKg: -0.6 });
     assert.equal(r.newKcal, 2000);
     assert.equal(r.changed, false);
-    assert.equal(r.reason, 'On track — stay the course');
+    assert.equal(r.reason, 'On track. Stay the course');
   });
   it('band edges are inclusive (no change at exactly −0.8 or −0.4)', () => {
     assert.equal(
@@ -147,7 +147,7 @@ describe('gmPhaseForWeek', () => {
         const p = gmPhaseForWeek(week, goal);
         assert.equal(p.kind, 'deload');
         assert.equal(p.volumeMultiplier, 0.6);
-        assert.equal(p.note, 'Deload — move light, recover hard');
+        assert.equal(p.note, 'Deload: move light, recover hard');
       }
     }
   });
@@ -161,7 +161,7 @@ describe('gmPhaseForWeek', () => {
       const p = gmPhaseForWeek(week, 'fat_loss');
       assert.equal(p.kind, 'dietBreak');
       assert.equal(p.volumeMultiplier, 1);
-      assert.equal(p.note, 'Diet break — eat at maintenance this week');
+      assert.equal(p.note, 'Diet break: eat at maintenance this week');
     }
   });
   it('build weeks label their position in the block', () => {

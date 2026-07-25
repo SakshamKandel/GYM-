@@ -1,6 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, type } from '@gym/ui-tokens';
 import { AppText, Tag } from '../../../components/ui';
 import type { CoachTier } from '../api';
@@ -16,12 +17,21 @@ import { CoachTierBadge, VerifiedMark } from './CoachTierBadge';
  *
  * Without a photo: the screen's ONE red block — big initials tile, onBlock
  * chips, black ink on red per the block language.
+ *
+ * `rating`/`reviewCount` are optional: the server withholds a coach's star
+ * average until enough real members have reviewed them, and older servers
+ * don't send the fields at all. Anything that isn't a real number renders no
+ * star pill — never "0.0", which would read as a terrible coach.
  */
 interface Props {
   name: string;
   headline: string;
   photoUrl: string | null;
   tier: CoachTier;
+  /** Member star average, 0-5. Null/undefined = not enough reviews yet. */
+  rating?: number | null;
+  /** How many members that average is built from. */
+  reviewCount?: number | null;
 }
 
 const HERO_HEIGHT = 300;
@@ -68,6 +78,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
   },
+  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   name: {
     fontSize: type.size.display,
     lineHeight: 46,
@@ -90,8 +101,42 @@ const styles = StyleSheet.create({
   headlineOnRed: { opacity: 0.75 },
 });
 
-export function CoachHero({ name, headline, photoUrl, tier }: Props) {
+/**
+ * Star + average + count, tinted for the surface it sits on. Rendered only
+ * when a real average exists — the caller decides, this just draws it.
+ */
+function RatingLine({
+  rating,
+  reviewCount,
+  tone,
+}: {
+  rating: number;
+  reviewCount: number | null;
+  tone: 'onPhoto' | 'onBlock';
+}) {
+  const ink = tone === 'onBlock' ? colors.onBlock : colors.text;
+  return (
+    <View
+      style={styles.ratingRow}
+      accessible
+      accessibilityLabel={`Rated ${rating.toFixed(1)} out of 5${
+        reviewCount !== null ? ` from ${reviewCount} member review${reviewCount === 1 ? '' : 's'}` : ''
+      }`}
+    >
+      <Ionicons name="star" size={14} color={tone === 'onBlock' ? colors.onBlock : colors.accent} />
+      <AppText variant="caption" color={ink}>
+        {rating.toFixed(1)}
+        {reviewCount !== null ? ` · ${reviewCount} review${reviewCount === 1 ? '' : 's'}` : ''}
+      </AppText>
+    </View>
+  );
+}
+
+export function CoachHero({ name, headline, photoUrl, tier, rating, reviewCount }: Props) {
   const hasHeadline = headline.trim().length > 0;
+  // Optional AND nullable on the wire — only a real number is a rating.
+  const stars = typeof rating === 'number' ? rating : null;
+  const reviews = typeof reviewCount === 'number' ? reviewCount : null;
 
   if (photoUrl !== null) {
     return (
@@ -108,6 +153,9 @@ export function CoachHero({ name, headline, photoUrl, tier }: Props) {
           <View style={styles.badgeRow}>
             <CoachTierBadge tier={tier} />
             <VerifiedMark />
+            {stars !== null ? (
+              <RatingLine rating={stars} reviewCount={reviews} tone="onPhoto" />
+            ) : null}
           </View>
           <AppText
             variant="display"
@@ -135,6 +183,9 @@ export function CoachHero({ name, headline, photoUrl, tier }: Props) {
         <View style={styles.redBadges}>
           <Tag label={COACH_TIER_LABEL[tier]} variant="onBlock" />
           <VerifiedMark tone="onBlock" />
+          {stars !== null ? (
+            <RatingLine rating={stars} reviewCount={reviews} tone="onBlock" />
+          ) : null}
         </View>
       </View>
       <AppText

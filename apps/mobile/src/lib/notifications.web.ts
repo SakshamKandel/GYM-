@@ -5,6 +5,16 @@ export async function requestPermission(): Promise<boolean> {
   return false;
 }
 
+export type NotificationPermissionState = 'granted' | 'canAsk' | 'blocked' | 'unsupported';
+
+/** No OS permission to read on web — screens render the 'unsupported' copy. */
+export async function getNotificationPermissionState(): Promise<NotificationPermissionState> {
+  return 'unsupported';
+}
+
+/** No app icon to badge on web; the in-app inbox is the only unread surface. */
+export async function setNotificationBadgeCount(_count: number): Promise<void> {}
+
 export async function scheduleFirstWorkoutsReminder(
   _daysFromNow: number,
   _title: string,

@@ -62,7 +62,7 @@ export function HomeHero() {
 
             <Reveal delay={700}>
               <p className="mt-7 max-w-xl text-[17px] leading-relaxed text-dim">
-                Workouts, food, healthy meal delivery, gym discovery and real human coaching —
+                Workouts, food, healthy meal delivery, gym discovery and real human coaching,
                 in one calm, offline-first app. Log workouts instantly with no waiting, even
                 with no signal in the basement gym.
               </p>
@@ -80,7 +80,7 @@ export function HomeHero() {
                     key={t.id}
                     type="button"
                     onClick={() => setActiveTab(t.id)}
-                    className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[12.5px] font-semibold transition-all duration-200 ${
+                    className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[14.5px] font-semibold transition-all duration-200 ${
                       isActive
                         ? 'bg-red text-ink shadow-ember scale-105'
                         : 'bg-charcoal border border-line-strong text-dim hover:text-snow hover:bg-charcoal-2'
@@ -104,7 +104,7 @@ export function HomeHero() {
             </Reveal>
 
             <Reveal delay={920}>
-              <p className="mt-8 font-sans text-[13px] text-faint">
+              <p className="mt-8 font-sans text-[14.5px] text-faint">
                 iOS · Android · Offline-first · No ads, ever
               </p>
             </Reveal>
@@ -135,7 +135,7 @@ export function HomeHero() {
               <div className="mkt-text-steel font-display text-5xl font-medium sm:text-6xl">
                 <CountUp to={s.value} prefix={s.prefix} suffix={s.suffix} />
               </div>
-              <p className="mt-2.5 font-sans text-[13px] text-dim">
+              <p className="mt-2.5 font-sans text-[14.5px] text-dim">
                 {s.caption}
               </p>
             </Reveal>

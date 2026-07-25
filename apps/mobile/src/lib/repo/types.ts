@@ -11,6 +11,8 @@ import type {
   Streak,
   TrainingCatalogCache,
   WeightLog,
+  WorkoutRestoreCursor,
+  WorkoutRestorePage,
   WorkoutSessionBlueprint,
   WorkoutLog,
 } from '@gym/shared';
@@ -90,8 +92,26 @@ export interface Repo {
   markWorkoutsSynced(ids: string[], syncedAt: string): Promise<void>;
   /** Quarantine a permanently invalid row without pretending it reached the server. */
   markWorkoutSyncFailed(failure: WorkoutSyncFailure): Promise<void>;
+  /**
+   * Lift a quarantine so the row re-enters {@link getUnsyncedFinishedWorkouts}
+   * and the next drain retries it. Never touches the synced stamp: an
+   * already-backed-up row is left exactly as it is.
+   */
+  clearWorkoutSyncFailure(workoutId: string): Promise<void>;
   /** Recent quarantined rows for diagnostics/support; data remains fully local. */
   getWorkoutSyncFailures(limit: number): Promise<WorkoutSyncFailure[]>;
+
+  // ── Workout restore (server → device, additive only) ────────
+  /** Where the last restored page stopped; null before the first pull. */
+  getWorkoutRestoreCursor(): Promise<WorkoutRestoreCursor | null>;
+  /**
+   * Take in workouts this device is missing and advance the cursor as one
+   * atomic step. Rows that already exist locally are left EXACTLY as they are —
+   * restore only ever adds history back, it never rewrites or removes what the
+   * phone already holds (a local edit or an upload still in the queue always
+   * outranks the server's copy).
+   */
+  applyWorkoutRestorePage(page: WorkoutRestorePage): Promise<void>;
 
   // â”€â”€ Member data sync (two-way, deterministic LWW) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /** Oldest account-owned local mutations waiting for server acknowledgement. */

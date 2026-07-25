@@ -13,6 +13,7 @@ import {
   confirmGymTrackerServer,
   getProfileData,
   login,
+  loginWithApple,
   loginWithGoogle,
   logout as apiLogout,
   me,
@@ -65,6 +66,23 @@ export interface AuthState {
    * onto it, so both sign-in methods open the SAME account (and data).
    */
   signInWithGoogle: (idToken: string, password?: string) => Promise<void>;
+  /**
+   * Sign in with Apple. `nonce` is the RAW challenge from requestAppleNonce
+   * (the same one handed to the Apple prompt); `displayName` is Apple's
+   * one-time name, supplied on the FIRST authorization only.
+   *
+   * Throws ApiError ('bad_credentials' | 'link_required' | 'not_configured' |
+   * 'auth_unavailable' | 'invalid' | 'network'). 'link_required' means the
+   * Apple email already has a password account — retry with the SAME
+   * identityToken and nonce plus that account's `password` to link Apple onto
+   * it, so both sign-in methods open the SAME account (and data).
+   */
+  signInWithApple: (
+    identityToken: string,
+    nonce: string,
+    displayName?: string,
+    password?: string,
+  ) => Promise<void>;
   /** Throws ApiError ('email_taken' | 'invalid' | 'network'). */
   signUp: (email: string, password: string, displayName: string) => Promise<void>;
   /** Best-effort server logout; local state always clears. Never throws. */
@@ -354,6 +372,13 @@ export const useAuth = create<AuthState>()(
 
       signInWithGoogle: async (idToken, password) => {
         const session = await loginWithGoogle(idToken, password);
+        await establishSession(session, set, get);
+      },
+
+      signInWithApple: async (identityToken, nonce, displayName, password) => {
+        const session = await loginWithApple(identityToken, nonce, displayName, password);
+        // Same persist + landing path as every other sign-in: 'onboarded' must
+        // be restored and staffRole settled BEFORE the caller's enterApp gate.
         await establishSession(session, set, get);
       },
 

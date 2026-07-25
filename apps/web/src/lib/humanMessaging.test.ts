@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { humanMessageDelivery } from './humanMessaging';
+import { humanMessageDelivery } from './humanMessaging.ts';
 
 test('support messages always route to the persisted human support inbox', () => {
   assert.deepEqual(humanMessageDelivery('support', null), {

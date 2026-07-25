@@ -1,12 +1,13 @@
-import { type CoachAssignedWorkoutItem, coachAssignedWorkouts } from '@gym/db';
+import { coachAssignedWorkouts } from '@gym/db';
 import { maskPii } from '@gym/shared';
 import { eq } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
+import { maskWorkoutItem } from '@/lib/coachContent';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -64,16 +65,6 @@ const workoutColumns = {
   updatedAt: coachAssignedWorkouts.updatedAt,
 };
 
-/** Masks every client-visible free-text field of one item. */
-function maskItem(item: CoachAssignedWorkoutItem): CoachAssignedWorkoutItem {
-  return {
-    ...item,
-    name: maskPii(item.name),
-    repRange: maskPii(item.repRange),
-    note: item.note !== undefined ? maskPii(item.note) : undefined,
-  };
-}
-
 export function OPTIONS() {
   return preflight();
 }
@@ -126,7 +117,7 @@ export async function PATCH(
       ...(notes !== undefined ? { notes: maskPii(notes) } : {}),
       ...(status !== undefined ? { status } : {}),
       ...(position !== undefined ? { position } : {}),
-      ...(items !== undefined ? { items: items.map(maskItem) } : {}),
+      ...(items !== undefined ? { items: items.map(maskWorkoutItem) } : {}),
       updatedAt: new Date(),
     })
     .where(eq(coachAssignedWorkouts.id, id))
@@ -140,11 +131,15 @@ export async function PATCH(
   });
 
   after(() =>
-    sendPushToAccount(row.clientId, {
-      title: 'Workout updated',
-      body: 'Your coach updated one of your workouts.',
-      data: { type: 'coach_plan' },
-    }),
+    notify(
+      'coach_plan',
+      { accountId: row.clientId },
+      {
+        title: 'Workout updated',
+        body: 'Your coach updated one of your workouts.',
+        data: { type: 'coach_plan' },
+      },
+    ),
   );
 
   return json({ workout }, 200);

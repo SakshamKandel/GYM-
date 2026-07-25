@@ -9,9 +9,12 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  SearchField,
   SkeletonBar,
   TierChip,
 } from '@/components/console';
+import { formatAge, formatTime } from '@/lib/format';
+import { MemberLink } from '../../_components/MemberLink';
 import type { SupportMessage, SupportThreadRow } from './types';
 
 const MAX_LEN = 2000;
@@ -25,24 +28,27 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'all', label: 'All' },
 ];
 
-/** Short relative age ("3m", "2h", "5d") with an absolute fallback. */
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return '';
-  const diff = Date.now() - then;
-  if (diff < 0) return 'now';
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  const days = Math.floor(hrs / 24);
-  if (days < 30) return `${days}d`;
-  return new Date(iso).toLocaleDateString();
+/**
+ * Does this thread belong in the Open work queue? Status OR unread — a member
+ * replying to a resolved ticket reopens it server-side, but the reply itself is
+ * the work signal, so an unread inbound message keeps the thread in the queue
+ * even if its lifecycle row lags (or was never written). Without the unread
+ * clause a follow-up on a closed ticket sat invisible behind the Resolved tab
+ * forever. Kept as one predicate so the tab filter, the tab counts and the
+ * page's stat tiles can never disagree.
+ */
+function inOpenQueue(t: SupportThreadRow): boolean {
+  return t.status === 'open' || t.unread > 0;
 }
 
-function clockTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+/**
+ * A ticket from a member who pays for priority support AND is waiting on a
+ * reply. `priority` alone is just a tier; this pair is what the Elite promise
+ * is actually about, and it is the same predicate behind the "Elite waiting"
+ * tile on the page above.
+ */
+function waitingPriority(t: SupportThreadRow): boolean {
+  return t.priority && t.unread > 0;
 }
 
 /**
@@ -65,11 +71,20 @@ function clockTime(iso: string): string {
  * trip per tab switch, and no request-race guard is needed for the list
  * itself (only the per-thread drawer load still needs one — see reqSeq
  * below).
+ *
+ * ORDER MATTERS HERE. Elite members are sold "your support messages get
+ * answered first", so the rows arrive already sorted by
+ * lib/supportThreads.compareSupportThreads: waiting on a reply first, Elite
+ * above the rest, longest wait first inside a tier. Every filter below
+ * PRESERVES that order (Array.filter is stable), so whichever tab is showing,
+ * the ticket at the top is the one to answer next. Do not re-sort here — the
+ * promise is only true if the one comparator decides it.
  */
 export function SupportInbox({
   threads,
   viewerId,
   canReply,
+  canViewMembers,
 }: {
   threads: SupportThreadRow[];
   viewerId: string;
@@ -80,31 +95,51 @@ export function SupportInbox({
    * a read-only viewer is the P1-3 403-trap.
    */
   canReply: boolean;
+  /** Viewer holds `members.read`, so member names can link to the record. */
+  canViewMembers: boolean;
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>('open');
+  const [query, setQuery] = useState('');
 
   const filtered = useMemo(() => {
-    switch (tab) {
-      case 'open':
-        return threads.filter((t) => t.status === 'open');
-      case 'resolved':
-        return threads.filter((t) => t.status === 'resolved');
-      case 'mine':
-        return threads.filter((t) => t.assignedTo === viewerId);
-      case 'all':
-      default:
-        return threads;
-    }
-  }, [threads, tab, viewerId]);
+    const inTab = ((): SupportThreadRow[] => {
+      switch (tab) {
+        case 'open':
+          return threads.filter(inOpenQueue);
+        // Resolved is the exact complement of Open, so the two tabs stay a
+        // partition of the inbox: a resolved thread with an unread member reply
+        // is waiting on staff, so it shows under Open and not here.
+        case 'resolved':
+          return threads.filter((t) => !inOpenQueue(t));
+        case 'mine':
+          return threads.filter((t) => t.assignedTo === viewerId);
+        case 'all':
+        default:
+          return threads;
+      }
+    })();
+    // The inbox loads every thread (it has never been paginated), so a plain
+    // client-side match over the name, the email and the latest message covers
+    // the whole queue — a daily queue with no way to find a ticket by the
+    // person who sent it is a queue you read top to bottom, every time.
+    const q = query.trim().toLowerCase();
+    if (!q) return inTab;
+    return inTab.filter((t) =>
+      [t.account.displayName, t.account.email, t.lastBody, t.assignedToLabel ?? '']
+        .join(' ')
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [threads, tab, viewerId, query]);
 
   function tabCount(key: TabKey): number {
     switch (key) {
       case 'open':
-        return threads.filter((t) => t.status === 'open').length;
+        return threads.filter(inOpenQueue).length;
       case 'resolved':
-        return threads.filter((t) => t.status === 'resolved').length;
+        return threads.filter((t) => !inOpenQueue(t)).length;
       case 'mine':
         return threads.filter((t) => t.assignedTo === viewerId).length;
       case 'all':
@@ -120,13 +155,27 @@ export function SupportInbox({
       key: 'account',
       header: 'Account',
       render: (r) => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontWeight: 500 }}>{r.account.displayName.trim() || r.account.email}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <MemberLink
+            id={r.account.id}
+            name={r.account.displayName}
+            email={r.account.email}
+            canView={canViewMembers}
+          />
           {r.unread > 0 ? <Badge tone="critical">{r.unread} new</Badge> : null}
         </span>
       ),
     },
-    { key: 'tier', header: 'Tier', render: (r) => <TierChip tier={r.account.tier} /> },
+    {
+      key: 'tier',
+      header: 'Tier',
+      render: (r) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <TierChip tier={r.account.tier} />
+          {waitingPriority(r) ? <Badge tone="info">First in line</Badge> : null}
+        </span>
+      ),
+    },
     {
       key: 'status',
       header: 'Status',
@@ -168,7 +217,7 @@ export function SupportInbox({
       align: 'right',
       render: (r) => (
         <span className="gt-numeric" style={{ color: 'var(--gt-text-dim)', whiteSpace: 'nowrap' }}>
-          {relativeTime(r.lastAt)}
+          {formatAge(r.lastAt)}
         </span>
       ),
     },
@@ -181,6 +230,15 @@ export function SupportInbox({
 
   return (
     <>
+      <div style={{ marginBottom: 16, maxWidth: 340 }}>
+        <SearchField
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search name, email or message"
+          aria-label="Search support tickets"
+        />
+      </div>
+
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         {TABS.map((t) => {
           const active = tab === t.key;
@@ -216,13 +274,15 @@ export function SupportInbox({
           `Open ticket for ${r.account.displayName.trim() || r.account.email}`
         }
         empty={
-          tab === 'open'
-            ? 'No open tickets — all clear.'
-            : tab === 'resolved'
-              ? 'No resolved tickets yet.'
-              : tab === 'mine'
-                ? 'No tickets assigned to you.'
-                : 'No support tickets yet.'
+          query.trim()
+            ? 'No tickets match that search.'
+            : tab === 'open'
+              ? 'No open tickets. All clear.'
+              : tab === 'resolved'
+                ? 'No resolved tickets yet.'
+                : tab === 'mine'
+                  ? 'No tickets assigned to you.'
+                  : 'No support tickets yet.'
         }
       />
 
@@ -347,7 +407,7 @@ function SupportThreadDrawer({
             : code === 'not_found'
               ? 'This account no longer exists.'
               : code === 'no_thread'
-                ? 'This account has no support ticket yet — nothing to reply to.'
+                ? 'This account has no support ticket yet, so there is nothing to reply to.'
                 : 'Could not send the reply.',
         );
         return;
@@ -356,7 +416,7 @@ function SupportThreadDrawer({
       await load(accountId);
       onReplied();
     } catch {
-      setError('Network error. Check your connection and retry.');
+      setError('Could not reach us just now. Check your connection and try again.');
     } finally {
       setSending(false);
     }
@@ -389,7 +449,7 @@ function SupportThreadDrawer({
       }
       onReplied();
     } catch {
-      setLifecycleError('Network error. Check your connection and retry.');
+      setLifecycleError('Could not reach us just now. Check your connection and try again.');
     } finally {
       setLifecycleBusy(false);
     }
@@ -407,7 +467,7 @@ function SupportThreadDrawer({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
           {!canReply ? (
             <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-              You have read-only access to support — replying, assigning and
+              You have read-only access to support. Replying, assigning and
               resolving are disabled.
             </div>
           ) : null}
@@ -421,7 +481,7 @@ function SupportThreadDrawer({
             placeholder={
               canReply
                 ? 'Reply as support…  (⌘/Ctrl + Enter to send)'
-                : 'Read-only — you cannot reply.'
+                : 'Read-only, so you cannot reply.'
             }
             aria-label="Reply"
             style={{ resize: 'vertical', minHeight: 56, fontFamily: 'var(--font-heading)' }}
@@ -470,6 +530,7 @@ function SupportThreadDrawer({
             <Badge tone={fallback.status === 'resolved' ? 'positive' : 'warning'}>
               {fallback.status}
             </Badge>
+            {fallback.priority ? <Badge tone="info">Priority support</Badge> : null}
             <span style={{ color: 'var(--gt-text-dim)' }}>
               {fallback.assignedToLabel
                 ? fallback.assignedTo === viewerId
@@ -597,7 +658,7 @@ function SupportThreadDrawer({
                   className="gt-numeric"
                   style={{ fontSize: 10.5, color: 'var(--gt-text-dim)', margin: '3px 4px 0' }}
                 >
-                  {fromUser ? 'Member' : 'Support'} · {clockTime(m.createdAt)}
+                  {fromUser ? 'Member' : 'Support'} · {formatTime(m.createdAt)}
                 </span>
               </div>
             );

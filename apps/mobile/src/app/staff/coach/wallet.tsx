@@ -82,16 +82,16 @@ function signedAmount(entry: WalletEntry): string {
 }
 
 function errorLine(code: string): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have coach access.";
   return "Couldn't load your wallet.";
 }
 
 function payoutErrorLine(code: string, currency: string): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have coach access.";
   if (code === 'already_pending')
-    return 'You already have a pending payout request — wait for it to be decided first.';
+    return 'You already have a pending payout request. Wait for it to be decided first.';
   if (code === 'insufficient_balance') return "That's more than your current balance.";
   // 'invalid' also covers the server's below-minimum rejection.
   if (code === 'invalid')
@@ -199,7 +199,7 @@ export default function CoachWalletScreen() {
   const redemptions = wallet?.code?.redemptionCount ?? 0;
 
   return (
-    <Screen scroll>
+    <Screen scroll keyboardAware>
       <Animated.View entering={enterDown()} style={styles.backRow}>
         <PressableScale
           accessibilityRole="button"
@@ -282,7 +282,7 @@ export default function CoachWalletScreen() {
                 <Ionicons name="time-outline" size={16} color={colors.warning} />
                 <AppText variant="caption" color={colors.textDim} style={styles.pendingBannerText}>
                   You have a pending request for{' '}
-                  {formatMoney(pendingPayout.amountMinor, pendingPayout.currency)} — wait for an
+                  {formatMoney(pendingPayout.amountMinor, pendingPayout.currency)}. Wait for an
                   admin to decide it before requesting again.
                 </AppText>
               </View>
@@ -375,7 +375,7 @@ export default function CoachWalletScreen() {
 
           {wallet.entries.length === 0 ? (
             <AppText variant="caption" color={colors.textFaint} style={styles.emptyLine}>
-              No ledger entries yet — commission lands here when someone redeems your
+              No ledger entries yet. Commission lands here when someone redeems your
               code.
             </AppText>
           ) : (

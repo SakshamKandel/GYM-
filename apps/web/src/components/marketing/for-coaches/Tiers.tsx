@@ -13,11 +13,11 @@ const TIERS = [
     accent: 'mkt-text-steel',
     dot: 'bg-snow/70',
     tag: 'Where everyone starts',
-    copy: 'The rank every newly verified coach holds from day one — nothing held back.',
+    copy: 'The rank every newly verified coach holds from day one, with nothing held back.',
     points: [
-      'Full coach console — roster, chat, review queue',
-      'Public profile live in the discovery hub',
-      'Auto promo code + 30% commission wallet',
+      'The full console: your roster, your chats, your sign-offs',
+      'A public profile, live in the discovery hub',
+      'Your own promo code, and 30% of every sale it makes',
     ],
   },
   {
@@ -37,11 +37,11 @@ const TIERS = [
     accent: 'mkt-text-ember',
     dot: 'bg-red',
     tag: 'The top rank',
-    copy: 'The mark members look for first. Elite is earned, requested, and reviewed — never bought.',
+    copy: 'The mark members look for first. Elite is earned, requested, and reviewed, never bought.',
     points: [
       'Elite badge across profile and discovery',
       'The standing that fills a capacity list',
-      'Same review flow — request from your console',
+      'Same review flow, request from your console',
     ],
   },
 ] as const;
@@ -57,7 +57,7 @@ export function TiersSection() {
           </Display>
           <Lead className="mt-6">
             Three coach ranks, worn as a badge on your public profile. You move up by
-            request — the GM team reviews your coaching record and answers, so the badge
+            request. The GM team reviews your coaching record and answers, so the badge
             actually means something.
           </Lead>
         </Reveal>
@@ -72,14 +72,14 @@ export function TiersSection() {
                   </span>
                   <span aria-hidden className={`size-2.5 rounded-full ${t.dot}`} />
                 </div>
-                <p className="mt-1 font-mono text-[10.5px] uppercase tracking-[0.18em] text-dim">
+                <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.18em] text-dim">
                   {t.tag}
                 </p>
                 <p className="mt-4 text-[14.5px] leading-relaxed text-dim">{t.copy}</p>
                 <div className="mkt-divider my-5" />
                 <ul className="flex flex-col gap-3">
                   {t.points.map((p) => (
-                    <li key={p} className="flex items-start gap-2.5 text-[13.5px] leading-relaxed text-snow">
+                    <li key={p} className="flex items-start gap-2.5 text-[14.5px] leading-relaxed text-snow">
                       <span
                         aria-hidden
                         className="mt-[7px] size-1.5 shrink-0 rounded-full bg-red"
@@ -94,7 +94,7 @@ export function TiersSection() {
         </div>
 
         <Reveal delay={320}>
-          <p className="mt-10 text-center font-mono text-[11.5px] uppercase tracking-[0.18em] text-faint">
+          <p className="mt-10 text-center font-mono text-[12px] uppercase tracking-[0.18em] text-faint">
             Tier requests live in your console · Reviewed by the GM team
           </p>
         </Reveal>

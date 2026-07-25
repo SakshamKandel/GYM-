@@ -31,7 +31,7 @@ export function TrainingSpotlight() {
           </div>
           <div className="order-1 lg:order-2">
             <Reveal>
-              <Eyebrow tone="light">01 — Training</Eyebrow>
+              <Eyebrow tone="light">01 · Training</Eyebrow>
               <Display className="mt-4">
                 Lift. Log.
                 <br />
@@ -44,7 +44,7 @@ export function TrainingSpotlight() {
             </Reveal>
             <Reveal delay={120}>
               <ul className="mt-8 flex flex-col gap-3.5">
-                <CheckItem tone="light">Coach-built plans or your own — 650+ exercises</CheckItem>
+                <CheckItem tone="light">Coach-built plans or your own, 650+ exercises</CheckItem>
                 <CheckItem tone="light">True-3D muscle anatomy with 17 heat-mapped zones</CheckItem>
                 <CheckItem tone="light">Automatic PR detection, tested to the rep</CheckItem>
               </ul>
@@ -68,14 +68,14 @@ export function FoodSpotlight() {
         <div className="grid items-center gap-16 lg:grid-cols-2">
           <div>
             <Reveal>
-              <Eyebrow tone="light">02 — Food</Eyebrow>
+              <Eyebrow tone="light">02 · Food</Eyebrow>
               <Display className="mt-4">
                 Eat like
                 <br />
                 it counts.
               </Display>
               <Lead tone="light" className="mt-6">
-                Scan a barcode or search dal bhat — the app speaks Nepali kitchens and global
+                Scan a barcode or search dal bhat. The app speaks Nepali kitchens and global
                 databases alike. Macros, water and food quality, minus the spreadsheet feeling.
               </Lead>
             </Reveal>
@@ -115,14 +115,14 @@ export function MealsSpotlight() {
           </div>
           <div className="order-1 lg:order-2">
             <Reveal>
-              <Eyebrow tone="light">03 — Meals</Eyebrow>
+              <Eyebrow tone="light">03 · Meals</Eyebrow>
               <Display className="mt-4">
                 Protein,
                 <br />
                 delivered.
               </Display>
               <Lead tone="light" className="mt-6">
-                Macro-counted meals from vetted partner kitchens across Kathmandu valley —
+                Macro-counted meals from vetted partner kitchens across Kathmandu valley:
                 one-off orders or weekly subscriptions, cash on delivery or digital. Every
                 order tracked live through seven states.
               </Lead>
@@ -153,14 +153,14 @@ export function ProgressSpotlight() {
         <div className="grid gap-12 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
           <div>
             <Reveal>
-              <Eyebrow tone="light">04 — Progress</Eyebrow>
+              <Eyebrow tone="light">04 · Progress</Eyebrow>
               <Display className="mt-4">
                 The trend,
                 <br />
                 not the noise.
               </Display>
               <Lead tone="light" className="mt-6">
-                Daily weight jumps around — your trend doesn&rsquo;t. Exponential smoothing
+                Daily weight jumps around. Your trend doesn&rsquo;t. Exponential smoothing
                 turns scale chaos into a line you can actually believe, next to PRs,
                 measurements and streaks.
               </Lead>
@@ -189,7 +189,7 @@ export function CoachingSpotlight() {
         <div className="grid items-center gap-16 lg:grid-cols-2">
           <div>
             <Reveal>
-              <Eyebrow tone="red">05 — Coaching</Eyebrow>
+              <Eyebrow tone="red">05 · Coaching</Eyebrow>
               <Display className="mt-4">
                 A real human
                 <br />
@@ -197,7 +197,7 @@ export function CoachingSpotlight() {
               </Display>
               <Lead tone="red" className="mt-6">
                 Verified coaches with public track records. They program your training, build
-                your diet plan and answer in chat — while the app keeps everyone&rsquo;s
+                your diet plan and answer in chat, while the app keeps everyone&rsquo;s
                 personal details masked and safe.
               </Lead>
             </Reveal>

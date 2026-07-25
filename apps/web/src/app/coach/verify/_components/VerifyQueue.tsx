@@ -62,7 +62,7 @@ export function VerifyQueue() {
         setLoadError(
           res.status === 401
             ? 'Your session expired. Sign in again.'
-            : 'Could not load the verification queue. Try again.',
+            : 'Could not load the badges waiting on you. Try again.',
         );
         setState('error');
         return;
@@ -71,7 +71,7 @@ export function VerifyQueue() {
       setItems(data.items);
       setState('ready');
     } catch {
-      setLoadError('Network error. Check your connection and retry.');
+      setLoadError('Could not reach us just now. Check your connection and try again.');
       setState('error');
     }
   }, []);
@@ -114,7 +114,7 @@ export function VerifyQueue() {
       setItems((prev) => prev.filter((i) => i.awardId !== item.awardId));
       setBusyId(null);
     } catch {
-      setRowError({ id: item.awardId, msg: 'Network error. Check your connection and retry.' });
+      setRowError({ id: item.awardId, msg: 'Could not reach us just now. Check your connection and try again.' });
       setBusyId(null);
     }
   }

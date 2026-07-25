@@ -117,7 +117,7 @@ function Row({
             title={`${row.label} · ${format(v)} ${metricLabel}`}
             style={{
               minHeight: 40,
-              borderRadius: 8,
+              borderRadius: 'var(--gt-radius-sm)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',

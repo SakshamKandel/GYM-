@@ -21,6 +21,11 @@ import {
   Stepper,
   Tag,
 } from '../../../components/ui';
+import {
+  mediaPermissionMessage,
+  OpenSettingsButton,
+  requestMediaPermission,
+} from '../../../components/ui/permissions';
 import { toApiError, reserveImageUpload, uploadImageAsset } from '../../../lib/api/client';
 import { useAuth } from '../../../state/auth';
 import {
@@ -157,6 +162,8 @@ export default function CoachProfileScreen() {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  // Photo access is denied for good — the error line gets a route out.
+  const [photoBlocked, setPhotoBlocked] = useState(false);
   const [coachTier, setCoachTier] = useState<CoachTier>('silver');
 
   // Tier-upgrade request sheet.
@@ -274,9 +281,11 @@ export default function CoachProfileScreen() {
   async function pickAvatar(): Promise<void> {
     if (!token || avatarUploading) return;
     setAvatarError(null);
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    setPhotoBlocked(false);
+    const perm = await requestMediaPermission('library');
     if (!perm.granted) {
-      setAvatarError('Allow photo library access in Settings to change your photo.');
+      setPhotoBlocked(perm.blocked);
+      setAvatarError(mediaPermissionMessage('library', 'change your photo', perm.blocked));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -290,7 +299,7 @@ export default function CoachProfileScreen() {
     if (!asset) return;
     // Guard against absurdly large originals before the bytes leave the phone.
     if (typeof asset.fileSize === 'number' && asset.fileSize > MAX_PHOTO_BYTES) {
-      setAvatarError('That photo is too large — pick one under 10 MB.');
+      setAvatarError('That photo is too large. Pick one under 10 MB.');
       return;
     }
 
@@ -528,6 +537,7 @@ export default function CoachProfileScreen() {
                   Members see this on your coach card.
                 </AppText>
               )}
+              {photoBlocked ? <OpenSettingsButton /> : null}
             </View>
           </View>
 
@@ -661,7 +671,7 @@ export default function CoachProfileScreen() {
 
           <SectionLabel>Specialties</SectionLabel>
           <AppText variant="caption" style={styles.hint}>
-            Pick up to {SPECIALTIES_MAX} — members filter coaches by these.
+            Pick up to {SPECIALTIES_MAX}. Members filter coaches by these.
           </AppText>
           <View style={styles.chips}>
             {COACH_SPECIALTIES.map((s) => (
@@ -675,7 +685,7 @@ export default function CoachProfileScreen() {
           </View>
           {specialtyNote ? (
             <AppText variant="caption" color={colors.textDim} style={styles.noteLine}>
-              That&apos;s the limit of {SPECIALTIES_MAX} — deselect one to swap it.
+              That&apos;s the limit of {SPECIALTIES_MAX}. Deselect one to swap it.
             </AppText>
           ) : null}
 
@@ -716,7 +726,7 @@ export default function CoachProfileScreen() {
             </View>
           ) : (
             <AppText variant="caption" color={colors.textFaint} style={styles.noteLine}>
-              Max {ACHIEVEMENTS_MAX} achievements — remove one to add another.
+              Max {ACHIEVEMENTS_MAX} achievements. Remove one to add another.
             </AppText>
           )}
 
@@ -792,7 +802,7 @@ export default function CoachProfileScreen() {
             </View>
           ) : (
             <AppText variant="caption" color={colors.textFaint} style={styles.noteLine}>
-              Max {CERTS_MAX} certifications — remove one to add another.
+              Max {CERTS_MAX} certifications. Remove one to add another.
             </AppText>
           )}
 
@@ -825,7 +835,7 @@ export default function CoachProfileScreen() {
         title="Request a tier upgrade"
       >
         <AppText variant="caption" color={colors.textDim} style={styles.upgradeHint}>
-          An admin reviews every request — you can have one pending at a time.
+          An admin reviews every request. You can have one pending at a time.
         </AppText>
         <View style={styles.chips}>
           {upgradeOptions.map((t) => (

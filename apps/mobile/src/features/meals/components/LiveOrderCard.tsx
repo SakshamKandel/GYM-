@@ -23,7 +23,8 @@ import {
   orderStatusLabel,
   paymentStatusLabel,
 } from '../logic';
-import type { MealOrder, MealOrderStatus } from '../api';
+import { PaymentReviewNotice } from './PaymentReviewNotice';
+import type { MealOrder, MealOrderStatus, MealPaymentRequestRow } from '../api';
 
 /**
  * The live order card — the "track something exciting" centerpiece for a
@@ -44,6 +45,13 @@ interface Props {
    * instead of Cancel when money is already in flight (payment under review
    * or captured), so the tap never dead-ends on a guaranteed 409. */
   onSupport?: (order: MealOrder, reason: string) => void;
+  /**
+   * The newest receipt sent for this order, when the caller has it. A rejected
+   * one silently flips the order back to "Payment needed", so without this the
+   * card asks for a receipt again and never says why the last one bounced.
+   * Optional — existing call sites keep working unchanged.
+   */
+  paymentRequest?: MealPaymentRequestRow | null;
 }
 
 function StatusPill({ status }: { status: MealOrderStatus }) {
@@ -58,7 +66,15 @@ function StatusPill({ status }: { status: MealOrderStatus }) {
   );
 }
 
-export function LiveOrderCard({ order, partnerName, onOpenDetail, onCancel, onReceipt, onSupport }: Props) {
+export function LiveOrderCard({
+  order,
+  partnerName,
+  onOpenDetail,
+  onCancel,
+  onReceipt,
+  onSupport,
+  paymentRequest,
+}: Props) {
   const terminal = order.status === 'cancelled' || order.status === 'refused';
   const day = relativeDay(order.deliveryDate) ?? formatCalendarDate(order.deliveryDate);
   const statusColor = orderStatusColor(order.status);
@@ -76,7 +92,7 @@ export function LiveOrderCard({ order, partnerName, onOpenDetail, onCancel, onRe
       <Card style={styles.card}>
         <PressableScale
           accessibilityRole="button"
-          accessibilityLabel={`${orderStatusLabel(order.status)} ${windowName(order.window)} order — view details`}
+          accessibilityLabel={`${orderStatusLabel(order.status)} ${windowName(order.window)} order. View details`}
           onPress={() => onOpenDetail(order)}
           style={styles.pressArea}
         >
@@ -116,7 +132,7 @@ export function LiveOrderCard({ order, partnerName, onOpenDetail, onCancel, onRe
         accessibilityRole="button"
         accessibilityLabel={`${windowName(order.window)} order from ${
           partnerName ?? 'your partner'
-        } — ${orderStatusLabel(order.status)}. View details.`}
+        }, ${orderStatusLabel(order.status)}. View details.`}
         onPress={() => onOpenDetail(order)}
         style={styles.pressArea}
       >
@@ -181,6 +197,13 @@ export function LiveOrderCard({ order, partnerName, onOpenDetail, onCancel, onRe
           </View>
         </View>
       </PressableScale>
+
+      {/* Why the order is asking for money again. Only the turned-down case
+          earns space here — "under review" already reads in the footer line,
+          and the full history lives in the detail sheet. */}
+      {paymentRequest?.status === 'rejected' ? (
+        <PaymentReviewNotice request={paymentRequest} onSendAgain={() => onReceipt(order)} />
+      ) : null}
 
       {canCancel || needsReceipt || supportBlock ? (
         <View style={styles.actionsRow}>

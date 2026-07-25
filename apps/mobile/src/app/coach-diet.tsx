@@ -230,7 +230,7 @@ export default function CoachDietScreen() {
           <UpgradePrompt
             requiredTier={section.requiredTier}
             title="Coach diet plans"
-            description="Get a personalized meal plan built and assigned by your coach."
+            description="Get a personalized diet plan built and assigned by your coach."
           />
           <Button
             label="Browse coaches"

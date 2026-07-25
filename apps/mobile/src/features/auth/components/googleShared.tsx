@@ -15,13 +15,17 @@ import { AuthField } from './AuthField';
 export function describeGoogleError(code: ApiErrorCode): string {
   switch (code) {
     case 'not_configured':
-      return "Google sign-in isn't switched on yet — use email for now";
+      return "Google sign-in isn't switched on yet. Use email for now";
     case 'bad_credentials':
-      return "Google couldn't verify your account — try again";
+      return "Google couldn't verify your account. Try again";
     case 'link_required':
-      return 'This email already has a password account — enter its password to link Google';
+      return 'This email already has a password account. Enter its password to link Google';
+    case 'app_not_configured':
+      // The build itself has no address for the account service, so nothing
+      // was sent and their connection is not the problem.
+      return "This version of the app can't reach your account. Please update the app";
     default:
-      return "Can't reach the server — check your connection";
+      return "We couldn't connect. Check your connection and try again";
   }
 }
 
@@ -42,10 +46,13 @@ const LINK_TOKEN_STALE_MS = 45 * 60_000;
  */
 export function GoogleLinkPrompt({
   idToken,
+  returnTo,
   onCancel,
 }: {
   /** The verified Google ID token that triggered link_required. */
   idToken: string;
+  /** Optional screen to reopen once the account is linked and open. */
+  returnTo?: string;
   onCancel: () => void;
 }) {
   const signInWithGoogle = useAuth((s) => s.signInWithGoogle);
@@ -59,7 +66,7 @@ export function GoogleLinkPrompt({
     if (busy) return;
     if (Date.now() - tokenCapturedAt.current > LINK_TOKEN_STALE_MS) {
       warnHaptic();
-      setError('Your Google sign-in expired — cancel and tap Continue with Google again');
+      setError('Your Google sign-in expired. Cancel and tap Continue with Google again');
       return;
     }
     if (!password) {
@@ -72,14 +79,14 @@ export function GoogleLinkPrompt({
     try {
       await signInWithGoogle(idToken, password);
       successHaptic();
-      enterApp();
+      enterApp(returnTo);
       // No setBusy(false) on success — enterApp unmounts this screen.
     } catch (err) {
       warnHaptic();
       const code = toApiError(err).code;
       setError(
         code === 'bad_credentials'
-          ? "That password doesn't match — try again, or restart with Continue with Google"
+          ? "That password doesn't match. Try again, or restart with Continue with Google"
           : describeGoogleError(code),
       );
       setBusy(false);
@@ -91,7 +98,7 @@ export function GoogleLinkPrompt({
       <AppText variant="bodyBold">Link Google to your account</AppText>
       <AppText variant="body" color={colors.textDim}>
         This email already has a password account. Enter its password once to
-        connect Google — after that, both sign-ins open the same account and
+        connect Google. After that, both sign-ins open the same account and
         the same data.
       </AppText>
       <AuthField
@@ -186,5 +193,4 @@ export const googleStyles = StyleSheet.create({
     letterSpacing: 0.3,
     color: colors.onBlock,
   },
-  centered: { textAlign: 'center' },
 });

@@ -34,27 +34,27 @@ export function ToolsSection() {
                 the <span className="text-red-deep">admin.</span>
               </Display>
               <Lead tone="light" className="mt-6">
-                Roster, review queue, chat, plans and milestones — one console on web and in
-                the app, so a client&rsquo;s whole story is in front of you before you reply.
+                Your roster, your sign-offs, chat, plans and milestones. One console on the web and
+                in the app, so a client&rsquo;s whole story is in front of you before you reply.
               </Lead>
             </Reveal>
             <Reveal delay={140}>
               <ul className="mt-8 flex flex-col gap-3.5">
                 <CheckItem tone="light">
-                  Assign full workout programs to silver-plan clients and diet plans to
-                  gold-plan clients — built once, delivered in their app.
+                  Write full workout programs for clients on Silver, and diet plans for clients on
+                  Gold. Build it once, and it lands in their app.
                 </CheckItem>
                 <CheckItem tone="light">
-                  Chat with server-side PII masking in both directions — phone numbers and
-                  handles never cross the line, yours or theirs.
+                  Chat with phone numbers and handles hidden both ways. Yours never reach them, and
+                  theirs never reach you.
                 </CheckItem>
                 <CheckItem tone="light">
-                  Log client milestones that publish straight to their Progress portfolio —
+                  Log client milestones that publish straight to their Progress portfolio
                   and stack up on your public record.
                 </CheckItem>
                 <CheckItem tone="light">
-                  Run challenges, clear the review queue, and catch needs-attention flags
-                  before a quiet client becomes a lost one.
+                  Run challenges, sign off next-weight suggestions, and catch a client going quiet
+                  before you lose them.
                 </CheckItem>
               </ul>
             </Reveal>

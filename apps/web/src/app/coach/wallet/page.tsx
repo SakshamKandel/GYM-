@@ -1,5 +1,6 @@
 import { coachPayoutRequests, promoCodes, walletLedger } from '@gym/db';
 import { and, desc, eq } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
@@ -12,6 +13,7 @@ import {
 } from './_components/CoachWalletView';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Wallet' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -108,7 +110,7 @@ export default async function CoachWalletPage() {
     <div style={{ maxWidth: 760 }}>
       <PageHeader
         title="Wallet"
-        subtitle="Your commission balance from promo-coded purchases. Request a payout once you clear the minimum — an admin reviews and disburses it."
+        subtitle="Your commission balance from promo-coded purchases. Request a payout once you clear the minimum. An admin reviews and disburses it."
       />
       <CoachWalletView
         balances={walletBalances}

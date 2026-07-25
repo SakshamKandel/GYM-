@@ -7,20 +7,24 @@ import { createDb } from '../index';
 import { exercises } from '../schema';
 
 /**
- * Seed the `exercises` catalog from the bundled free-exercise-db dataset
- * (WP-9 — video pipeline repair).
+ * One-time import of the free-exercise-db dataset into the `exercises` table.
  *
- * WHY THIS EXISTS: `plan_videos.exercise_id` has a FK to `exercises(id)`, but
- * the table shipped empty — the app reads its exercise library from the bundled
- * JSON asset, not this table. So attaching a video to any real member-visible
- * exercise raised a 23503 FK violation and no video ever reached members. This
- * script upserts the SAME 873-exercise catalog (identical ids — the canonical
- * free-exercise-db slug space, contract C-G) the mobile app bundles, so those
- * FKs resolve.
+ * SOURCE OF TRUTH: the `exercises` table in Neon. Members read it through the
+ * authenticated training-catalog endpoint (GET /api/me/training-catalog), and
+ * staff edit it in the admin catalog (/admin/catalog). The app does NOT ship an
+ * exercise list of its own — apps/mobile/src/lib/exercises.ts re-exports the
+ * Neon-backed catalog, so anything not in this table is invisible to members.
  *
- * SOURCE OF TRUTH: apps/mobile/assets/data/exercises.json — the single bundled
- * copy the mobile Train tab reads. We read it directly rather than duplicating
- * the ~1MB payload so the seed can never drift from what members actually see.
+ * ./data/exercises.json is an import FIXTURE, not a live data source. It is the
+ * upstream free-exercise-db snapshot, kept only so the table can be populated
+ * (or repopulated) from a known-good starting point. Edits made in the admin
+ * catalog do not flow back into it, and re-running this seed will overwrite
+ * those edits for any id present in the fixture.
+ *
+ * IDS ARE A CONTRACT: the seeded ids are the canonical free-exercise-db slugs
+ * (contract C-G). `plan_videos.exercise_id` and other rows carry foreign keys
+ * to them, and PR detection joins on them, so ids must stay byte-identical
+ * across re-imports — never regenerate or renumber them.
  *
  * Idempotent: keyed by id with ON CONFLICT DO UPDATE, so re-running refreshes
  * names/muscles/images in place and never duplicates. Safe to run after every
@@ -45,7 +49,7 @@ interface RawExercise {
   images: string[];
 }
 
-/** Mirror of apps/mobile/src/lib/exercises.ts `normalize` → the DB row shape. */
+/** Map one free-exercise-db fixture entry onto the `exercises` row shape. */
 function toRow(raw: RawExercise) {
   return {
     id: raw.id,
@@ -67,8 +71,8 @@ async function main() {
   }
 
   const here = dirname(fileURLToPath(import.meta.url));
-  // packages/db/src/seed → repo root is four levels up.
-  const jsonPath = resolve(here, '../../../../apps/mobile/assets/data/exercises.json');
+  // Import fixture sits next to this script: packages/db/src/seed/data/.
+  const jsonPath = resolve(here, 'data/exercises.json');
   const raw = JSON.parse(readFileSync(jsonPath, 'utf8')) as RawExercise[];
   const rows = raw.map(toRow);
 

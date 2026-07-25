@@ -124,7 +124,7 @@ export function OrderDetailDrawer({
         const body = (await res.json()) as { order: PartnerOrderDetail };
         if (alive) setDetail(body.order);
       } catch {
-        if (alive) setError('Network error loading this order.');
+        if (alive) setError('Could not reach us just now, so this order did not open. Try again.');
       }
     })();
     return () => {
@@ -220,7 +220,7 @@ export function OrderDetailDrawer({
               </div>
             ) : (
               <div style={{ fontSize: 13, color: 'var(--gt-text-faint)' }}>
-                No map pin — customer address is text-only.
+                No map pin. Customer address is text-only.
               </div>
             )}
           </Section>

@@ -37,6 +37,7 @@ import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   adminRoleOf,
+  auditIp,
   logAudit,
   requireOutranks,
   requirePermission,
@@ -72,12 +73,6 @@ const bodySchema = z.object({
   reason: z.string().max(500).optional(),
 });
 
-function getIp(req: Request): string | null {
-  const fwd = req.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]?.trim() ?? null;
-  return req.headers.get('x-real-ip');
-}
-
 export function OPTIONS() {
   return preflight();
 }
@@ -96,7 +91,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const { confirm, reason } = parsed.data;
 
   const db = getDb();
-  const ip = getIp(req);
+  const ip = auditIp(req);
 
   // Rank guard before existence lookup: a lower-ranked staffer gets the same
   // rejection for real and made-up staff ids alike.
@@ -217,15 +212,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     db
       .delete(coachRequests)
       .where(or(eq(coachRequests.userId, uid), eq(coachRequests.coachId, uid))),
+    // PARTIES ONLY. `assignedBy` is the staffer who created the pairing, not a
+    // party to it — deleting them must not dissolve an unrelated coach↔member
+    // relationship. That column is nullable ON DELETE SET NULL, so the final
+    // accounts delete clears the reference on its own.
     db
       .delete(coachAssignments)
-      .where(
-        or(
-          eq(coachAssignments.coachId, uid),
-          eq(coachAssignments.userId, uid),
-          eq(coachAssignments.assignedBy, uid),
-        ),
-      ),
+      .where(or(eq(coachAssignments.coachId, uid), eq(coachAssignments.userId, uid))),
     db.delete(passwordResetTokens).where(eq(passwordResetTokens.accountId, uid)),
     db.delete(coachProfiles).where(eq(coachProfiles.accountId, uid)),
     db.delete(admins).where(eq(admins.accountId, uid)),

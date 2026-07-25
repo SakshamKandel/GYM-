@@ -18,6 +18,12 @@ import {
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
+/**
+ * Legacy identity root (pre-`accounts`). Joined to `accounts` on lower(email),
+ * so that expression is indexed AND unique below: unindexed it was a sequential
+ * scan on every join, and a duplicate pair permanently blocked the member's
+ * account deletion with no in-app remedy.
+ */
 export const profiles = pgTable('profiles', {
   id: text('id').primaryKey(), // auth provider subject id
   displayName: text('display_name').notNull().default(''),
@@ -38,7 +44,13 @@ export const profiles = pgTable('profiles', {
     .default('normal'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  // Functional unique on the join key the accounts↔profiles lookup actually
+  // uses. Partial → rows with no email (legacy/anonymous) stay unconstrained.
+  uniqueIndex('profiles_email_lower')
+    .on(sql`lower(${t.email})`)
+    .where(sql`${t.email} is not null`),
+]);
 
 export const exercises = pgTable('exercises', {
   id: text('id').primaryKey(), // free-exercise-db slug
@@ -773,9 +785,11 @@ export const coachAssignments = pgTable(
     status: text('status', { enum: ['active', 'ended'] })
       .notNull()
       .default('active'),
-    assignedBy: text('assigned_by')
-      .notNull()
-      .references(() => accounts.id, { onDelete: 'cascade' }),
+    // The STAFFER who created the pairing — an actor/author column, not a party
+    // to the relationship. Nullable + set null (like audit_log.actor_id) so
+    // deleting an offboarded ex-admin can never cascade away the live
+    // coach↔member relationships they happened to have set up.
+    assignedBy: text('assigned_by').references(() => accounts.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -829,9 +843,10 @@ export const coachProfiles = pgTable('coach_profiles', {
 
 /**
  * Member-initiated coaching requests (the matching flow). One PENDING request
- * per member at a time (enforced in the route — a member shops one coach at a
- * time). Accepting upserts the coachAssignments row and ends the member's
- * other active assignments so "my coach" stays singular.
+ * per member at a time — a member shops one coach at a time — enforced by the
+ * `coach_requests_one_pending` partial unique below, not just by the route.
+ * Accepting upserts the coachAssignments row and ends the member's other
+ * active assignments so "my coach" stays singular.
  */
 export const coachRequests = pgTable(
   'coach_requests',
@@ -856,6 +871,12 @@ export const coachRequests = pgTable(
   (t) => [
     index('coach_requests_user_created').on(t.userId, t.createdAt),
     index('coach_requests_coach_status').on(t.coachId, t.status),
+    // At most ONE pending request per member: closes the check-then-insert race
+    // that could otherwise leave two live requests shopping two coaches at once.
+    // Route uses onConflictDoNothing→409.
+    uniqueIndex('coach_requests_one_pending')
+      .on(t.userId)
+      .where(sql`${t.status} = 'pending'`),
   ],
 );
 
@@ -1275,11 +1296,12 @@ export const coachPicks = pgTable(
 
 /**
  * Self-serve coach applications (SCALE-UP-PLAN §1.4). Any member may apply
- * once — one non-rejected application per account is route-enforced (same
- * pattern as coach_requests: no partial-unique constraint here). Free-text
- * fields (bio, achievements) are PII-masked before storage. Admin approval
- * upserts coach_profiles from these fields (incl. avatarUrl), grants
- * `admins.role = 'coach'`, and generates the coach's promo code.
+ * once — one non-rejected application per account, route-checked and backed by
+ * the `coach_applications_one_pending` partial unique below (same pattern as
+ * coach_requests). Free-text fields (bio, achievements) are PII-masked before
+ * storage. Admin approval upserts coach_profiles from these fields (incl.
+ * avatarUrl), grants `admins.role = 'coach'`, and generates the coach's promo
+ * code.
  */
 export const coachApplications = pgTable(
   'coach_applications',
@@ -1320,8 +1342,8 @@ export const coachApplications = pgTable(
 
 /**
  * Coach-requested seniority-tier upgrade (silver→gold→elite is a badge, not
- * money — see coach_profiles.coachTier). One PENDING request per coach is
- * route-enforced, same pattern as coach_applications.
+ * money — see coach_profiles.coachTier). One PENDING request per coach, backed
+ * by a partial unique — same pattern as coach_applications.
  */
 export const coachTierRequests = pgTable(
   'coach_tier_requests',
@@ -1604,6 +1626,46 @@ export const paymentRequests = pgTable(
       .where(sql`${t.status} = 'pending' and ${t.discountGrantId} is not null`),
   ],
 );
+
+/**
+ * Singleton config row (id='singleton') holding the merchant details a member
+ * has to send money TO before uploading a receipt — the payee side of both
+ * manual-payment rails (`payment_requests` for memberships,
+ * `meal_payment_requests` for meal orders and billing cycles).
+ *
+ * Until this row exists the app asked members to "transfer first, then upload
+ * the receipt" without ever naming a wallet, an account or a QR, which made the
+ * only working purchase path impossible to complete. Every column is nullable
+ * on purpose: an unset field means that rail is NOT offered to members rather
+ * than offered with a blank destination. A method counts as configured only
+ * when its own identifier is present (esewaId / khaltiId / bankAccountName +
+ * bankAccountNumber); `qrImageUrl` and `instructions` are supplementary and
+ * never enable a method on their own.
+ *
+ * Read-only projections of this row ship inside GET /api/subscription/catalog
+ * and GET /api/meals/partners; admins edit it at /admin/pricing.
+ */
+export const paymentSettings = pgTable('payment_settings', {
+  id: text('id').primaryKey().default('singleton'),
+  /** eSewa wallet id (a Nepali mobile number) money is sent to. */
+  esewaId: text('esewa_id'),
+  /** Name the eSewa wallet is registered under, so a member can verify it. */
+  esewaName: text('esewa_name'),
+  khaltiId: text('khalti_id'),
+  khaltiName: text('khalti_name'),
+  bankName: text('bank_name'),
+  bankAccountName: text('bank_account_name'),
+  bankAccountNumber: text('bank_account_number'),
+  /** Optional scan-to-pay image (https URL, e.g. a Cloudinary delivery URL). */
+  qrImageUrl: text('qr_image_url'),
+  /** Optional extra line shown under the details (max 400 chars, enforced in the route). */
+  instructions: text('instructions'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  // Audit actor, same shape as meal_delivery_config.updatedBy / tier_prices.updatedBy:
+  // a real FK, set null on delete so the config row survives the staffer who
+  // last touched it.
+  updatedBy: text('updated_by').references(() => accounts.id, { onDelete: 'set null' }),
+});
 
 /**
  * One exercise line in a coach-assigned workout. exerciseId is optional —
@@ -1891,11 +1953,9 @@ export const adminPermissionOverrides = pgTable(
     grantedBy: text('granted_by').references(() => accounts.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [
-    primaryKey({ columns: [t.accountId, t.perm] }),
-    // requirePermission fetches all overrides for one account per request.
-    index('admin_permission_overrides_account').on(t.accountId),
-  ],
+  // requirePermission fetches all overrides for one account per request — the
+  // composite PK leads with accountId, so that scan needs no extra index.
+  (t) => [primaryKey({ columns: [t.accountId, t.perm] })],
 );
 
 /**
@@ -1980,10 +2040,9 @@ export const mealPartners = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [
-    index('meal_partners_account').on(t.accountId),
-    index('meal_partners_active').on(t.isActive),
-  ],
+  // accountId needs no index of its own — its column-level UNIQUE already backs
+  // one (the auth guard's partner lookup rides it).
+  (t) => [index('meal_partners_active').on(t.isActive)],
 );
 
 /**
@@ -2023,10 +2082,9 @@ export const meals = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [
-    index('meals_partner').on(t.partnerId),
-    index('meals_partner_active').on(t.partnerId, t.isActive),
-  ],
+  // Partner-scoped menu reads all lead with partnerId, so the composite serves
+  // the partnerId-only lookups too — no separate single-column index.
+  (t) => [index('meals_partner_active').on(t.partnerId, t.isActive)],
 );
 
 /**
@@ -2053,6 +2111,9 @@ export const mealAvailability = pgTable(
 /**
  * A member's saved delivery address. `isDeleted` soft-delete keeps prior orders'
  * FK (meal_orders.addressId onDelete set null) intact for real deletes.
+ * Exactly one default per account is guaranteed by the partial unique below —
+ * the driver has no transactions, so the clear-then-set pair the route runs
+ * needs a constraint to land on.
  */
 export const savedAddresses = pgTable(
   'saved_addresses',
@@ -2073,7 +2134,13 @@ export const savedAddresses = pgTable(
     isDeleted: boolean('is_deleted').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('saved_addresses_account').on(t.accountId)],
+  (t) => [
+    index('saved_addresses_account').on(t.accountId),
+    // At most ONE default address per account.
+    uniqueIndex('saved_addresses_one_default')
+      .on(t.accountId)
+      .where(sql`${t.isDefault} = true`),
+  ],
 );
 
 /**
@@ -2274,6 +2341,14 @@ export const mealOrders = pgTable(
     index('meal_orders_partner_status').on(t.partnerId, t.status),
     index('meal_orders_account').on(t.accountId),
     index('meal_orders_partner_date').on(t.partnerId, t.deliveryDate),
+    // Cutoff/dispatch sweeps scan by delivery date across all partners.
+    index('meal_orders_delivery_date').on(t.deliveryDate),
+    // Newest-first order lists page on (placed_at, id).
+    index('meal_orders_placed').on(t.placedAt, t.id),
+    // "Orders for this subscription" lookups — only subscription rows qualify.
+    index('meal_orders_subscription')
+      .on(t.subscriptionId)
+      .where(sql`${t.subscriptionId} IS NOT NULL`),
   ],
 );
 
@@ -2325,6 +2400,8 @@ export const mealOrderEvents = pgTable(
  * `paymentRequests`, scoped to an order OR a billing cycle (exactly one set).
  * eSewa/Khalti only (COD reconciles on delivery). `receiptUrl` UNIQUE dedupes
  * a resubmitted screenshot. Admin approve → paid; refund is idempotent-stamped.
+ * At most one PENDING request per order and per cycle — constraint-backed by
+ * the two partial uniques below, not merely route-checked.
  */
 export const mealPaymentRequests = pgTable(
   'meal_payment_requests',
@@ -2355,6 +2432,21 @@ export const mealPaymentRequests = pgTable(
   (t) => [
     index('meal_payment_requests_account').on(t.accountId),
     index('meal_payment_requests_status').on(t.status),
+    // Both FK targets are money-safety predicates ("is this order/cycle already
+    // paid?") AND ON DELETE CASCADE parents — an unindexed FK makes every
+    // parent delete a sequential scan of this table.
+    index('meal_payment_requests_order').on(t.orderId),
+    index('meal_payment_requests_cycle').on(t.cycleId),
+    // At most ONE live (pending) request per target — closes the double-submit
+    // race the route could only check-then-insert against. Rejected/approved/
+    // refunded history stays unconstrained so a member can resubmit after a
+    // rejection.
+    uniqueIndex('meal_payment_requests_one_live_order')
+      .on(t.orderId)
+      .where(sql`${t.status} = 'pending' and ${t.orderId} is not null`),
+    uniqueIndex('meal_payment_requests_one_live_cycle')
+      .on(t.cycleId)
+      .where(sql`${t.status} = 'pending' and ${t.cycleId} is not null`),
   ],
 );
 
@@ -2373,7 +2465,10 @@ export const mealDeliveryConfig = pgTable('meal_delivery_config', {
   lunchCutoffPrevDayHour: integer('lunch_cutoff_prev_day_hour').notNull().default(21),
   dinnerCutoffSameDayHour: integer('dinner_cutoff_same_day_hour').notNull().default(10),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedBy: text('updated_by'),
+  // Audit actor, same shape as every other one in this file (audit_log.actorId,
+  // tier_prices.updatedBy): a real FK, set null on delete so the config row
+  // survives the staffer who last touched it.
+  updatedBy: text('updated_by').references(() => accounts.id, { onDelete: 'set null' }),
 });
 
 /** Macros snapshot embedded in a meal_order_items row (frozen at order time). */
@@ -2500,10 +2595,18 @@ export const gymPhotos = pgTable(
 // layer (hard-rule 3). New free-text member fields are maskPii'd before store.
 // ===========================================================================
 
-/** Deep-link payload carried on a notification row (mobile routes on data.type). */
+/**
+ * Deep-link payload carried on a notification row (mobile routes on data.type).
+ *
+ * The open string index mirrors NotifyData in apps/web/src/lib/notify.ts: several
+ * senders carry a route-specific key beside `type` (badgeId, checkInId, orderId,
+ * status, …) that shipped mobile builds already read. FCM data payloads are
+ * string→string, so every value must stay a string.
+ */
 export interface NotificationData {
   type: string; // 'order' | 'cycle' | 'tier' | 'coach_chat' | 'support' | 'gym' | …
   id?: string;
+  [key: string]: string | undefined;
 }
 
 /**
@@ -2648,8 +2751,11 @@ export const partnerWalletLedger = pgTable(
 
 /**
  * Durable notification inbox + outbox (Pack B / E2). `notify()` (WP-2) writes the
- * row FIRST (durable, `sentAt=null`) then dispatches the push (flips `sentAt`); a
- * crash between commit and FCM-send is reconciled by the `retry-unsent` cron.
+ * row with `sentAt` ALREADY STAMPED — the column records the delivery ATTEMPT,
+ * not its outcome — and reverts it to null only on a confirmed transient failure,
+ * which returns the row to the `retry-unsent` cron. Stamping after a successful
+ * send instead would leave a crash window in which the identical push is
+ * re-delivered on the next tick.
  * `dedupeKey` (partial-unique) is the at-least-once idempotency key cron/senders
  * set (e.g. `trial_expiry:{accountId}:{yyyy-mm-dd}`) so a re-run / double-fire is
  * a no-op — mirrors the `revenuecat_events` / `wallet_ledger` idempotency pattern.
@@ -2744,10 +2850,8 @@ export const gymFavorites = pgTable(
       .references(() => gyms.id, { onDelete: 'cascade' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [
-    primaryKey({ columns: [t.accountId, t.gymId] }),
-    index('gym_favorites_account').on(t.accountId),
-  ],
+  // "My saved gyms" leads with accountId — served by the composite PK.
+  (t) => [primaryKey({ columns: [t.accountId, t.gymId] })],
 );
 
 /** A member-reported correction to a gym listing → admin queue (Pack M). */
@@ -2776,6 +2880,50 @@ export const gymReports = pgTable(
 );
 
 /**
+ * A member's membership / day-pass enquiry about a gym → admin follow-up queue.
+ *
+ * The enquire route used to fire ONLY a staff notification, so the member's
+ * "the team will reach out" promise had no durable backing: nothing listed the
+ * leads, and a cleared notification lost them for good. This is that record.
+ * The row is written BEFORE the notification so a push/FCM failure can never
+ * drop the lead.
+ *
+ * `passId` is the id of an entry inside the gym's `pass_options` jsonb (day
+ * pass, monthly, …), nullable for a plain "tell me about membership" enquiry —
+ * a jsonb sub-object can't carry a foreign key, so the enquire route validates
+ * it against the gym's own options before storing. `message` is maskPii'd.
+ * `status` is the ops lifecycle: open → contacted → closed.
+ */
+export const gymEnquiries = pgTable(
+  'gym_enquiries',
+  {
+    id: text('id')
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    gymId: text('gym_id')
+      .notNull()
+      .references(() => gyms.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    passId: text('pass_id'), // GymPassOption.id inside gyms.pass_options (no FK possible)
+    message: text('message').notNull().default(''), // maskPii'd
+    status: text('status', { enum: ['open', 'contacted', 'closed'] })
+      .notNull()
+      .default('open'),
+    handledBy: text('handled_by').references(() => accounts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Per-gym lead history ("who has asked about this listing").
+    index('gym_enquiries_gym').on(t.gymId),
+    // Staff queue: open-first, oldest-first.
+    index('gym_enquiries_status_created').on(t.status, t.createdAt),
+  ],
+);
+
+/**
  * A member's review of their coach (Pack C / L). `unique(coachId,memberId)` =
  * one review per relationship. Display policy (min-N threshold) is a product
  * ruling (§6); the mechanism ships here. `note` maskPii'd.
@@ -2796,10 +2944,8 @@ export const coachReviews = pgTable(
     note: text('note').notNull().default(''), // maskPii'd
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [
-    uniqueIndex('coach_reviews_coach_member').on(t.coachId, t.memberId),
-    index('coach_reviews_coach').on(t.coachId),
-  ],
+  // The per-coach aggregate scan leads with coachId — served by the unique.
+  (t) => [uniqueIndex('coach_reviews_coach_member').on(t.coachId, t.memberId)],
 );
 
 /**

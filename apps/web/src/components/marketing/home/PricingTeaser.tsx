@@ -8,15 +8,11 @@ import { motion } from 'motion/react';
 import { useState } from 'react';
 import type { PublicCatalog } from '@/lib/publicCatalog';
 import { Reveal, Stagger, StaggerItem } from '../motion';
-import { priceFor, TIER_META, type Region } from '../pricing-format';
+import { bulletsFor, inheritsFrom, priceFor, TIER_META, type Region } from '../pricing-format';
 import { Container, Display, Eyebrow, Lead, PillLink, Section } from '../ui';
 
-const TIER_FEATURES: Record<string, string[]> = {
-  starter: ['Gym Mode & Set Logger', '650+ Exercise Library', 'Basic EWMA Weight Trend', 'Offline SQLite Queue'],
-  silver: ['Everything in Starter', 'Macro & Barcode Scanner', 'True-3D Muscle Anatomy', 'Gym Discovery Passes'],
-  gold: ['Everything in Silver', '1-on-1 Coach Plan Sync', '15% Off Kathmandu Meals', 'Priority Support Inbox'],
-  elite: ['Everything in Gold', 'Dedicated Senior Coach', 'Customized Diet Plans', 'VIP Event Passes'],
-};
+/** Teaser cards are short — the first few bullets, then "compare all". */
+const TEASER_BULLET_LIMIT = 3;
 
 export function PricingTeaser({ catalog }: { catalog: PublicCatalog }) {
   const [region, setRegion] = useState<Region>('NP');
@@ -30,7 +26,7 @@ export function PricingTeaser({ catalog }: { catalog: PublicCatalog }) {
             <Eyebrow tone="light">Membership Tiers</Eyebrow>
             <Display className="mt-4">Start free. Level up when it&rsquo;s real.</Display>
             <Lead tone="light" className="mt-5">
-              Transparent plans tailored for Nepal and international athletes — zero hidden fees.
+              Transparent plans tailored for Nepal and international athletes, with zero hidden fees.
             </Lead>
           </Reveal>
 
@@ -52,7 +48,7 @@ export function PricingTeaser({ catalog }: { catalog: PublicCatalog }) {
                   type="button"
                   aria-pressed={region === key}
                   onClick={() => setRegion(key)}
-                  className={`relative h-11 rounded-full px-6 text-[13.5px] font-semibold transition-colors ${
+                  className={`relative h-11 rounded-full px-6 text-[14.5px] font-semibold transition-colors ${
                     region === key ? 'text-snow' : 'text-gravel hover:text-ink'
                   }`}
                 >
@@ -74,7 +70,11 @@ export function PricingTeaser({ catalog }: { catalog: PublicCatalog }) {
         <Stagger className="mt-14 grid gap-6 sm:grid-cols-2 lg:grid-cols-4" gap={0.08}>
           {TIER_META.map((t) => {
             const isGold = t.tier === 'gold';
-            const features = TIER_FEATURES[t.tier] ?? [];
+            const inherited = inheritsFrom(t.tier);
+            const features = [
+              ...(inherited ? [inherited] : []),
+              ...bulletsFor(t.tier, TEASER_BULLET_LIMIT).map((b) => b.label),
+            ];
 
             return (
               <StaggerItem key={t.tier}>
@@ -86,7 +86,7 @@ export function PricingTeaser({ catalog }: { catalog: PublicCatalog }) {
                   }`}
                 >
                   {isGold ? (
-                    <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 rounded-full bg-red px-4 py-1 font-mono text-[10.5px] font-bold uppercase tracking-[0.16em] text-ink shadow-ember">
+                    <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 rounded-full bg-red px-4 py-1 font-mono text-[11px] font-bold uppercase tracking-[0.16em] text-ink shadow-ember">
                       Most Popular
                     </div>
                   ) : null}
@@ -96,14 +96,14 @@ export function PricingTeaser({ catalog }: { catalog: PublicCatalog }) {
                       <h3 className="font-display text-2xl font-bold uppercase tracking-tight">
                         {t.name}
                       </h3>
-                      <span className={`font-mono text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full ${
+                      <span className={`font-mono text-[11px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full ${
                         isGold ? 'bg-red/20 text-red' : 'bg-paper-2 text-gravel'
                       }`}>
                         {t.tier}
                       </span>
                     </div>
 
-                    <p className={`mt-3 text-[13.5px] leading-relaxed ${isGold ? 'text-dim' : 'text-gravel'}`}>
+                    <p className={`mt-3 text-[14.5px] leading-relaxed ${isGold ? 'text-dim' : 'text-gravel'}`}>
                       {t.blurb}
                     </p>
 
@@ -113,7 +113,7 @@ export function PricingTeaser({ catalog }: { catalog: PublicCatalog }) {
                         {priceFor(regionCatalog, t.tier)}
                       </span>
                       {!['Free', 'Unavailable'].includes(priceFor(regionCatalog, t.tier)) ? (
-                        <span className={`ml-2 font-mono text-[11.5px] uppercase tracking-wider ${isGold ? 'text-faint' : 'text-gravel'}`}>
+                        <span className={`ml-2 font-mono text-[12px] uppercase tracking-wider ${isGold ? 'text-faint' : 'text-gravel'}`}>
                           / month
                         </span>
                       ) : null}
@@ -122,8 +122,8 @@ export function PricingTeaser({ catalog }: { catalog: PublicCatalog }) {
                     {/* Feature list */}
                     <ul className="flex flex-col gap-2.5">
                       {features.map((f) => (
-                        <li key={f} className="flex items-center gap-2.5 text-[13px]">
-                          <span className={`flex size-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                        <li key={f} className="flex items-start gap-2.5 text-[14.5px] leading-snug">
+                          <span className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
                             isGold ? 'bg-red text-ink' : 'bg-ink text-snow'
                           }`}>
                             ✓

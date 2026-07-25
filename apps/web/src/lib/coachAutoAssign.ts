@@ -75,13 +75,15 @@ export async function syncEliteCoachAssignment(
     if ((await adminRoleOf(userId)) !== null) return;
 
     const db = getDb();
-    // assignedBy is a NOT NULL FK → accounts.id. setAccountTier callers pass a
-    // staff Principal (console overrides) or the member's own { id } for
-    // audited self-serve writes (subscription/tier, buddy trial) — both are
-    // real account ids. When actor is null (defensive / future
-    // system-initiated path) we stamp the coach's own account id so the FK
-    // always holds.
-    const assignedBy = actor?.id ?? coachId;
+    // assignedBy records WHO created the pairing — an actor column, not a party
+    // to it. setAccountTier callers pass a staff Principal (console overrides)
+    // or the member's own { id } for audited self-serve writes
+    // (subscription/tier, buddy trial) — both are real account ids. The column
+    // is nullable (FK → accounts.id ON DELETE SET NULL), so when actor is null
+    // (defensive / future system-initiated path) we record null — "no human
+    // actor" — instead of misattributing the pairing to the coach to satisfy a
+    // NOT NULL that no longer exists.
+    const assignedBy = actor?.id ?? null;
 
     if (effectiveTier === 'elite') {
       // Ensure an ACTIVE row. Reactivate an 'ended' pair rather than crash on

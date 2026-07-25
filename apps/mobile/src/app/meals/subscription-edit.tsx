@@ -29,7 +29,7 @@ import {
 import { editMealSubscription, toMealsError, type MealAddress, type MealPlanType, type MealWindow } from '../../features/meals/api';
 import { AddressSheet } from '../../features/meals/components/AddressSheet';
 import { mealErrorMessage, weekdayLabel, WEEKDAY_OPTIONS, windowLabel } from '../../features/meals/logic';
-import { pushPath, replacePath } from '../../features/meals/nav';
+import { replacePath } from '../../features/meals/nav';
 
 /**
  * /meals/subscription-edit?id= — the front door for the previously-unreachable
@@ -66,6 +66,18 @@ const styles = StyleSheet.create({
   quoteCard: { gap: spacing.xs },
   errorText: { marginTop: spacing.sm },
   doneCard: { alignItems: 'center', gap: spacing.sm },
+  menuNote: { paddingVertical: spacing.sm },
+  retryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    minHeight: touch.min,
+  },
+  retryText: { flex: 1 },
 });
 
 function SectionLabel({ children }: { children: string }) {
@@ -76,10 +88,25 @@ function SectionLabel({ children }: { children: string }) {
   );
 }
 
+function BackRow({ onPress }: { onPress: () => void }) {
+  return (
+    <Animated.View entering={enterDown()} style={styles.backRow}>
+      <PressableScale accessibilityRole="button" accessibilityLabel="Go back" onPress={onPress} style={styles.backBtn}>
+        <Ionicons name="chevron-back" size={24} color={colors.text} />
+      </PressableScale>
+    </Animated.View>
+  );
+}
+
 export default function SubscriptionEditScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const token = useAuth((s) => s.token);
-  const { data: subs } = useMyMealSubscriptions(token);
+  const {
+    data: subs,
+    loading: subsLoading,
+    error: subsError,
+    retry: retrySubs,
+  } = useMyMealSubscriptions(token);
   const sub = subs?.find((s) => s.id === id) ?? null;
 
   const [days, setDays] = useState<Set<number>>(new Set());
@@ -102,7 +129,12 @@ export default function SubscriptionEditScreen() {
     setSeeded(true);
   }, [seeded, sub]);
 
-  const { data: menu } = useMealMenu(token, sub?.partnerId ?? null, { window });
+  const {
+    data: menu,
+    loading: menuLoading,
+    error: menuError,
+    retry: retryMenu,
+  } = useMealMenu(token, sub?.partnerId ?? null, { window });
   const { data: addresses, reload: reloadAddresses } = useMealAddresses(token);
   const selectedAddress: MealAddress | null = addresses?.find((a) => a.id === addressId) ?? null;
 
@@ -160,15 +192,43 @@ export default function SubscriptionEditScreen() {
   if (!id) {
     return (
       <Screen scroll>
-        <EmptyState icon="repeat-outline" title="No plan selected" body="Open a plan from My subscriptions to edit it." />
+        <BackRow onPress={goBack} />
+        <EmptyState
+          icon="repeat-outline"
+          title="No meal plan selected"
+          body="Open a meal plan from My meal plans to edit it."
+          actionLabel="Back to my meal plans"
+          onAction={() => replacePath('/meals/subscriptions')}
+        />
       </Screen>
     );
   }
 
   if (!sub) {
+    // Three very different states used to share one "Loading…" screen: a failed
+    // fetch, a plan that no longer exists, and a genuinely in-flight load.
     return (
       <Screen scroll>
-        <EmptyState icon="repeat-outline" title="Loading your plan…" body="One moment." />
+        <BackRow onPress={goBack} />
+        {subsError ? (
+          <EmptyState
+            icon="cloud-offline"
+            title="Your meal plan could not be loaded"
+            body="Check your connection and try again."
+            actionLabel="Try again"
+            onAction={retrySubs}
+          />
+        ) : subsLoading ? (
+          <EmptyState icon="repeat-outline" title="Loading your meal plan…" body="One moment." />
+        ) : (
+          <EmptyState
+            icon="repeat-outline"
+            title="Meal plan not found"
+            body="This meal plan may have been cancelled or already changed."
+            actionLabel="Back to my meal plans"
+            onAction={() => replacePath('/meals/subscriptions')}
+          />
+        )}
       </Screen>
     );
   }
@@ -176,11 +236,11 @@ export default function SubscriptionEditScreen() {
   if (done) {
     return (
       <Screen scroll>
-        <ScreenHeader eyebrow="Plan updated" title="Changes saved" style={styles.header} />
+        <ScreenHeader eyebrow="Meal plan updated" title="Changes saved" style={styles.header} />
         <Card style={styles.doneCard}>
           <Ionicons name="checkmark-circle" size={32} color={colors.success} />
           <AppText variant="bodyBold" center>
-            Your plan is updated from today onward.
+            Your meal plan is updated from today onward.
           </AppText>
           {done.preservedOrderDates.length > 0 ? (
             <AppText variant="caption" color={colors.textDim} center>
@@ -189,8 +249,10 @@ export default function SubscriptionEditScreen() {
           ) : null}
         </Card>
         <Button
-          label="Back to my subscriptions"
-          onPress={() => pushPath('/meals/subscriptions')}
+          label="Back to my meal plans"
+          // Replace, not push: the changes are saved, so Android back must
+          // never reopen this (now spent) form.
+          onPress={() => replacePath('/meals/subscriptions')}
           style={{ marginTop: spacing.gutter }}
         />
       </Screen>
@@ -199,13 +261,9 @@ export default function SubscriptionEditScreen() {
 
   return (
     <Screen scroll>
-      <Animated.View entering={enterDown()} style={styles.backRow}>
-        <PressableScale accessibilityRole="button" accessibilityLabel="Go back" onPress={goBack} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={24} color={colors.text} />
-        </PressableScale>
-      </Animated.View>
+      <BackRow onPress={goBack} />
 
-      <ScreenHeader eyebrow="Weekly plan" title="Edit your plan" style={styles.header} />
+      <ScreenHeader eyebrow="Weekly meal plan" title="Edit your meal plan" style={styles.header} />
 
       <Animated.View entering={enterUp(0)} style={styles.section}>
         <SectionLabel>Delivery days</SectionLabel>
@@ -239,11 +297,34 @@ export default function SubscriptionEditScreen() {
           />
         </View>
         {planType === 'fixed_meal' ? (
-          <View style={styles.chipRow}>
-            {(menu ?? []).map((m) => (
-              <Chip key={m.id} label={m.name} selected={mealId === m.id} onPress={() => setMealId(m.id)} />
-            ))}
-          </View>
+          menuLoading ? (
+            <AppText variant="caption" color={colors.textDim} style={styles.menuNote}>
+              Loading meals…
+            </AppText>
+          ) : menuError ? (
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Couldn't load meals. Tap to retry."
+              onPress={retryMenu}
+              style={styles.retryRow}
+            >
+              <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
+              <AppText variant="caption" color={colors.textDim} style={styles.retryText}>
+                Couldn&apos;t load meals. Tap to retry.
+              </AppText>
+              <Ionicons name="refresh" size={15} color={colors.textDim} />
+            </PressableScale>
+          ) : (menu ?? []).length === 0 ? (
+            <AppText variant="caption" color={colors.textDim} style={styles.menuNote}>
+              No meals available for this window.
+            </AppText>
+          ) : (
+            <View style={styles.chipRow}>
+              {(menu ?? []).map((m) => (
+                <Chip key={m.id} label={m.name} selected={mealId === m.id} onPress={() => setMealId(m.id)} />
+              ))}
+            </View>
+          )
         ) : null}
       </Animated.View>
 
@@ -287,7 +368,7 @@ export default function SubscriptionEditScreen() {
             </AppText>
           ) : quoteStatus === 'error' ? (
             <AppText variant="caption" color={colors.error}>
-              Couldn&apos;t price this change — adjust your selection.
+              Couldn&apos;t price this change. Adjust your selection.
             </AppText>
           ) : (
             <AppText variant="caption" color={colors.textDim}>
@@ -295,7 +376,7 @@ export default function SubscriptionEditScreen() {
             </AppText>
           )}
           <AppText variant="caption" color={colors.textFaint}>
-            Changes apply to future deliveries only — anything already scheduled keeps its original price.
+            Changes apply to future deliveries only. Anything already scheduled keeps its original price.
           </AppText>
         </Card>
       </Animated.View>

@@ -1,8 +1,10 @@
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { requireCoachPage } from '@/lib/coachPage';
 import { VerifyQueue } from './_components/VerifyQueue';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Verify' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -21,7 +23,7 @@ export default async function CoachVerifyPage() {
     <div style={{ maxWidth: 900 }}>
       <PageHeader
         title="Verify"
-        subtitle="Strength-club badges your clients have logged, oldest first. Verifying confirms the lift for the record — the member sees a verified check the moment you do."
+        subtitle="Strength-club badges your clients have logged, oldest first. Verifying confirms the lift for the record, and the member sees a verified check the moment you do."
       />
       <VerifyQueue />
     </div>

@@ -54,12 +54,16 @@ const styles = StyleSheet.create({
   },
   cta: { marginTop: spacing.xl },
   tipCard: { marginTop: spacing.lg },
+  tipNote: { marginTop: spacing.xs, paddingHorizontal: spacing.xs },
 });
 
 export function WeightSection() {
   const unitPref = useProfile((s) => s.unitPref);
   const goalType = useProfile((s) => s.goalType);
   const targetWeightKg = useProfile((s) => s.targetWeightKg);
+  // Height rides along so the server can sanity-check the goal weight before
+  // it coaches anyone towards it.
+  const heightCm = useProfile((s) => s.heightCm);
   const weights = useWeights();
 
   // Derive from an empty list while weights are still loading (null) so EVERY
@@ -73,27 +77,39 @@ export function WeightSection() {
   const unit = unitLabel(unitPref);
   const [historyOpen, setHistoryOpen] = useState(false);
 
-  const { state: tipState, refresh } = useAiTip(() => {
-    const trendVal = headline.trendValue;
-    const rate = headline.summary.ratePerWeekKg;
-    const direction = headline.summary.direction;
-    const goal = goalType ?? 'muscle';
-    const target = targetWeightKg
-      ? `${(targetWeightKg).toFixed(1)} kg`
-      : 'not set';
-
-    return [
-      {
-        role: 'system' as const,
-        content:
-          'You are a friendly gym coach giving a single short weight-management tip. Keep it under 40 words. Be practical and encouraging. No medical advice. No disclaimers. Just the tip.',
+  // Closed payload: numbers and enums only, never prose. The prompt itself is
+  // owned by the server, so this card finally asks about WEIGHT and gets an
+  // answer about weight. Facts this screen does not hold (sessions, streak)
+  // stay null so the coach never guesses at them.
+  const { state: tipState, refresh } = useAiTip(
+    () => ({
+      kind: 'weight' as const,
+      context: {
+        goalType: goalType ?? null,
+        unitPref,
+        bodyweightKg: headline.trendKg,
+        goalWeightKg: targetWeightKg ?? null,
+        heightCm: heightCm ?? null,
+        trendDirection: headline.trendKg === null ? null : headline.summary.direction,
+        ratePerWeekKg: headline.trendKg === null ? null : headline.summary.ratePerWeekKg,
+        sessionsThisWeek: null,
+        streakWeeks: null,
+        daysSinceLastSession: null,
+        weekVolumeKg: null,
+        personalBestsLast30Days: null,
+        trainedToday: null,
       },
-      {
-        role: 'user' as const,
-        content: `Current trend weight: ${trendVal ?? 'unknown'} ${unit}. Rate: ${rate.toFixed(2)} kg/week (${direction}). Goal: ${goal}. Target weight: ${target}. Give one actionable tip to help reach the target weight.`,
-      },
-    ];
-  }, [headline.trendValue, headline.summary.ratePerWeekKg, goalType, targetWeightKg, unitPref]);
+    }),
+    [
+      headline.trendKg,
+      headline.summary.ratePerWeekKg,
+      headline.summary.direction,
+      goalType,
+      targetWeightKg,
+      heightCm,
+      unitPref,
+    ],
+  );
 
   // Safe now: all hooks above ran unconditionally.
   if (weights === null) return null;
@@ -163,6 +179,13 @@ export function WeightSection() {
           error={tipState.status === 'error'}
           onRefresh={refresh}
         />
+        {/* Say where the words came from, and only when they really are the
+            AI coach's. Our own safety note must not be captioned as one. */}
+        {tipState.status === 'done' && tipState.source === 'coach' ? (
+          <AppText variant="caption" style={styles.tipNote}>
+            Written by an AI coach from your training numbers.
+          </AppText>
+        ) : null}
       </Animated.View>
 
       <Animated.View entering={enterUp(4)}>

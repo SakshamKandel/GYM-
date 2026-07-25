@@ -45,7 +45,15 @@
   /* Text */
   --gt-text: #1b1c1e; /* primary ink */
   --gt-text-dim: #5f636a; /* secondary (>=5.2:1 on bg) */
-  --gt-text-faint: #8a8e95; /* tertiary / meta */
+  /**
+   * Tertiary / meta — quietest ink, but it still carries real reading content
+   * (column headers, group labels, placeholders), so it must be readable.
+   * Darkened from #8a8e95 (3.0:1 on --gt-bg, invisible to many readers) to
+   * clear 4.5:1 everywhere: bg 4.6, white surfaces 5.1. Same fix the mobile
+   * tokens made to `textFaint`. Stays a clear step lighter than --gt-text-dim
+   * so the three-level hierarchy still reads.
+   */
+  --gt-text-faint: #6a6f77;
 
   /* Accent (signal orange) */
   --gt-accent: #f0521e; /* fills, active indicator */
@@ -153,8 +161,154 @@ h4 {
   font-weight: 600;
   font-size: 16px;
   cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
 }
 .gt-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Console button (components/console/Button.tsx) ───────────────────────
+ * The variant look lives here, not in an inline style, because hover and
+ * :active cannot be written inline — the console's main control had neither.
+ * The component still spreads its `style` prop last, so a per-call override
+ * keeps winning over these rules.
+ *
+ * Sizing: 48px floor (44 for `sm`) meets the Material 48dp / Apple 44pt touch
+ * minimums the console was missing; inline-flex centring keeps the label
+ * optically centred now that the box is taller than the text.
+ *
+ * Pressed states darken toward --gt-text rather than introducing a new colour.
+ */
+.gt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 10px 16px;
+  border-radius: var(--gt-radius-sm);
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.gt-btn[data-size='sm'] {
+  min-height: 44px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+.gt-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.gt-btn[data-variant='primary'] {
+  background: var(--gt-accent-strong);
+  color: var(--gt-accent-ink);
+  border: none;
+}
+.gt-btn[data-variant='primary']:hover:not(:disabled),
+.gt-btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-accent-strong) 88%, var(--gt-text));
+}
+.gt-btn[data-variant='primary']:active:not(:disabled),
+.gt-btn-primary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-accent-strong) 76%, var(--gt-text));
+}
+
+.gt-btn[data-variant='dark'] {
+  background: var(--gt-text);
+  color: var(--gt-surface);
+  border: none;
+}
+.gt-btn[data-variant='dark']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-text) 86%, var(--gt-surface));
+}
+.gt-btn[data-variant='dark']:active:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-text) 94%, var(--gt-surface));
+}
+
+/* Outlined at rest, fills on hover (the documented danger behaviour). */
+.gt-btn[data-variant='danger'] {
+  background: transparent;
+  color: var(--gt-danger);
+  border: 1px solid color-mix(in srgb, var(--gt-danger) 38%, transparent);
+}
+.gt-btn[data-variant='danger']:hover:not(:disabled) {
+  background: var(--gt-danger);
+  border-color: var(--gt-danger);
+  color: var(--gt-accent-ink);
+}
+.gt-btn[data-variant='danger']:active:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-danger) 86%, var(--gt-text));
+  border-color: color-mix(in srgb, var(--gt-danger) 86%, var(--gt-text));
+  color: var(--gt-accent-ink);
+}
+
+.gt-btn[data-variant='ghost'] {
+  background: var(--gt-surface);
+  color: var(--gt-text);
+  border: 1px solid var(--gt-border-strong);
+}
+.gt-btn[data-variant='ghost']:hover:not(:disabled) {
+  background: var(--gt-surface-hover);
+  border-color: var(--gt-border-input);
+}
+.gt-btn[data-variant='ghost']:active:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-surface-hover) 88%, var(--gt-text));
+  border-color: var(--gt-border-input);
+}
+
+/* ── Filter pill (components/console/FilterPill.tsx) ──────────────────────
+ * The segmented filter row above a queue or table. Selected uses
+ * --gt-accent-strong: it is the only accent fill that clears 4.5:1 against
+ * --gt-accent-ink, so pill rows can't drift onto the lighter --gt-accent that
+ * fails. Same 44px floor as a small button. */
+.gt-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: var(--gt-radius-sm);
+  border: 1px solid var(--gt-border);
+  background: var(--gt-surface);
+  color: var(--gt-text);
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.gt-pill:hover:not(:disabled) {
+  background: var(--gt-surface-hover);
+  border-color: var(--gt-border-strong);
+}
+.gt-pill[aria-pressed='true'] {
+  background: var(--gt-accent-strong);
+  border-color: var(--gt-accent-strong);
+  color: var(--gt-accent-ink);
+}
+.gt-pill[aria-pressed='true']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-accent-strong) 88%, var(--gt-text));
+  border-color: color-mix(in srgb, var(--gt-accent-strong) 88%, var(--gt-text));
+}
+.gt-pill:active:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-surface-hover) 88%, var(--gt-text));
+  border-color: var(--gt-border-input);
+}
+.gt-pill[aria-pressed='true']:active:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-accent-strong) 76%, var(--gt-text));
+  border-color: color-mix(in srgb, var(--gt-accent-strong) 76%, var(--gt-text));
+  color: var(--gt-accent-ink);
+}
+.gt-pill:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -173,10 +327,20 @@ h4 {
 .gt-input::placeholder {
   color: var(--gt-text-faint);
 }
+/* Focus: the border tint reads for everyone. The 1.1:1 accent wash on its own
+ * was invisible, and the blanket `outline: none` here also swallowed the global
+ * focus-visible ring, so keyboard users got nothing at all. Now the wash is the
+ * quiet pointer-only treatment and keyboard focus keeps a real ring. */
 .gt-input:focus {
-  outline: none;
   border-color: var(--gt-accent-strong);
+}
+.gt-input:focus:not(:focus-visible) {
+  outline: none;
   box-shadow: 0 0 0 3px var(--gt-accent-weak);
+}
+.gt-input:focus-visible {
+  outline: 2px solid var(--gt-accent-strong);
+  outline-offset: 2px;
 }
 
 /* Pill chips for tier / status. */
@@ -315,11 +479,12 @@ h4 {
   margin: 4px 0;
 }
 
-/* Focus states — visible keyboard ring on every interactive control. */
+/* Focus states — visible keyboard ring on every interactive control. The ring
+ * follows each control's own radius, so it is NOT forced to 4px here (that
+ * squared off pills and cards the moment they took focus). */
 :focus-visible {
   outline: 2px solid var(--gt-accent-strong);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 /* Pointer clicks shouldn't paint the ring (only keyboard focus). */
 :focus:not(:focus-visible) {
@@ -351,7 +516,10 @@ h4 {
 @media (prefers-reduced-motion: reduce) {
   .gt-nav-item,
   .gt-inbox-row,
-  .gt-skip-link {
+  .gt-skip-link,
+  .gt-btn,
+  .gt-btn-primary,
+  .gt-pill {
     transition: none;
   }
 }

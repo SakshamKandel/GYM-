@@ -5,11 +5,25 @@ import { getTrainingCatalog, toApiError } from './api/client';
 import { getRepoForAccount } from './repo';
 import { useAuth } from '../state/auth';
 
+/**
+ * Programs and exercises live in Neon and reach the app through ONE read:
+ * GET /api/me/training-catalog, which answers 401 without a bearer token. So
+ * with no account there is no catalog at all — no programs, no exercise
+ * library, nothing for the muscle map or the workout picker to show.
+ *
+ * That is why setup now ends by creating the account
+ * (features/onboarding/OnboardingWizard.tsx) and why every surface that reads
+ * this store must treat 'authRequired' as "ask for the account", never as an
+ * error and never as an empty library. If the endpoint ever serves an
+ * unauthenticated read, this module is where that lands: fetch without a
+ * token, keep tier-gated plan bodies hidden, and 'authRequired' disappears.
+ */
 export type TrainingCatalogStatus =
   | 'idle'
   | 'loading'
   | 'ready'
   | 'cached'
+  /** Signed out: the catalog cannot be read at all (see the note above). */
   | 'authRequired'
   | 'error';
 

@@ -10,8 +10,12 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  SearchField,
   StatusChip,
 } from '@/components/console';
+import { formatDate } from '@/lib/format';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
+import { MemberLink } from '../../_components/MemberLink';
 
 export type ApplicationStatus = 'pending' | 'approved' | 'rejected';
 export type CoachTier = 'silver' | 'gold' | 'elite';
@@ -44,12 +48,6 @@ const TABS: readonly { key: 'all' | ApplicationStatus; label: string }[] = [
 
 const COACH_TIERS: readonly CoachTier[] = ['silver', 'gold', 'elite'];
 
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-});
-
 const STATUS_CHIP: Record<
   ApplicationStatus,
   { status: 'pending' | 'live' | 'ended'; label: string }
@@ -74,12 +72,16 @@ const STATUS_CHIP: Record<
 export function ApplicationsManager({
   applications,
   canReview,
+  canViewMembers,
 }: {
   applications: ApplicationRow[];
   canReview: boolean;
+  /** Viewer holds `members.read`, so applicant names can link to the record. */
+  canViewMembers: boolean;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<(typeof TABS)[number]['key']>('pending');
+  const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<'approve' | 'reject' | null>(null);
   const [coachTier, setCoachTier] = useState<CoachTier>('silver');
@@ -88,9 +90,16 @@ export function ApplicationsManager({
   const [error, setError] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
-    if (tab === 'all') return applications;
-    return applications.filter((a) => a.status === tab);
-  }, [applications, tab]);
+    const inTab = tab === 'all' ? applications : applications.filter((a) => a.status === tab);
+    const q = query.trim().toLowerCase();
+    if (!q) return inTab;
+    return inTab.filter((a) =>
+      [a.displayName, a.accountDisplayName, a.accountEmail, a.headline, ...a.specialties]
+        .join(' ')
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [applications, tab, query]);
 
   const selected = applications.find((a) => a.id === selectedId) ?? null;
 
@@ -163,7 +172,7 @@ export function ApplicationsManager({
       setMode(null);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setBusy(false);
     }
   }
@@ -174,18 +183,12 @@ export function ApplicationsManager({
       header: 'Applicant',
       render: (a) => (
         <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              fontFamily: 'var(--font-heading)',
-              fontWeight: 600,
-              fontSize: 14,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {a.displayName || a.accountDisplayName || a.accountEmail}
-          </div>
+          <MemberLink
+            id={a.accountId}
+            name={a.displayName || a.accountDisplayName}
+            email={a.accountEmail}
+            canView={canViewMembers}
+          />
           <div
             style={{
               fontSize: 12,
@@ -251,7 +254,7 @@ export function ApplicationsManager({
           className="gt-numeric"
           style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}
         >
-          {DATE_FMT.format(new Date(a.createdAt))}
+          {formatDate(a.createdAt)}
         </span>
       ),
     },
@@ -259,6 +262,15 @@ export function ApplicationsManager({
 
   return (
     <>
+      <div style={{ marginBottom: 16, maxWidth: 340 }}>
+        <SearchField
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search name, email or specialty"
+          aria-label="Search coach applications"
+        />
+      </div>
+
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         {TABS.map((t) => {
           const active = tab === t.key;
@@ -302,7 +314,7 @@ export function ApplicationsManager({
           rows={filtered}
           rowKey={(a) => a.id}
           onRowClick={openRow}
-          empty="No applications in this status."
+          empty={query.trim() ? 'No applications match that search.' : 'No applications in this status.'}
         />
       )}
 
@@ -387,7 +399,7 @@ export function ApplicationsManager({
                   {selected.certifications.map((c, i) => (
                     <li key={`${c.title}-${i}`}>
                       {c.title}
-                      {c.issuer ? ` — ${c.issuer}` : ''}
+                      {c.issuer ? ` · ${c.issuer}` : ''}
                       {c.year ? ` (${c.year})` : ''}
                     </li>
                   ))}
@@ -410,9 +422,9 @@ export function ApplicationsManager({
             </Field>
 
             <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-              Submitted {DATE_FMT.format(new Date(selected.createdAt))}
+              Submitted {formatDate(selected.createdAt)}
               {selected.decidedAt
-                ? ` · Decided ${DATE_FMT.format(new Date(selected.decidedAt))}`
+                ? ` · Decided ${formatDate(selected.decidedAt)}`
                 : ''}
             </div>
 
@@ -459,11 +471,11 @@ export function ApplicationsManager({
                         value={coachTier}
                         onChange={(e) => setCoachTier(e.target.value as CoachTier)}
                         disabled={busy}
-                        style={{ textTransform: 'capitalize', cursor: 'pointer' }}
+                        style={{ cursor: 'pointer' }}
                       >
                         {COACH_TIERS.map((t) => (
                           <option key={t} value={t}>
-                            {t}
+                            {tierLabel(t)}
                           </option>
                         ))}
                       </select>
@@ -491,7 +503,7 @@ export function ApplicationsManager({
                         disabled={busy}
                         onClick={() => void decide('approve')}
                       >
-                        {busy ? 'Approving…' : `Approve as ${coachTier}`}
+                        {busy ? 'Approving…' : `Approve as ${tierLabel(coachTier)}`}
                       </Button>
                     </div>
                   </div>

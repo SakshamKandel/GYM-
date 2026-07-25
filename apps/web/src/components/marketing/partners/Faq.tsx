@@ -8,7 +8,7 @@ import { Container, Display, Eyebrow, Section } from '../ui';
 const FAQS = [
   {
     q: 'What commission does The GM Method take?',
-    a: 'There is no flat public rate — commission is agreed during onboarding, based on your menu, expected volume and delivery setup. You will know the exact number before you sign anything, and it stays in writing.',
+    a: 'There is no flat public rate. Commission is agreed during onboarding, based on your menu, expected volume and delivery setup. You will know the exact number before you sign anything, and it stays in writing.',
   },
   {
     q: 'How do payouts work?',
@@ -16,7 +16,7 @@ const FAQS = [
   },
   {
     q: 'How is cash on delivery handled?',
-    a: 'Digital orders are prepaid through the app, so there is nothing to collect. For COD orders — flagged right on the order card — you collect cash at the door, and the amount reconciles in your wallet when the order is marked delivered.',
+    a: 'Digital orders are prepaid through the app, so there is nothing to collect. For COD orders, flagged right on the order card, you collect cash at the door, and the amount reconciles in your wallet when the order is marked delivered.',
   },
   {
     q: 'Who delivers the food?',

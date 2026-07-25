@@ -1,9 +1,10 @@
 'use client';
 
-import { formatMoney } from '@gym/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, Card } from '@/components/console';
+import { formatMoney, parseMoneyInput } from '@/lib/format';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 
 export type PriceRegion = 'NP' | 'INTL';
 export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
@@ -26,19 +27,28 @@ function key(region: PriceRegion, tier: Tier): string {
   return `${region}-${tier}`;
 }
 
-/** amountMinor → an editable major-unit string (e.g. 49900 → "499", 999 → "9.99"). */
+/**
+ * amountMinor → an editable major-unit string (49900 → "499", 999 → "9.99").
+ * Integer split, so no price ever renders as 4.9899999999999995.
+ */
 function toMajorInput(amountMinor: number): string {
-  return (amountMinor / 100).toString();
+  const cents = amountMinor % 100;
+  const whole = (amountMinor - cents) / 100;
+  return cents === 0 ? String(whole) : `${whole}.${String(cents).padStart(2, '0')}`;
 }
 
-/** Editable major-unit string → amountMinor (rounds to the nearest paisa/cent). */
+/**
+ * Editable major-unit string → amountMinor, parsed as digits rather than as a
+ * float (a price is money, and `9.99 * 100` is not exactly 999).
+ *
+ * An empty/whitespace cell must NOT coerce to 0 (Number('') === 0), which would
+ * silently price a paid tier as free (E2) — that, anything negative, and
+ * anything with more than two decimals, all read as invalid.
+ */
 function toMinor(major: string): number | null {
-  // An empty/whitespace cell must NOT coerce to 0 (Number('') === 0), which
-  // would silently price a paid tier as free (E2) — treat it as invalid.
-  if (major.trim() === '') return null;
-  const n = Number(major);
-  if (!Number.isFinite(n) || n < 0) return null;
-  return Math.round(n * 100);
+  const minor = parseMoneyInput(major);
+  if (minor === null || minor < 0) return null;
+  return minor;
 }
 
 /**
@@ -111,7 +121,7 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
         if (edits[k] === original) continue;
         const minor = toMinor(edits[k]);
         if (minor === null) {
-          setError(`Invalid amount for ${region.label} · ${tier}.`);
+          setError(`That is not a valid amount for ${tierLabel(tier)} in ${region.label}.`);
           return;
         }
         payload.push({ region: region.key, tier, amountMinor: minor });
@@ -139,7 +149,7 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
       setSaving(false);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
@@ -195,10 +205,9 @@ export function PricingGrid({ prices }: { prices: PriceCell[] }) {
                   style={{
                     fontSize: 12,
                     color: 'var(--gt-text-dim)',
-                    textTransform: 'capitalize',
                   }}
                 >
-                  {tier}
+                  {tierLabel(tier)}
                 </span>
                 <div style={{ position: 'relative' }}>
                   <span

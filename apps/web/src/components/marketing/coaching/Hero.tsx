@@ -12,9 +12,9 @@ import { Container, PillLink } from '../ui';
 
 const STATS = [
   { value: '100%', caption: 'coaches admin-verified' },
-  { value: '3', caption: 'seniority tiers · silver → elite' },
-  { value: '1', caption: 'pending request at a time' },
-  { value: '2-way', caption: 'PII masking in every chat' },
+  { value: '3', caption: 'coach ranks · Silver to Elite' },
+  { value: '1', caption: 'request waiting at a time' },
+  { value: '2-way', caption: 'numbers and emails hidden in chat' },
 ] as const;
 
 export function CoachingHero() {
@@ -36,7 +36,7 @@ export function CoachingHero() {
             <Reveal delay={160}>
               <p className="mt-7 max-w-xl text-[17px] leading-relaxed text-dim">
                 Browse admin-verified coaches with public track records, send one request,
-                and get a real program — workouts, diet plans and chat inside the app you
+                and get a real program: workouts, diet plans and chat inside the app you
                 already train with. No spreadsheets, no WhatsApp threads.
               </p>
             </Reveal>
@@ -47,7 +47,7 @@ export function CoachingHero() {
               </PillLink>
             </Reveal>
             <Reveal delay={320}>
-              <p className="mt-8 font-mono text-[11.5px] uppercase tracking-[0.2em] text-faint">
+              <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-faint">
                 Silver · Gold · Elite mentorship
               </p>
             </Reveal>
@@ -68,7 +68,7 @@ export function CoachingHero() {
               <div className="mkt-text-steel font-display text-5xl font-medium sm:text-6xl">
                 {s.value}
               </div>
-              <p className="mt-2.5 font-mono text-[11.5px] uppercase tracking-[0.16em] text-dim">
+              <p className="mt-2.5 font-mono text-[12px] uppercase tracking-[0.16em] text-dim">
                 {s.caption}
               </p>
             </Reveal>

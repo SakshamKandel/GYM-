@@ -27,7 +27,7 @@ export function NutritionSearch() {
 
           <div className="order-1 lg:order-2">
             <Reveal>
-              <Eyebrow tone="light">02 — Search</Eyebrow>
+              <Eyebrow tone="light">02 · Search</Eyebrow>
               <Display className="mt-4">
                 Your kitchen,
                 <br />
@@ -36,12 +36,12 @@ export function NutritionSearch() {
               <Lead tone="light" className="mt-6">
                 One search runs across Open Food Facts and USDA together, so dal bhat sits
                 next to global brand foods with full macro data. Missing something? Create a
-                custom food once — your recipe, your serving sizes, saved forever.
+                custom food once: your recipe, your serving sizes, saved forever.
               </Lead>
             </Reveal>
             <Reveal delay={120}>
               <ul className="mt-8 flex flex-col gap-3.5">
-                <CheckItem tone="light">One search across two databases — no tab-switching</CheckItem>
+                <CheckItem tone="light">One search across two databases, no tab-switching</CheckItem>
                 <CheckItem tone="light">Nepali staples and global brands, side by side</CheckItem>
                 <CheckItem tone="light">Custom foods for home recipes and family dishes</CheckItem>
                 <CheckItem tone="light">Nutri-Score letters right in the result rows</CheckItem>

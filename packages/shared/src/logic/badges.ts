@@ -102,7 +102,7 @@ const CONSISTENCY_BADGES: BadgeDef[] = [
   { id: 'streak_12w', family: 'consistency', name: '12-week streak', description: streakDesc(12), icon: 'flame', sort: 212, threshold: 12 },
   { id: 'streak_26w', family: 'consistency', name: '26-week streak', description: streakDesc(26), icon: 'flame', sort: 213, threshold: 26 },
   { id: 'streak_52w', family: 'consistency', name: '52-week streak', description: streakDesc(52), icon: 'flame', sort: 214, threshold: 52 },
-  { id: 'comeback', family: 'consistency', name: 'Comeback', description: 'Return to training after a break of two weeks or more. Everyone stumbles — champions come back.', icon: 'comeback', sort: 220 },
+  { id: 'comeback', family: 'consistency', name: 'Comeback', description: 'Return to training after a break of two weeks or more. Everyone stumbles. Champions come back.', icon: 'comeback', sort: 220 },
 ];
 
 // ── Mileage (5) — lifetime tonnage in kg ────────────────────────────────
@@ -191,9 +191,6 @@ export interface BadgeComputeInput {
   /** Distinct session-day isos from ALL finished workouts (ranked + unranked — day_one/comeback use all). */
   sessionDayIsos: readonly string[];
   checkInCount: number;
-  /** Legacy — the buddy badges are retired and nothing here reads it; kept so
-   * server callers that still compute it for legacy accounts keep compiling. */
-  hasBuddy: boolean;
 }
 
 /** Total (best S+B+D e1RM) from the per-lift bests, or null if any of the three is missing. */
@@ -244,8 +241,6 @@ export interface BadgeProgressStats {
   prCount: number;
   streakWeeksBest: number;
   checkInCount: number;
-  /** Legacy — see BadgeComputeInput.hasBuddy. */
-  hasBuddy: boolean;
 }
 
 export type BadgeProgressUnit = 'kg' | 'sessions' | 'weeks' | 'prs' | 'check-ins';

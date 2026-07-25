@@ -18,8 +18,12 @@ import {
  * Idempotent: keyed by email — re-running updates the profile in place and
  * never duplicates rows.
  *
+ * OFF BY DEFAULT: the coach is verified and accepting clients, so members can
+ * find and request them, and it lands in whatever database DATABASE_URL happens
+ * to point at. See `demoSeedBlockedReason` below.
+ *
  * Run from packages/db (DATABASE_URL comes from the repo-root .env, same as
- * drizzle.config.ts):  pnpm --filter @gym/db seed:demo-coach
+ * drizzle.config.ts):  SEED_DEMO=yes pnpm --filter @gym/db seed:demo-coach
  */
 
 config({ path: '../../.env' });
@@ -104,7 +108,44 @@ async function upsertAccount(
   return row.id;
 }
 
+/**
+ * Demo seeding is opt-in. A non-empty DATABASE_URL is not consent: the repo-root
+ * .env can easily be pointed at the live database, and this script writes a
+ * verified coach that real members would find in the coach list and could
+ * request. So refuse unless someone turned it on for this run, and never run
+ * under a production NODE_ENV. Returns the message to show, or null when it is
+ * safe to continue.
+ */
+function demoSeedBlockedReason(): string | null {
+  if (process.env.NODE_ENV === 'production') {
+    return [
+      'Refusing to run: NODE_ENV is set to "production".',
+      'This seed creates a verified demo coach that members can find and request.',
+      '',
+      'If this really is a test database, say so on purpose:',
+      '  NODE_ENV=development SEED_DEMO=yes pnpm --filter @gym/db seed:demo-coach',
+    ].join('\n');
+  }
+  if (process.env.SEED_DEMO !== 'yes') {
+    return [
+      'Refusing to run: demo seeding is off by default.',
+      'This seed creates a verified demo coach that members can find and request,',
+      'in whatever database DATABASE_URL points at.',
+      '',
+      'Check DATABASE_URL is a local or test database, then opt in:',
+      '  SEED_DEMO=yes pnpm --filter @gym/db seed:demo-coach',
+    ].join('\n');
+  }
+  return null;
+}
+
 async function main(): Promise<void> {
+  const blocked = demoSeedBlockedReason();
+  if (blocked !== null) {
+    console.error(blocked);
+    process.exit(1);
+  }
+
   const databaseUrl = process.env.DATABASE_URL;
   if (databaseUrl === undefined || databaseUrl === '') {
     throw new Error('DATABASE_URL missing — put it in the repo-root .env');

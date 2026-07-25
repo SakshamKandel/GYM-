@@ -372,7 +372,7 @@ export default function PortionScreen() {
       <Animated.View entering={enterUp(4)} style={styles.pinned}>
         {error ? (
           <AppText variant="caption" color={colors.error} center style={styles.error}>
-            {"Couldn't save — try again."}
+            {"Couldn't save. Try again."}
           </AppText>
         ) : null}
         <Button

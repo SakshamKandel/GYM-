@@ -1,12 +1,12 @@
 'use client';
 
-import { compareTiers, effectiveTier, formatMoney } from '@gym/shared';
-import { useMemo, useState } from 'react';
+import { compareTiers, effectiveTier } from '@gym/shared';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { z } from 'zod';
 import {
   Button,
   type Column,
-  ConfirmButton,
   DataTable,
   Drawer,
   EmptyState,
@@ -14,6 +14,10 @@ import {
   StatusChip,
   TierChip,
 } from '@/components/console';
+import { formatDate, formatDateTime, formatMoney } from '@/lib/format';
+import { ConfirmDialog } from '../../_components/ConfirmDialog';
+import { MemberLink } from '../../_components/MemberLink';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 
 export type PaymentStatus = 'pending' | 'approved' | 'rejected' | 'refunded';
 export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
@@ -67,20 +71,6 @@ const TABS: readonly { key: 'all' | PaymentStatus; label: string }[] = [
   { key: 'refunded', label: 'Refunded' },
   { key: 'all', label: 'All' },
 ];
-
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-});
-
-const DATE_ONLY = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-});
 
 const STATUS_CHIP: Record<PaymentStatus, { status: 'pending' | 'live' | 'ended'; label: string }> =
   {
@@ -160,11 +150,74 @@ function previewWindow(row: PaymentRequestRow): WindowPreview & { needsConfirm: 
   };
 }
 
+/**
+ * GET /api/admin/payment-requests row, as the guarded API returns it. Shape
+ * differs from this page's server-rendered `PaymentRequestRow` (account nested,
+ * no decidedAt, receiptUrl possibly the degraded `unsigned:<uid>` placeholder),
+ * so `toSearchRow` normalises it. Deliberately LENIENT on the enum-ish columns
+ * — legacy/unknown values are cast the same way the server page casts them,
+ * rather than failing the whole search.
+ */
+const searchResponseSchema = z.object({
+  rows: z.array(
+    z.object({
+      id: z.string(),
+      account: z.object({
+        id: z.string(),
+        email: z.string(),
+        displayName: z.string(),
+        tier: z.string(),
+        tierExpiresAt: z.string().nullable(),
+      }),
+      tier: z.string(),
+      months: z.number(),
+      region: z.string(),
+      selfReportedRegion: z.boolean(),
+      amountMinor: z.number(),
+      currency: z.string(),
+      method: z.string(),
+      receiptUrl: z.string(),
+      note: z.string().nullable(),
+      status: z.string(),
+      reviewNote: z.string().nullable(),
+      createdAt: z.string(),
+    }),
+  ),
+});
+
+function toSearchRow(r: z.infer<typeof searchResponseSchema>['rows'][number]): PaymentRequestRow {
+  return {
+    id: r.id,
+    accountId: r.account.id,
+    accountEmail: r.account.email,
+    accountDisplayName: r.account.displayName,
+    accountTier: r.account.tier as Tier,
+    accountTierExpiresAt: r.account.tierExpiresAt,
+    tier: r.tier as Tier,
+    months: r.months,
+    region: r.region as PaymentRequestRow['region'],
+    selfReportedRegion: r.selfReportedRegion,
+    amountMinor: r.amountMinor,
+    currency: r.currency,
+    method: r.method as PaymentRequestRow['method'],
+    // The API degrades an unsignable receipt to `unsigned:<uid>`; the drawer
+    // renders receiptUrl straight into an <img>, so anything that isn't a real
+    // URL becomes null ("Receipt image unavailable") instead of a broken image.
+    receiptUrl: /^https?:\/\//i.test(r.receiptUrl) ? r.receiptUrl : null,
+    note: r.note,
+    status: r.status as PaymentStatus,
+    reviewNote: r.reviewNote,
+    createdAt: r.createdAt,
+    // Not carried by the list endpoint; nothing in this queue renders it.
+    decidedAt: null,
+  };
+}
+
 function expiryLabel(iso: string | null): string {
   if (!iso) return 'no expiry';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return 'no expiry';
-  return DATE_ONLY.format(d);
+  return formatDate(d);
 }
 
 /**
@@ -172,15 +225,25 @@ function expiryLabel(iso: string | null): string {
  * POST to the guarded /api/admin/payment-requests/[id] route; an approval that
  * would shorten/downgrade the member's current tier returns 409 confirm_required
  * (P0-2) — we surface the preview and re-POST with confirm:true. Approved rows
- * can be refunded (P0-1) via the [id]/refund route. router.refresh() after any
- * mutation reloads the server-rendered queue.
+ * can be refunded (P0-1) via the [id]/refund route. refreshAll() after any
+ * mutation reloads the server-rendered queue AND re-runs an open search.
+ *
+ * The search box is SERVER-side (debounced GET /api/admin/payment-requests?q=).
+ * The page only ships pending-unbounded + the newest 200 decided rows, so the
+ * old client-side filter over that slice could never answer "where is this
+ * member's money?" for an older decided payment — the row simply wasn't in the
+ * browser to match. While a search is active its results are the working set:
+ * the table, the tab badges, and the drawer all read from it.
  */
 export function PaymentsQueue({
   requests,
   counts,
+  canViewMembers,
 }: {
   requests: PaymentRequestRow[];
   counts: PaymentStatusCounts;
+  /** Viewer holds `members.read`, so member names can link to the record. */
+  canViewMembers: boolean;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<(typeof TABS)[number]['key']>('pending');
@@ -192,25 +255,96 @@ export function PaymentsQueue({
   const [error, setError] = useState<string | null>(null);
   // Set when the server asks for explicit confirmation of a shorten/downgrade.
   const [confirmPreview, setConfirmPreview] = useState<WindowPreview | null>(null);
+  // Which irreversible action is waiting on a confirm that names it. Refund
+  // moves money out and claws back commission; reject turns down a receipt the
+  // member says they paid.
+  const [pendingAction, setPendingAction] = useState<'refund' | 'reject' | null>(null);
+  // Server-side search results (null = not searching). The page only ships
+  // pending-unbounded + the newest 200 decided rows, so filtering THAT in the
+  // browser could never answer "where is this member's money?" for anything
+  // older; `q` is matched against the full table instead.
+  const [searchRows, setSearchRows] = useState<PaymentRequestRow[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  // Bumped after any decision so an open search re-runs alongside
+  // router.refresh() (which only reloads the server-rendered props).
+  const [searchNonce, setSearchNonce] = useState(0);
+
+  const searchActive = query.trim().length > 0;
+
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setSearchRows(null);
+      setSearching(false);
+      setSearchError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setSearching(true);
+    setSearchError(null);
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/admin/payment-requests?q=${encodeURIComponent(q)}`,
+            { credentials: 'include', signal: controller.signal },
+          );
+          if (!res.ok) {
+            setSearchError(
+              res.status === 403
+                ? 'You are not allowed to search payments.'
+                : 'Could not search payments. Try again.',
+            );
+            setSearchRows([]);
+            setSearching(false);
+            return;
+          }
+          const parsed = searchResponseSchema.safeParse(await res.json());
+          if (!parsed.success) {
+            setSearchError('Could not read the search results.');
+            setSearchRows([]);
+            setSearching(false);
+            return;
+          }
+          setSearchRows(parsed.data.rows.map(toSearchRow));
+          setSearching(false);
+        } catch {
+          // An abort just means a newer keystroke superseded this request.
+          if (controller.signal.aborted) return;
+          setSearchError('Could not reach us just now. Try again.');
+          setSearchRows([]);
+          setSearching(false);
+        }
+      })();
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, searchNonce]);
+
+  /** Reloads BOTH the server-rendered queue and any active search. */
+  function refreshAll() {
+    router.refresh();
+    setSearchNonce((n) => n + 1);
+  }
+
+  // While a search is active the search results ARE the working set; otherwise
+  // the server-rendered props are.
+  const activeRows = searchActive ? (searchRows ?? []) : requests;
 
   const filtered = useMemo(() => {
     // The server ships pending-first then decided (each newest-first within its
     // group), so the "All" tab must be re-sorted globally by submitted-time to
     // read as one reverse-chronological stream instead of two stitched blocks.
-    const base =
-      tab === 'all'
-        ? [...requests].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        : requests.filter((r) => r.status === tab);
-    const q = query.trim().toLowerCase();
-    if (!q) return base;
-    return base.filter(
-      (r) =>
-        r.accountDisplayName.toLowerCase().includes(q) ||
-        r.accountEmail.toLowerCase().includes(q),
-    );
-  }, [requests, tab, query]);
+    if (tab === 'all') {
+      return [...activeRows].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    }
+    return activeRows.filter((r) => r.status === tab);
+  }, [activeRows, tab]);
 
-  const selected = requests.find((r) => r.id === selectedId) ?? null;
+  const selected = activeRows.find((r) => r.id === selectedId) ?? null;
   const preview = selected && selected.status === 'pending' ? previewWindow(selected) : null;
 
   function openRow(row: PaymentRequestRow) {
@@ -219,14 +353,34 @@ export function PaymentsQueue({
     setRefundReason('');
     setError(null);
     setConfirmPreview(null);
+    setPendingAction(null);
   }
 
   function closeDrawer() {
     if (busy) return;
     setSelectedId(null);
+    setPendingAction(null);
+  }
+
+  /**
+   * Runs whichever irreversible action the confirm dialog was opened for, then
+   * closes it — one exit point, so no error path leaves the dialog stuck open
+   * over a decision that already went through.
+   */
+  async function runPendingAction() {
+    if (pendingAction === 'refund') await refund();
+    else if (pendingAction === 'reject') await decide('reject');
+    setPendingAction(null);
   }
 
   function tabCount(key: 'all' | PaymentStatus): number {
+    // While searching, the badges must count the SEARCH RESULTS — showing the
+    // authoritative global totals next to a filtered list would read as rows
+    // going missing.
+    if (searchActive) {
+      if (key === 'all') return activeRows.length;
+      return activeRows.filter((r) => r.status === key).length;
+    }
     if (key === 'all') {
       return counts.pending + counts.approved + counts.rejected + counts.refunded;
     }
@@ -257,14 +411,14 @@ export function PaymentsQueue({
         setError('Another admin already decided this. Refreshing…');
         setBusy(false);
         setSelectedId(null);
-        router.refresh();
+        refreshAll();
         return;
       }
       if (res.status === 404) {
         setError('This request no longer exists. Refreshing…');
         setBusy(false);
         setSelectedId(null);
-        router.refresh();
+        refreshAll();
         return;
       }
       if (!res.ok) {
@@ -278,9 +432,9 @@ export function PaymentsQueue({
       }
       setBusy(false);
       setSelectedId(null);
-      router.refresh();
+      refreshAll();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setBusy(false);
     }
   }
@@ -303,7 +457,7 @@ export function PaymentsQueue({
         setError('This payment was already refunded or is no longer approved. Refreshing…');
         setBusy(false);
         setSelectedId(null);
-        router.refresh();
+        refreshAll();
         return;
       }
       if (!res.ok) {
@@ -317,9 +471,9 @@ export function PaymentsQueue({
       }
       setBusy(false);
       setSelectedId(null);
-      router.refresh();
+      refreshAll();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setBusy(false);
     }
   }
@@ -330,18 +484,12 @@ export function PaymentsQueue({
       header: 'Member',
       render: (r) => (
         <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              fontFamily: 'var(--font-heading)',
-              fontWeight: 600,
-              fontSize: 14,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {r.accountDisplayName || r.accountEmail}
-          </div>
+          <MemberLink
+            id={r.accountId}
+            name={r.accountDisplayName}
+            email={r.accountEmail}
+            canView={canViewMembers}
+          />
           <div
             style={{
               fontSize: 12,
@@ -376,7 +524,7 @@ export function PaymentsQueue({
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           {r.selfReportedRegion ? (
             <span
-              title="NP pricing without a verified NP country — check the receipt currency"
+              title="Paid the Nepal price, but we could not confirm they are in Nepal. Check the currency on the receipt."
               style={{
                 fontSize: 10,
                 fontWeight: 700,
@@ -417,7 +565,7 @@ export function PaymentsQueue({
       align: 'right',
       render: (r) => (
         <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {DATE_FMT.format(new Date(r.createdAt))}
+          {formatDateTime(r.createdAt)}
         </span>
       ),
     },
@@ -433,6 +581,22 @@ export function PaymentsQueue({
           aria-label="Search payments by member"
           style={{ maxWidth: 320 }}
         />
+        {searchActive ? (
+          <div
+            aria-live="polite"
+            style={{
+              marginTop: 6,
+              fontSize: 12,
+              color: searchError ? 'var(--gt-danger)' : 'var(--gt-text-dim)',
+            }}
+          >
+            {searchError
+              ? searchError
+              : searching
+                ? 'Searching every payment…'
+                : `Searched every payment · ${activeRows.length} match${activeRows.length === 1 ? '' : 'es'}.`}
+          </div>
+        ) : null}
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -461,7 +625,7 @@ export function PaymentsQueue({
         })}
       </div>
 
-      {requests.length === 0 ? (
+      {requests.length === 0 && !searchActive ? (
         <EmptyState
           title="No payment requests yet"
           description="Manual eSewa/Khalti/bank payments submitted from the app appear here for review."
@@ -472,7 +636,13 @@ export function PaymentsQueue({
           rows={filtered}
           rowKey={(r) => r.id}
           onRowClick={openRow}
-          empty={query.trim() ? 'No matching members.' : 'No requests in this status.'}
+          empty={
+            searching
+              ? 'Searching…'
+              : searchActive
+                ? 'No matching members in this status.'
+                : 'No requests in this status.'
+          }
         />
       )}
 
@@ -503,7 +673,7 @@ export function PaymentsQueue({
                     padding: '2px 6px',
                   }}
                 >
-                  Self-reported NP region
+                  Nepal price, country not confirmed
                 </span>
               ) : null}
             </div>
@@ -521,7 +691,7 @@ export function PaymentsQueue({
               </Row>
               <Row label="Amount">{formatMoney(selected.amountMinor, selected.currency)}</Row>
               <Row label="Method">{METHOD_LABEL[selected.method]}</Row>
-              <Row label="Submitted">{DATE_FMT.format(new Date(selected.createdAt))}</Row>
+              <Row label="Submitted">{formatDateTime(selected.createdAt)}</Row>
             </div>
 
             {selected.note ? <Row label="Member note">{selected.note}</Row> : null}
@@ -541,29 +711,26 @@ export function PaymentsQueue({
               >
                 <div
                   style={{
-                    fontSize: 12,
-                    letterSpacing: '0.03em',
-                    textTransform: 'uppercase',
+                    fontSize: 12.5,
+                    letterSpacing: '0.01em',
                     color: 'var(--gt-text-dim)',
                     fontFamily: 'var(--font-heading)',
                   }}
                 >
-                  On approval ({preview.action})
+                  {preview.action === 'extend'
+                    ? 'On approval, this adds time to what they already have.'
+                    : 'On approval, this starts a fresh membership from today.'}
                 </div>
                 <div>
-                  Current:{' '}
-                  <span style={{ textTransform: 'uppercase', fontWeight: 600 }}>
-                    {preview.currentTier}
-                  </span>{' '}
+                  Now:{' '}
+                  <span style={{ fontWeight: 600 }}>{tierLabel(preview.currentTier)}</span>{' '}
                   <span style={{ color: 'var(--gt-text-dim)' }}>
                     ({expiryLabel(preview.currentExpiresAt)})
                   </span>
                 </div>
                 <div>
                   After:{' '}
-                  <span style={{ textTransform: 'uppercase', fontWeight: 600 }}>
-                    {preview.resultTier}
-                  </span>{' '}
+                  <span style={{ fontWeight: 600 }}>{tierLabel(preview.resultTier)}</span>{' '}
                   <span style={{ color: 'var(--gt-text-dim)' }}>
                     (until {expiryLabel(preview.resultExpiresAt)})
                   </span>
@@ -571,8 +738,8 @@ export function PaymentsQueue({
                 {preview.needsConfirm ? (
                   <div style={{ color: 'var(--gt-warning)', fontSize: 12 }}>
                     {preview.reason === 'higher_current'
-                      ? 'This would downgrade an active higher tier — confirm required.'
-                      : 'This would put an expiry on a permanent tier — confirm required.'}
+                      ? 'This drops them to a lower membership than the one they are on. Approving asks you to confirm.'
+                      : 'This puts an end date on a membership that never ends. Approving asks you to confirm.'}
                   </div>
                 ) : null}
               </div>
@@ -645,12 +812,12 @@ export function PaymentsQueue({
                     }}
                   >
                     {confirmPreview.reason === 'higher_current'
-                      ? `This member currently has an active ${confirmPreview.currentTier.toUpperCase()} tier. Approving downgrades them to ${confirmPreview.resultTier.toUpperCase()} until ${expiryLabel(confirmPreview.resultExpiresAt)}.`
-                      : `This member currently has a permanent ${confirmPreview.currentTier.toUpperCase()} tier. Approving replaces it with ${confirmPreview.resultTier.toUpperCase()} until ${expiryLabel(confirmPreview.resultExpiresAt)}.`}
+                      ? `This member is on ${tierLabel(confirmPreview.currentTier)} right now. Approving moves them down to ${tierLabel(confirmPreview.resultTier)} until ${expiryLabel(confirmPreview.resultExpiresAt)}.`
+                      : `This member has ${tierLabel(confirmPreview.currentTier)} with no end date. Approving replaces it with ${tierLabel(confirmPreview.resultTier)} until ${expiryLabel(confirmPreview.resultExpiresAt)}.`}
                   </div>
                 ) : null}
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <Button variant="danger" disabled={busy} onClick={() => void decide('reject')}>
+                  <Button variant="danger" disabled={busy} onClick={() => setPendingAction('reject')}>
                     {busy ? 'Saving…' : 'Reject'}
                   </Button>
                   <Button
@@ -679,7 +846,7 @@ export function PaymentsQueue({
                 }}
               >
                 <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-                  Refunding removes the granted tier and claws back any coach commission.
+                  Refunding takes back the membership and removes the coach&apos;s commission on it.
                 </div>
                 <textarea
                   className="gt-input"
@@ -693,15 +860,16 @@ export function PaymentsQueue({
                 />
                 <div>
                   {/* P0-5: a refund claws back coach commission and rolls back
-                      the granted tier — irreversible, so require an explicit
-                      two-step confirm rather than firing on a single click. */}
-                  <ConfirmButton
-                    label="Refund payment"
-                    confirmLabel="Confirm refund"
-                    busyLabel="Refunding…"
-                    busy={busy}
-                    onConfirm={() => void refund()}
-                  />
+                      the granted tier — irreversible. The confirm now NAMES the
+                      member, the amount and the tier being taken back, the same
+                      way the meal-payments refund does. */}
+                  <Button
+                    variant="danger"
+                    disabled={busy}
+                    onClick={() => setPendingAction('refund')}
+                  >
+                    {busy ? 'Refunding…' : 'Refund payment'}
+                  </Button>
                 </div>
               </div>
             ) : null}
@@ -710,6 +878,61 @@ export function PaymentsQueue({
           </div>
         ) : null}
       </Drawer>
+
+      <ConfirmDialog
+        open={selected != null && pendingAction != null}
+        title={pendingAction === 'refund' ? 'Refund this payment?' : 'Reject this receipt?'}
+        summary={
+          selected ? (
+            pendingAction === 'refund' ? (
+              <>
+                {formatMoney(selected.amountMinor, selected.currency)} goes back to{' '}
+                <strong>{selected.accountDisplayName || selected.accountEmail}</strong>. Their{' '}
+                {tierLabel(selected.tier)} membership is taken back, and any commission the coach
+                earned on it comes off the coach&apos;s balance. This cannot be undone.
+              </>
+            ) : (
+              <>
+                <strong>{selected.accountDisplayName || selected.accountEmail}</strong> is told
+                their {formatMoney(selected.amountMinor, selected.currency)} receipt was not
+                accepted, and no membership is granted.
+              </>
+            )
+          ) : (
+            ''
+          )
+        }
+        details={
+          selected
+            ? [
+                { label: 'Member', value: selected.accountDisplayName || selected.accountEmail },
+                {
+                  label: 'Membership',
+                  value: `${tierLabel(selected.tier)} · ${selected.months} month${selected.months === 1 ? '' : 's'}`,
+                },
+                {
+                  label: 'Amount',
+                  value: (
+                    <span className="gt-numeric">
+                      {formatMoney(selected.amountMinor, selected.currency)}
+                    </span>
+                  ),
+                },
+                { label: 'Method', value: METHOD_LABEL[selected.method] },
+              ]
+            : undefined
+        }
+        confirmLabel={
+          selected && pendingAction === 'refund'
+            ? `Refund ${formatMoney(selected.amountMinor, selected.currency)}`
+            : 'Reject receipt'
+        }
+        busyLabel={pendingAction === 'refund' ? 'Refunding…' : 'Saving…'}
+        cancelLabel="Go back"
+        busy={busy}
+        onCancel={() => setPendingAction(null)}
+        onConfirm={() => void runPendingAction()}
+      />
     </>
   );
 }

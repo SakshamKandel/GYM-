@@ -108,6 +108,14 @@ export function OpsTiles({ ops }: { ops: OpsQueue }) {
       hint: 'awaiting approval',
     });
   }
+  if (ops.pendingMealPayments != null) {
+    tiles.push({
+      href: '/admin/meal-payments',
+      label: 'Meal payments',
+      value: ops.pendingMealPayments,
+      hint: 'receipts to check',
+    });
+  }
   if (ops.unreadSupport != null) {
     tiles.push({
       href: '/admin/support',
@@ -208,7 +216,7 @@ export function OpsTiles({ ops }: { ops: OpsQueue }) {
               {formatRevenue(ops.revenueThisMonth ?? [])}
             </span>
             <span style={{ fontSize: 12, color: 'var(--gt-text-dim)', minHeight: 16 }}>
-              approved payments
+              settled payments, less refunds
             </span>
           </div>
         ) : null}

@@ -26,7 +26,7 @@ export function DownloadHero() {
           {/* Left copy */}
           <div className="lg:pr-4">
             <Reveal>
-              <Eyebrow>Download — iOS &amp; Android</Eyebrow>
+              <Eyebrow>Download · iOS &amp; Android</Eyebrow>
             </Reveal>
             <Reveal delay={80}>
               <Display as="h1" size="lg" className="mt-5">
@@ -72,7 +72,7 @@ export function DownloadHero() {
                       <span className="font-display text-[19px] font-medium uppercase text-snow">
                         {f.k}
                       </span>
-                      <span className="text-right text-[12.5px] leading-tight text-dim">{f.v}</span>
+                      <span className="text-right text-[14.5px] leading-tight text-dim">{f.v}</span>
                     </div>
                   </li>
                 ))}

@@ -1,5 +1,6 @@
 import { gymReports } from '@gym/db';
 import { maskPii } from '@gym/shared';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
@@ -65,16 +66,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
     .returning({ id: gymReports.id });
 
   // Fire-and-forget (§7.1 contract) — never blocks the member's confirmation.
-  void notify(
-    'gym_report_staff',
-    { role: 'staff', permission: 'gyms.manage' },
-    {
-      title: 'Gym listing reported',
-      body: `${gym.name}: ${field}${note ? ` — Member note: ${note}` : ''}`,
-      // `id` is the SLUG, not the row id — the mobile deep-link route is
-      // /gyms/[slug], so this is directly routable with no extra lookup.
-      data: { type: 'gym', id: slug },
-    },
+  // after() keeps the function alive past the response so the dispatch actually
+  // runs instead of being frozen mid-flight.
+  after(() =>
+    notify(
+      'gym_report_staff',
+      { role: 'staff', permission: 'gyms.manage' },
+      {
+        title: 'Gym listing reported',
+        body: `${gym.name}: ${field}${note ? `. Member note: ${note}` : ''}`,
+        // `id` is the SLUG, not the row id — the mobile deep-link route is
+        // /gyms/[slug], so this is directly routable with no extra lookup.
+        data: { type: 'gym', id: slug },
+      },
+    ),
   );
 
   return json({ report }, 201);

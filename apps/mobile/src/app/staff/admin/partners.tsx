@@ -52,7 +52,7 @@ import { useAuth } from '../../../state/auth';
 function errorLine(code: StaffErrorCode): string {
   switch (code) {
     case 'unauthorized':
-      return 'Your session expired — sign in again.';
+      return 'Your session expired. Sign in again.';
     case 'forbidden':
       return "You don't have access to manage meal partners.";
     case 'not_found':
@@ -223,7 +223,7 @@ function CreateSheet({
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetScroll}>
         <AppText variant="caption" color={colors.textDim}>
           Mints a new web-only login for this restaurant AND its partner row
-          together — this is the only way a partner account is ever created.
+          together. This is the only way a partner account is ever created.
         </AppText>
 
         <SectionLabel>Restaurant name</SectionLabel>
@@ -300,7 +300,7 @@ function CredentialsSheet({ creds, onDone }: { creds: CreatedCreds | null; onDon
       {creds ? (
         <View style={styles.sheetScroll}>
           <AppText variant="body" color={colors.textDim}>
-            Share this login with {creds.name} now — the password won&apos;t be shown again.
+            Share this login with {creds.name} now. The password won&apos;t be shown again.
           </AppText>
           <View style={styles.credsBox}>
             <AppText variant="caption" color={colors.textFaint}>

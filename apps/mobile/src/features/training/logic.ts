@@ -1,4 +1,5 @@
-import type { PlanWorkout, SetLog } from '@gym/shared';
+import type { PlanWorkout, SetLog, UnitPref } from '@gym/shared';
+import { DEFAULT_BAR_KG, PLATES_KG } from '@gym/shared';
 import { colors } from '@gym/ui-tokens';
 import type { CustomTemplateExercise } from './templates';
 
@@ -8,6 +9,32 @@ export const DEFAULT_REST_SEC = 120;
 export const DEFAULT_ADHOC_SETS = 3;
 /** Sensible cold-start weight when there is zero history (empty bar). */
 export const DEFAULT_START_WEIGHT_KG = 20;
+
+/**
+ * A workout left open longer than this is treated as abandoned: the app stops
+ * silently adopting it and asks whether to pick it up or start fresh. Long
+ * enough to cover a genuinely long session plus a lunch break, short enough
+ * that yesterday's forgotten session never quietly swallows today's sets.
+ */
+export const STALE_SESSION_HOURS = 8;
+
+/** True when a workout started `STALE_SESSION_HOURS`+ ago and is still open. */
+export function isSessionStale(startedAt: string, nowMs: number = Date.now()): boolean {
+  const started = new Date(startedAt).getTime();
+  if (!Number.isFinite(started)) return false;
+  return nowMs - started >= STALE_SESSION_HOURS * 3600 * 1000;
+}
+
+/** "3 hours", "1 day" — plain-language age of an open session, for prompts. */
+export function sessionAgeLabel(startedAt: string, nowMs: number = Date.now()): string {
+  const started = new Date(startedAt).getTime();
+  if (!Number.isFinite(started)) return 'a while';
+  const hours = Math.floor(Math.max(0, nowMs - started) / 3600000);
+  if (hours < 1) return 'less than an hour';
+  if (hours < 24) return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+  const days = Math.floor(hours / 24);
+  return `${days} ${days === 1 ? 'day' : 'days'}`;
+}
 
 export interface RepRange {
   min: number;
@@ -73,6 +100,51 @@ export function plateColor(kg: number): string {
   if (kg >= 5) return colors.text;
   if (kg >= 2.5) return colors.textDim;
   return colors.textFaint;
+}
+
+/**
+ * What is actually on the rack in front of the member, in THEIR unit. A
+ * kilogram gym loads 25/20/15/10/5/2.5/1.25 onto a 20 kg bar; a pound gym
+ * loads 45/35/25/10/5/2.5 onto a 45 lb bar. Showing 20 kg plates to someone
+ * who picked pounds is a number they can't act on, so the calculator picks the
+ * inventory from the unit preference and works entirely in the display unit
+ * (convert the target with displayWeight before calling platesFor).
+ */
+export interface PlateInventory {
+  /** Empty-bar weight, in the display unit. */
+  barWeight: number;
+  /** Plate denominations, heaviest first, in the display unit. */
+  plates: readonly number[];
+}
+
+export const KG_PLATE_INVENTORY: PlateInventory = {
+  barWeight: DEFAULT_BAR_KG,
+  plates: PLATES_KG,
+};
+
+/** Standard US commercial rack: 45 lb bar, no 1.25 (that's a kilo-gym plate). */
+export const LB_PLATE_INVENTORY: PlateInventory = {
+  barWeight: 45,
+  plates: [45, 35, 25, 10, 5, 2.5],
+};
+
+export function plateInventoryFor(pref: UnitPref): PlateInventory {
+  return pref === 'lb' ? LB_PLATE_INVENTORY : KG_PLATE_INVENTORY;
+}
+
+/**
+ * Ink ramp, heaviest first, index-aligned with an inventory's `plates`.
+ * Derived from the kilogram ladder rather than repeating it, so the kg strip
+ * keeps its exact colors and a pound strip reads with the same
+ * heaviest→lightest contrast (45 → red, 35 → blue, 25 → yellow, …).
+ */
+const PLATE_INK: readonly string[] = PLATES_KG.map((kg) => plateColor(kg));
+
+/** Token color for one denomination of `inventory`, by its rank on the rack. */
+export function plateInk(denomination: number, inventory: PlateInventory): string {
+  const rank = inventory.plates.indexOf(denomination);
+  if (rank < 0) return colors.textFaint;
+  return PLATE_INK[Math.min(rank, PLATE_INK.length - 1)] ?? colors.textFaint;
 }
 
 interface Completable {

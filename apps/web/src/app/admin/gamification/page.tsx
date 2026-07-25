@@ -1,6 +1,7 @@
 import { accounts, awardedBadges, challengeMembers, coachChallenges, xpEvents } from '@gym/db';
 import { BADGE_CATALOG } from '@gym/shared';
 import { count, desc, eq, inArray } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -10,6 +11,7 @@ import { GamificationManager } from './_components/GamificationManager';
 import type { AwardedBadgeRow, ChallengeRow, XpCorrectionRow } from './_components/types';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Points & badges' };
 export const dynamic = 'force-dynamic';
 
 const CATALOG_NAME_BY_ID = new Map(BADGE_CATALOG.map((b) => [b.id, b.name]));
@@ -124,8 +126,8 @@ export default async function AdminGamificationPage() {
   return (
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
-        title="Gamification oversight"
-        subtitle="XP corrections, badge revocation, and coach challenge moderation."
+        title="Points & badges"
+        subtitle="Correct a member's points, take back a badge, and review coach challenges."
       />
 
       <div

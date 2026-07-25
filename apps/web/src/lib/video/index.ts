@@ -17,13 +17,21 @@
  *
  * `isImageConfigured()` is the image-side equivalent, BUT unlike video it is
  * NOT selection-dependent: only Cloudinary implements images today (Cloudflare
- * Stream is video-only, see cloudflareStream.ts), so this simply reports
- * whether the Cloudinary env is present. A route should still catch
- * NotConfiguredError around the real call — if VIDEO_PROVIDER is pinned to
- * 'cf_stream' while Cloudinary keys also happen to exist, getVideoProvider()
- * returns the Cloudflare instance and image calls will still throw even
- * though this check reports true — this is a cheap early-exit UI hint, not
- * the enforcement point.
+ * Stream is video-only, see cloudflareStream.ts), so this reports whether the
+ * Cloudinary env is present. A route should still catch NotConfiguredError
+ * around the real call — if VIDEO_PROVIDER is pinned to 'cf_stream' while
+ * Cloudinary keys also happen to exist, getVideoProvider() returns the
+ * Cloudflare instance and image calls will still throw even though this check
+ * reports true — this is a cheap early-exit UI hint, not the enforcement point.
+ *
+ * It counts CLOUDINARY_URL_SIGNING_KEY as required, which the upload path
+ * strictly does not need. That is on purpose: the images this product stores
+ * privately are payment receipts and progress photos, and they can only be
+ * VIEWED through signedImageUrl(), which refuses to build a non-expiring link
+ * (cloudinaryProvider.ts). Without that key an admin can accept a receipt
+ * upload and then be shown nothing when they open it to approve money against
+ * it. Reporting "photos are on" in that state is a promise the deployment
+ * cannot keep, so the check requires everything a photo needs end to end.
  */
 
 import { CloudflareStreamProvider } from './cloudflareStream';
@@ -41,13 +49,23 @@ export { NotConfiguredError } from './types';
 
 type ProviderKind = 'cloudinary' | 'cf_stream';
 
-/** True when all Cloudinary env vars are present. */
+/** True when the Cloudinary env vars an UPLOAD needs are present. */
 function hasCloudinaryEnv(): boolean {
   return Boolean(
     process.env.CLOUDINARY_CLOUD_NAME &&
       process.env.CLOUDINARY_API_KEY &&
       process.env.CLOUDINARY_API_SECRET,
   );
+}
+
+/**
+ * True when a private image can make the WHOLE round trip: uploaded, and then
+ * viewed through a link that expires. `signedImageUrl` treats
+ * CLOUDINARY_URL_SIGNING_KEY as a hard prerequisite, so without it receipts and
+ * progress photos upload fine and then 503 on every read.
+ */
+function hasImageEnv(): boolean {
+  return hasCloudinaryEnv() && Boolean(process.env.CLOUDINARY_URL_SIGNING_KEY);
 }
 
 /** True when all Cloudflare Stream env vars are present. */
@@ -110,10 +128,11 @@ export function isVideoConfigured(): boolean {
 }
 
 /**
- * True when the Cloudinary env (the only image-capable provider today) is
- * present. See the module doc comment above for the selection-mismatch
+ * True when photos work end to end: every Cloudinary variable an upload needs,
+ * PLUS the URL-signing key their only read path requires. See the module doc
+ * comment above for why the signing key counts, and for the selection-mismatch
  * caveat — routes still catch NotConfiguredError around the real call.
  */
 export function isImageConfigured(): boolean {
-  return hasCloudinaryEnv();
+  return hasImageEnv();
 }

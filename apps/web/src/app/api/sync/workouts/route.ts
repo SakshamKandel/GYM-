@@ -1,6 +1,16 @@
 import { checkIns, syncedSets, syncedWorkouts } from '@gym/db';
-import { checkWorkoutPlausibility, epley1Rm, type PriorBestE1Rm } from '@gym/shared';
-import { and, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm';
+import {
+  checkWorkoutPlausibility,
+  epley1Rm,
+  workoutRestoreRequestSchema,
+  WORKOUT_RESTORE_PAGE_SIZE,
+  type PriorBestE1Rm,
+  type RestoredSet,
+  type RestoredWorkout,
+  type WorkoutRestoreCursor,
+  type WorkoutRestorePage,
+} from '@gym/shared';
+import { and, asc, desc, eq, gte, inArray, isNotNull, or, sql } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
@@ -34,7 +44,15 @@ export const runtime = 'nodejs';
  *    in after() so it never blocks or fails the sync response.
  *
  * The mobile client marks local workouts synced ONLY for ids echoed back in
- * `syncedWorkoutIds`. No download, no merge — v1 is backup only.
+ * `syncedWorkoutIds`.
+ *
+ *  - The same POST also serves the RESTORE half: a client that sends `cursor`
+ *    (null to start from the beginning) gets `restoredWorkouts` + `cursor` +
+ *    `hasMore` back alongside the push keys — one page of its own workouts,
+ *    parent + sets, oldest sync first. Sending no cursor is push-only and does
+ *    zero extra work, which is exactly what every already-shipped client does.
+ *    Merging is the device's business: the server states what it holds and
+ *    never asks a device to drop anything.
  */
 
 const MAX_WORKOUTS = 25;
@@ -91,14 +109,110 @@ const workoutSchema = z.object({
   sets: z.array(setSchema).min(1).max(MAX_SETS),
 });
 
-const bodySchema = z
-  .object({
-    workouts: z.array(workoutSchema).min(1).max(MAX_WORKOUTS),
+/**
+ * Push + pull in one body. `workouts` is now optional so a device that only
+ * wants its history back can ask for it without inventing an upload; every
+ * shipped client still sends it and hits exactly the same validation as before.
+ * `cursor` comes from the shared restore contract (absent = push only).
+ */
+const bodySchema = workoutRestoreRequestSchema
+  .extend({
+    workouts: z.array(workoutSchema).min(1).max(MAX_WORKOUTS).optional(),
   })
   .refine(
-    (b) => b.workouts.reduce((n, w) => n + w.sets.length, 0) <= MAX_SETS,
+    (b) => (b.workouts ?? []).reduce((n, w) => n + w.sets.length, 0) <= MAX_SETS,
     'too many sets in batch',
   );
+
+/**
+ * One page of the account's own workouts, oldest sync first, resumed from the
+ * client's cursor. Read-only and account-scoped: the WHERE clause is the only
+ * thing standing between two members' histories, so accountId is bound on both
+ * the parent and the set query.
+ */
+async function loadRestorePage(
+  accountId: string,
+  cursor: WorkoutRestoreCursor | null,
+): Promise<WorkoutRestorePage> {
+  const db = getDb();
+  // Keyset, not OFFSET: rows arriving mid-restore can't shift the window.
+  const after = cursor
+    ? or(
+        sql`${syncedWorkouts.syncedAt} > ${new Date(cursor.serverSyncedAt)}`,
+        and(
+          sql`${syncedWorkouts.syncedAt} = ${new Date(cursor.serverSyncedAt)}`,
+          sql`${syncedWorkouts.id} > ${cursor.workoutId}`,
+        ),
+      )
+    : undefined;
+
+  const rows = await db
+    .select()
+    .from(syncedWorkouts)
+    .where(and(eq(syncedWorkouts.accountId, accountId), after))
+    .orderBy(asc(syncedWorkouts.syncedAt), asc(syncedWorkouts.id))
+    .limit(WORKOUT_RESTORE_PAGE_SIZE + 1);
+
+  const hasMore = rows.length > WORKOUT_RESTORE_PAGE_SIZE;
+  const page = rows.slice(0, WORKOUT_RESTORE_PAGE_SIZE);
+  const last = page[page.length - 1];
+  // Nothing new: hand the caller's own cursor back so it stays where it is.
+  if (!last) return { restoredWorkouts: [], cursor, hasMore: false };
+
+  const setRows = await db
+    .select()
+    .from(syncedSets)
+    .where(
+      and(
+        eq(syncedSets.accountId, accountId),
+        inArray(
+          syncedSets.workoutId,
+          page.map((w) => w.id),
+        ),
+      ),
+    )
+    .orderBy(asc(syncedSets.loggedAt));
+
+  const setsByWorkout = new Map<string, RestoredSet[]>();
+  for (const s of setRows) {
+    const list = setsByWorkout.get(s.workoutId) ?? [];
+    list.push({
+      id: s.id,
+      setNo: s.setNo,
+      exerciseId: s.exerciseId,
+      exerciseName: s.exerciseName,
+      weightKg: s.weightKg,
+      weightUnit: s.weightUnit,
+      reps: s.reps,
+      rpe: s.rpe,
+      isWarmup: s.isWarmup,
+      isPr: s.isPr,
+      loggedAt: s.loggedAt.toISOString(),
+    });
+    setsByWorkout.set(s.workoutId, list);
+  }
+
+  const restoredWorkouts: RestoredWorkout[] = page.map((w) => ({
+    id: w.id,
+    date: w.date,
+    name: w.name,
+    templateId: w.templateId,
+    templateName: w.templateName,
+    startedAt: w.startedAt.toISOString(),
+    finishedAt: w.finishedAt.toISOString(),
+    durationSec: w.durationSec,
+    ranked: w.ranked,
+    flagReason: w.flagReason,
+    serverSyncedAt: w.syncedAt.toISOString(),
+    sets: setsByWorkout.get(w.id) ?? [],
+  }));
+
+  return {
+    restoredWorkouts,
+    cursor: { serverSyncedAt: last.syncedAt.toISOString(), workoutId: last.id },
+    hasMore,
+  };
+}
 
 export function OPTIONS() {
   return preflight();
@@ -123,7 +237,10 @@ export async function POST(req: Request) {
 
   const parsed = bodySchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  const { workouts } = parsed.data;
+  // A pull-only request carries no workouts; every push path below is a no-op
+  // on an empty array, so the two halves stay completely independent.
+  const workouts = parsed.data.workouts ?? [];
+  const { cursor } = parsed.data;
 
   const db = getDb();
   const batchIds = workouts.map((w) => w.id);
@@ -135,10 +252,13 @@ export async function POST(req: Request) {
   // transaction (all commit or none do). A workout is "newly inserted" by this
   // request iff it does not already exist; new rows are always written with
   // accountId = user.id, so newly-inserted ⇒ owned by the caller.
-  const existingRows = await db
-    .select({ id: syncedWorkouts.id, accountId: syncedWorkouts.accountId })
-    .from(syncedWorkouts)
-    .where(inArray(syncedWorkouts.id, batchIds));
+  const existingRows =
+    batchIds.length === 0
+      ? []
+      : await db
+          .select({ id: syncedWorkouts.id, accountId: syncedWorkouts.accountId })
+          .from(syncedWorkouts)
+          .where(inArray(syncedWorkouts.id, batchIds));
   const existingOwnerById = new Map(existingRows.map((r) => [r.id, r.accountId] as const));
   const isNewWorkout = (id: string) => !existingOwnerById.has(id);
   const isOwnedWorkout = (id: string) =>
@@ -299,5 +419,11 @@ export async function POST(req: Request) {
     after(() => runAwardEngine(user.id).then(() => undefined));
   }
 
-  return json({ ok: true, syncedWorkoutIds, flaggedWorkoutIds }, 200);
+  // ── Restore (pull) ─────────────────────────────────────────────
+  // Only when the client asked. No cursor key = a pre-restore client, which
+  // gets byte-for-byte the response it has always parsed and costs the DB
+  // nothing extra.
+  if (cursor === undefined) return json({ ok: true, syncedWorkoutIds, flaggedWorkoutIds }, 200);
+  const restore = await loadRestorePage(user.id, cursor);
+  return json({ ok: true, syncedWorkoutIds, flaggedWorkoutIds, ...restore }, 200);
 }

@@ -51,6 +51,8 @@ export interface ActivityToday {
   /**
    * Sensor permission state. Reported as 'granted' whenever Health Connect is
    * the active source — steps are flowing, so no "enable tracking" CTA applies.
+   * 'blocked' means the OS will no longer prompt: the UI must offer a route to
+   * the system Settings app instead of an "enable" button that can't work.
    */
   permission: StepPermission;
   /**

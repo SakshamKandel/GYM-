@@ -92,7 +92,7 @@ const ERR_TEXT: Record<StaffErrorCode, string> = {
   insufficient_balance: "That would take the coach's balance negative.",
   not_configured: 'This feature is not set up yet.',
   network: "Couldn't reach the server.",
-  rate_limited: 'Too many requests — wait a moment and try again.',
+  rate_limited: 'Too many requests. Wait a moment and try again.',
 };
 
 function coachDisplay(c: CoachRow): string {
@@ -351,7 +351,7 @@ function CoachDetail({
         keyboardType="email-address"
       />
       <AppText variant="caption" color={colors.textFaint} style={styles.hint}>
-        Find a member to assign them to this coach — or end their current
+        Find a member to assign them to this coach, or end their current
         assignment.
       </AppText>
 

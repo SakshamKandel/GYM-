@@ -42,7 +42,7 @@ export function AssignedPlanScreen() {
             <div className="min-w-0 flex-1">
               <AppEyebrow onBlock>Note · Coach Gaurav</AppEyebrow>
               <p className="mt-1 text-[12.5px] font-medium leading-snug text-ink/80">
-                &ldquo;Deload the squat this week — we push heavy again Monday.&rdquo;
+                &ldquo;Deload the squat this week. We push heavy again Monday.&rdquo;
               </p>
             </div>
           </div>

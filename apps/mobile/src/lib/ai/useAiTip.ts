@@ -1,96 +1,96 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
+import { AI_TIP_MAX_VARIETY, type AiTipRequestInput } from '@gym/shared';
 
-import { getAiTip, type AiTipMessage } from '../api/client';
+import { getAiTip } from '../api/client';
 import { useAuth } from '../../state/auth';
+
+/**
+ * Where the words on the card came from.
+ *  - 'coach' the model wrote them from the member's numbers.
+ *  - 'fixed' we wrote them (the goal-safety note), so the screen must NOT
+ *    caption them as written by an AI coach.
+ */
+export type TipSource = 'coach' | 'fixed';
 
 type TipState =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'done'; text: string }
+  | { status: 'done'; text: string; source: TipSource }
   | { status: 'error' };
 
 /**
  * Focus-refresh TTL: tab refocus within this window reuses the tip already on
- * screen instead of refiring the LLM call (every tab switch was a Groq hit).
- * Module-level so it also survives screen remounts. Manual "New tip" refresh
- * is NOT throttled — it always fetches.
+ * screen instead of asking for a new one (every tab switch used to be a fresh
+ * model call). Module-level so it also survives screen remounts. The manual
+ * "New tip" tap is NOT throttled, it always fetches.
  */
 const TIP_TTL_MS = 30 * 60 * 1000;
 let lastTipFetchAt = 0;
 
 /**
- * Fetch a short AI tip. The prompt is built by the caller via a function so the
- * tip refreshes when the inputs change. Generation runs SERVER-SIDE (the Groq
- * key never ships in the app), so a tip needs a signed-in token — signed-out
- * users simply get no tip (the card shows a quiet "unavailable" line).
+ * Fetch a short coach tip. The caller passes a builder for the CLOSED payload
+ * (card kind plus the member's training and body numbers) so the tip refreshes
+ * when those numbers change. Nothing the member typed is ever included.
  *
- * Freshness: the very first tip for a given prompt is cached so re-renders don't
- * re-hit the API. Manual refresh always bumps an internal nonce that FORCES a
- * brand-new fact (bypassing the cache and nudging the model for variety).
- * Screen refocus does the same, but only once the 30-minute TTL has lapsed —
- * within the TTL the tip already on screen is reused.
+ * Generation runs server-side, so a tip needs a signed-in token. Signed-out
+ * members simply get no tip and the card stays quiet.
+ *
+ * Freshness: the first tip for a given set of numbers is cached so re-renders
+ * do not re-ask. "New tip" bumps a variety counter that rides along as a plain
+ * number, and the server appends it to its own prompt so the next answer takes
+ * a different angle. Screen refocus does the same, but only after the TTL.
  */
-export function useAiTip(buildPrompt: () => AiTipMessage[], deps: unknown[]): {
+export function useAiTip(
+  buildInput: () => AiTipRequestInput,
+  deps: unknown[],
+): {
   state: TipState;
   refresh: () => void;
 } {
   const token = useAuth((s) => s.token);
   const [state, setState] = useState<TipState>({ status: 'idle' });
-  const [nonce, setNonce] = useState(0);
-  const cache = useRef<Map<string, string>>(new Map());
-  const promptKey = JSON.stringify(buildPrompt());
+  const [variety, setVariety] = useState(0);
+  const cache = useRef<Map<string, { text: string; source: TipSource }>>(new Map());
+  const inputKey = JSON.stringify(buildInput());
 
   const fetchTip = useCallback(async () => {
     if (token === null) {
-      // No account → no server key access. Degrade quietly, don't call.
+      // No account, so no access to the server's key. Degrade quietly.
       setState({ status: 'error' });
       return;
     }
-    const messages = buildPrompt();
-    // Only the first-load tip (nonce 0) is cached, so re-renders don't spam the
-    // API. Any refresh/focus (nonce > 0) always fetches fresh.
-    const key = JSON.stringify(messages);
-    if (nonce === 0) {
+    const input = buildInput();
+    // Only the first tip (variety 0) is cached, so re-renders do not re-ask.
+    // Any refresh or focus (variety > 0) always fetches fresh.
+    const key = JSON.stringify(input);
+    if (variety === 0) {
       const cached = cache.current.get(key);
       if (cached) {
-        setState({ status: 'done', text: cached });
+        setState({ status: 'done', text: cached.text, source: cached.source });
         return;
       }
     }
-    // After the first tip, append a variety nudge so the model reliably serves
-    // a DIFFERENT fact instead of replaying its favourite line.
-    const outgoing: AiTipMessage[] =
-      nonce === 0
-        ? messages
-        : messages.map((m, i) =>
-            i === 0 && m.role === 'system'
-              ? {
-                  ...m,
-                  content: `${m.content} Give a DIFFERENT, fresh fact from any before — variety #${nonce}.`,
-                }
-              : m,
-          );
     setState({ status: 'loading' });
-    const text = await getAiTip(outgoing, token);
-    if (text) {
-      if (nonce === 0) cache.current.set(key, text);
-      lastTipFetchAt = Date.now();
-      setState({ status: 'done', text });
-    } else {
+    const outcome = await getAiTip({ ...input, variety }, token);
+    if (outcome.kind === 'unavailable') {
       setState({ status: 'error' });
+      return;
     }
+    const source: TipSource = outcome.kind === 'fixed' ? 'fixed' : 'coach';
+    if (variety === 0) cache.current.set(key, { text: outcome.text, source });
+    lastTipFetchAt = Date.now();
+    setState({ status: 'done', text: outcome.text, source });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [promptKey, token, nonce]);
+  }, [inputKey, token, variety]);
 
   useEffect(() => {
     void fetchTip();
   }, [fetchTip]);
 
-  // Revisiting the screen surfaces a fresh fact — but only after the TTL has
-  // lapsed, so rapid tab-hopping reuses the tip instead of refiring the call.
-  // Skip the very first focus — the mount effect above already loaded the
-  // initial tip.
+  // Revisiting the screen brings a fresh tip, but only once the TTL has
+  // lapsed, so rapid tab-hopping reuses what is already on screen. The very
+  // first focus is skipped because the mount effect above already loaded it.
   const firstFocus = useRef(true);
   useFocusEffect(
     useCallback(() => {
@@ -99,9 +99,14 @@ export function useAiTip(buildPrompt: () => AiTipMessage[], deps: unknown[]): {
         return;
       }
       if (Date.now() - lastTipFetchAt < TIP_TTL_MS) return;
-      setNonce((n) => n + 1);
+      setVariety(nextVariety);
     }, []),
   );
 
-  return { state, refresh: () => setNonce((n) => n + 1) };
+  return { state, refresh: () => setVariety(nextVariety) };
+}
+
+/** Wrap rather than climb forever, so the counter stays inside its bounds. */
+function nextVariety(current: number): number {
+  return current >= AI_TIP_MAX_VARIETY ? 1 : current + 1;
 }

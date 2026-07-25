@@ -1,0 +1,261 @@
+/**
+ * Customer feedback: the star record, the notes customers wrote, and problems
+ * they reported. Reading surface, so it favours generous line length and a
+ * calm hierarchy over the dense grid the ops board uses.
+ */
+
+.page {
+  width: 100%;
+  max-width: 1080px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gt-space-5);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gt-space-3);
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: var(--gt-space-3);
+  flex-wrap: wrap;
+}
+
+.sectionTitle {
+  margin: 0;
+  color: var(--gt-text);
+  font-family: var(--font-heading);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sectionCopy {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--gt-text-dim);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* ── Star record ──────────────────────────────────────────────── */
+
+.ratingCard {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  gap: var(--gt-space-5);
+  align-items: center;
+}
+
+.ratingHero {
+  text-align: center;
+}
+
+.ratingAverage {
+  color: var(--gt-text);
+  font-family: var(--font-numeric);
+  font-size: 48px;
+  line-height: 1;
+}
+
+.ratingCount {
+  margin-top: 6px;
+  color: var(--gt-text-dim);
+  font-size: 14px;
+}
+
+.stars {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--gt-accent-strong);
+  font-size: 18px;
+  letter-spacing: 2px;
+}
+
+.spread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.spreadRow {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 40px;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.spreadLabel {
+  color: var(--gt-text-dim);
+  font-family: var(--font-numeric);
+  text-align: right;
+}
+
+.spreadTrack {
+  height: 8px;
+  overflow: hidden;
+  border-radius: var(--gt-radius-pill);
+  background: var(--gt-surface-hover);
+}
+
+.spreadFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--gt-accent-strong);
+}
+
+.spreadCount {
+  color: var(--gt-text-dim);
+  font-family: var(--font-numeric);
+}
+
+.emptyRating {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Notes ────────────────────────────────────────────────────── */
+
+.noteGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--gt-space-3);
+}
+
+.noteHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gt-space-3);
+}
+
+.noteHead .stars {
+  margin-top: 0;
+}
+
+.noteWhen {
+  color: var(--gt-text-faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.noteBody {
+  margin: 10px 0 0;
+  color: var(--gt-text);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.noteOrder {
+  margin: 10px 0 0;
+  color: var(--gt-text-faint);
+  font-family: var(--font-numeric);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+/* ── Reported problems ────────────────────────────────────────── */
+
+.disputeStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gt-space-3);
+}
+
+.disputeHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gt-space-3);
+  flex-wrap: wrap;
+}
+
+.disputeTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.disputeReason {
+  color: var(--gt-text);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.disputeWhen {
+  color: var(--gt-text-faint);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.disputeOrder {
+  margin: 8px 0 0;
+  color: var(--gt-text-dim);
+  font-size: 13px;
+}
+
+.disputeNote,
+.disputeResolution {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--gt-border-strong);
+  border-radius: 0 var(--gt-radius-sm) var(--gt-radius-sm) 0;
+  background: var(--gt-surface-sunken);
+  color: var(--gt-text);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.disputeResolution {
+  border-left-color: var(--gt-success);
+}
+
+.disputeNoteLabel {
+  color: var(--gt-text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.disputeNoteEmpty {
+  margin: 12px 0 0;
+  color: var(--gt-text-dim);
+  font-size: 14px;
+}
+
+.disputeAction {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-top: var(--gt-space-3);
+  color: var(--gt-accent-strong);
+  font-family: var(--font-heading);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.disputeAction:hover {
+  color: var(--gt-accent);
+}
+
+@media (max-width: 760px) {
+  .ratingCard {
+    grid-template-columns: 1fr;
+    gap: var(--gt-space-4);
+  }
+}

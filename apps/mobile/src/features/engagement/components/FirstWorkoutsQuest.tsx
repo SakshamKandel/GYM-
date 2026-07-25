@@ -27,7 +27,7 @@ import type { QuestProgress } from '../logic';
 /** Days out for the single gentle nudge. */
 const REMINDER_DAYS = 3;
 const REMINDER_TITLE = 'Your first 3 workouts';
-const REMINDER_BODY = "Newie's waiting — get your next one in and lock the habit.";
+const REMINDER_BODY = "Newie's waiting. Get your next one in and lock the habit.";
 
 const styles = StyleSheet.create({
   // Cream color block: chunky radius, flat fill, NO border (brief §1/§3).
@@ -55,7 +55,7 @@ const styles = StyleSheet.create({
 /** Coach line that escalates as the user closes in on the goal. */
 function coachLine(done: number): string {
   if (done <= 0) return "Let's get the first one in.";
-  if (done === 1) return 'Nice start — two more to make it stick.';
+  if (done === 1) return 'Nice start. Two more to make it stick.';
   return "One more and it's a habit.";
 }
 

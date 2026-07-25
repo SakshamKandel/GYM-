@@ -11,10 +11,11 @@ import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import { settlePromoOnPurchase } from '@/lib/promoEconomy';
 import { clientIp } from '@/lib/rateLimit';
 import { setAccountTier } from '@/lib/tier';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 
 export const runtime = 'nodejs';
 
@@ -120,11 +121,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       note,
     }, ip);
     after(() =>
-      sendPushToAccount(row.accountId, {
-        title: 'Payment update',
-        body: 'Your payment request was not approved this time.',
-        data: { type: 'payment_decided' },
-      }),
+      notify(
+        'payment_reviewed_member',
+        { accountId: row.accountId },
+        {
+          title: 'Payment update',
+          body: 'Your payment request was not approved this time.',
+          data: { type: 'payment_decided' },
+        },
+      ),
     );
     return json({ ok: true }, 200);
   }
@@ -327,11 +332,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       note,
     }, ip);
     after(() =>
-      sendPushToAccount(row.accountId, {
-        title: 'Payment approved',
-        body: `Your ${row.tier} payment was approved — enjoy!`,
-        data: { type: 'payment_decided' },
-      }),
+      notify(
+        'payment_reviewed_member',
+        { accountId: row.accountId },
+        {
+          title: 'Payment approved',
+          body: `Your ${tierLabel(row.tier)} membership is on. Have a good one.`,
+          data: { type: 'payment_decided' },
+        },
+      ),
     );
   }
 

@@ -40,7 +40,7 @@ export function Kitchens() {
                 <CheckItem>Vetted and onboarded by the GM team, kitchen by kitchen</CheckItem>
                 <CheckItem>Every dish is macro-counted before it reaches the menu</CheckItem>
                 <CheckItem>
-                  Kitchens run orders on their own partner portal — accept, prepare, hand off
+                  Kitchens run orders on their own partner portal: accept, prepare, hand off
                 </CheckItem>
                 <CheckItem>Delivery areas and cutoffs set to what each kitchen can serve</CheckItem>
               </ul>

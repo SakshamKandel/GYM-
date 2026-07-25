@@ -1,5 +1,6 @@
 import { accounts, auditLog } from '@gym/db';
 import { desc, eq, sql } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@/components/console';
 import { getDb } from '@/lib/db';
@@ -8,6 +9,7 @@ import { staffFromCookie } from '@/lib/staffSession';
 import { AuditTable, type AuditEntry } from './_components/AuditTable';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Audit log' };
 export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 50;

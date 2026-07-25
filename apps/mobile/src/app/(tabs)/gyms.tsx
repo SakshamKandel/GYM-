@@ -28,6 +28,10 @@ import { useGymDirectory } from '../../features/gyms/hooks';
 import { pushPath } from '../../features/gyms/nav';
 import { useMealAddresses } from '../../features/meals/hooks';
 
+/** Lifts the 40dp List/Map pills to a 48dp target without growing the pill
+ * itself; vertical only, so the two adjacent pills never overlap. */
+const SEGMENT_HIT_SLOP = { top: 4, bottom: 4 } as const;
+
 const styles = StyleSheet.create({
   header: { marginBottom: spacing.sm },
   banner: { marginBottom: spacing.md },
@@ -82,7 +86,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: 6,
     borderRadius: radius.full,
-    minHeight: 34,
+    minHeight: 40,
   },
   segmentBtnActive: {
     backgroundColor: colors.accent,
@@ -136,12 +140,7 @@ export default function GymsTabScreen() {
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [filterOpen, setFilterOpen] = useState(false);
-  const [filters, setFilters] = useState<GymFilterState>({
-    radiusKm: null,
-    category: null,
-    amenities: [],
-    openNow: false,
-  });
+  const [filters, setFilters] = useState<GymFilterState>({ radiusKm: null, category: null });
 
   const q = query.trim().toLowerCase();
   const filtered = gyms === null
@@ -154,8 +153,9 @@ export default function GymsTabScreen() {
         return true;
       });
 
-  const hasActiveFilters =
-    filters.radiusKm !== null || filters.category !== null || filters.amenities.length > 0 || filters.openNow;
+  // Mirrors exactly what the filter above applies — the highlight must never
+  // promise a filter the list can't honour.
+  const hasActiveFilters = filters.radiusKm !== null || filters.category !== null;
 
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
@@ -188,7 +188,7 @@ export default function GymsTabScreen() {
         />
       </Animated.View>
 
-      {/* Search & Filter Trigger */}
+      {/* Search and filter trigger */}
       <Animated.View entering={enterUp(1)} style={styles.searchRow}>
         <View style={styles.searchInput}>
           <AppTextInput
@@ -200,7 +200,7 @@ export default function GymsTabScreen() {
         </View>
         <PressableScale
           accessibilityRole="button"
-          accessibilityLabel="Open filter drawer"
+          accessibilityLabel="Open filters"
           onPress={() => setFilterOpen(true)}
           style={[styles.filterBtn, hasActiveFilters ? styles.filterBtnActive : null]}
         >
@@ -208,10 +208,10 @@ export default function GymsTabScreen() {
         </PressableScale>
       </Animated.View>
 
-      {/* Category Pills Row */}
+      {/* Category pills row */}
       <Animated.View entering={enterUp(2)} style={styles.categoriesScroll}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoriesRow}>
-          <Chip label="All Gyms" selected={selectedCat === null} onPress={() => setSelectedCat(null)} />
+          <Chip label="All gyms" selected={selectedCat === null} onPress={() => setSelectedCat(null)} />
           {GYM_CATEGORIES.map((cat) => (
             <Chip
               key={cat}
@@ -229,13 +229,27 @@ export default function GymsTabScreen() {
           {filtered !== null ? `${filtered.length} listings found` : 'Loading listings…'}
         </AppText>
         <View style={styles.segmentBox}>
-          <PressableScale onPress={() => setViewMode('list')} style={[styles.segmentBtn, viewMode === 'list' ? styles.segmentBtnActive : null]}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Show gyms as a list"
+            accessibilityState={{ selected: viewMode === 'list' }}
+            hitSlop={SEGMENT_HIT_SLOP}
+            onPress={() => setViewMode('list')}
+            style={[styles.segmentBtn, viewMode === 'list' ? styles.segmentBtnActive : null]}
+          >
             <Ionicons name="list" size={14} color={viewMode === 'list' ? colors.onBlock : colors.textDim} />
             <AppText variant="label" color={viewMode === 'list' ? colors.onBlock : colors.textDim}>
               List
             </AppText>
           </PressableScale>
-          <PressableScale onPress={() => setViewMode('map')} style={[styles.segmentBtn, viewMode === 'map' ? styles.segmentBtnActive : null]}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Show gyms on a map"
+            accessibilityState={{ selected: viewMode === 'map' }}
+            hitSlop={SEGMENT_HIT_SLOP}
+            onPress={() => setViewMode('map')}
+            style={[styles.segmentBtn, viewMode === 'map' ? styles.segmentBtnActive : null]}
+          >
             <Ionicons name="map" size={14} color={viewMode === 'map' ? colors.onBlock : colors.textDim} />
             <AppText variant="label" color={viewMode === 'map' ? colors.onBlock : colors.textDim}>
               Map
@@ -254,7 +268,7 @@ export default function GymsTabScreen() {
           >
             <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
             <AppText variant="caption" style={styles.retryText}>
-              {gyms === null ? "Couldn't load gyms — tap to retry." : 'Showing last known list — tap to retry.'}
+              {gyms === null ? "Couldn't load gyms. Tap to retry." : 'Showing last known list. Tap to retry.'}
             </AppText>
             <Ionicons name="refresh" size={15} color={colors.textDim} />
           </PressableScale>
@@ -272,7 +286,7 @@ export default function GymsTabScreen() {
           <EmptyState
             icon="business"
             title={q || selectedCat ? 'No matches' : 'No gyms yet'}
-            body={q || selectedCat ? 'Try adjusting your search or filters.' : 'Gym listings are on the way — check back soon.'}
+            body={q || selectedCat ? 'Try adjusting your search or filters.' : 'Gym listings are on the way. Check back soon.'}
           />
         </Animated.View>
       ) : filtered !== null ? (

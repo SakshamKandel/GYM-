@@ -96,7 +96,7 @@ async function request(
       body: init.body ? JSON.stringify(init.body) : undefined,
     });
   } catch {
-    throw new ProgressPhotoApiError('network', "Can't reach the server");
+    throw new ProgressPhotoApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   const payload = await readResponseJson(response);

@@ -108,7 +108,7 @@ const ERR_TEXT: Record<StaffErrorCode, string> = {
   non_refundable: 'That can no longer be refunded.',
   insufficient_balance: "That would take the coach's balance negative.",
   not_configured: 'This feature is not set up yet.',
-  rate_limited: "Too many attempts — wait a moment and try again.",
+  rate_limited: "Too many attempts. Wait a moment and try again.",
   network: "Couldn't reach the server.",
 };
 

@@ -71,17 +71,17 @@ describe('greeceReply — tier length differences', () => {
   it('silver gets exactly one body line', () => {
     const r = greeceReply(okSignals, { ...richFacts, tier: 'silver' });
     assert.equal(r.lines.length, 1);
-    assert.equal(r.signoff, '— The GM Method');
+    assert.equal(r.signoff, 'The GM Method');
   });
   it('gold gets up to three body lines', () => {
     const r = greeceReply(okSignals, { ...richFacts, tier: 'gold' });
     assert.ok(r.lines.length > 1);
     assert.ok(r.lines.length <= 3);
-    assert.equal(r.signoff, '— The GM Method');
+    assert.equal(r.signoff, 'The GM Method');
   });
   it('elite signs off from Greece and acknowledges the 1:1 relationship', () => {
     const r = greeceReply(okSignals, { ...richFacts, tier: 'elite' });
-    assert.equal(r.signoff, '— Greece');
+    assert.equal(r.signoff, 'Greece');
     assert.ok(r.lines.length <= 3);
     assert.ok(r.lines.some((l) => l.toLowerCase().includes('personally')));
   });

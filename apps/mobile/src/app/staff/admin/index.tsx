@@ -126,7 +126,7 @@ const NAV_ROWS: NavRow[] = [
   {
     icon: 'restaurant',
     title: 'Orders',
-    blurb: 'All-partners meal-order oversight — force status or cancel.',
+    blurb: 'All-partners meal-order oversight. Force status or cancel.',
     route: STAFF_ROUTES.adminOrders,
     perm: 'orders.review',
   },
@@ -137,6 +137,20 @@ const NAV_ROWS: NavRow[] = [
     route: STAFF_ROUTES.adminMealPayments,
     perm: 'payments.review',
     opsKey: 'pendingMealPayments',
+  },
+  {
+    icon: 'alert-circle-outline',
+    title: 'Disputes',
+    blurb: 'Member claims about delivered orders. Resolve or reject.',
+    route: STAFF_ROUTES.adminDisputes,
+    perm: 'orders.review',
+  },
+  {
+    icon: 'bicycle',
+    title: 'Delivery settings',
+    blurb: 'Delivery and small-order fees, plus the lunch and dinner cutoffs.',
+    route: STAFF_ROUTES.adminDeliverySettings,
+    perm: 'partners.manage',
   },
   {
     icon: 'pricetag',
@@ -219,8 +233,15 @@ const NAV_ROWS: NavRow[] = [
   {
     icon: 'business',
     title: 'Gyms',
-    blurb: 'The nearby-gyms directory — draft, verify, publish.',
+    blurb: 'The nearby-gyms directory: draft, verify, publish.',
     route: STAFF_ROUTES.adminGyms,
+    perm: 'gyms.manage',
+  },
+  {
+    icon: 'chatbox-ellipses',
+    title: 'Gym reports & reviews',
+    blurb: 'Wrong-listing reports, member reviews and membership enquiries.',
+    route: STAFF_ROUTES.adminGymModeration,
     perm: 'gyms.manage',
   },
   {
@@ -372,7 +393,7 @@ export default function AdminHomeScreen() {
             onPress={() => void load()}
           >
             <AppText variant="body" color={colors.onBlock} style={styles.heroRetry}>
-              Couldn&apos;t load stats — tap to retry
+              Couldn&apos;t load stats. Tap to retry
             </AppText>
           </PressableScale>
         ) : overview?.membership ? (

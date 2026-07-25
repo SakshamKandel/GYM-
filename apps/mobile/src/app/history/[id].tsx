@@ -220,7 +220,7 @@ export default function HistoryDetailScreen() {
             <Animated.View entering={enterUp(1)} style={styles.flagRow}>
               <Ionicons name="information-circle-outline" size={18} color={colors.textDim} />
               <AppText variant="caption" color={colors.textDim} style={styles.flagText}>
-                Not counted toward rankings — fix this entry?
+                Not counted toward rankings. Fix this entry?
               </AppText>
             </Animated.View>
           ) : null}
@@ -254,7 +254,7 @@ export default function HistoryDetailScreen() {
                   {comparison !== undefined ? (
                     <AppText variant="caption" style={styles.vsLine}>
                       {comparison.kind === 'first'
-                        ? 'First time logging this one — nothing to compare yet.'
+                        ? 'First time logging this one, so nothing to compare yet.'
                         : vsLastLine(
                             displayWeight(comparison.deltaVolumeKg, unitPref),
                             displayWeight(comparison.deltaBestKg, unitPref),
@@ -273,7 +273,7 @@ export default function HistoryDetailScreen() {
           >
             {deleteError ? (
               <AppText variant="caption" color={colors.error} center style={styles.deleteError}>
-                {"Couldn't delete — try again."}
+                {"Couldn't delete. Try again."}
               </AppText>
             ) : null}
             <Button

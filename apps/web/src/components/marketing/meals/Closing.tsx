@@ -22,7 +22,7 @@ const LINKS = [
   {
     title: 'Pricing',
     href: '/pricing',
-    blurb: 'The member card — and its restaurant discounts — rides along with your tier.',
+    blurb: 'The member card and its restaurant discounts ride along with your tier.',
   },
 ] as const;
 
@@ -51,7 +51,7 @@ export function CrossLinks() {
                 </span>
                 <div>
                   <h3 className="font-display text-2xl font-medium uppercase">{l.title}</h3>
-                  <p className="mt-2 text-[14px] leading-relaxed text-dim">{l.blurb}</p>
+                  <p className="mt-2 text-[14.5px] leading-relaxed text-dim">{l.blurb}</p>
                 </div>
               </Link>
             </Reveal>
@@ -75,7 +75,7 @@ export function MealsCta() {
               Diary sorted.
             </Display>
             <Lead tone="light" className="mx-auto mt-6">
-              Order once or set a weekly plan — cooked across town, tracked through seven
+              Order once or set a weekly plan: cooked across town, tracked through seven
               states, and logged into your diary before the box is open.
             </Lead>
           </Reveal>

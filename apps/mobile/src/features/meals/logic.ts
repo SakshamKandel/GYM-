@@ -1,4 +1,5 @@
 import {
+  canOpenDispute,
   DISPUTE_REASONS,
   formatMoney,
   isSlotOrderable,
@@ -83,14 +84,27 @@ export function slotLabel(deliveryDate: string, window: MealWindow, now: Date = 
   return `${day} · ${window === 'lunch' ? 'Lunch' : 'Dinner'}`;
 }
 
+export interface UpcomingSlot {
+  date: string;
+  window: MealWindow;
+  orderable: boolean;
+  label: string;
+}
+
 /** The next few candidate delivery slots, in cutoff order, each flagged for
  * whether it's still orderable right now (client-side preview only — the
- * server is the final word via `isSlotOrderable` at submit time). */
-export function upcomingSlots(
-  now: Date = new Date(),
-  count = 6,
-): { date: string; window: MealWindow; orderable: boolean; label: string }[] {
-  const out: { date: string; window: MealWindow; orderable: boolean; label: string }[] = [];
+ * server is the final word via `isSlotOrderable` at submit time).
+ *
+ * Cutoff caveat (2026-07-25): `isSlotOrderable` is called WITHOUT a
+ * `CutoffHours` argument, so this preview uses the frozen 21:00/10:00 defaults
+ * while the server uses the admin-editable `meal_delivery_config` hours. No
+ * member-facing route exposes those hours yet, so the client cannot mirror
+ * them. The disagreement is handled rather than guessed: a slot the server
+ * refuses as `past_cutoff` is remembered via {@link slotKey} and taken out of
+ * the picker (see /meals/checkout), so the member is corrected once by the
+ * authority instead of being told a wrong story twice. */
+export function upcomingSlots(now: Date = new Date(), count = 6): UpcomingSlot[] {
+  const out: UpcomingSlot[] = [];
   let date = ktmDateString(now);
   for (let i = 0; i < 10 && out.length < count; i += 1) {
     for (const window of ['lunch', 'dinner'] as const) {
@@ -100,6 +114,25 @@ export function upcomingSlots(
     date = ktmAddDays(date, 1);
   }
   return out;
+}
+
+/** Stable identity for one delivery slot (date + window). */
+export function slotKey(date: string, window: MealWindow): string {
+  return `${date}|${window}`;
+}
+
+/**
+ * Index of the first slot a member can actually order — the checkout's default
+ * selection. The list starts at TODAY's lunch, which is past its cutoff for
+ * most of the day, so defaulting to index 0 lands the member on a dead slot.
+ * `closedKeys` carries slots the server has since refused (see
+ * {@link upcomingSlots}); `-1` means nothing in the list is orderable.
+ */
+export function firstOrderableSlotIndex(
+  slots: readonly UpcomingSlot[],
+  closedKeys: ReadonlySet<string> = new Set<string>(),
+): number {
+  return slots.findIndex((s) => s.orderable && !closedKeys.has(slotKey(s.date, s.window)));
 }
 
 // ── Order status timeline ────────────────────────────────────────
@@ -185,9 +218,9 @@ export function canMemberCancelOrder(order: MealOrder, now: Date = new Date()): 
 export function cancelBlockMessage(blocked: MemberCancelBlock): string | null {
   switch (blocked) {
     case 'payment_review_required':
-      return 'A payment receipt is under review — contact support to cancel this order.';
+      return 'A payment receipt is under review. Contact support to cancel this order.';
     case 'refund_required':
-      return 'This order is already paid — contact support so the refund and cancellation happen together.';
+      return 'This order is already paid. Contact support so the refund and cancellation happen together.';
     case 'past_cutoff':
       return null;
   }
@@ -221,7 +254,7 @@ export function paymentStatusLabel(order: MealOrder): string {
 export function mealErrorMessage(code: string): string {
   switch (code) {
     case 'unauthorized':
-      return 'Your session expired — sign in again to continue.';
+      return 'Your session expired. Sign in again to continue.';
     case 'forbidden':
       return "You don't have permission to do that.";
     case 'past_cutoff':
@@ -232,9 +265,9 @@ export function mealErrorMessage(code: string): string {
     case 'partner_unavailable':
       return 'This partner is no longer taking orders.';
     case 'cod_unavailable':
-      return "This partner doesn't accept cash on delivery — pick eSewa or Khalti.";
+      return "This partner doesn't accept cash on delivery. Pick eSewa or Khalti.";
     case 'address_not_found':
-      return "That address couldn't be found — pick or add another.";
+      return "That address couldn't be found. Pick or add another.";
     case 'outside_delivery_area':
       return "That address is outside this partner's delivery area; pick another.";
     case 'delivery_area_unverified':
@@ -248,14 +281,14 @@ export function mealErrorMessage(code: string): string {
     case 'meal_required':
       return 'Pick a meal for a fixed-meal plan.';
     case 'meal_not_allowed':
-      return 'A rotating plan doesn’t take a fixed meal.';
+      return 'A rotating meal plan doesn’t take a fixed meal.';
     case 'no_meals':
     case 'no_meals_for_window':
       return 'This partner has no meals available for that window yet.';
     case 'not_cancellable':
     case 'invalid_transition':
     case 'conflict':
-      return 'That action no longer applies — refresh and try again.';
+      return 'That action no longer applies. Refresh and try again.';
     case 'payment_review_required':
       return 'A payment receipt is under review. Contact support before cancelling or skipping.';
     case 'refund_required':
@@ -263,14 +296,14 @@ export function mealErrorMessage(code: string): string {
     case 'idempotency_conflict':
       return 'This checkout changed while it was being submitted. Review it and try again.';
     case 'not_active':
-      return 'This subscription is no longer active.';
+      return 'This meal plan is no longer active.';
     case 'past_date':
     case 'not_a_delivery_day':
-      return "That date doesn't match this plan's delivery days.";
+      return "That date doesn't match this meal plan's delivery days.";
     case 'order_not_found':
     case 'cycle_not_found':
     case 'not_found':
-      return "Couldn't find that — it may have changed.";
+      return "Couldn't find that. It may have changed.";
     case 'cod_no_receipt':
       return 'Cash-on-delivery orders don’t need a receipt.';
     case 'order_closed':
@@ -285,24 +318,26 @@ export function mealErrorMessage(code: string): string {
       return 'A receipt is already awaiting review for this.';
     case 'receipt_already_used':
       return 'That receipt has already been submitted elsewhere.';
+    case 'image_not_configured':
+      return 'Receipt uploads are temporarily unavailable. Please contact support.';
     case 'exactly_one_target':
-      return 'Something went wrong preparing that payment — try again.';
+      return 'Something went wrong preparing that payment. Try again.';
     case 'invalid':
       return 'Check your details and try again.';
     case 'already_rated':
       return "You've already rated this order.";
     case 'not_delivered':
-      return "This order hasn't been delivered yet — you can rate or tip it once it arrives.";
+      return "This order hasn't been delivered yet. You can rate or tip it once it arrives.";
     case 'invalid_tip':
       return 'Enter a valid tip amount and try again.';
     case 'tip_locked':
-      return "This order has already been paid — the tip can't be changed.";
+      return "This order has already been paid, so the tip can't be changed.";
     case 'dispute_exists':
-      return 'You already have an open report for this order — check its status before filing another.';
+      return 'You already have an open report for this order. Check its status before filing another.';
     case 'not_disputable':
       return "This order isn't eligible for a dispute yet.";
     default:
-      return "Couldn't reach the server — check your connection and try again.";
+      return "That didn't go through. Check your connection and try again.";
   }
 }
 
@@ -311,7 +346,7 @@ export function mealErrorMessage(code: string): string {
 /** "Price updated Rs 450→Rs 470, confirm?" copy for the checkout guard's
  * 409 `price_changed` response. */
 export function priceChangeMessage(quotedMinor: number, currentMinor: number, currency: string): string {
-  return `Price updated ${formatMoney(quotedMinor, currency)} → ${formatMoney(currentMinor, currency)} — confirm to place at the new total.`;
+  return `Price updated ${formatMoney(quotedMinor, currency)} → ${formatMoney(currentMinor, currency)}. Confirm to place at the new total.`;
 }
 
 /** Per-line "X unavailable — remove & continue" copy (B11) for a quote's 422
@@ -319,8 +354,8 @@ export function priceChangeMessage(quotedMinor: number, currentMinor: number, cu
  * a name (it may not for a wholly unknown id). */
 export function mealUnavailableLineMessage(mealName: string | null | undefined): string {
   return mealName
-    ? `${mealName} isn't available for this slot anymore — remove it and continue.`
-    : "One of these meals isn't available for this slot anymore — remove it and continue.";
+    ? `${mealName} isn't available for this slot anymore. Remove it and continue.`
+    : "One of these meals isn't available for this slot anymore. Remove it and continue.";
 }
 
 // ── Tips (Pack D) ─────────────────────────────────────────────────────
@@ -336,6 +371,27 @@ export function tipPresetLabel(percent: number): string {
 
 export { DISPUTE_REASONS };
 export type { DisputeReason };
+
+/**
+ * May the member report a problem with this order? A thin wrapper over
+ * `@gym/shared`'s `canOpenDispute` — the EXACT predicate the dispute route
+ * enforces — so the button and the server agree. Delivered orders qualify, and
+ * so does any order whose money was captured: a prepaid order that was then
+ * refused or cancelled is precisely the case that needs a refund path, and
+ * gating the button on `delivered` alone hid it from those members.
+ */
+export function canReportOrderProblem(order: MealOrder): boolean {
+  return canOpenDispute(order.status, order.paymentStatus);
+}
+
+// ── Weekly plan pricing (member-facing preview) ───────────────────────
+
+/** What a full week of a weekly plan costs: the server-quoted per-day price
+ * (meal + delivery) times the number of delivery days chosen. Mirrors how a
+ * billing cycle is charged (planned slots × price per day). */
+export function weeklyPlanTotalMinor(pricePerDayMinor: number, deliveryDays: number): number {
+  return Math.max(0, Math.trunc(pricePerDayMinor)) * Math.max(0, Math.trunc(deliveryDays));
+}
 
 export function disputeReasonLabel(reason: DisputeReason): string {
   switch (reason) {

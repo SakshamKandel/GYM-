@@ -18,6 +18,7 @@ import {
   Skeleton,
   Stepper,
 } from '../../../components/ui';
+import { OpenSettingsButton } from '../../../components/ui/permissions';
 import { dayLabel, todayIso } from '../../../lib/dates';
 import { useProfile } from '../../../state/profile';
 import { useActivityToday, useStepsWeek, type ActivityToday, type DaySteps } from '../hooks';
@@ -99,6 +100,8 @@ const styles = StyleSheet.create({
   manualActionButton: { flex: 1 },
   sheetButton: { marginTop: spacing.lg },
   explainer: { marginTop: spacing.lg },
+  // Blocked-permission / Health Connect notes: copy first, then the action.
+  permissionBlock: { marginTop: spacing.lg, gap: spacing.md },
   ioRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.md },
   ioLabel: { width: 32 },
   ioTrack: {
@@ -455,7 +458,21 @@ function StepsSheetBody({
         </>
       )}
 
-      {activity.permission === 'denied' || activity.permission === 'undetermined' ? (
+      {/* Sensor permission. 'blocked' means the OS won't prompt again, so an
+          "Enable step tracking" button would silently do nothing — say what is
+          switched off and hand over the only control that still works. Health
+          Connect being the live source reports 'granted' (hooks.ts), so this
+          whole area stays hidden while HC is counting. */}
+      {activity.permission === 'blocked' ? (
+        <View style={styles.permissionBlock}>
+          <AppText variant="body" color={colors.textDim}>
+            Step tracking is switched off for this app in your phone settings. Turn on physical
+            activity access to count steps automatically. You can keep adding steps by hand
+            until then.
+          </AppText>
+          <OpenSettingsButton />
+        </View>
+      ) : activity.permission === 'denied' || activity.permission === 'undetermined' ? (
         <Button
           label="Enable step tracking"
           onPress={() => {
@@ -465,9 +482,69 @@ function StepsSheetBody({
         />
       ) : null}
 
+      {/* Android's better source: Health Connect keeps counting while the app
+          is closed, which the raw sensor watch can't do. Offered whenever it
+          isn't already the live source. */}
+      {Platform.OS === 'android' && activity.stepsSource !== 'health-connect' ? (
+        <HealthConnectPrompt activity={activity} />
+      ) : null}
+
       <AppText variant="caption" color={colors.textFaint} style={styles.explainer}>
         Distance and calories are estimates from your steps, height and weight.
       </AppText>
+    </View>
+  );
+}
+
+/**
+ * Android-only "use Health Connect" offer. The hook method behind it was
+ * fully implemented but had no call site — this is it.
+ *
+ * `requestHealthConnectPermission()` no-ops safely (resolves false) on iOS, in
+ * Expo Go, and where Health Connect isn't installed; on grant it refreshes the
+ * whole activity snapshot, so this button disappears on its own once Health
+ * Connect becomes the live source. A false result is explained inline rather
+ * than left as a silent no-op — Linking.openSettings() would open THIS app's
+ * page, which is not where Health Connect access lives, so it is deliberately
+ * not offered here.
+ */
+function HealthConnectPrompt({ activity }: { activity: ActivityToday }) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  async function connect(): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      const granted = await activity.requestHealthConnectPermission();
+      if (!granted) {
+        setNote(
+          'We couldn’t turn on Health Connect. Open the Health Connect app and allow this app to read Steps, or just keep using your phone’s own step sensor.',
+        );
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <View style={styles.permissionBlock}>
+      <AppText variant="caption" color={colors.textDim}>
+        Health Connect keeps counting your steps while the app is closed.
+      </AppText>
+      <Button
+        label="Use Health Connect"
+        variant="secondary"
+        loading={busy}
+        disabled={busy}
+        onPress={() => void connect()}
+      />
+      {note !== null ? (
+        <AppText variant="caption" color={colors.textDim}>
+          {note}
+        </AppText>
+      ) : null}
     </View>
   );
 }

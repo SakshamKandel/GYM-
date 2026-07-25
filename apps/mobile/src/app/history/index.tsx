@@ -251,7 +251,7 @@ function WorkoutRow({
         </AppText>
         {flagged ? (
           <AppText variant="caption" color={colors.textFaint} numberOfLines={1}>
-            Not counted toward rankings — fix this entry?
+            Not counted toward rankings. Fix this entry?
           </AppText>
         ) : null}
       </View>

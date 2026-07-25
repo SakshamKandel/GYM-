@@ -6,7 +6,7 @@ import { logAudit } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { hashPassword } from '@/lib/password';
-import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -37,8 +37,11 @@ export function OPTIONS() {
 }
 
 export async function POST(req: Request) {
-  // Damp token-guessing / password-set abuse: 10 attempts/min per IP.
-  const limited = rateLimit({
+  // Token-guessing / password-set ceiling: 10 attempts/min per IP. Counted in
+  // the shared store when one is configured so a guessing run can't buy extra
+  // attempts by spreading across instances; without a store it counts per
+  // instance, as local development always has.
+  const limited = await rateLimitShared({
     route: 'auth/reset-password',
     limit: 10,
     windowMs: 60_000,

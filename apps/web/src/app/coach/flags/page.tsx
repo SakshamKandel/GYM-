@@ -1,8 +1,10 @@
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { requireCoachPage } from '@/lib/coachPage';
 import { FlagsList } from './_components/FlagsList';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Flags' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -25,7 +27,7 @@ export default async function CoachFlagsPage() {
     <div style={{ maxWidth: 900 }}>
       <PageHeader
         title="Flags"
-        subtitle="Workouts our plausibility check excluded from rankings and badges, unacknowledged first. This is not an accusation — it only means the numbers looked off, and the entry stays in the member's own log either way."
+        subtitle="Workouts we left out of rankings and badges because the numbers looked off, the ones you have not read yet first. This is not an accusation, and the workout stays in your client's own log either way."
       />
       <FlagsList />
     </div>

@@ -15,6 +15,7 @@ import {
 import { MembershipCardAny } from '../features/subscription/components/MembershipCardAny';
 import { tierExpiryInfo } from '../features/subscription/logic';
 import { useMealPartners, useMyMealOrders } from '../features/meals/hooks';
+import { tierName } from '../lib/tier';
 import { useAuth } from '../state/auth';
 import { useProfile } from '../state/profile';
 
@@ -22,9 +23,21 @@ import { useProfile } from '../state/profile';
  * /membership-card — a dedicated, full-screen membership card for showing in
  * person: whichever card face the member picked in Settings
  * (MembershipCardAny), enlarged, the member code spelled out in full (not
- * just the last 4), and the member-discount pitch for the restaurant of the
- * member's current meal order (next upcoming order's partner, else the most
- * recent past one) — show the card there to claim the member discount.
+ * just the last 4), and where that code is actually useful — the restaurant on
+ * the member's current meal order (next upcoming order's partner, else the
+ * most recent past one).
+ *
+ * This screen used to tell the member to "claim your member discount", and the
+ * partner portal told the counter to "apply the member discount". Neither side
+ * could name a number, because none exists: no discount is stored against a
+ * meal partner, no admin can set one, and meal pricing never reads the member's
+ * tier, so every tier is quoted the same price. Two pieces of prose promising
+ * money off, with nothing behind them. Rather than invent a percentage no
+ * restaurant has agreed to, this now promises only what the product genuinely
+ * does: a partner restaurant can type the member code and see that the
+ * membership is real and current (POST /api/partner/verify-member). If a real
+ * discount is ever agreed, it needs a stored number both sides read, not new
+ * copy.
  *
  * No QR/barcode graphic — there's no scanner-verified encoder in this app
  * yet (no QR/barcode library is installed, and a hand-rolled one can't be
@@ -51,9 +64,9 @@ export default function MembershipCardScreen() {
   const upcomingOrders = useMyMealOrders(authed, 'upcoming');
   const pastOrders = useMyMealOrders(authed, 'history');
   const partners = useMealPartners(authed);
-  const discountOrder = upcomingOrders.data?.[0] ?? pastOrders.data?.[0] ?? null;
-  const discountPartner = discountOrder
-    ? (partners.data?.find((p) => p.id === discountOrder.partnerId)?.name ?? null)
+  const latestOrder = upcomingOrders.data?.[0] ?? pastOrders.data?.[0] ?? null;
+  const partnerName = latestOrder
+    ? (partners.data?.find((p) => p.id === latestOrder.partnerId)?.name ?? null)
     : null;
 
   const fullCode = memberId ? memberId.replace(/-/g, '').toUpperCase() : null;
@@ -69,7 +82,7 @@ export default function MembershipCardScreen() {
     if (!fullCode) return;
     try {
       await Share.share({
-        message: `${holderName} — GM Method ${tier.toUpperCase()} member\nMember code: ${fullCode}`,
+        message: `${holderName}, GM Method ${tierName(tier)} member\nMember code: ${fullCode}`,
       });
     } catch {
       // Share sheet dismissed/unavailable — the code stays visible on screen.
@@ -89,7 +102,7 @@ export default function MembershipCardScreen() {
         </PressableScale>
       </Animated.View>
 
-      <ScreenHeader eyebrow="Show it, claim your perks" title="Membership card" style={styles.header} />
+      <ScreenHeader eyebrow="Your membership, in person" title="Membership card" style={styles.header} />
 
       <Animated.View entering={enterUp(0)} style={styles.cardWrap}>
         <MembershipCardAny
@@ -105,7 +118,7 @@ export default function MembershipCardScreen() {
         <Animated.View entering={enterUp(1)} style={styles.notice}>
           <Ionicons name="information-circle-outline" size={18} color={colors.textFaint} />
           <AppText variant="caption" color={colors.textFaint} style={styles.noticeText}>
-            This is a local preview — sign in to get a real member code staff can look up.
+            This is a local preview. Sign in to get a real member code staff can look up.
           </AppText>
         </Animated.View>
       ) : (
@@ -118,23 +131,23 @@ export default function MembershipCardScreen() {
               {codeDisplay}
             </AppText>
             <AppText variant="caption" color={colors.textDim} center>
-              Your unique member code — it verifies your membership wherever GM Method perks
-              apply.
+              Your unique member code. Partner restaurants can look it up to check your
+              membership.
             </AppText>
           </Animated.View>
 
-          <Animated.View entering={enterUp(2)} style={styles.discountBlock}>
-            <View style={styles.discountHead}>
+          <Animated.View entering={enterUp(2)} style={styles.counterBlock}>
+            <View style={styles.counterHead}>
               <Ionicons name="restaurant-outline" size={18} color={colors.accent} />
               <AppText variant="label" color={colors.textFaint}>
-                MEMBER DISCOUNT
+                AT THE COUNTER
               </AppText>
             </View>
-            <AppText variant="bodyBold">{discountPartner ?? 'Partner restaurants'}</AppText>
+            <AppText variant="bodyBold">{partnerName ?? 'Partner restaurants'}</AppText>
             <AppText variant="caption" color={colors.textDim}>
-              {discountPartner
-                ? `Show this card at ${discountPartner} — the restaurant on your meal order — to claim your member discount.`
-                : 'Order from a partner restaurant in Meals, then show this card there to claim your member discount.'}
+              {partnerName
+                ? `Show this card at ${partnerName}, the restaurant on your meal order. Staff can type your code and see your first name, your membership and how long it runs.`
+                : 'Order from a partner restaurant in Meals, then show this card there. Staff can type your code and see your first name, your membership and how long it runs.'}
             </AppText>
           </Animated.View>
 
@@ -194,14 +207,14 @@ const styles = StyleSheet.create({
   /* Sized + centered so the grouped code wraps to tidy lines instead of
      running off the card block on narrow screens. */
   codeText: { fontSize: 24, lineHeight: 32, letterSpacing: 2, textAlign: 'center' },
-  discountBlock: {
+  counterBlock: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     padding: spacing.gutter,
     gap: spacing.xs,
     marginBottom: spacing.md,
   },
-  discountHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  counterHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   expiryRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -86,7 +86,7 @@ export function OverviewSection({ data }: Props) {
       <Card>
         <ConsistencyHeatmap weeks={weeks} />
         <AppText variant="caption" color={colors.textDim} style={styles.caption}>
-          Last 12 weeks — every filled square is a session. Today is outlined.
+          Last 12 weeks. Every filled square is a session. Today is outlined.
         </AppText>
       </Card>
 

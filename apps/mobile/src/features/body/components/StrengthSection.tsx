@@ -125,7 +125,7 @@ export function StrengthSection() {
         <SectionLabel>PR ledger</SectionLabel>
       </Animated.View>
       {data.prs.length === 0 ? (
-        <AppText variant="caption">PRs land here — go set one.</AppText>
+        <AppText variant="caption">PRs land here. Go set one.</AppText>
       ) : (
         data.prs.map((pr, i) => (
           <Animated.View

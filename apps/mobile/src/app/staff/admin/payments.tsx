@@ -104,7 +104,7 @@ function receiptUnusable(url: string): boolean {
 }
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'not_found') return 'That request is no longer available.';
   // B13-style remap for the refund action's CAS conflicts — a generic "try
@@ -112,7 +112,7 @@ function errorLine(code: StaffErrorCode): string {
   // 409s).
   if (code === 'already_refunded') return 'This payment was already refunded.';
   if (code === 'not_approved')
-    return 'This request is no longer approved — refresh the queue and try again.';
+    return 'This request is no longer approved. Refresh the queue and try again.';
   return "Couldn't load the queue.";
 }
 
@@ -303,7 +303,7 @@ export default function AdminPaymentsScreen() {
         // 409 loop (defect #1).
         setPendingConfirm(true);
         setDecideError(
-          "This member's current plan is permanent or higher than what's being granted — approving will change it. Tap Approve again to confirm.",
+          "This member's current plan is permanent or higher than what's being granted, so approving will change it. Tap Approve again to confirm.",
         );
       } else {
         setPendingConfirm(false);
@@ -506,12 +506,12 @@ export default function AdminPaymentsScreen() {
                     </AppText>
                     {TIER_RANK[previewTier] > TIER_RANK[selected.tier] ? (
                       <AppText variant="caption" color={colors.warning}>
-                        This member already holds a HIGHER tier — approving may downgrade
+                        This member already holds a HIGHER tier, so approving may downgrade
                         them. Confirm this is intended.
                       </AppText>
                     ) : previewTier === selected.tier ? (
                       <AppText variant="caption" color={colors.textDim}>
-                        Same tier as today — this extends the existing window by{' '}
+                        Same tier as today, so this extends the existing window by{' '}
                         {selected.months} month{selected.months === 1 ? '' : 's'}.
                       </AppText>
                     ) : (
@@ -538,7 +538,7 @@ export default function AdminPaymentsScreen() {
                 ) : null}
                 {receiptBad ? (
                   <AppText variant="caption" color={colors.textFaint} style={styles.decideError}>
-                    Approve is disabled until the receipt loads — reload the queue and try again.
+                    Approve is disabled until the receipt loads. Reload the queue and try again.
                   </AppText>
                 ) : null}
                 <View style={styles.decisionButtons}>

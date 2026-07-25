@@ -11,6 +11,8 @@ import {
   Modal,
   TextField,
 } from '@/components/console';
+import { formatDateTime } from '@/lib/format';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 
 /**
  * One row of the broadcast history — derived on the server from `broadcast.send`
@@ -54,14 +56,6 @@ interface SendResult {
 }
 
 const TIERS = ['starter', 'silver', 'gold', 'elite'] as const;
-
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-});
 
 /**
  * Broadcast composer (gap build P0-4). Compose a push announcement, optionally
@@ -132,7 +126,7 @@ export function BroadcastComposer({
       });
     } catch {
       setPreview(null);
-      setPreviewError('Network error while estimating the audience.');
+      setPreviewError('Could not work out how many people this reaches. The send itself is unaffected.');
     } finally {
       setPreviewing(false);
     }
@@ -195,7 +189,7 @@ export function BroadcastComposer({
       setPreviewError(null);
       router.refresh();
     } catch {
-      setError('Network error — the broadcast may not have been sent. Check the history below before retrying.');
+      setError('We lost the connection, so this may or may not have gone out. Check the history below before you send it again.');
       setSending(false);
     }
   }
@@ -250,7 +244,7 @@ export function BroadcastComposer({
       width: 150,
       render: (r) => (
         <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {DATE_FMT.format(new Date(r.createdAt))}
+          {formatDateTime(r.createdAt)}
         </span>
       ),
     },
@@ -297,7 +291,7 @@ export function BroadcastComposer({
             disabled={sending}
             maxLength={500}
             rows={4}
-            placeholder="Keep it short — this shows as a push notification."
+            placeholder="Keep it short. This shows as a push notification."
             style={{ resize: 'vertical', minHeight: 88, fontFamily: 'inherit' }}
           />
           <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
@@ -356,7 +350,7 @@ export function BroadcastComposer({
             {preview.recipients === 1 ? '' : 's'} ({preview.devices.toLocaleString()} device
             {preview.devices === 1 ? '' : 's'}).
             {preview.truncated
-              ? ' Larger than a single broadcast can reach — only the first 20,000 devices would get it.'
+              ? ' Larger than a single broadcast can reach, so only the first 20,000 devices would get it.'
               : ''}
           </div>
         ) : null}
@@ -462,12 +456,12 @@ export function BroadcastComposer({
                       preview.devices === 1 ? '' : 's'
                     })${
                       preview.truncated
-                        ? ' — only the first 20,000 devices will get it'
+                        ? ', so only the first 20,000 devices will get it'
                         : ''
                     }.`
                   : previewError
                     ? previewError
-                    : 'Audience size unavailable — the send will still reach the filtered members.'}
+                    : 'Audience size unavailable. The send will still reach the filtered members.'}
             </div>
           </div>
         </div>
@@ -479,7 +473,7 @@ export function BroadcastComposer({
 /** Human audience label from the optional tier/country filters. */
 function describeAudience(tier: string | null, country: string | null): string {
   const parts: string[] = [];
-  if (tier) parts.push(`${tier.charAt(0).toUpperCase()}${tier.slice(1)} tier`);
+  if (tier) parts.push(`${tierLabel(tier)} members`);
   if (country) parts.push(country);
   return parts.length === 0 ? 'All members' : parts.join(' · ');
 }
@@ -490,18 +484,18 @@ function numberOr(value: unknown): number {
 
 function errorCopy(status: number, code: string | null): string {
   if (code === 'push_not_configured') {
-    return 'Push is not configured on the server (no Firebase credential). No broadcast was sent.';
+    return 'Push notifications are not set up yet, so nothing was sent. Ask an engineer to finish the setup.';
   }
   // 503 from the fail-closed permission guard when the override lookup itself
   // errors — a transient auth-layer failure, NOT a validation problem. Retrying
   // shortly is the right advice; the old copy funnelled this into the generic
   // "Try again" with no signal that nothing was sent (P1-4).
   if (code === 'authorization_unavailable') {
-    return 'Could not verify your permissions just now. No broadcast was sent — try again in a moment.';
+    return 'Could not verify your permissions just now. No broadcast was sent. Try again in a moment.';
   }
   if (status === 401 || status === 403) return 'You are not allowed to send broadcasts.';
   if (status === 400 || code === 'invalid') {
-    return 'Check the title (1–120 chars) and message (1–500 chars).';
+    return 'Check the title (up to 120 characters) and the message (up to 500 characters).';
   }
   return 'Could not send the broadcast. Try again.';
 }

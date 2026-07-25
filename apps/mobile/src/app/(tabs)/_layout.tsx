@@ -14,7 +14,7 @@ export default function TabsLayout() {
   const hydrated = useStoresHydrated();
   const onboarded = useProfile((s) => s.onboarded);
 
-  if (!hydrated) return <AppStartupScreen message="Loading your plan" />;
+  if (!hydrated) return <AppStartupScreen message="Loading your program" />;
   if (!onboarded) return <Redirect href="/welcome" />;
 
   return (

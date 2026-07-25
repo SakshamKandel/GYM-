@@ -2,6 +2,7 @@ import { accounts, sessions } from '@gym/db';
 import { eq } from 'drizzle-orm';
 import {
   adminRoleOf,
+  auditIp,
   logAudit,
   requireOutranks,
   requirePermission,
@@ -22,12 +23,6 @@ export const runtime = 'nodejs';
  * Rank-guarded for staff targets: a lower-ranked staffer cannot revoke a
  * peer/higher admin's sessions.
  */
-
-function getIp(req: Request): string | null {
-  const fwd = req.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]?.trim() ?? null;
-  return req.headers.get('x-real-ip');
-}
 
 export function OPTIONS() {
   return preflight();
@@ -62,7 +57,7 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     'account',
     id,
     { revoked: revoked.length },
-    getIp(req),
+    auditIp(req),
   );
 
   return json({ ok: true, revoked: revoked.length }, 200);

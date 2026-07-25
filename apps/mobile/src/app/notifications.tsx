@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { ActivityIndicator, RefreshControl, StyleSheet, Switch, View } from 'react-native';
+import { ActivityIndicator, Linking, RefreshControl, StyleSheet, Switch, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import { NOTIFICATION_CATEGORIES, type NotificationCategory } from '@gym/shared'
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
+  Button,
   Card,
   EmptyState,
   enterDown,
@@ -26,7 +27,14 @@ import {
   type NotificationPrefsState,
   type NotificationRow,
 } from '../features/notifications/api';
-import { deepLinkForNotification } from '../lib/notifications';
+import {
+  deepLinkForNotification,
+  getNotificationPermissionState,
+  registerForPushNotificationsAsync,
+  requestPermission,
+  setNotificationBadgeCount,
+  type NotificationPermissionState,
+} from '../lib/notifications';
 import { useAuth } from '../state/auth';
 
 /**
@@ -39,12 +47,12 @@ import { useAuth } from '../state/auth';
  */
 
 const CATEGORY_LABEL: Record<NotificationCategory, { title: string; blurb: string }> = {
-  orders: { title: 'Orders', blurb: 'Placed, status updates, cancellations.' },
-  payments: { title: 'Payments', blurb: 'Receipt reviews and payout status.' },
-  support: { title: 'Support', blurb: 'Replies, disputes, gym reports.' },
-  coaching: { title: 'Coaching', blurb: 'Coach messages, check-ins, milestones.' },
-  billing: { title: 'Billing', blurb: 'Trial, renewal and plan reminders.' },
-  engagement: { title: 'Engagement', blurb: 'Streaks, tips, come-back nudges.' },
+  orders: { title: 'Meal orders', blurb: 'When an order is placed, on the way, or cancelled.' },
+  payments: { title: 'Payments', blurb: 'When we check a receipt or send money you are owed.' },
+  support: { title: 'Support', blurb: 'Replies to anything you have written to us.' },
+  coaching: { title: 'Coaching', blurb: 'Messages from your coach, check-ins and milestones.' },
+  billing: { title: 'Membership', blurb: 'When your membership is about to end or renews.' },
+  engagement: { title: 'Nudges', blurb: 'Your streak, and a word when you have been away.' },
 };
 
 const PAGE_SIZE = 30;
@@ -67,12 +75,43 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
+/**
+ * Push off at the OS level makes every switch below a lie, so read the real
+ * state and say so. Wrapped because the web build of `lib/notifications` has
+ * no permission helper — web simply never shows the banner.
+ */
+async function readPermissionState(): Promise<NotificationPermissionState> {
+  try {
+    return await getNotificationPermissionState();
+  } catch {
+    return 'unsupported';
+  }
+}
+
+/** Keep the app-icon badge in step with the inbox. Never throws (see above). */
+function syncBadge(unread: number): void {
+  try {
+    void setNotificationBadgeCount(unread);
+  } catch {
+    // No badge support on this platform build.
+  }
+}
+
 function hourLabel(minuteOfDay: number): string {
   const h = Math.floor(minuteOfDay / 60) % 24;
   const suffix = h >= 12 ? 'PM' : 'AM';
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12} ${suffix}`;
 }
+
+/**
+ * Quiet hours are measured in Nepal time for everyone, because that is the one
+ * clock the server has — no member time zone is stored yet. This screen used to
+ * print the hours bare, which read as "your local hours" and quietly misled
+ * anyone travelling or living elsewhere: their quiet window sat in the middle
+ * of their afternoon. Until a member time zone exists, name the clock.
+ */
+const QUIET_HOURS_ZONE = 'Nepal time';
 
 function NotificationRowItem({
   row,
@@ -122,6 +161,10 @@ function NotificationsSession({ token }: { token: string | null }) {
   const [prefs, setPrefs] = useState<NotificationPrefsState | null>(null);
   const [prefsBusy, setPrefsBusy] = useState(false);
   const [prefsError, setPrefsError] = useState<string | null>(null);
+  // 'unsupported' until we've actually read the OS state, so the banner can
+  // never flash on a device where notifications are perfectly fine.
+  const [permission, setPermission] = useState<NotificationPermissionState>('unsupported');
+  const [askingPermission, setAskingPermission] = useState(false);
 
   const listSeq = useRef(0);
   const prefsSeq = useRef(0);
@@ -138,10 +181,11 @@ function NotificationsSession({ token }: { token: string | null }) {
       setRows(page.notifications);
       setUnreadCount(page.unreadCount);
       setNextOffset(page.nextOffset);
+      syncBadge(page.unreadCount);
     } catch (e) {
       if (listSeq.current !== seq || useAuth.getState().token !== token) return;
       setError(toNotificationError(e).code === 'unauthorized'
-        ? 'Your session expired — sign in again.'
+        ? 'Your session expired. Sign in again.'
         : "Couldn't load your notifications.");
     } finally {
       if (listSeq.current === seq && useAuth.getState().token === token) setLoading(false);
@@ -164,8 +208,28 @@ function NotificationsSession({ token }: { token: string | null }) {
     useCallback(() => {
       void load();
       void loadPrefs();
+      // Re-read on every focus: the user may have just come back from phone
+      // settings, where they could have flipped notifications either way.
+      void readPermissionState().then(setPermission);
     }, [load, loadPrefs]),
   );
+
+  /** "Turn on notifications" — only offered while the OS can still ask. */
+  async function onAskPermission(): Promise<void> {
+    if (askingPermission) return;
+    setAskingPermission(true);
+    try {
+      if (await requestPermission()) {
+        // Just granted — claim this device for the account now, instead of
+        // leaving push dead until the next cold start.
+        await registerForPushNotificationsAsync();
+      }
+    } catch {
+      // Never throws in practice; the re-read below reports the truth anyway.
+    }
+    setPermission(await readPermissionState());
+    setAskingPermission(false);
+  }
 
   async function onRefresh(): Promise<void> {
     setRefreshing(true);
@@ -194,6 +258,7 @@ function NotificationsSession({ token }: { token: string | null }) {
     if (row.readAt === null) {
       setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, readAt: new Date().toISOString() } : r)));
       setUnreadCount((n) => Math.max(0, n - 1));
+      syncBadge(Math.max(0, unreadCount - 1));
       void markNotificationRead(row.id, token).catch(() => {
         // Best-effort — worst case it re-shows as unread next load.
       });
@@ -206,6 +271,7 @@ function NotificationsSession({ token }: { token: string | null }) {
     if (!token || unreadCount === 0) return;
     setRows((prev) => prev.map((r) => (r.readAt === null ? { ...r, readAt: new Date().toISOString() } : r)));
     setUnreadCount(0);
+    syncBadge(0);
     try {
       await markAllNotificationsRead(token);
     } catch {
@@ -229,7 +295,7 @@ function NotificationsSession({ token }: { token: string | null }) {
       setPrefs(fresh);
     } catch {
       if (useAuth.getState().token !== token) return;
-      setPrefsError("Couldn't save — try again.");
+      setPrefsError("Couldn't save. Try again.");
       void loadPrefs();
     } finally {
       if (useAuth.getState().token === token) setPrefsBusy(false);
@@ -250,7 +316,7 @@ function NotificationsSession({ token }: { token: string | null }) {
       setPrefs(fresh);
     } catch {
       if (useAuth.getState().token !== token) return;
-      setPrefsError("Couldn't save — try again.");
+      setPrefsError("Couldn't save. Try again.");
       void loadPrefs();
     } finally {
       if (useAuth.getState().token === token) setPrefsBusy(false);
@@ -347,7 +413,45 @@ function NotificationsSession({ token }: { token: string | null }) {
       </Animated.View>
 
       <Animated.View entering={enterUp(1)}>
-        <SectionLabel>Push preferences</SectionLabel>
+        <SectionLabel>What we can notify you about</SectionLabel>
+
+        {/* The switches below only matter if the phone lets notifications
+            through at all. When it doesn't, say so first — otherwise six
+            toggles read as "on" while nothing can ever arrive. */}
+        {permission === 'canAsk' || permission === 'blocked' ? (
+          <Card style={styles.permissionCard}>
+            <View style={styles.permissionHead}>
+              <Ionicons name="notifications-off-outline" size={20} color={colors.warning} />
+              <AppText variant="bodyBold" style={styles.permissionTitle}>
+                {permission === 'canAsk'
+                  ? 'Notifications are not turned on'
+                  : 'Notifications are switched off'}
+              </AppText>
+            </View>
+            <AppText variant="body" color={colors.textDim}>
+              {permission === 'canAsk'
+                ? "Your phone hasn't been asked yet, so nothing below can reach you. Everything still waits for you here in your inbox."
+                : 'Your phone is blocking notifications from this app. Turn them back on in your phone settings. Until then, nothing below can reach you.'}
+            </AppText>
+            {permission === 'canAsk' ? (
+              <Button
+                label="Turn on notifications"
+                loading={askingPermission}
+                onPress={() => void onAskPermission()}
+                style={styles.permissionBtn}
+              />
+            ) : (
+              <Button
+                label="Open Settings"
+                onPress={() => {
+                  void Linking.openSettings().catch(() => undefined);
+                }}
+                style={styles.permissionBtn}
+              />
+            )}
+          </Card>
+        ) : null}
+
         {!prefs ? (
           <View style={styles.center}>
             <ActivityIndicator color={colors.accent} />
@@ -373,7 +477,7 @@ function NotificationsSession({ token }: { token: string | null }) {
                     disabled={prefsBusy}
                     trackColor={{ false: colors.surfaceRaised, true: colors.accentDim }}
                     thumbColor={on ? colors.accent : colors.textDim}
-                    accessibilityLabel={`${meta.title} push notifications`}
+                    accessibilityLabel={`Notify me about ${meta.title.toLowerCase()}`}
                   />
                 </View>
               );
@@ -384,10 +488,12 @@ function NotificationsSession({ token }: { token: string | null }) {
                 <AppText variant="bodyBold" numberOfLines={1}>
                   Quiet hours
                 </AppText>
-                <AppText variant="caption" color={colors.textDim} numberOfLines={2}>
+                <AppText variant="caption" color={colors.textDim} numberOfLines={3}>
                   {quietOn && prefs.quietHoursStart !== null && prefs.quietHoursEnd !== null
-                    ? `No push ${hourLabel(prefs.quietHoursStart)} – ${hourLabel(prefs.quietHoursEnd)} (still logged in your inbox).`
-                    : 'Push arrives any time.'}
+                    ? `No notifications ${hourLabel(prefs.quietHoursStart)} to ${hourLabel(
+                        prefs.quietHoursEnd,
+                      )}, ${QUIET_HOURS_ZONE}. They'll still be waiting in your inbox.`
+                    : `Notifications can arrive any time. Quiet hours run on ${QUIET_HOURS_ZONE}.`}
                 </AppText>
               </View>
               <Switch
@@ -444,6 +550,10 @@ const styles = StyleSheet.create({
   unreadDotSpacer: { width: 8, height: 8 },
   rowText: { flex: 1, gap: 2, minWidth: 0 },
   loadMoreRow: { alignItems: 'center', paddingVertical: spacing.md, minHeight: touch.min, justifyContent: 'center' },
+  permissionCard: { gap: spacing.sm, marginBottom: spacing.md },
+  permissionHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  permissionTitle: { flex: 1, minWidth: 0 },
+  permissionBtn: { alignSelf: 'stretch', marginTop: spacing.xs },
   prefsCard: { gap: 0, marginBottom: spacing.xl },
   prefRow: {
     flexDirection: 'row',

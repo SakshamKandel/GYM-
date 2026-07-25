@@ -20,7 +20,7 @@ export function TableThumb({
   const box: React.CSSProperties = {
     width: size,
     height: size,
-    borderRadius: 8,
+    borderRadius: 'var(--gt-radius-sm)',
     flexShrink: 0,
     border: '1px solid var(--gt-border)',
     background: 'var(--gt-surface-sunken)',
@@ -60,6 +60,16 @@ export interface Column<T> {
 }
 
 /**
+ * Is this event coming from a control INSIDE the row (a link, a button, an
+ * input) rather than from the row itself? A clickable row that also carries a
+ * member link would otherwise do both things at once — navigate to the member
+ * AND open the row's drawer — so the innermost control wins.
+ */
+function fromNestedControl(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('a,button,input,select,textarea') !== null;
+}
+
+/**
  * Dense, dark data table. Hairline row separators, dim uppercase header, subtle
  * hover on rows via the .gt-tr-hover class (in globals — falls back gracefully).
  * Horizontally scrolls inside its own container so the page never scrolls
@@ -67,7 +77,8 @@ export interface Column<T> {
  *
  * Server-component friendly: pass plain data + render fns. `rowKey` derives a
  * stable React key per row; `onRowClick` (client pages only) makes rows
- * clickable — omit it in server components.
+ * clickable — omit it in server components. Cells may contain their own links
+ * or buttons: those swallow the row click instead of firing both.
  */
 export function DataTable<T>({
   columns,
@@ -147,14 +158,23 @@ export function DataTable<T>({
             rows.map((row, i) => (
               <tr
                 key={rowKey(row, i)}
-                onClick={onRowClick ? () => onRowClick(row) : undefined}
+                onClick={
+                  onRowClick
+                    ? (e) => {
+                        if (fromNestedControl(e.target)) return;
+                        onRowClick(row);
+                      }
+                    : undefined
+                }
                 onKeyDown={
                   onRowClick
                     ? (e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          onRowClick(row);
-                        }
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        // Enter on a focused link inside the row belongs to the
+                        // link, not to the row.
+                        if (fromNestedControl(e.target)) return;
+                        e.preventDefault();
+                        onRowClick(row);
                       }
                     : undefined
                 }

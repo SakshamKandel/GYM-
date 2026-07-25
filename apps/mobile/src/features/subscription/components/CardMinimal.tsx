@@ -168,8 +168,8 @@ export function MembershipCardMinimal({ tier, holderName, memberId, signedIn, ex
       : `, valid through ${expiry.dateLabel}`
     : '';
   const label = `${TIER_TITLE[tier]} gym membership card for ${name}${
-    signedIn ? '' : ', local profile — sign in to sync'
-  }${expiryLabel}${onPress ? '. Opens subscription options.' : ''}`;
+    signedIn ? '' : ', not signed in. Sign in to save your membership'
+  }${expiryLabel}${onPress ? '. Opens membership options.' : ''}`;
 
   const statusWord = showExpiry
     ? `${expiry?.expired ? 'EXPIRED' : 'THRU'} ${expiresAt ? shortMonthYear(expiresAt) : ''}`.trim()

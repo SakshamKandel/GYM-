@@ -1,60 +1,21 @@
-import { accounts, referrals } from '@gym/db';
-import { and, eq } from 'drizzle-orm';
+import { accounts } from '@gym/db';
+import { maskPii } from '@gym/shared';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { createSession } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { hashPassword } from '@/lib/password';
-import { grantDiscount } from '@/lib/promoEconomy';
-import { clientIp, rateLimit } from '@/lib/rateLimit';
-
-/** Referral reward window (SCALE-UP-PLAN §1.3 / §7.2). */
-const REFERRAL_DISCOUNT_PCT = 20;
-const REFERRAL_GRANT_DAYS = 90;
-
-/**
- * If anyone invited this (now-registered) email, flip their referral(s) to
- * 'joined' and grant BOTH parties a 20%/90-day discount. Only rows still
- * 'pending' transition — an already joined/rewarded row is left alone, which
- * is what prevents double-granting on any retry of this same call. One email
- * can have pending referral rows from multiple referrers (unique index is
- * (referrerId, inviteeEmail)), so every matching referrer is granted too.
- * Best-effort: a referral-wiring failure must never fail registration itself.
- */
-async function wireReferralsForNewAccount(accountId: string, email: string): Promise<void> {
-  try {
-    const db = getDb();
-    const joined = await db
-      .update(referrals)
-      .set({ inviteeId: accountId, status: 'joined' })
-      .where(and(eq(referrals.inviteeEmail, email), eq(referrals.status, 'pending')))
-      .returning({ referrerId: referrals.referrerId });
-
-    if (joined.length === 0) return;
-
-    const expiresAt = new Date(Date.now() + REFERRAL_GRANT_DAYS * 24 * 60 * 60 * 1000);
-    await grantDiscount({
-      accountId,
-      source: 'referral',
-      pct: REFERRAL_DISCOUNT_PCT,
-      expiresAt,
-    });
-    for (const row of joined) {
-      await grantDiscount({
-        accountId: row.referrerId,
-        source: 'referral',
-        pct: REFERRAL_DISCOUNT_PCT,
-        expiresAt,
-      });
-    }
-  } catch {
-    // Best-effort — the account is already created; the next referral fetch
-    // or a support ticket can reconcile. Never fail registration for this.
-  }
-}
+import { wireReferralsForNewAccount } from '@/lib/promoEconomy';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
+/**
+ * The 120-character limit is checked on the RAW name. The mask is longer than
+ * the text it replaces, so validating afterwards would reject a perfectly
+ * short name that happened to contain a phone number.
+ */
 const bodySchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
@@ -67,8 +28,10 @@ export function OPTIONS() {
 
 export async function POST(req: Request) {
   try {
-    // Mass-signup damping: 10 registrations/min per IP (in-memory, per instance).
-    const limited = rateLimit({
+    // Mass-signup ceiling: 10 registrations/min per IP, counted in the shared
+    // store when one is configured so concurrency can't multiply the budget.
+    // No store configured (the normal local setup) → per-instance counting.
+    const limited = await rateLimitShared({
       route: 'auth/register',
       limit: 10,
       windowMs: 60_000,
@@ -98,7 +61,11 @@ export async function POST(req: Request) {
         .values({
           email,
           passwordHash,
-          displayName: parsed.data.displayName.trim(),
+          // The display name is shown to every coach the member ever works
+          // with, so it is masked on the way in like any other free text that
+          // reaches another person. Setting your name to your phone number was
+          // otherwise a clean way around the chat mask.
+          displayName: maskPii(parsed.data.displayName.trim()),
         })
         .returning({
           id: accounts.id,

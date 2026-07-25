@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -6,6 +7,7 @@ import { loadSupportThreads } from '@/lib/supportThreads';
 import { SupportInbox } from './_components/SupportInbox';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Support' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -17,7 +19,9 @@ export const dynamic = 'force-dynamic';
  * Thread loading (the query, unread subquery, lifecycle-state join) lives in
  * @/lib/supportThreads — shared with GET /api/admin/support/threads so the
  * server-rendered first paint and the client's later fetches read the
- * identical shape (deliberate; see the lib file's docblock).
+ * identical shape (deliberate; see the lib file's docblock). That lib also
+ * owns the ORDER, which is where the Elite "answered first" promise is made
+ * true, and the per-row `priority` flag the badge and the tile below read.
  */
 
 export default async function AdminSupportPage() {
@@ -37,16 +41,25 @@ export default async function AdminSupportPage() {
   // long-standing full-table-scan shape), and the stat tiles below need the
   // resolved count regardless of which tab is showing.
   const threads = await loadSupportThreads({ status: 'all' });
-  const openThreads = threads.filter((t) => t.status === 'open');
+  // Same open-queue predicate the inbox's Open tab uses (status OR unread): a
+  // member replying to a resolved ticket puts it back on the queue, and the
+  // unread reply is the work signal even if the lifecycle row lags. Counting
+  // only status==='open' here made the tiles disagree with the tab beneath
+  // them and hid follow-ups on closed tickets from the "Awaiting reply" count.
+  const openThreads = threads.filter((t) => t.status === 'open' || t.unread > 0);
   const resolvedCount = threads.length - openThreads.length;
   const awaiting = openThreads.filter((t) => t.unread > 0).length;
   const totalUnread = threads.reduce((sum, t) => sum + t.unread, 0);
+  // Elite pays for a place at the front of the line, so how many of them are
+  // still waiting is the number this team is judged on. Same `priority` flag
+  // that sorts the list and badges the rows.
+  const priorityWaiting = openThreads.filter((t) => t.priority && t.unread > 0).length;
 
   return (
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Support"
-        subtitle="Every account with a support ticket, unread first. Open a thread to read, reply, assign, or resolve it."
+        subtitle="Every account with a support ticket. Tickets waiting on a reply come first, Elite before the rest, longest wait first. Open a thread to read, reply, assign, or resolve it."
       />
 
       <div
@@ -63,11 +76,21 @@ export default async function AdminSupportPage() {
           value={awaiting}
           hint={awaiting === 0 ? 'all clear' : undefined}
         />
+        <StatTile
+          label="Elite waiting"
+          value={priorityWaiting}
+          hint={priorityWaiting > 0 ? 'answer these first' : 'all clear'}
+        />
         <StatTile label="Unread messages" value={totalUnread} />
         <StatTile label="Resolved" value={resolvedCount} />
       </div>
 
-      <SupportInbox threads={threads} viewerId={principal.id} canReply={canReply} />
+      <SupportInbox
+        threads={threads}
+        viewerId={principal.id}
+        canReply={canReply}
+        canViewMembers={permissions.has('members.read')}
+      />
     </div>
   );
 }

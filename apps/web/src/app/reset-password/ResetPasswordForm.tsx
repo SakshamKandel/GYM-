@@ -58,9 +58,9 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
       <div className={styles.resetCard}>
         <p className={styles.eyebrow}>PASSWORD RESET</p>
         <h1>Link unavailable.</h1>
-        <p>This reset link is missing its secure token. Request a new link from support.</p>
+        <p>This reset link is incomplete or has expired.</p>
         <p className={styles.formError} role="alert">
-          No valid reset token was found in this URL.
+          This link cannot be used. Request a new reset email.
         </p>
         <Link className={styles.resetHomeLink} href="/contact">
           Go to support

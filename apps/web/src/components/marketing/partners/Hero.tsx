@@ -32,7 +32,7 @@ export function PartnersHero() {
             </Reveal>
             <Reveal delay={160}>
               <Lead tone="light" className="mt-7">
-                GM members plan food by the numbers — and order meals that hit them, one-off or on
+                GM members plan food by the numbers, and order meals that hit them, one-off or on
                 a weekly subscription. Cook what you&rsquo;re great at; the partner portal handles
                 orders, prep and payouts.
               </Lead>
@@ -50,7 +50,7 @@ export function PartnersHero() {
                 {CHIPS.map((c) => (
                   <li
                     key={c}
-                    className="rounded-full border border-ink/15 px-3.5 py-1.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.14em] text-cream-dim"
+                    className="rounded-full border border-ink/15 px-3.5 py-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-cream-dim"
                   >
                     {c}
                   </li>

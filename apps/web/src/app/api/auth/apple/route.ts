@@ -1,5 +1,5 @@
-import { accounts, referrals } from '@gym/db';
-import { appleAuthRequestSchema, effectiveTier } from '@gym/shared';
+import { accounts } from '@gym/db';
+import { appleAuthRequestSchema, effectiveTier, maskPii } from '@gym/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
   allowedAppleClientIds,
@@ -13,36 +13,8 @@ import { consumeAppleAuthNonce } from '@/lib/appleNonce';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { verifyPassword } from '@/lib/password';
-import { grantDiscount } from '@/lib/promoEconomy';
-import { clientIp, rateLimit } from '@/lib/rateLimit';
-
-const REFERRAL_DISCOUNT_PCT = 20;
-const REFERRAL_GRANT_DAYS = 90;
-
-async function wireReferralsForNewAccount(accountId: string, email: string): Promise<void> {
-  try {
-    const db = getDb();
-    const joined = await db
-      .update(referrals)
-      .set({ inviteeId: accountId, status: 'joined' })
-      .where(and(eq(referrals.inviteeEmail, email), eq(referrals.status, 'pending')))
-      .returning({ referrerId: referrals.referrerId });
-    if (joined.length === 0) return;
-
-    const expiresAt = new Date(Date.now() + REFERRAL_GRANT_DAYS * 24 * 60 * 60 * 1_000);
-    await grantDiscount({ accountId, source: 'referral', pct: REFERRAL_DISCOUNT_PCT, expiresAt });
-    for (const row of joined) {
-      await grantDiscount({
-        accountId: row.referrerId,
-        source: 'referral',
-        pct: REFERRAL_DISCOUNT_PCT,
-        expiresAt,
-      });
-    }
-  } catch {
-    // Referral rewards are best-effort and must never block authentication.
-  }
-}
+import { wireReferralsForNewAccount } from '@/lib/promoEconomy';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -61,7 +33,10 @@ export function OPTIONS() {
 
 /** Exchange a cryptographically verified Apple identity token for an app session. */
 export async function POST(req: Request) {
-  const limited = rateLimit({
+  // Same 10/min/IP ceiling as the other sign-in routes, counted in the shared
+  // store when one is configured (per instance when none is) so serverless
+  // concurrency can't multiply it. The link branch checks a password.
+  const limited = await rateLimitShared({
     route: 'auth/apple',
     limit: 10,
     windowMs: 60_000,
@@ -91,11 +66,14 @@ export async function POST(req: Request) {
   if (!identity) return json({ error: 'bad_credentials' }, 401);
 
   const db = getDb();
+  // Captured before the closure: TypeScript does not carry the `parsed.success`
+  // narrowing into a function body declared after it.
+  const requestNonce = parsed.data.nonce;
   let nonceConsumed = false;
   async function consumeNonce(): Promise<Response | null> {
     if (nonceConsumed) return null;
     try {
-      if (!(await consumeAppleAuthNonce(parsed.data.nonce))) {
+      if (!(await consumeAppleAuthNonce(requestNonce))) {
         return json({ error: 'bad_credentials' }, 401);
       }
       nonceConsumed = true;
@@ -198,7 +176,13 @@ export async function POST(req: Request) {
           .values({
             email: identity.email,
             appleSub: identity.sub,
-            displayName: displayNameForNewAppleAccount(parsed.data.displayName, identity.email),
+            // Masked on the way in: the name reaches every coach the member
+            // works with, and the one-time name Apple hands over is whatever
+            // the member typed. Same rule as /api/auth/register. The length
+            // sanitising inside the helper still runs on the raw name.
+            displayName: maskPii(
+              displayNameForNewAppleAccount(parsed.data.displayName, identity.email),
+            ),
           })
           .returning(accountColumns)
       )[0];

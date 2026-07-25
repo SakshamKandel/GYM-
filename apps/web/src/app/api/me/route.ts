@@ -193,15 +193,13 @@ export async function DELETE(req: Request) {
     db
       .delete(coachRequests)
       .where(or(eq(coachRequests.userId, uid), eq(coachRequests.coachId, uid))),
+    // PARTIES ONLY. `assignedBy` is the staffer who created the pairing, not a
+    // party to it — deleting them must not dissolve an unrelated coach↔member
+    // relationship. That column is nullable ON DELETE SET NULL, so the final
+    // accounts delete clears the reference on its own.
     db
       .delete(coachAssignments)
-      .where(
-        or(
-          eq(coachAssignments.coachId, uid),
-          eq(coachAssignments.userId, uid),
-          eq(coachAssignments.assignedBy, uid),
-        ),
-      ),
+      .where(or(eq(coachAssignments.coachId, uid), eq(coachAssignments.userId, uid))),
     db.delete(coachProfiles).where(eq(coachProfiles.accountId, uid)),
     db.delete(admins).where(eq(admins.accountId, uid)),
     db.delete(accountProfiles).where(eq(accountProfiles.accountId, uid)),

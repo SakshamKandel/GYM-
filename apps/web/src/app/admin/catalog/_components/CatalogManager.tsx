@@ -14,6 +14,7 @@ import {
   TextField,
   Toolbar,
 } from '@/components/console';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import type {
   ExerciseRow,
   PlanExerciseDetail,
@@ -236,7 +237,7 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
       setModalOpen(false);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
@@ -253,7 +254,7 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
         const code = await parseErrorCode(res);
         setRowError({
           id: row.id,
-          msg: code === 'in_use' ? 'Still used by a plan — remove it there first.' : 'Could not delete.',
+          msg: code === 'in_use' ? 'Still used by a plan. Remove it there first.' : 'Could not delete.',
         });
         setRowBusy(null);
         return;
@@ -261,7 +262,7 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
       setRowBusy(null);
       router.refresh();
     } catch {
-      setRowError({ id: row.id, msg: 'Network error.' });
+      setRowError({ id: row.id, msg: 'Could not reach us just now. Try again.' });
       setRowBusy(null);
     }
   }
@@ -348,7 +349,7 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {!editingId ? (
             <TextField
-              label="Id (optional — auto-generated from name if blank)"
+              label="Id (optional, auto-generated from name if blank)"
               value={form.id}
               onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
               disabled={saving}
@@ -531,7 +532,7 @@ function PlansTab({ plans }: { plans: PlanRow[] }) {
       setModalOpen(false);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
@@ -552,7 +553,7 @@ function PlansTab({ plans }: { plans: PlanRow[] }) {
 
   const columns: Column<PlanRow>[] = [
     { key: 'name', header: 'Name', render: (r) => <span style={{ fontWeight: 600 }}>{r.name}</span> },
-    { key: 'tier', header: 'Tier', width: 90, render: (r) => <Badge tone="info">{r.tierRequired}</Badge> },
+    { key: 'tier', header: 'Tier', width: 90, render: (r) => <Badge tone="info">{tierLabel(r.tierRequired)}</Badge> },
     { key: 'goal', header: 'Goal', render: (r) => r.goalType.replace('_', ' ') },
     { key: 'weeks', header: 'Weeks', width: 70, align: 'right', render: (r) => r.weeks },
     { key: 'days', header: 'Days/wk', width: 80, align: 'right', render: (r) => r.daysPerWeek },
@@ -752,7 +753,7 @@ function PlanStructureDrawer({ plan, onClose }: { plan: PlanRow; onClose: () => 
           );
         }
       } catch {
-        if (!cancelled) setError('Network error loading structure.');
+        if (!cancelled) setError('Could not reach us just now, so the plan did not load. Try again.');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -786,7 +787,7 @@ function PlanStructureDrawer({ plan, onClose }: { plan: PlanRow; onClose: () => 
         setError(
           code === 'unknown_exercise'
             ? 'One or more exerciseId values do not exist in the catalog.'
-            : 'Could not save — check the JSON shape.',
+            : 'Could not save. Check the JSON shape.',
         );
         setSaving(false);
         return;
@@ -795,13 +796,13 @@ function PlanStructureDrawer({ plan, onClose }: { plan: PlanRow; onClose: () => 
       onClose();
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSaving(false);
     }
   }
 
   return (
-    <Modal open onClose={onClose} title={`Workout structure — ${plan.name}`} width={640}>
+    <Modal open onClose={onClose} title={`Workout structure · ${plan.name}`} width={640}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <Card style={{ padding: 12 }}>
           <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>

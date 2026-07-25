@@ -1,6 +1,7 @@
 import { gymPhotos, gyms } from '@gym/db';
 import type { GymAmenity } from '@gym/shared';
 import { asc } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -10,6 +11,7 @@ import { GymsManager } from './_components/GymsManager';
 import type { GymRow } from './_components/types';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Nearby gyms' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -68,7 +70,7 @@ export default async function AdminGymsPage() {
     <div style={{ maxWidth: 1200 }}>
       <PageHeader
         title="Nearby gyms"
-        subtitle="Discoverable gym/studio listings for the member app. A listing can only be published once it's marked verified — fill in real details before flipping either switch. Photos are admin-uploaded only; never hotlink or scrape third-party images."
+        subtitle="Discoverable gym/studio listings for the member app. A listing can only be published once it's marked verified, so fill in real details before flipping either switch. Photos are admin-uploaded only; never hotlink or scrape third-party images."
       />
 
       <div

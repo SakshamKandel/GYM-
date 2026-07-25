@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { adminRoleOf, logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -155,11 +155,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     );
 
     after(() =>
-      sendPushToAccount(application.accountId, {
-        title: 'Coach application update',
-        body: 'Your coach application was not approved this time.',
-        data: { type: 'application_decided' },
-      }),
+      notify(
+        'coach_application_decided',
+        { accountId: application.accountId },
+        {
+          title: 'Coach application update',
+          body: 'Your coach application was not approved this time.',
+          data: { type: 'application_decided' },
+        },
+      ),
     );
 
     return json({ ok: true }, 200);
@@ -288,11 +292,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   );
 
   after(() =>
-    sendPushToAccount(application.accountId, {
-      title: 'Coach application approved',
-      body: "You're now a verified coach on GYM Tracker.",
-      data: { type: 'application_decided' },
-    }),
+    notify(
+      'coach_application_decided',
+      { accountId: application.accountId },
+      {
+        title: 'Coach application approved',
+        body: "You're now a verified coach on GYM Tracker.",
+        data: { type: 'application_decided' },
+      },
+    ),
   );
 
   return json({ ok: true }, 200);

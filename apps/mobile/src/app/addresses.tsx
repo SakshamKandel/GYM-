@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, RefreshControl, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router, useFocusEffect } from 'expo-router';
@@ -26,6 +26,7 @@ import {
   updateSavedAddress,
   type SavedAddress,
 } from '../features/addresses/api';
+import { isCurrentSessionRequest } from '../lib/sessionRequest';
 import { useAuth } from '../state/auth';
 
 /**
@@ -47,10 +48,10 @@ interface FormState {
 const EMPTY_FORM: FormState = { id: null, label: '', line: '', area: '', phone: '', isDefault: false };
 
 function errorLine(code: ReturnType<typeof toAddressError>['code']): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'not_found') return 'That address is no longer available.';
   if (code === 'invalid') return 'Check the address fields and try again.';
-  return "Couldn't reach the server.";
+  return "That didn't go through. Check your connection and try again.";
 }
 
 function AddressRow({
@@ -127,7 +128,11 @@ function AddressRow({
 export default function AddressesScreen() {
   const token = useAuth((s) => s.token);
 
-  const [rows, setRows] = useState<SavedAddress[]>([]);
+  // Stamped with the account that loaded it, so the rows on screen are always
+  // re-derived against the CURRENT session: switching accounts shows an empty
+  // list immediately instead of the previous member's addresses.
+  const [loaded, setLoaded] = useState<{ token: string; rows: SavedAddress[] } | null>(null);
+  const rows = loaded !== null && loaded.token === token ? loaded.rows : [];
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -140,16 +145,29 @@ export default function AddressesScreen() {
   const [pendingDelete, setPendingDelete] = useState<SavedAddress | null>(null);
   const [rowBusyId, setRowBusyId] = useState<string | null>(null);
 
+  const requestSequence = useRef(0);
+
   const load = useCallback(async () => {
     if (!token) return;
+    // A response that started under the previous account (or an older request
+    // for this one) must never touch the screen: capture both, re-check both.
+    const request = { token, sequence: ++requestSequence.current };
+    const isCurrent = (): boolean =>
+      isCurrentSessionRequest(request, {
+        token: useAuth.getState().token,
+        sequence: requestSequence.current,
+      });
     setLoading(true);
     setError(null);
     try {
-      setRows(await getSavedAddresses(token));
+      const next = await getSavedAddresses(token);
+      if (!isCurrent()) return;
+      setLoaded({ token, rows: next });
     } catch (e) {
+      if (!isCurrent()) return;
       setError(errorLine(toAddressError(e).code));
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [token]);
 
@@ -232,7 +250,7 @@ export default function AddressesScreen() {
       await deleteSavedAddress(target.id, token);
       await load();
     } catch {
-      setError("Couldn't delete that address — try again.");
+      setError("Couldn't delete that address. Try again.");
     } finally {
       setRowBusyId(null);
     }

@@ -6,6 +6,7 @@ import { Image } from 'expo-image';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
+  Button,
   Card,
   Chip,
   enterDown,
@@ -34,7 +35,11 @@ import { MUSCLE_KNOWLEDGE } from './knowledge';
  * Anatomy explorer — the app's muscle encyclopedia. A rotatable body
  * (drag 360°, pinch zoom, tap to select) on top; below it, the selected
  * muscle's anatomy, function, and evidence-based training guidance, plus the
- * best-matching exercises from the bundled library.
+ * best-matching exercises from the account's training catalog.
+ *
+ * The anatomy itself ships with the app and works signed out. The exercise
+ * list does NOT: it is read per account, so with no account it is empty and
+ * the section says why instead of pointing at a library that isn't there.
  */
 
 const EXERCISE_PREVIEW_LIMIT = 5;
@@ -107,6 +112,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
   },
   rowGap: { marginTop: spacing.sm },
+  accountCta: { marginTop: spacing.sm },
 });
 
 function Bullet({ text, tone }: { text: string; tone: 'tip' | 'mistake' }) {
@@ -126,7 +132,8 @@ function Bullet({ text, tone }: { text: string; tone: 'tip' | 'mistake' }) {
 }
 
 export function AnatomyExplorer({ initialMuscle }: { initialMuscle: MuscleGroup }) {
-  useTrainingCatalog();
+  const catalogState = useTrainingCatalog();
+  const needsAccount = catalogState.status === 'authRequired';
   const [selected, setSelected] = useState<MuscleGroup>(initialMuscle);
   const [side, setSide] = useState<MuscleMapSide>(PREFERRED_SIDE[initialMuscle]);
 
@@ -153,7 +160,9 @@ export function AnatomyExplorer({ initialMuscle }: { initialMuscle: MuscleGroup 
         meta={
           <>
             <Tag label={`${MUSCLE_GROUPS.length} muscle groups`} variant="dim" />
-            <Tag label={`${exercises.length} ${label} moves`} variant="dim" />
+            {needsAccount ? null : (
+              <Tag label={`${exercises.length} ${label} moves`} variant="dim" />
+            )}
           </>
         }
       />
@@ -318,11 +327,23 @@ export function AnatomyExplorer({ initialMuscle }: { initialMuscle: MuscleGroup 
         ))}
         {exercises.length === 0 ? (
           <View style={styles.infoCard}>
-            <IconChip icon="barbell-outline" />
-            <AppText variant="bodyBold">No exercises yet</AppText>
-            <AppText variant="caption" color={colors.textDim}>
-              Browse the library to find a movement for this area.
+            <IconChip icon={needsAccount ? 'person-add-outline' : 'barbell-outline'} />
+            <AppText variant="bodyBold">
+              {needsAccount ? 'Exercises come with your account' : 'No exercises yet'}
             </AppText>
+            <AppText variant="caption" color={colors.textDim}>
+              {needsAccount
+                ? 'Your coach publishes the exercise library to your account. Making one is free and takes a moment.'
+                : 'Browse the library to find a movement for this area.'}
+            </AppText>
+            {needsAccount ? (
+              <Button
+                label="Create account"
+                variant="secondary"
+                onPress={() => pushPath('/auth/sign-up')}
+                style={styles.accountCta}
+              />
+            ) : null}
           </View>
         ) : (
           <PressableScale

@@ -653,7 +653,7 @@ export default function StaffAndRolesScreen() {
                         color={colors.error}
                       >
                         • Outstanding wallet balance:{' '}
-                        {(b.amountMinor / 100).toFixed(2)} {b.currency} — settle
+                        {(b.amountMinor / 100).toFixed(2)} {b.currency}. Settle
                         this first, or the balance becomes untrackable once
                         revoked.
                       </AppText>
@@ -763,7 +763,7 @@ export default function StaffAndRolesScreen() {
                   regrantImpact.walletBalances.map((b) => (
                     <AppText key={b.currency} variant="caption" color={colors.error}>
                       • Outstanding wallet balance: {(b.amountMinor / 100).toFixed(2)}{' '}
-                      {b.currency} — settle this first, or the balance becomes
+                      {b.currency}. Settle this first, or the balance becomes
                       untrackable once changed.
                     </AppText>
                   ))

@@ -21,6 +21,11 @@ import {
   Tag,
 } from '../../../components/ui';
 import {
+  mediaPermissionMessage,
+  OpenSettingsButton,
+  requestMediaPermission,
+} from '../../../components/ui/permissions';
+import {
   createVideo,
   deleteVideo,
   getCoachVideos,
@@ -124,6 +129,8 @@ function UploadPanel({
     null,
   );
   const [notConfigured, setNotConfigured] = useState(false);
+  // Photo access is denied for good — the status line gets a route out.
+  const [photoBlocked, setPhotoBlocked] = useState(false);
 
   const suggestions = useMemo(() => {
     const q = exerciseQuery.trim();
@@ -142,11 +149,15 @@ function UploadPanel({
 
   const pick = useCallback(async () => {
     setLine(null);
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    setPhotoBlocked(false);
+    const perm = await requestMediaPermission('library');
     if (!perm.granted) {
+      // Permanently denied gets an Open Settings button below; a plain decline
+      // can just be retried, so it stays a quiet dim line.
+      setPhotoBlocked(perm.blocked);
       setLine({
-        text: 'Allow photo library access in Settings to pick a video.',
-        tone: 'dim',
+        text: mediaPermissionMessage('library', 'pick a video', perm.blocked),
+        tone: perm.blocked ? 'error' : 'dim',
       });
       return;
     }
@@ -221,7 +232,7 @@ function UploadPanel({
       <Animated.View entering={enterUp(0)} style={styles.banner}>
         <Ionicons name="videocam-off-outline" size={18} color={colors.warning} />
         <AppText variant="caption" style={styles.noteText} color={colors.textDim}>
-          Video hosting not configured — add Cloudinary keys.
+          Video hosting not configured. Add Cloudinary keys.
         </AppText>
       </Animated.View>
     );
@@ -248,7 +259,7 @@ function UploadPanel({
           <AppTextInput
             value={title}
             onChangeText={setTitle}
-            placeholder="Title — e.g. Barbell back squat"
+            placeholder="Title, e.g. Barbell back squat"
             maxLength={200}
             editable={!uploading}
             accessibilityLabel="Video title"
@@ -360,6 +371,7 @@ function UploadPanel({
           >
             {line.text}
           </AppText>
+          {photoBlocked ? <OpenSettingsButton /> : null}
         </Animated.View>
       ) : null}
     </Animated.View>

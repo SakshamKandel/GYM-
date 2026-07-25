@@ -199,7 +199,7 @@ export function PillLink({
     <Link
       href={href}
       className={`inline-flex items-center justify-center gap-2 rounded-full font-sans font-semibold transition-all duration-200 active:scale-[0.97] ${
-        small ? 'h-11 px-6 text-[14px]' : 'h-14 px-8 text-[15px]'
+        small ? 'h-11 px-6 text-[14.5px]' : 'h-14 px-8 text-[15px]'
       } ${PILL_VARIANTS[variant]} ${className}`}
     >
       {children}

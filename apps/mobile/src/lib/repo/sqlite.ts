@@ -8,6 +8,7 @@ import {
   memberDataRecordId,
   memberDataSyncCursorSchema,
   trainingCatalogCacheSchema,
+  workoutRestoreCursorSchema,
 } from '@gym/shared';
 import type {
   DailyMacros,
@@ -112,6 +113,9 @@ CREATE TABLE IF NOT EXISTS member_data_mutations (
 CREATE INDEX IF NOT EXISTS idx_member_data_mutations_owner_changed
   ON member_data_mutations(owner_id, changed_at, mutation_id);
 CREATE TABLE IF NOT EXISTS member_data_sync_state (
+  owner_id TEXT PRIMARY KEY, cursor_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workout_restore_state (
   owner_id TEXT PRIMARY KEY, cursor_json TEXT NOT NULL
 );
 `;
@@ -1004,6 +1008,16 @@ export async function createSqliteRepo(): Promise<RepoStore> {
         failure.workoutId,
       );
     },
+    async clearWorkoutSyncFailure(workoutId) {
+      // `synced_at IS NULL` keeps this strictly a retry lever: a row that has
+      // since been confirmed by the server is never re-queued for upload.
+      await db.runAsync(
+        `UPDATE workout_logs SET sync_error = NULL, sync_failed_at = NULL
+         WHERE owner_id = ? AND id = ? AND synced_at IS NULL`,
+        ownerId,
+        workoutId,
+      );
+    },
     async getWorkoutSyncFailures(limit) {
       const rows = await db.getAllAsync<{
         workout_id: string;
@@ -1026,6 +1040,94 @@ export async function createSqliteRepo(): Promise<RepoStore> {
             failedAt: row.failed_at,
           }),
         );
+    },
+
+    // ── Workout restore (server → device, additive only) ────
+    async getWorkoutRestoreCursor() {
+      const row = await db.getFirstAsync<{ cursor_json: string }>(
+        'SELECT cursor_json FROM workout_restore_state WHERE owner_id = ?',
+        ownerId,
+      );
+      if (!row) return null;
+      try {
+        const parsed = workoutRestoreCursorSchema.safeParse(JSON.parse(row.cursor_json) as unknown);
+        // An unreadable cursor restarts the stream rather than stranding the
+        // device: re-reading pages it already has is a cheap no-op.
+        return parsed.success ? parsed.data : null;
+      } catch {
+        return null;
+      }
+    },
+    async applyWorkoutRestorePage(page) {
+      await db.withExclusiveTransactionAsync(async (transaction) => {
+        // Absent-only. A local row — synced, queued, quarantined, or still
+        // running — is this device's own truth and is never overwritten by the
+        // server's copy, so no local edit can be silently undone. One lookup
+        // for the whole page keeps the transaction short.
+        const ids = page.restoredWorkouts.map((w) => w.id);
+        const present = new Set<string>();
+        if (ids.length > 0) {
+          const placeholders = ids.map(() => '?').join(',');
+          const rows = await transaction.getAllAsync<{ id: string }>(
+            `SELECT id FROM workout_logs WHERE owner_id = ? AND id IN (${placeholders})`,
+            ownerId,
+            ...ids,
+          );
+          for (const row of rows) present.add(row.id);
+        }
+
+        for (const workout of page.restoredWorkouts) {
+          if (present.has(workout.id)) continue;
+
+          await transaction.runAsync(
+            `INSERT OR IGNORE INTO workout_logs
+             (owner_id, id, date, plan_workout_id, name, started_at, finished_at, duration_sec,
+              synced_at, sync_error, sync_failed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+            ownerId,
+            workout.id,
+            workout.date,
+            workout.templateId,
+            workout.name,
+            workout.startedAt,
+            workout.finishedAt,
+            workout.durationSec,
+            // Stamped synced: it came FROM the server, so the upload drain must
+            // never hand it back again.
+            workout.serverSyncedAt,
+          );
+          for (const set of workout.sets) {
+            await transaction.runAsync(
+              `INSERT OR IGNORE INTO set_logs
+               (owner_id, id, workout_log_id, exercise_id, exercise_name, set_no, weight_kg,
+                reps, rpe, is_pr, logged_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ownerId,
+              set.id,
+              workout.id,
+              set.exerciseId,
+              set.exerciseName,
+              set.setNo,
+              set.weightKg,
+              set.reps,
+              set.rpe,
+              set.isPr ? 1 : 0,
+              set.loggedAt,
+            );
+          }
+        }
+
+        // Cursor moves in the same transaction as the rows it covers: a crash
+        // mid-page replays that page instead of skipping it.
+        if (page.cursor !== null) {
+          await transaction.runAsync(
+            `INSERT INTO workout_restore_state (owner_id, cursor_json) VALUES (?, ?)
+             ON CONFLICT(owner_id) DO UPDATE SET cursor_json=excluded.cursor_json`,
+            ownerId,
+            JSON.stringify(page.cursor),
+          );
+        }
+      });
     },
 
     // ── Body ────────────────────────────────────────────────
@@ -1316,7 +1418,7 @@ export async function createSqliteRepo(): Promise<RepoStore> {
         if (item.source === 'custom') {
           await queueMemberDataMutation(transaction, ownerId, {
             entity: 'food',
-            value: item,
+            value: { ...item, source: 'custom' as const },
           });
         }
       });
@@ -1531,6 +1633,7 @@ export async function createSqliteRepo(): Promise<RepoStore> {
         await transaction.runAsync('DELETE FROM training_catalog_cache WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM member_data_mutations WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM member_data_sync_state WHERE owner_id = ?', ownerId);
+        await transaction.runAsync('DELETE FROM workout_restore_state WHERE owner_id = ?', ownerId);
         await transaction.runAsync('DELETE FROM set_logs WHERE owner_id = ?', ownerId);
         await transaction.runAsync(
           'DELETE FROM workout_session_blueprints WHERE owner_id = ?', ownerId,

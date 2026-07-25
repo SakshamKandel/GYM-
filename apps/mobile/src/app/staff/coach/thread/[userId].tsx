@@ -38,6 +38,7 @@ import {
   type Tier,
 } from '../../../../features/staff/api';
 import { pushStaff, STAFF_ROUTES } from '../../../../features/staff/nav';
+import { QuickReplies } from '../../../../features/staff/QuickReplies';
 
 /**
  * Coach thread — the full coach_chat history with one client, built to feel like
@@ -72,7 +73,7 @@ const isTier = (v: string | undefined): v is Tier =>
   v === 'starter' || v === 'silver' || v === 'gold' || v === 'elite';
 
 function loadErrorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return 'This client is no longer assigned to you.';
   if (code === 'not_found') return "This thread doesn't exist.";
   return "Couldn't load this conversation.";
@@ -81,7 +82,7 @@ function loadErrorLine(code: StaffErrorCode): string {
 function sendErrorLine(code: StaffErrorCode): string {
   if (code === 'forbidden') return 'This client is no longer assigned to you.';
   if (code === 'invalid') return 'That message is too long to send.';
-  return "Couldn't send — check your connection and try again.";
+  return "Couldn't send. Check your connection and try again.";
 }
 
 /** "3:42 PM" — local wall-clock, deterministic (no Intl dependency). */
@@ -226,6 +227,10 @@ function CoachThreadSession({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<StaffErrorCode | null>(null);
+  // True when the last reply was stored with contact details taken out. Coaching
+  // stays in the app, so a coach who typed a phone number should be told it
+  // didn't travel rather than assume the client got it.
+  const [contactHidden, setContactHidden] = useState(false);
 
   const listRef = useRef<FlatList<CoachThreadMessage>>(null);
   const pendingSeq = useRef(0);
@@ -307,11 +312,22 @@ function CoachThreadSession({
 
   const canSend = draft.trim().length > 0 && !sending;
 
+  /** Drop a saved quick reply into the draft: appended on its own line when
+   * something is already typed, never replacing the coach's own words, and
+   * clipped to the same length limit the input enforces. */
+  const insertQuickReply = useCallback((body: string) => {
+    setDraft((prev) => {
+      const joiner = prev.trim().length > 0 ? `${prev.replace(/\s+$/, '')}\n` : '';
+      return `${joiner}${body}`.slice(0, MAX_LEN);
+    });
+  }, []);
+
   const onSend = useCallback(() => {
     const body = draft.trim();
     if (body.length === 0 || sending || !token || !userId) return;
     setSending(true);
     setSendError(null);
+    setContactHidden(false);
     setDraft('');
     // Optimistic bubble: the coach's reply lands in the thread the instant they
     // tap send, rather than vanishing for the reply + refetch round-trips. On
@@ -341,7 +357,8 @@ function CoachThreadSession({
         ) return;
         successHaptic();
         // Swap the optimistic bubble for the server-confirmed row.
-        setMessages((prev) => prev.map((m) => (m.id === tempId ? saved : m)));
+        setMessages((prev) => prev.map((m) => (m.id === tempId ? saved.message : m)));
+        setContactHidden(saved.contactHidden === true);
       } catch (err) {
         if (
           !isCurrentSessionRequest(request, {
@@ -519,6 +536,21 @@ function CoachThreadSession({
             </AppText>
           </View>
         ) : null}
+
+        {/* Same row as a send error, quieter ink: the reply DID land, we just
+            took the contact details out of it before storing. */}
+        {contactHidden ? (
+          <View style={styles.errorRow}>
+            <AppText variant="caption" color={colors.textDim}>
+              Sent, but we hid the contact details in that message. Coaching stays in the app.
+            </AppText>
+          </View>
+        ) : null}
+
+        {/* Saved quick replies — one tap drops a canned answer into the draft,
+            which the coach can still edit before sending. Hidden entirely when
+            there is nothing saved and nothing worth saving. */}
+        <QuickReplies token={token} draft={draft} onInsert={insertQuickReply} />
 
         {/* Pill composer beside the red send circle — no hairline above; the
             filled pill separates itself from the thread (no-border law). */}

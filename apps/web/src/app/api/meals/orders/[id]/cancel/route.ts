@@ -90,13 +90,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const cancelBody = maskedReason
     ? `Order ${code} was cancelled by the member. Member note: ${maskedReason}`
     : `Order ${code} was cancelled by the member.`;
-  after(() => {
-    void notify(
+  // Awaited inside the after() callback — a bare `void` here would let the
+  // callback resolve immediately and the platform could still freeze the
+  // function before either dispatch finished. notify() never throws.
+  after(async () => {
+    await notify(
       'order_cancelled_partner',
       { partnerId: order.partnerId },
       { title: 'Order cancelled', body: cancelBody, data: { type: 'order', id: result.order.id } },
     );
-    void notify(
+    await notify(
       'order_cancelled_partner',
       { role: 'staff', permission: 'orders.review' },
       { title: 'Member cancelled an order', body: cancelBody, data: { type: 'order', id: result.order.id } },

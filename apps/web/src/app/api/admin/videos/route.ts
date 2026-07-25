@@ -1,8 +1,8 @@
 import { planVideos } from '@gym/db';
 import { desc } from 'drizzle-orm';
 import { z } from 'zod';
-import { logAudit, requireAnyPermission } from '@/lib/authz';
-import { getDb } from '@/lib/db';
+import { auditIp, logAudit, requireAnyPermission } from '@/lib/authz';
+import { getDb, pgErrorCode } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { getVideoProvider, NotConfiguredError } from '@/lib/video';
 import { reverifyProcessingVideo } from '@/lib/video/requeue';
@@ -45,22 +45,6 @@ const createSchema = z.object({
   planId: z.string().trim().min(1).optional(),
   tierRequired: z.enum(['starter', 'silver', 'gold', 'elite']),
 });
-
-/** Postgres error code off a thrown driver error, if present (e.g. '23503'). */
-function pgErrorCode(err: unknown): string | null {
-  if (err && typeof err === 'object' && 'code' in err) {
-    const code = (err as { code?: unknown }).code;
-    return typeof code === 'string' ? code : null;
-  }
-  return null;
-}
-
-/** Best-effort caller IP for the audit trail (proxy header, first hop). */
-function clientIp(req: Request): string | null {
-  const fwd = req.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]!.trim();
-  return req.headers.get('x-real-ip');
-}
 
 /**
  * Which host string to stamp on the plan_videos.provider column. Mirrors the
@@ -162,7 +146,7 @@ export async function POST(req: Request) {
     'plan_video',
     video.id,
     { title, tierRequired },
-    clientIp(req),
+    auditIp(req),
   );
 
   // Hand the browser a provider-neutral upload descriptor:

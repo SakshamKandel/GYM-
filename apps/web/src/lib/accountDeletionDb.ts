@@ -108,6 +108,11 @@ export async function loadAccountDeletionContext(
     db.select({ value: count() }).from(admins).where(eq(admins.accountId, uid)),
     db.select({ value: count() }).from(mealPartners).where(eq(mealPartners.accountId, uid)),
     db.select({ value: count() }).from(coachProfiles).where(eq(coachProfiles.accountId, uid)),
+    // Blocking scope == deletion scope: the two PARTIES to the pairing. Rows
+    // this account merely created as staff (`assignedBy`) are not counted here
+    // and are no longer deleted either — that column is nullable ON DELETE SET
+    // NULL, so an offboarded staffer's reference clears itself without
+    // dissolving live coach↔member relationships.
     db
       .select({ value: count() })
       .from(coachAssignments)
@@ -279,11 +284,9 @@ export async function purgeAccountProgressPhotos(
   };
 }
 
-/** Postgres/driver error shape carrying a SQLSTATE code, when present. */
-export function pgErrorCode(error: unknown): string | null {
-  if (error && typeof error === 'object' && 'code' in error) {
-    const value = (error as { code?: unknown }).code;
-    return typeof value === 'string' ? value : null;
-  }
-  return null;
-}
+/**
+ * Postgres/driver error shape carrying a SQLSTATE code, when present. Lives in
+ * lib/db (the DB seam) now that four call sites want it; re-exported here so
+ * the deletion routes that already import it from this module keep working.
+ */
+export { pgErrorCode } from './db';

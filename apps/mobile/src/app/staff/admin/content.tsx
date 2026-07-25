@@ -23,6 +23,11 @@ import {
   Tag,
 } from '../../../components/ui';
 import {
+  mediaPermissionMessage,
+  OpenSettingsButton,
+  requestMediaPermission,
+} from '../../../components/ui/permissions';
+import {
   createVideo,
   deleteVideo,
   getModerationQueue,
@@ -37,6 +42,10 @@ import {
   type VideoRow,
   type VideoStatus,
 } from '../../../features/staff/api';
+import {
+  getCustomFoodQueue,
+  removeCustomFood,
+} from '../../../features/staff/customFoodModeration';
 import { pushStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { searchExercises } from '../../../lib/exercises';
 import { useAuth } from '../../../state/auth';
@@ -70,6 +79,21 @@ const MODERATION_TABS: { key: ModerationKind; label: string }[] = [
   { key: 'custom-foods', label: 'Custom foods' },
   { key: 'progress-photos', label: 'Progress photos' },
 ];
+
+/** Custom foods route through their own client (see customFoodModeration.ts). */
+function loadQueue(kind: ModerationKind, token: string): Promise<ModerationItem[]> {
+  return kind === 'custom-foods' ? getCustomFoodQueue(token) : getModerationQueue(kind, token);
+}
+
+function removeQueueItem(
+  kind: ModerationKind,
+  item: ModerationItem,
+  token: string,
+): Promise<void> {
+  return kind === 'custom-foods'
+    ? removeCustomFood(item, token)
+    : removeModerationItem(kind, item.id, token);
+}
 
 /**
  * Admin · Content — the plan-video library.
@@ -171,6 +195,8 @@ function UploadPanel({
   );
   // The host keys are absent server-side — uploads can't work at all.
   const [notConfigured, setNotConfigured] = useState(false);
+  // Photo access is denied for good — the status line gets a route out.
+  const [photoBlocked, setPhotoBlocked] = useState(false);
   // G11: the {video, upload} reservation from a successful createVideo() —
   // held across retries so a failed host-upload/confirm step re-tries THAT
   // same processing row instead of calling createVideo again and orphaning a
@@ -210,11 +236,15 @@ function UploadPanel({
 
   const pick = useCallback(async () => {
     setLine(null);
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    setPhotoBlocked(false);
+    const perm = await requestMediaPermission('library');
     if (!perm.granted) {
+      // Permanently denied gets an Open Settings button below; a plain decline
+      // can just be retried, so it stays a quiet dim line.
+      setPhotoBlocked(perm.blocked);
       setLine({
-        text: 'Allow photo library access in Settings to pick a video.',
-        tone: 'dim',
+        text: mediaPermissionMessage('library', 'pick a video', perm.blocked),
+        tone: perm.blocked ? 'error' : 'dim',
       });
       return;
     }
@@ -305,7 +335,7 @@ function UploadPanel({
       <Animated.View entering={enterUp(0)} style={styles.banner}>
         <Ionicons name="videocam-off-outline" size={18} color={colors.warning} />
         <AppText variant="caption" style={styles.noteText} color={colors.textDim}>
-          Video hosting not configured — add Cloudinary keys.
+          Video hosting not configured. Add Cloudinary keys.
         </AppText>
       </Animated.View>
     );
@@ -327,7 +357,7 @@ function UploadPanel({
           <AppTextInput
             value={title}
             onChangeText={setTitle}
-            placeholder="Title — e.g. Barbell back squat"
+            placeholder="Title, e.g. Barbell back squat"
             maxLength={200}
             editable={!uploading}
             accessibilityLabel="Video title"
@@ -429,6 +459,7 @@ function UploadPanel({
           >
             {line.text}
           </AppText>
+          {photoBlocked ? <OpenSettingsButton /> : null}
         </Animated.View>
       ) : null}
     </Animated.View>
@@ -576,7 +607,7 @@ function ModerationTabs({ token }: { token: string }) {
       setError(null);
       setErrorCode(null);
       try {
-        setItems(await getModerationQueue(k, token));
+        setItems(await loadQueue(k, token));
       } catch (err) {
         const code = toStaffError(err).code;
         setErrorCode(code);
@@ -598,7 +629,7 @@ function ModerationTabs({ token }: { token: string }) {
     setRemoveTarget(null);
     setBusyId(target.id);
     try {
-      await removeModerationItem(kind, target.id, token);
+      await removeQueueItem(kind, target, token);
       await load(kind);
     } catch (err) {
       const code = toStaffError(err).code;
@@ -902,7 +933,7 @@ function errorLine(code: string): string {
     case 'invalid':
       return 'That change was rejected. Try again.';
     case 'not_configured':
-      return "Custom food moderation isn't built yet — check back in a future update.";
+      return "That part of the console isn't set up on the server yet.";
     default:
       return "Couldn't reach the server. Check your connection and retry.";
   }

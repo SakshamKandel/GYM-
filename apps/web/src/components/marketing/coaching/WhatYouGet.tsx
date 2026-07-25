@@ -50,19 +50,19 @@ export function CoachingWhatYouGet() {
               <Lead tone="light" className="mt-6">
                 An active coach doesn&rsquo;t send you PDFs. Workouts appear in your Train
                 tab, diet targets in Food, and the conversation lives in one masked,
-                in-app chat. What unlocks depends on your member tier.
+                in-app chat. Which of these you get depends on your member tier.
               </Lead>
             </Reveal>
             <Reveal delay={120}>
               <ul className="mt-8 flex flex-col gap-3.5">
                 <CheckItem tone="light">
-                  Coach-assigned workouts, straight into your Train tab — Silver and up
+                  Coach-assigned workouts, straight into your Train tab, Silver and up
                 </CheckItem>
                 <CheckItem tone="light">
-                  Personal diet plans with kcal and protein targets — Gold and up
+                  Personal diet plans with kcal and protein targets, Gold and up
                 </CheckItem>
                 <CheckItem tone="light">
-                  Coach chat — with any active assignment, or always-on with Elite
+                  Coach chat with any active assignment, or always-on with Elite
                 </CheckItem>
                 <CheckItem tone="light">
                   Coach-logged milestones that build your Progress portfolio

@@ -9,9 +9,9 @@ import { Container, Display, Eyebrow, Lead, Section } from '../ui';
 
 const FLOW = [
   { n: '01', title: 'Share your code', copy: 'Every verified coach gets one, auto-issued. Yours might read GAURAV30.' },
-  { n: '02', title: 'Client subscribes', copy: 'They take 30% off any tier, in NPR or USD — whichever region they pay in.' },
+  { n: '02', title: 'Client subscribes', copy: 'They take 30% off any tier, in NPR or USD, whichever region they pay in.' },
   { n: '03', title: 'Ledger credit', copy: '30% commission lands in your wallet ledger the moment the purchase clears.' },
-  { n: '04', title: 'Request payout', copy: 'One tap in the console. The GM team processes it through the payout queue.' },
+  { n: '04', title: 'Ask to be paid', copy: 'One tap in your console. Someone from the GM team sends the money.' },
 ] as const;
 
 export function EarnSection() {
@@ -50,7 +50,7 @@ export function EarnSection() {
           {/* copy */}
           <div className="order-1 lg:order-2">
             <Reveal>
-              <Eyebrow tone="red">Earn — the 30 / 30 rule</Eyebrow>
+              <Eyebrow tone="red">Earn: the 30 / 30 rule</Eyebrow>
               <Display size="lg" className="mt-4">
                 One code.
                 <br />
@@ -59,11 +59,11 @@ export function EarnSection() {
               <Lead tone="red" className="mt-6">
                 Your promo code is a discount for them and a paycheck for you. Clients save
                 30% on any subscription; you earn 30% commission on every purchase made with
-                it — itemised to the rupee in your wallet ledger.
+                it, itemised to the rupee in your wallet ledger.
               </Lead>
             </Reveal>
             <Reveal delay={140}>
-              <p className="mt-5 font-mono text-[11.5px] uppercase tracking-[0.18em] text-ink/60">
+              <p className="mt-5 font-mono text-[12px] uppercase tracking-[0.18em] text-ink/60">
                 No invoicing · No chasing · No spreadsheets
               </p>
             </Reveal>
@@ -86,7 +86,7 @@ export function EarnSection() {
                   ) : (
                     <span
                       aria-hidden
-                      className="flex size-5 items-center justify-center rounded-full bg-ink text-[10px] font-bold text-red"
+                      className="flex size-5 items-center justify-center rounded-full bg-ink text-[11px] font-bold text-red"
                     >
                       ✓
                     </span>
@@ -95,7 +95,7 @@ export function EarnSection() {
                 <h3 className="mt-4 font-display text-[21px] font-medium uppercase leading-tight text-ink">
                   {step.title}
                 </h3>
-                <p className="mt-2 text-[13.5px] leading-relaxed text-ink/75">{step.copy}</p>
+                <p className="mt-2 text-[14.5px] leading-relaxed text-ink/75">{step.copy}</p>
               </div>
             </Reveal>
           ))}

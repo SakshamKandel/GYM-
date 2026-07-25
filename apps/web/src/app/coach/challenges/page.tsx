@@ -1,8 +1,10 @@
+import type { Metadata } from 'next';
 import { PageHeader } from '@/components/console';
 import { requireCoachPage } from '@/lib/coachPage';
 import { ChallengeManager } from './_components/ChallengeManager';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Challenges' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -22,7 +24,7 @@ export default async function CoachChallengesPage() {
     <div style={{ maxWidth: 900 }}>
       <PageHeader
         title="Challenges"
-        subtitle="One monthly challenge for your clients — everyone who reaches the target session-day count earns the badge, no winner and no ranking. Pick one member a month to spotlight with Coach's pick."
+        subtitle="One monthly challenge for your clients. Everyone who reaches the target session-day count earns the badge, no winner and no ranking. Pick one member a month to spotlight with Coach's pick."
       />
       <ChallengeManager />
     </div>

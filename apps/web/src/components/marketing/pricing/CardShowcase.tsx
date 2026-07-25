@@ -2,7 +2,16 @@
 
 /**
  * Membership-card showcase — the pointer-tilting metal card on a blueprint
- * grid, with the ten selectable face designs and the partner-discount story.
+ * grid, with the ten selectable face designs and the partner-verification
+ * story.
+ *
+ * This block used to sell "the member discount". Nothing in the product sets,
+ * stores or applies one: there is no discount on a meal partner, no admin can
+ * enter a number, and meal pricing never reads the member's tier. What IS real
+ * is the counter check (POST /api/partner/verify-member → first name, tier,
+ * validity), so that is what this copy promises now. If a real discount ever
+ * lands, name the number here and on the mobile card from one source, never as
+ * two pieces of prose.
  */
 import { MembershipCardVisual } from '../screens/MembershipCardVisual';
 import { Reveal } from '../motion';
@@ -23,12 +32,12 @@ const FACES = [
 
 const PERKS = [
   {
-    title: 'Discounts at partner restaurants',
-    body: 'Show your card at any GM meal partner and the member discount applies to macro-counted meals across the network.',
+    title: 'Recognised at partner restaurants',
+    body: 'Show your card at any GM meal partner. Staff type your member code and see straight away that your membership is real and still running.',
   },
   {
-    title: 'Verified in seconds',
-    body: 'Partners check your member code and see only your first name, tier and validity — nothing else leaves the app.',
+    title: 'Only what the counter needs',
+    body: 'A check shows your first name, your tier and how long your membership runs. Nothing else leaves the app.',
   },
   {
     title: 'Metal follows your tier',
@@ -43,7 +52,7 @@ export function CardShowcase() {
         <div className="grid items-center gap-14 lg:grid-cols-[0.95fr_1.05fr]">
           <div>
             <Reveal>
-              <Eyebrow>Membership card — every paid tier</Eyebrow>
+              <Eyebrow>Membership card · every member</Eyebrow>
               <Display className="mt-4">
                 <span className="mkt-text-steel">One card.</span>
                 <br />
@@ -51,9 +60,9 @@ export function CardShowcase() {
                 <span className="mkt-text-steel">faces.</span>
               </Display>
               <Lead className="mt-6">
-                Every paid tier comes with the GM membership card — a real discount
-                instrument at partner restaurants, not a loyalty gimmick. Pick any of ten
-                face designs in the app and switch whenever you like.
+                Your membership, on your phone, with a code a partner restaurant can check
+                at the counter in seconds. Pick any of ten face designs in the app and
+                switch whenever you like.
               </Lead>
             </Reveal>
 
@@ -72,7 +81,7 @@ export function CardShowcase() {
               {PERKS.map((perk) => (
                 <div key={perk.title}>
                   <h3 className="text-[15px] font-semibold text-snow">{perk.title}</h3>
-                  <p className="mt-1 max-w-md text-[14px] leading-relaxed text-dim">
+                  <p className="mt-1 max-w-md text-[14.5px] leading-relaxed text-dim">
                     {perk.body}
                   </p>
                 </div>

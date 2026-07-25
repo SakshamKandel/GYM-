@@ -159,8 +159,8 @@ export default function StaffHubScreen() {
               Manage your restaurant on the web
             </AppText>
             <AppText variant="caption">
-              The partner portal — today&apos;s orders, your menu, subscriptions and
-              earnings — is on the web. Sign in at the partner portal from a browser.
+              The partner portal (today&apos;s orders, your menu, subscriptions and
+              earnings) is on the web. Sign in at the partner portal from a browser.
             </AppText>
           </View>
         </Animated.View>
@@ -187,7 +187,7 @@ export default function StaffHubScreen() {
               Switch to member app
             </AppText>
             <AppText variant="caption" numberOfLines={2}>
-              Leave the console for your normal athlete app — you stay signed in.
+              Leave the console for your normal athlete app. You stay signed in.
             </AppText>
           </View>
           <Ionicons name="chevron-forward" size={20} color={colors.textDim} />

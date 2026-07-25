@@ -25,37 +25,37 @@ export function Subscriptions() {
 
           <div className="order-1 lg:order-2">
             <Reveal>
-              <Eyebrow tone="light">Weekly subscriptions</Eyebrow>
+              <Eyebrow tone="light">Weekly meal plans</Eyebrow>
               <Display className="mt-4">
                 Set the week.
                 <br />
                 Skip the days.
               </Display>
               <Lead tone="light" className="mt-6">
-                Subscribe Monday to Friday and the kitchen plans around you. Prepaid cycles
-                run on eSewa or Khalti; skip a day from the plan screen and nothing is
-                wasted — no calls, no awkward messages.
+                Set a meal plan Monday to Friday and the kitchen cooks around you. Pay the week
+                ahead on eSewa or Khalti, or pay the rider. Skip a day from the plan screen and
+                nothing is wasted. No calls, no awkward messages.
               </Lead>
             </Reveal>
             <Reveal delay={120}>
               <ul className="mt-8 flex flex-col gap-3.5">
                 <CheckItem tone="light">
-                  Pause the plan or skip any day, straight from the app
+                  Pause your meal plan or skip any day, straight from the app
                 </CheckItem>
                 <CheckItem tone="light">
-                  Prepaid digital cycles — pay a cycle ahead on eSewa or Khalti
+                  Pay the week ahead on eSewa or Khalti
                 </CheckItem>
                 <CheckItem tone="light">
-                  Prefer cash? COD orders reconcile when the meal arrives
+                  Prefer cash? Pay the rider when the food arrives
                 </CheckItem>
                 <CheckItem tone="light">
-                  Each delivery runs through the same live 7-state tracker
+                  Every delivery is tracked the same way, from placed to at your door
                 </CheckItem>
               </ul>
             </Reveal>
             <Reveal delay={200}>
               <ArrowLink href="/download" className="mt-8 text-red-deep">
-                Get the app to subscribe
+                Get the app to set one up
               </ArrowLink>
             </Reveal>
           </div>

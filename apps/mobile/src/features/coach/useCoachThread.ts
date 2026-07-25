@@ -65,6 +65,12 @@ export interface CoachThread {
   send: (body: string) => Promise<boolean>;
   /** Last send failure code, or null. Cleared on the next successful send. */
   sendError: 'coach_unavailable' | 'forbidden' | 'network' | null;
+  /**
+   * The last message sent was stored with its contact details taken out. Coach
+   * chat only, because support threads are no longer masked. Cleared when the
+   * next send starts, so the notice belongs to one message and not the screen.
+   */
+  contactHidden: boolean;
 }
 
 function isOptimistic(m: CoachMessage): boolean {
@@ -95,6 +101,7 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
   const [sendError, setSendError] = useState<
     'coach_unavailable' | 'forbidden' | 'network' | null
   >(null);
+  const [contactHidden, setContactHidden] = useState(false);
   // Every local snapshot is fingerprinted to the bearer token that produced
   // it. A different account renders an empty thread immediately, before the
   // focus effect has a chance to start its first request.
@@ -130,6 +137,7 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
       setSending(false);
       setGenerating(false);
       setSendError(null);
+      setContactHidden(false);
       loadedFor.current = null;
     }
     const request = { token, sequence: ++loadSequence.current };
@@ -243,6 +251,7 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         setInstantReply(false);
         setStale(false);
         setSendError(null);
+        setContactHidden(false);
         loadedFor.current = null;
       }
       const request = { token, sequence: ++sendSequence.current };
@@ -276,6 +285,9 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
       setSending(true);
       setGenerating(showTyping);
       setSendError(null);
+      // The notice below belongs to ONE message, so clear it as the next send
+      // starts rather than leaving it sitting under the composer.
+      setContactHidden(false);
 
       try {
         // The server generates Greece's reply in context while this round-trips
@@ -293,18 +305,20 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
         ) {
           // Learn whether this thread actually returns an instant coach reply,
           // so the next send suppresses (or keeps) the typing bubble honestly.
-          setInstantReply(inserted.some((m) => m.sender === 'coach'));
+          setInstantReply(inserted.messages.some((m) => m.sender === 'coach'));
+          // The server only masks coach chat, so this is never true on support.
+          setContactHidden(inserted.contactHidden === true);
           // Swap the optimistic user + typing bubbles for the server's real
           // [user, coachReply] pair. A focus reload landing mid-round-trip can
           // have already merged in the persisted real user row, so also drop any
           // existing row whose id is in `inserted` to avoid a duplicate key.
-          const insertedIds = new Set(inserted.map((m) => m.id));
+          const insertedIds = new Set(inserted.messages.map((m) => m.id));
           setMessages((prev) => [
             ...prev.filter(
               (m) =>
                 m.id !== optimistic.id && m.id !== typing.id && !insertedIds.has(m.id),
             ),
-            ...inserted,
+            ...inserted.messages,
           ]);
         }
         return true;
@@ -361,5 +375,6 @@ export function useCoachThread(kind: CoachThreadKind): CoachThread {
     reload,
     send,
     sendError: ownsState ? sendError : null,
+    contactHidden: ownsState ? contactHidden : false,
   };
 }

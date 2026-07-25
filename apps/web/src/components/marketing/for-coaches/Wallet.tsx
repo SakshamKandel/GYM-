@@ -25,23 +25,21 @@ export function WalletSection() {
                 itemised.
               </Display>
               <Lead tone="light" className="mt-6">
-                Commission isn&rsquo;t a promise on a dashboard — it&rsquo;s a ledger. Each
-                purchase made with your code lands as its own dated, promo-attributed entry
-                the moment it clears.
+                Commission is not a promise on a dashboard. Every purchase made with your code
+                shows up on its own line, with the date, the moment the money clears.
               </Lead>
             </Reveal>
             <Reveal delay={140}>
               <ul className="mt-8 flex flex-col gap-3.5">
                 <CheckItem tone="light">
-                  One ledger row per transaction, tagged with your promo code — audit your own
-                  income any time.
+                  One line per sale, so you can check your own earnings any time.
                 </CheckItem>
                 <CheckItem tone="light">
-                  Request a payout from the console when you want it; the GM team processes it
-                  through the payout queue.
+                  Ask for a payout from your console whenever you want it, and the GM team sends
+                  the money.
                 </CheckItem>
                 <CheckItem tone="light">
-                  Regional pricing built in — commission tracks what your client actually paid,
+                  Regional pricing built in, so commission tracks what your client actually paid,
                   in NPR or USD.
                 </CheckItem>
               </ul>

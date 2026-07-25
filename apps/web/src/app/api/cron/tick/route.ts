@@ -2,11 +2,11 @@ import {
   type CronResult,
   cronEnabled,
   cronGuard,
-  ktmHour,
   runCycleDunning,
   runDay2Reengage,
   runRenewalNudge,
   runRetryUnsent,
+  runStaleOrders,
   runTrialExpiry,
 } from '@/lib/cron';
 import { json } from '@/lib/http';
@@ -14,21 +14,25 @@ import { json } from '@/lib/http';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** The KTM hour the once-daily scans fire on an hourly tick. */
-const DAILY_HOUR = 6;
-
 /**
  * Consolidated cron dispatcher — the mechanism registered in the repo-root
  * vercel.json. ONE Vercel Cron entry drives the whole async class, so it runs on
- * the Hobby plan (capped at 2 daily crons) as well as Pro. It "fans out by
- * wall-clock": retry-unsent runs EVERY tick (drains stragglers fast); the
- * once-daily scans run only when the KTM hour matches DAILY_HOUR. Every scan is
- * dedupe-guarded, so even a double-fire within the daily hour never
- * double-notifies.
+ * the Hobby plan (capped at daily granularity) as well as Pro.
  *
- * Schedule: hourly (`0 * * * *`) on Pro. On Hobby (daily granularity only) set it
- * to `0 6 * * *`; retry-unsent then runs once/day — stragglers drain within a day
- * while the durable inbox row holds the message in the meantime.
+ * EVERY scan runs on EVERY tick. There is deliberately NO wall-clock gate.
+ * A previous version only ran the four window scans when the KTM hour equalled
+ * a hard-coded 6, while the deployed schedule fires at 03:00 UTC (08:45 KTM) —
+ * so trial-expiry, renewal-nudge, cycle-dunning and day2-reengage never ran at
+ * all. Running them unconditionally is safe because each scan (see lib/cron.ts)
+ * is BOUNDED (BATCH=500 per run), FORWARD-PROGRESSING (anti-joined against the
+ * durable notifications outbox, so already-notified rows drop out) and
+ * IDEMPOTENT (a `cronDedupeKey` + the `notifications_dedupe` partial unique make
+ * a re-run or a provider double-fire a no-op). Extra ticks therefore cost a few
+ * bounded index scans and never double-notify a member.
+ *
+ * Schedule: any cadence works — hourly (`0 * * * *`) on Pro drains outbox
+ * stragglers faster; daily (the current `0 3 * * *`, Hobby's limit) still runs
+ * every scan exactly once a day.
  */
 export async function GET(req: Request) {
   const denied = cronGuard(req);
@@ -38,17 +42,23 @@ export async function GET(req: Request) {
   const now = new Date();
   const ran: Record<string, CronResult> = {};
 
-  // Every tick: reconcile the durable outbox.
+  // Reconcile the durable outbox first — cheapest, and it drains anything the
+  // scans below wrote on the previous tick.
   ran.retryUnsent = await runRetryUnsent(now);
 
-  // Once per day, on the wall-clock hour, run the window scans.
-  const daily = ktmHour(now) === DAILY_HOUR;
-  if (daily) {
-    ran.trialExpiry = await runTrialExpiry(now);
-    ran.renewalNudge = await runRenewalNudge(now);
-    ran.cycleDunning = await runCycleDunning(now);
-    ran.day2Reengage = await runDay2Reengage(now);
-  }
+  ran.trialExpiry = await runTrialExpiry(now);
+  ran.renewalNudge = await runRenewalNudge(now);
+  ran.cycleDunning = await runCycleDunning(now);
+  ran.day2Reengage = await runDay2Reengage(now);
 
-  return json({ ok: true, daily, ran }, 200);
+  // Fulfilment sweep: cancels orders no restaurant confirmed in time and
+  // escalates the ones that still need a human. Same conventions as the scans
+  // above — bounded, forward-progressing, and idempotent (the cancel is a
+  // status compare-and-set, the nudges carry per-order dedupe keys), so it is
+  // safe on every tick and safe to run twice.
+  ran.staleOrders = await runStaleOrders(now);
+
+  // `daily` stays in the payload (existing callers/log greps read it) and is now
+  // always true: the window scans run on every tick.
+  return json({ ok: true, daily: true, ran }, 200);
 }

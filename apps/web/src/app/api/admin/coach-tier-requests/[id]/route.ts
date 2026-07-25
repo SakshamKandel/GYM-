@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 
 export const runtime = 'nodejs';
 
@@ -86,11 +87,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     );
 
     after(() =>
-      sendPushToAccount(request.coachId, {
-        title: 'Tier request update',
-        body: 'Your coach tier upgrade request was not approved this time.',
-        data: { type: 'tier_request_decided' },
-      }),
+      notify(
+        'coach_tier_decided',
+        { accountId: request.coachId },
+        {
+          title: 'Tier request update',
+          body: 'Your coach tier upgrade request was not approved this time.',
+          data: { type: 'tier_request_decided' },
+        },
+      ),
     );
 
     return json({ ok: true }, 200);
@@ -164,11 +169,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   );
 
   after(() =>
-    sendPushToAccount(request.coachId, {
-      title: 'Coach tier upgraded',
-      body: `You've been upgraded to ${request.requestedTier} tier.`,
-      data: { type: 'tier_request_decided' },
-    }),
+    notify(
+      'coach_tier_decided',
+      { accountId: request.coachId },
+      {
+        title: 'Coach tier upgraded',
+        body: `You are now a ${tierLabel(request.requestedTier)} coach.`,
+        data: { type: 'tier_request_decided' },
+      },
+    ),
   );
 
   return json({ ok: true }, 200);

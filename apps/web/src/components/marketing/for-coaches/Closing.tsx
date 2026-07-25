@@ -20,14 +20,14 @@ export function ClosingCta() {
       <Container className="relative py-32 text-center sm:py-40">
         <Reveal>
           <Eyebrow className="justify-center text-center !text-snow/60">
-            Verified coaches only · Your code, your clients, your ledger
+            Verified coaches only · Your code, your clients, your earnings
           </Eyebrow>
           <Display size="xl" className="mx-auto mt-5">
             Take the
             <span className="text-red"> floor.</span>
           </Display>
           <p className="mx-auto mt-6 max-w-md text-[17px] leading-relaxed text-snow/80">
-            Already verified? Your console is waiting. Still deciding? Ask us anything —
+            Already verified? Your console is waiting. Still deciding? Ask us anything and
             a coach will answer.
           </p>
         </Reveal>

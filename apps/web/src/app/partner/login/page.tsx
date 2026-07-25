@@ -1,12 +1,15 @@
+import type { Metadata } from 'next';
 import { StaffLogin } from '@/components/console/StaffLogin';
+
+export const metadata: Metadata = { title: 'Sign in' };
 
 export default function PartnerLoginPage() {
   return (
     <StaffLogin
       portal="Partner"
       destination="/partner"
-      description="Run today’s fulfilment, keep the menu accurate, manage subscribers, and understand revenue without losing the live queue."
-      unauthorizedMessage="Those credentials do not belong to an active partner account."
+      description="Cook today’s orders, keep the menu right, look after your weekly meal plans, and see what you have earned."
+      unauthorizedMessage="That email and password do not open a restaurant account."
     />
   );
 }

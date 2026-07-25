@@ -11,7 +11,7 @@ const LINKS = [
   {
     href: '/coaching',
     label: 'Coaching',
-    blurb: 'Real, verified human coaches — programs, diet plans and chat with personal details masked.',
+    blurb: 'Real, verified human coaches: programs, diet plans and chat with personal details masked.',
   },
   {
     href: '/partners',

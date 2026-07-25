@@ -36,7 +36,11 @@
   --color-mist: #e7e6df;
   --color-mist-strong: #d8d7cf;
   --color-gravel: #5e6168;
-  --color-gravel-faint: #9a9ca2;
+  /* Micro text (mono captions). Darkened from #9a9ca2, which measured 2.6:1
+     and failed WCAG AA for the 11-12px page copy it carries. Now 4.96:1 on
+     paper, 4.58:1 on paper-2 and 5.18:1 on white cards, and still a clear
+     step lighter than gravel. */
+  --color-gravel-faint: #6a6d74;
 
   /* Brand */
   --color-red: #ff3b30;

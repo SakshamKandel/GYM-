@@ -116,6 +116,10 @@ function friendlyStaffError(status: number, code: string | null): string {
  * permission still renders (and this map is exhaustively covered by a
  * `satisfies Record<Permission, …>`, so a new key breaks the type until copy is
  * supplied).
+ *
+ * Copy rule: the person choosing what to grant is an operator, not an engineer.
+ * Every `desc` names the ACTION the holder gains ("Add, edit, and remove …"),
+ * never the storage shape behind it. No database words.
  */
 const PERMISSION_META = {
   'members.read': { label: 'Read members', desc: 'View the member directory.' },
@@ -128,56 +132,65 @@ const PERMISSION_META = {
     label: 'Override subscription',
     desc: 'Change a member’s subscription tier.',
   },
-  'audit.read': { label: 'Read audit log', desc: 'View the admin audit trail.' },
+  'audit.read': {
+    label: 'Read audit log',
+    desc: 'See the record of what every staff member has done.',
+  },
   'roles.grant': {
     label: 'Manage staff roles',
     desc: 'Grant, change, or revoke staff roles.',
   },
   'support.thread.read': {
     label: 'Read support threads',
-    desc: 'List and read member support tickets.',
+    desc: 'Open and read member support tickets.',
   },
   'support.thread.reply': {
     label: 'Reply to support',
-    desc: 'Reply into a support thread.',
+    desc: 'Write replies in a member support ticket.',
   },
   'coach.application.review': {
     label: 'Review coach applications',
-    desc: 'Approve/reject applications and tier requests.',
+    desc: 'Approve or reject coach applications and coach tier requests.',
   },
   'payments.review': {
     label: 'Review payments',
     desc: 'Approve, reject, or refund payment requests.',
   },
-  'promo.manage': { label: 'Manage promo codes', desc: 'Create and toggle promo codes.' },
-  'pricing.manage': { label: 'Manage pricing', desc: 'Edit regional tier prices.' },
+  'promo.manage': {
+    label: 'Manage promo codes',
+    desc: 'Create promo codes and switch them on or off.',
+  },
+  'pricing.manage': {
+    label: 'Manage pricing',
+    desc: 'Change what each tier costs in every region.',
+  },
   'wallet.manage': {
     label: 'Manage wallets',
-    desc: 'View wallets, record adjustments and payouts.',
+    desc: 'Open coach and partner wallets, and record adjustments and payouts.',
   },
   'content.manage': {
     label: 'Manage content',
-    desc: 'Org-wide plan-video CRUD (any row).',
+    desc: 'Add, edit, and remove any training video, whoever uploaded it.',
   },
   'content.video.own': {
     label: 'Manage own videos',
-    desc: 'CRUD only videos this coach created.',
+    desc: 'Add, edit, and remove only the videos this coach uploaded.',
   },
   'coach.message.user': {
     label: 'Message clients',
-    desc: 'Reply into an assigned client’s thread.',
+    desc: 'Write replies to an assigned client in chat.',
   },
   'coach.user.read': {
     label: 'Read clients',
-    desc: 'Read assigned clients’ threads and profile.',
+    desc: 'Open an assigned client’s messages and profile.',
   },
   'coach.wallet.read': {
     label: 'Read own wallet',
-    desc: 'A coach reading their own wallet balance.',
+    desc: 'See their own coach earnings and balance.',
   },
   'client.tier_grant': {
     label: 'Grant client tiers',
-    desc: 'Coach-initiated client tier grants (off by default).',
+    desc: 'Give a client a paid tier without an admin. Off unless switched on.',
   },
   'broadcast.send': {
     label: 'Send broadcasts',
@@ -185,7 +198,7 @@ const PERMISSION_META = {
   },
   'members.manage_credentials': {
     label: 'Manage credentials',
-    desc: 'Password reset, force sign-out, identity fixes.',
+    desc: 'Send a member a password reset, sign them out everywhere, fix their sign-in details.',
   },
   'payouts.review': {
     label: 'Review payouts',
@@ -193,31 +206,31 @@ const PERMISSION_META = {
   },
   'analytics.read': {
     label: 'Read analytics',
-    desc: 'View revenue, churn, and coach-performance analytics.',
+    desc: 'See revenue, churn, and how coaches are performing.',
   },
   'permissions.override': {
     label: 'Manage permissions',
-    desc: 'Grant or strip per-account permission overrides.',
+    desc: 'Give one staff member an extra permission, or take one away.',
   },
   'moderation.manage': {
     label: 'Moderate content',
-    desc: 'Custom foods, progress photos, milestones.',
+    desc: 'Review and take down member-submitted foods, progress photos, and milestones.',
   },
   'catalog.manage': {
     label: 'Manage catalog',
-    desc: 'CRUD the exercises and plans catalog.',
+    desc: 'Add, edit, and remove exercises and training plans.',
   },
   'gamification.manage': {
     label: 'Manage gamification',
-    desc: 'XP corrections, badge audit/revoke, challenge moderation.',
+    desc: 'Correct XP, review and revoke badges, and moderate challenges.',
   },
   'meals.own': {
     label: 'Manage own meals',
-    desc: 'Partner-only: CRUD this restaurant’s own menu and fulfill its orders.',
+    desc: 'Restaurant only: edit this restaurant’s menu and work its orders.',
   },
   'orders.fulfill': {
     label: 'Fulfill orders',
-    desc: 'Partner-only: advance a meal order through its delivery states.',
+    desc: 'Restaurant only: move a meal order along, from confirmed through to delivered.',
   },
   'partners.manage': {
     label: 'Manage meal partners',
@@ -225,11 +238,11 @@ const PERMISSION_META = {
   },
   'orders.review': {
     label: 'Review meal orders',
-    desc: 'Oversight and override across every partner’s orders.',
+    desc: 'See and step in on any meal order, at any restaurant.',
   },
   'gyms.manage': {
     label: 'Manage gyms',
-    desc: 'CRUD the nearby-gyms directory and its photos.',
+    desc: 'Add, edit, and remove gyms in the Nearby Gyms directory, photos included.',
   },
 } satisfies Record<Permission, { label: string; desc: string }>;
 
@@ -237,10 +250,18 @@ export function StaffManager({
   staff,
   currentAccountId,
   callerRole,
+  canOverridePermissions,
 }: {
   staff: StaffMember[];
   currentAccountId: string;
   callerRole: StaffRole;
+  /**
+   * Does the caller hold 'permissions.override' — the key GET/PUT
+   * /api/admin/staff/[accountId]/permissions actually require? Granting roles
+   * ('roles.grant', the gate on this page) does NOT imply it, so the override
+   * panel is hidden without it rather than opening onto a 403.
+   */
+  canOverridePermissions: boolean;
 }) {
   const router = useRouter();
 
@@ -271,7 +292,9 @@ export function StaffManager({
 
   // Per-account permission overrides (P2-20). Opened for a manageable, non-self
   // staff row so the operator can grant one extra capability or strip a preset
-  // one on top of the role. super_admin rows are never eligible (safety floor).
+  // one on top of the role. super_admin rows are never eligible (safety floor),
+  // and the entry button additionally requires `canOverridePermissions` — the
+  // permission its own routes enforce.
   const [permsTarget, setPermsTarget] = useState<StaffMember | null>(null);
 
   async function changeRole(accountId: string, role: StaffRole) {
@@ -293,7 +316,7 @@ export function StaffManager({
       setBusyId(null);
       router.refresh();
     } catch {
-      setRowError({ id: accountId, msg: 'Network error.' });
+      setRowError({ id: accountId, msg: 'Could not reach us just now. Try again.' });
       setBusyId(null);
     }
   }
@@ -315,7 +338,7 @@ export function StaffManager({
       setBusyId(null);
       router.refresh();
     } catch {
-      setRowError({ id: accountId, msg: 'Network error.' });
+      setRowError({ id: accountId, msg: 'Could not reach us just now. Try again.' });
       setBusyId(null);
     }
   }
@@ -455,7 +478,7 @@ export function StaffManager({
               gap: 4,
             }}
           >
-            {!isSelf && manageable && row.role !== 'super_admin' ? (
+            {canOverridePermissions && !isSelf && manageable && row.role !== 'super_admin' ? (
               <Button
                 variant="ghost"
                 size="sm"
@@ -613,7 +636,7 @@ function PermissionsModal({
       }
       setPayload((await res.json()) as PermissionsPayload);
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setPayload(null);
     } finally {
       setLoading(false);
@@ -653,7 +676,7 @@ function PermissionsModal({
       // the panel can never disagree with what enforcement will do.
       setPayload((await res.json()) as PermissionsPayload);
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
     } finally {
       setBusyKey(null);
     }
@@ -922,7 +945,7 @@ function OffboardModal({
       const data = (await res.json()) as { counts: OffboardCounts | null };
       setCounts(data.counts);
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setCounts(null);
     } finally {
       setLoading(false);
@@ -977,7 +1000,7 @@ function OffboardModal({
       setSubmitting(false);
       onDone();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSubmitting(false);
     }
   }
@@ -1055,7 +1078,7 @@ function OffboardModal({
             </div>
             {counts.walletBalances.length > 0 ? (
               <div style={{ color: 'var(--gt-warning)', marginTop: 4 }}>
-                ⚠ Outstanding wallet balance: {formatBalances(counts.walletBalances)} — settle
+                ⚠ Outstanding wallet balance: {formatBalances(counts.walletBalances)}. Settle
                 payouts before revoking (the ledger is preserved either way).
               </div>
             ) : null}
@@ -1235,7 +1258,7 @@ function GrantRoleModal({
       reset();
       onGranted();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setSubmitting(false);
     }
   }
@@ -1332,7 +1355,7 @@ function GrantRoleModal({
                 >
                   {picked.email}
                   {pickedRole != null && !pickedIsSelf && !pickedLocked
-                    ? ` · already ${staffRoleLabel(pickedRole)} — role will change`
+                    ? ` · already ${staffRoleLabel(pickedRole)}, role will change`
                     : ''}
                 </div>
               </div>
@@ -1353,11 +1376,11 @@ function GrantRoleModal({
             </div>
             {pickedIsSelf ? (
               <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                This is your own account — you cannot change your own role.
+                This is your own account, so you cannot change your own role.
               </div>
             ) : pickedLocked ? (
               <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                Managed by super admin — you cannot change this account’s role.
+                Managed by super admin, so you cannot change this account’s role.
               </div>
             ) : null}
           </div>

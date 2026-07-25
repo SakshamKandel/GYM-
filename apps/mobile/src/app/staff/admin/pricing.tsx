@@ -79,7 +79,7 @@ function toMinor(major: string): number | null {
 }
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'invalid') return 'One or more prices were rejected. Check the amounts and try again.';
   return "Couldn't load pricing.";

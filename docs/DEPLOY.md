@@ -33,17 +33,57 @@ Project root: `apps/web` (Next 15). DB schema is already pushed to Neon; staff a
 
 **Environment variables (Vercel → Settings → Environment Variables):**
 
-| Var | Required | Notes |
+Every row says what stops working while the variable is missing. The same list,
+with the same wording and no values, lives in `.env.example` at the repo root —
+copy that file when setting up a new environment, and keep the two in step.
+
+| Var | Required | What breaks while it is missing |
 |---|---|---|
-| `DATABASE_URL` | ✅ | Neon connection string |
-| `CLOUDINARY_CLOUD_NAME` | ✅ for video | `qbl5lkap` |
-| `CLOUDINARY_API_KEY` | ✅ for video | |
-| `CLOUDINARY_API_SECRET` | ✅ for video | **Rotate it first** — it was shared in chat |
-| `CLOUDINARY_URL_SIGNING_KEY` | ✅ **load-bearing since 2026-07-12** | Signs `authenticated`-delivery images. Payment receipts (`GET /api/admin/payment-requests`) and progress photos (`/api/me/photos`, `/api/coach/clients/[userId]/photos`) are stored as Cloudinary `authenticated` assets; each GET mints a signed URL per row via `signedImageUrl()`. **Missing this var → those endpoints 503 `{error:'image_not_configured'}`**, not a silent image failure — set it before the coach/payment/progress-photo surfaces go live. |
-| `GROQ_API_KEY` | ✅ for AI coach/tips | degrades quietly if missing |
-| `FIREBASE_SERVICE_ACCOUNT_B64` | for push | buddy/coach push notifications; also drives `support_reply`, `buddy_message`, `coach_plan`, `application_decided`, `payment_decided`, `tier_request_decided` pushes (2026-07-12) |
-| `GOOGLE_CLIENT_ID`(`S`) | for Google sign-in | |
-| `VIDEO_PROVIDER` | optional | auto-selects `cloudinary` when CLOUDINARY_* present |
+| `DATABASE_URL` | ✅ | Neon connection string. Nothing runs: every API route fails |
+| `NEXT_PUBLIC_SITE_URL` | ✅ | Public origin of the website. Canonical links, `sitemap.xml` and `robots.txt` fall back to the old preview domain and point search engines there |
+| `EXPO_PUBLIC_API_URL` | ✅ for the app | API base URL the mobile app calls. Unset → the app talks to `http://localhost:3000`, so a store build reaches nothing. Set per EAS profile (`apps/mobile/eas.json`, §2) |
+| `RESEND_API_KEY` | ✅ for password reset | Resend API key ([resend.com](https://resend.com) → API Keys). Unset → `POST /api/auth/forgot-password` sends nothing, mints nothing and reports `not_configured`; the app then tells members reset-by-email is unavailable and passwords can only be reset by an admin (Members → credentials) |
+| `EMAIL_FROM` | ✅ for password reset | Verified sender, e.g. `The GM Method <no-reply@yourdomain.com>`. The domain must be verified in Resend or it refuses the message. Unset → exactly as above. **Both email vars are required; either one missing means no email is ever sent** |
+| `FIREBASE_SERVICE_ACCOUNT_B64` | ✅ for push | Base64 of the Firebase service-account JSON. Unset → no push is ever delivered. Inbox rows are still written, so reminders, coach replies, order updates and broadcasts only appear once the member opens the app |
+| `CLOUDINARY_CLOUD_NAME` | ✅ for photos + video | `qbl5lkap`. The three `CLOUDINARY_*` below are needed together; any missing → avatars, receipts and progress photos cannot be uploaded at all, and video too unless `VIDEO_PROVIDER=cf_stream` is set up instead |
+| `CLOUDINARY_API_KEY` | ✅ for photos + video | Cloudinary console → Settings → Access Keys |
+| `CLOUDINARY_API_SECRET` | ✅ for photos + video | Signs uploads. **Rotate it first** — it was shared in chat |
+| `CLOUDINARY_URL_SIGNING_KEY` | ✅ **load-bearing since 2026-07-12** | Signs `authenticated`-delivery images. Payment receipts (`GET /api/admin/payment-requests`) and progress photos (`/api/me/photos`, `/api/coach/clients/[userId]/photos`) are stored as Cloudinary `authenticated` assets; each GET mints a signed URL per row via `signedImageUrl()`. **Missing → those reads 503 `{error:'image_not_configured'}`** even though uploads still succeed, so an admin cannot see the receipt they are approving money against. Since 2026-07-25 `isImageConfigured()` counts this key, so the admin Configuration card and the startup log report photos as turned off instead of claiming they work |
+| `VIDEO_PROVIDER` | optional | `cloudinary` (auto-selected when `CLOUDINARY_*` present) or `cf_stream` |
+| `CF_STREAM_ACCOUNT_ID` / `_API_TOKEN` / `_KEY_ID` / `_JWK` | optional | Only for `VIDEO_PROVIDER=cf_stream`; all four required together. Any missing → coaches cannot publish or play plan videos |
+| `BILLING_MODE` | ✅ to sell plans | `disabled` (default, no paid activation), `preview` (non-production only: tiers are a free selection), `live` (paid tiers only via the RevenueCat webhook). Unset → nobody can buy a plan |
+| `REVENUECAT_WEBHOOK_AUTH` | ✅ with `BILLING_MODE=live` | Exact `Authorization` header value the store webhook must send. **Missing → billing silently falls back to `disabled`**, so purchases in the stores never grant a tier |
+| `REVENUECAT_WEBHOOK_SIGNATURE_SECRET` | optional | HMAC secret for RevenueCat's signature header. Unset → the webhook is accepted on the `Authorization` header alone |
+| `CRON_SECRET` | ✅ for reminders | Shared secret Vercel Cron sends as `Authorization: Bearer <value>`. **Missing → every `/api/cron/*` route fails closed with 500** and no scheduled job runs |
+| `NOTIFICATIONS_CRON_ENABLED` | ✅ for reminders | Master switch, must be exactly `true`. Anything else → the tick returns `{skipped:"disabled"}`, so renewal notices, payment reminders and come-back nudges are never sent |
+| `GROQ_API_KEY` | ✅ for the AI coach tip | The only AI surface in the product. Unset → `/api/ai/tip` answers `not_configured` and both cards fall back to their quiet empty state. Nothing else breaks |
+| `GOOGLE_CLIENT_ID`(`S`) | for Google sign-in | Accepted ID-token audiences; `…_IDS` takes a comma-separated web/iOS/Android list. Both unset → the server rejects every Google sign-in |
+| `APPLE_CLIENT_ID`(`S`) | for Apple sign-in | Same pair for Apple (Services ID / bundle id). Both unset → Apple sign-in rejects every token |
+| `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` / `_IOS_` / `_ANDROID_` | for Google sign-in | Compiled into the app. Unset → the Google button stays hidden and only email sign-in is offered |
+| `EXPO_PUBLIC_REVENUECAT_IOS_KEY` | ✅ to sell on iPhone | RevenueCat → Project settings → API keys → the **public** app-specific key for the iOS app. Compiled into the app, safe to ship (it can only read offerings and start a purchase the store itself confirms). Unset → the store purchase sheet and the Restore purchases row never appear on iOS, and the paywall keeps the receipt rail. See §2.1 |
+| `EXPO_PUBLIC_REVENUECAT_ANDROID_KEY` | ✅ to sell on Android | Same, for the Google Play app. Unset → exactly as above on Android |
+| `EXPO_PUBLIC_USDA_API_KEY` | optional | Second food source. Unset → food search still works through Open Food Facts, with fewer US branded results |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN` (or `KV_REST_API_URL` / `_TOKEN`) | recommended | Shared store for the limits on sign-in, registration, password reset and staff re-auth. Unset → those limits count per instance, so the real ceiling is `limit × warm instances`. Either name pair works |
+| `COACH_GREECE_EMAIL` | optional | Coach that Elite members are auto-assigned to (§3). Unset → the oldest coach account is used |
+| `NOTIF_PREFS_ENFORCED` | optional | Per-account notification preferences and quiet hours, default on. Set to `false` ONLY to debug a preferences bug: every member then gets every push regardless of what they turned off |
+| `PRICE_CHANGE_GUARD_ENABLED` | optional | Set to `true` to reject a meal order whose total moved since the cart was priced. Unset → the order goes through at the new price without asking |
+| `PARTNER_LEDGER_ENABLED` | optional | Cutover marker for observability only; it must never gate money math. Unset → no effect on any balance |
+| `SEED_DEMO` | never in production | Demo coach seed guard (`packages/db seed:demo-coach`). Must be exactly `yes` or the seed refuses to run, and it never runs under `NODE_ENV=production` |
+
+**Startup self-check:** in production `apps/web/src/instrumentation.ts` logs one
+`[startup]` line per missing capability (billing, images, video, cron) into the
+Vercel logs at boot. It names variables only, never values, and never throws —
+the marketing site and free tier stay up regardless. The same booleans render as
+a "Configuration" card on `/admin` (super/main admins) and are readable at
+`GET /api/admin/system/config`.
+
+**Cron schedule:** the repo-root `vercel.json` registers ONE entry,
+`/api/cron/tick` (currently daily at 03:00 UTC — Hobby's limit). Every scan
+(outbox retry, trial expiry, renewal nudge, cycle dunning, day-2 re-engage) runs
+on EVERY tick; there is no wall-clock gate. Each scan is bounded, anti-joined
+against the notifications outbox and dedupe-keyed, so a more frequent schedule
+(e.g. hourly `0 * * * *` on Pro) only drains stragglers faster — it never
+double-notifies a member.
 
 Then deploy. Post-deploy smoke test (2 min):
 1. `https://<domain>/admin` → log in (super admin) → Overview shows real counts.
@@ -58,6 +98,75 @@ Then deploy. Post-deploy smoke test (2 min):
 - Camera + photo-library permission strings are configured via the `expo-camera` / `expo-image-picker` plugins in app.json (required by App Store / Play review).
 - Build: `cd apps/mobile && eas build --profile production --platform android`.
 - For quick device testing without a build: Expo Go + `EXPO_PUBLIC_API_URL=http://<PC-LAN-IP>:3000` (or the Vercel URL).
+
+## 2.1 In-app purchases (RevenueCat + the stores)
+
+**Who does what.** The app takes the payment through the App Store or Google
+Play. The store confirms it to RevenueCat. RevenueCat calls
+`POST /api/subscription/revenuecat`, and that webhook is the only thing that
+turns a membership on. The app never grants a tier, so a tampered client buys
+nothing. After a payment goes through, the app re-reads the account for about
+ten seconds and, if the confirmation has not arrived yet, says so plainly
+instead of pretending the membership is live.
+
+**The purchase button only exists when all of this is true**, and hides itself
+otherwise (there is never a button that cannot finish):
+
+1. the device is an iPhone or an Android phone (the web build never sells),
+2. the build carries the RevenueCat public key for that platform (§1),
+3. the RevenueCat SDK started for the signed-in account,
+4. the server reports `BILLING_MODE=live` **and** `REVENUECAT_WEBHOOK_AUTH` is
+   set, so a purchase can actually be honoured,
+5. the store has at least one product on sale for that membership.
+
+Until then the paywall behaves exactly as it does today, and the manual receipt
+rail (§4) keeps working either way, including alongside the stores.
+
+**Naming contract.** The app matches what a store sells to what this product
+sells by name, and refuses to guess. Set the dashboard up this way:
+
+| In RevenueCat | Name it | Why |
+|---|---|---|
+| Entitlement | exactly `silver`, `gold`, `elite` | The webhook reads the entitlement id as the tier. A different spelling grants nothing |
+| Offering | one per tier, named after the tier (`gold`) | How the app knows which card a package belongs to |
+| Package | one per length (monthly, yearly, …) | Becomes the choices in the purchase sheet |
+| Product | e.g. `gm_gold_monthly` | Fallback match when an offering is not named after a tier |
+
+An identifier that names two tiers at once (`silver_to_gold`) or none is left
+unmapped and never offered. Prices always come from the store itself, in the
+store's own currency and formatting, because that is the amount the member is
+charged.
+
+**Only the owner can do these, and none of them can be done from this repo:**
+
+1. **Apple**: an Apple Developer Program membership, the Paid Applications
+   agreement signed in App Store Connect (purchases fail until it is), an app
+   record for `com.gmmethod.gymtracker`, and one auto-renewing subscription
+   product per tier and length.
+2. **Google**: a Play Console developer account, an app record for
+   `com.gmmethod.gymtracker`, and the matching subscription products. Play only
+   returns products once a build with the billing library has been uploaded to a
+   testing track at least once.
+3. **RevenueCat**: an account, a project, one app per platform, the store
+   credentials it needs (App Store Connect API key / Play service account), the
+   entitlements and offerings above, the public API keys for §1, and a webhook
+   pointing at `https://<domain>/api/subscription/revenuecat` with the
+   `Authorization` header value set to `REVENUECAT_WEBHOOK_AUTH` (and the
+   signature secret if `REVENUECAT_WEBHOOK_SIGNATURE_SECRET` is set).
+4. **A native build**: `pnpm install` first (the dependency is declared in
+   `apps/mobile/package.json` but not installed), then
+   `eas build --profile production`. Purchases cannot work in Expo Go: it has no
+   billing code. The library needs **no** Expo config plugin entry in
+   `app.json`; autolinking picks it up during prebuild.
+5. **A sandbox test before launch**: a StoreKit sandbox account on iOS and a
+   licence tester on Android, buy each tier once, confirm the membership turns
+   on by itself within a minute (Admin → Members shows the tier and its end
+   date), then confirm **Restore purchases** brings it back on a fresh install.
+
+Turning `BILLING_MODE=live` on before the store products exist is safe: with
+nothing on sale the app finds no packages, hides the purchase sheet and the
+restore row, and the paywall carries on with the receipt rail. Nothing on screen
+claims a store purchase is possible until one really is.
 
 ## 3. Staff access
 
@@ -119,3 +228,11 @@ set/extend subscriptions for their OWN active clients only via
 3. **Mobile session token lives in AsyncStorage** — move the auth slice to `expo-secure-store` before onboarding staff on personal devices.
 4. `/api/auth/login` lets a *suspended* user mint a session row (token is unusable — `userForToken` filters `status='active'` — so no bypass; just add the status check for a cleaner UX).
 5. **Nightly off-provider DB backup** (`pg_dump` → R2) — the plan's Phase 0 item, still the highest-priority ops gap.
+6. **Restores rely on a webhook event.** The webhook only acts on the purchase
+   lifecycle events it knows (`INITIAL_PURCHASE`, `RENEWAL`, `PRODUCT_CHANGE`,
+   `UNCANCELLATION`, `CANCELLATION`, `EXPIRATION`, `SUBSCRIPTION_EXTENDED`). A
+   restore that produces only a `TRANSFER` (the same purchase moving to another
+   account) leaves the server unaware, so the app tells the member to contact
+   support instead of claiming the membership is back. Closing this needs a
+   server-side read of RevenueCat's subscriber API, or handling `TRANSFER`;
+   until then support can grant the window from Admin → Members.

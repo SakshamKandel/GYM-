@@ -354,7 +354,7 @@ export function LocationPicker({
       });
       if (!res.ok) {
         setResults([]);
-        setSearchError(res.status === 429 ? 'Too many searches — wait a moment.' : 'Search unavailable.');
+        setSearchError(res.status === 429 ? 'Too many searches. Wait a moment.' : 'Search unavailable.');
         return;
       }
       const data = (await res.json()) as { results?: GeoResult[] };
@@ -422,8 +422,8 @@ export function LocationPicker({
                 padding: 4,
                 background: 'var(--gt-surface, #fff)',
                 border: '1px solid var(--gt-border)',
-                borderRadius: 8,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                borderRadius: 'var(--gt-radius-sm)',
+                boxShadow: 'var(--gt-shadow-pop)',
                 maxHeight: 220,
                 overflowY: 'auto',
               }}
@@ -434,7 +434,9 @@ export function LocationPicker({
                     type="button"
                     onClick={() => selectResult(r)}
                     style={{
-                      display: 'block',
+                      display: 'flex',
+                      alignItems: 'center',
+                      minHeight: 44,
                       width: '100%',
                       textAlign: 'left',
                       padding: '8px 10px',
@@ -443,6 +445,8 @@ export function LocationPicker({
                       background: 'transparent',
                       color: 'var(--gt-text)',
                       cursor: 'pointer',
+                      // 6px is the nested-radius match for a 10px dropdown with
+                      // 4px padding, not an off-scale value.
                       borderRadius: 6,
                     }}
                   >
@@ -462,7 +466,7 @@ export function LocationPicker({
         style={{
           height,
           width: '100%',
-          borderRadius: 10,
+          borderRadius: 'var(--gt-radius-sm)',
           border: '1px solid var(--gt-border)',
           overflow: 'hidden',
           background: 'var(--gt-surface-sunken, #eef1f4)',
@@ -513,7 +517,7 @@ export function LocationPicker({
           {mode === 'radius' ? (
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 200px' }}>
               <FieldMicroLabel htmlFor={`${fieldId}-radius`}>
-                Delivery radius — {radiusKm.toFixed(1)} km
+                Delivery radius · {radiusKm.toFixed(1)} km
               </FieldMicroLabel>
               <input
                 id={`${fieldId}-radius`}

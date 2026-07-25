@@ -4,10 +4,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import { formatMoney } from '@gym/shared';
 import { AppText, Button, PressableScale, Sheet, Tag } from '../../../components/ui';
-import { fetchMealMenu, toMealsError, type MealOrder } from '../api';
+import { fetchMealMenu, toMealsError, type MealOrder, type MealPaymentRequestRow } from '../api';
 import { useMealCart } from '../cartStore';
 import { pushPath } from '../nav';
 import {
+  canReportOrderProblem,
   mealErrorMessage,
   orderStatusLabel,
   orderStatusTone,
@@ -29,6 +30,9 @@ import {
 import { RatingPanel } from './RatingPanel';
 import { TipPanel } from './TipPanel';
 import { DisputePanel } from './DisputePanel';
+import { DisputeNotice } from './DisputeNotice';
+import { useFiledDisputes } from './disputeRecord';
+import { PaymentReviewNotice } from './PaymentReviewNotice';
 
 /**
  * Full order detail sheet: macro roll-up (protein + calories lead — this is a
@@ -61,11 +65,31 @@ interface Props {
   /** Fires after a tip update changes the order's total, or after a rating /
    * dispute submits — lets the caller refresh its own list state. */
   onOrderChanged?: (order?: MealOrder) => void;
+  /**
+   * The newest receipt the member sent for THIS order, when the caller has it.
+   * Optional so existing call sites keep working; without it the sheet simply
+   * doesn't show the review outcome.
+   */
+  paymentRequest?: MealPaymentRequestRow | null;
+  /** Reopen the receipt sheet after a turned-down receipt. */
+  onSendReceiptAgain?: (order: MealOrder) => void;
 }
 
-export function OrderDetailSheet({ order, token, partnerName, onClose, onOrderChanged }: Props) {
+export function OrderDetailSheet({
+  order,
+  token,
+  partnerName,
+  onClose,
+  onOrderChanged,
+  paymentRequest,
+  onSendReceiptAgain,
+}: Props) {
   const [reorder, setReorder] = useState<ReorderState>({ phase: 'idle' });
   const [panel, setPanel] = useState<ActivePanel>('none');
+  // Subscribed, not read once: filing a report from the panel below must make
+  // the record appear on this same screen without closing it.
+  const filedDisputes = useFiledDisputes((s) => s.byOrderId);
+  const filedDispute = order ? (filedDisputes[order.id] ?? null) : null;
 
   // Reset the reorder affordance + any open panel whenever a different order
   // opens the sheet (or the sheet closes).
@@ -76,7 +100,7 @@ export function OrderDetailSheet({ order, token, partnerName, onClose, onOrderCh
 
   function shareReceipt(): void {
     if (!order) return;
-    const lines = order.items.map((item) => `${item.qty}x ${item.name} — ${formatMoney(item.priceMinorSnapshot * item.qty, order.currency)}`);
+    const lines = order.items.map((item) => `${item.qty}x ${item.name} · ${formatMoney(item.priceMinorSnapshot * item.qty, order.currency)}`);
     const message = [
       `Order ${order.orderNumber || order.id}`,
       partnerName ?? '',
@@ -105,9 +129,12 @@ export function OrderDetailSheet({ order, token, partnerName, onClose, onOrderCh
           setReorder({ phase: 'none' });
           return;
         }
+        // Clear FIRST, then set the partner. `clear()` nulls the partner id, so
+        // doing it the other way round threw away the partner this reorder just
+        // set and left the member on an empty cart.
         const cart = useMealCart.getState();
-        cart.setPartner(order.partnerId);
         cart.clear();
+        cart.setPartner(order.partnerId);
         for (const { meal, qty } of matched) cart.setQty(meal, Math.min(qty, 20));
         onClose();
         pushPath(`/meals/${order.partnerId}`);
@@ -228,6 +255,20 @@ export function OrderDetailSheet({ order, token, partnerName, onClose, onOrderCh
             />
           </View>
 
+          {/* What happened to the receipt they sent — above all the pretty
+              numbers, because a turned-down receipt is the one thing on this
+              screen that needs them to do something. */}
+          {paymentRequest && paymentRequest.status !== 'approved' ? (
+            <View style={styles.noticeWrap}>
+              <PaymentReviewNotice
+                request={paymentRequest}
+                onSendAgain={
+                  onSendReceiptAgain ? () => onSendReceiptAgain(order) : undefined
+                }
+              />
+            </View>
+          ) : null}
+
           {/* Timeline */}
           <AppText variant="label" style={styles.sectionLabel}>
             Timeline
@@ -315,18 +356,36 @@ export function OrderDetailSheet({ order, token, partnerName, onClose, onOrderCh
                 <AppText variant="caption">Tip</AppText>
               </PressableScale>
             ) : null}
-            {order.status === 'delivered' ? (
+            {/* Same predicate the dispute route enforces: delivered OR already
+                paid. A prepaid order that was refused or cancelled is exactly
+                the one that needs this — gating on `delivered` hid the only
+                in-app refund path from the members owed money. It stays offered
+                after a report: only the server knows whether the last one is
+                still live, and a resolved order can genuinely need a new one —
+                a second attempt on a live case is answered honestly, not
+                silently swallowed. */}
+            {canReportOrderProblem(order) ? (
               <PressableScale
                 accessibilityRole="button"
-                accessibilityLabel="Report a problem with this order"
+                accessibilityLabel={
+                  filedDispute
+                    ? 'Report another problem with this order'
+                    : 'Report a problem with this order'
+                }
                 onPress={() => setPanel(panel === 'dispute' ? 'none' : 'dispute')}
                 style={styles.quickActionBtn}
               >
                 <Ionicons name="flag-outline" size={16} color={colors.text} />
-                <AppText variant="caption">Report</AppText>
+                <AppText variant="caption">{filedDispute ? 'Report again' : 'Report'}</AppText>
               </PressableScale>
             ) : null}
           </View>
+
+          {filedDispute ? (
+            <View style={styles.noticeWrap}>
+              <DisputeNotice dispute={filedDispute} />
+            </View>
+          ) : null}
 
           {panel === 'rating' && token ? (
             <View style={styles.panelWrap}>
@@ -435,6 +494,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   paymentText: { gap: 2 },
+  noticeWrap: { marginTop: spacing.md },
   timeline: { gap: 0 },
   eventRow: { flexDirection: 'row', gap: spacing.md },
   eventRail: { width: 14, alignItems: 'center' },

@@ -66,7 +66,7 @@ function nextKey(): string {
 function errorLine(code: StaffErrorCode): string {
   switch (code) {
     case 'unauthorized':
-      return 'Your session expired — sign in again.';
+      return 'Your session expired. Sign in again.';
     case 'forbidden':
       return 'This client is no longer assigned to you.';
     case 'not_found':
@@ -384,7 +384,7 @@ export function DietPlanSection({ userId, token }: { userId: string; token: stri
         <AppTextInput
           value={title}
           onChangeText={setTitle}
-          placeholder="Title — e.g. Cutting phase"
+          placeholder="Title, e.g. Cutting phase"
           maxLength={120}
           accessibilityLabel="Diet plan title"
           style={styles.sheetInput}
@@ -445,7 +445,7 @@ export function DietPlanSection({ userId, token }: { userId: string; token: stri
               <AppTextInput
                 value={foodName}
                 onChangeText={setFoodName}
-                placeholder="Food — e.g. Chicken breast"
+                placeholder="Food, e.g. Chicken breast"
                 maxLength={80}
                 accessibilityLabel="Food name"
                 style={[styles.sheetInput, styles.foodNameInput]}
@@ -453,7 +453,7 @@ export function DietPlanSection({ userId, token }: { userId: string; token: stri
               <AppTextInput
                 value={foodQty}
                 onChangeText={setFoodQty}
-                placeholder="Qty — e.g. 200g"
+                placeholder="Qty, e.g. 200g"
                 maxLength={40}
                 accessibilityLabel="Quantity"
                 style={[styles.sheetInput, styles.foodQtyInput]}

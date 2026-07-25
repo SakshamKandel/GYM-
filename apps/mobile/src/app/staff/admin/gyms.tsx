@@ -29,7 +29,7 @@ import {
   type GymStatus,
   type StaffErrorCode,
 } from '../../../features/staff/api';
-import { replaceStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
+import { pushStaff, replaceStaff, staffCan, STAFF_ROUTES } from '../../../features/staff/nav';
 import { useAuth } from '../../../state/auth';
 
 /**
@@ -51,7 +51,7 @@ import { useAuth } from '../../../state/auth';
 function errorLine(code: StaffErrorCode): string {
   switch (code) {
     case 'unauthorized':
-      return 'Your session expired — sign in again.';
+      return 'Your session expired. Sign in again.';
     case 'forbidden':
       return "You don't have access to manage gyms.";
     case 'not_found':
@@ -158,7 +158,7 @@ function CoreFields({
     <>
       {showSlug ? (
         <>
-          <SectionLabel>Slug (optional — auto-generated from name)</SectionLabel>
+          <SectionLabel>Slug (optional, auto-generated from name)</SectionLabel>
           <AppTextInput
             value={form.slug}
             onChangeText={(v) => setForm((f) => ({ ...f, slug: v }))}
@@ -364,7 +364,7 @@ function CreateSheet({
     <Sheet visible={visible} onClose={close} title="New gym">
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.sheetScroll}>
         <AppText variant="caption" color={colors.textDim}>
-          New listings are always created as a draft, unverified — publish it
+          New listings are always created as a draft, unverified. Publish it
           from the roster once it&apos;s ready.
         </AppText>
         <CoreFields form={form} setForm={setForm} disabled={saving} showSlug />
@@ -535,7 +535,7 @@ function EditSheet({
             <SectionLabel>Photos</SectionLabel>
             <AppText variant="caption" color={colors.textFaint}>
               {gym.photoCount} photo{gym.photoCount === 1 ? '' : 's'} attached. Upload and reorder
-              from the web admin console — photo management stays web-only.
+              from the web admin console. Photo management stays web-only.
             </AppText>
           </View>
         </ScrollView>
@@ -653,6 +653,24 @@ export default function AdminGymsScreen() {
 
       <Button label="New gym" onPress={() => setCreating(true)} style={styles.newBtn} />
 
+      {/* The three member-facing queues that hang off these listings: wrong-info
+          reports, reviews, and membership enquiries someone has to answer. */}
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel="Open gym reports, reviews and enquiries"
+        onPress={() => pushStaff(STAFF_ROUTES.adminGymModeration)}
+        style={styles.moderationLink}
+      >
+        <Ionicons name="chatbox-ellipses-outline" size={20} color={colors.accent} />
+        <View style={styles.moderationText}>
+          <AppText variant="bodyBold">Reports, reviews and enquiries</AppText>
+          <AppText variant="caption" color={colors.textDim}>
+            What members are telling you about these listings
+          </AppText>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+      </PressableScale>
+
       {loading && !gyms ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.accent} />
@@ -758,7 +776,18 @@ const styles = StyleSheet.create({
   searchRow: { marginBottom: spacing.sm },
   searchInput: { flex: 1 },
   filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginBottom: spacing.md },
-  newBtn: { marginBottom: spacing.lg },
+  newBtn: { marginBottom: spacing.md },
+  moderationLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.lg,
+    minHeight: 64,
+    marginBottom: spacing.lg,
+  },
+  moderationText: { flex: 1, gap: 2 },
   center: { paddingVertical: spacing.xl, alignItems: 'center' },
   retryWrap: { marginTop: spacing.md },
   retry: {

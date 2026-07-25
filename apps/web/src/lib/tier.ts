@@ -61,6 +61,17 @@ export interface TierSourceExpectation {
  *     untouched (P1-9 — a blank start field never wipes a stored start).
  *  2. Mirrors the tier into account_profiles.data->>'tier' (jsonb merge that
  *     preserves sibling keys). Skipped when the account has no profile row.
+ *     This mirror is ADVISORY and one-way: nothing gates on it. It used to have
+ *     a second writer — the member profile PUT persisted the client's whole
+ *     blob verbatim, so a client round-tripping a stale profile clobbered the
+ *     value written here and the two records could disagree. PUT /api/profile
+ *     now strips the client's tier and re-stamps the account's own, and GET
+ *     re-derives it on read, which leaves this call the only writer of the
+ *     authoritative value. Note the mirror holds the STORED tier while the
+ *     profile route stamps the EFFECTIVE one (expiry applied); both are
+ *     projections of accounts.tier and neither is ever read for entitlements —
+ *     those resolve from accounts.tier via effectiveTier() at the auth choke
+ *     point (userForToken / api/me / login).
  *  3. Syncs the Greece auto-assignment based on the account's NEW EFFECTIVE
  *     tier (elite → ensure active; below elite → end the auto-created row).
  *     Best-effort: an assignment-sync failure must not fail the tier write.

@@ -1,8 +1,10 @@
 import { coachAssignments } from '@gym/db';
 import { eq } from 'drizzle-orm';
+import { after } from 'next/server';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -30,6 +32,18 @@ export async function DELETE(
   const { id } = await params;
   const db = getDb();
 
+  // Did this DELETE end a LIVE assignment? Only then has the member really lost
+  // a coach and earned a notice. Read the pre-state first: `.returning()` below
+  // reports the row AFTER the flip, so 'ended' there says nothing about what the
+  // row was a moment ago. The update itself is left exactly as it was — same
+  // unconditional where, same 200-vs-404 semantics, same response shape.
+  const before = await db
+    .select({ status: coachAssignments.status })
+    .from(coachAssignments)
+    .where(eq(coachAssignments.id, id))
+    .limit(1);
+  const endedLive = before[0]?.status === 'active';
+
   const updated = await db
     .update(coachAssignments)
     .set({ status: 'ended' })
@@ -48,6 +62,24 @@ export async function DELETE(
     coachId: assignment.coachId,
     assignmentId: assignment.id,
   });
+
+  // The coach-side release (DELETE /api/coach/users/[userId]) notifies the
+  // member; the ADMIN unassign was silent, so a member's coach vanished with no
+  // notice. Same event + copy as that route. Only on a real end — re-ending an
+  // already-ended row must never tell the member their coach left.
+  if (endedLive) {
+    after(() =>
+      notify(
+        'coach_unassigned',
+        { accountId: assignment.userId },
+        {
+          title: 'Coaching update',
+          body: 'Your coaching assignment has ended. You can request a new coach whenever you are ready.',
+          data: { type: 'coach' },
+        },
+      ),
+    );
+  }
 
   return json({ assignment }, 200);
 }

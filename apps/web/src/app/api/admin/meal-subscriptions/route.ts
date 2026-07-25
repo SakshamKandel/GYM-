@@ -7,7 +7,7 @@ import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { subscriptionPaymentMutationBlock } from '@/lib/meals';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 import { clientIp } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -241,16 +241,20 @@ export async function POST(req: Request) {
   );
 
   after(() =>
-    sendPushToAccount(sub.accountId, {
-      title: 'Meal plan updated',
-      body:
-        target === 'cancelled'
-          ? 'Your meal subscription was cancelled by support.'
-          : target === 'paused'
-            ? 'Your meal subscription was paused by support.'
-            : 'Your meal subscription was resumed by support.',
-      data: { type: 'meal_subscription_updated' },
-    }),
+    notify(
+      'subscription_status',
+      { accountId: sub.accountId },
+      {
+        title: 'Meal plan updated',
+        body:
+          target === 'cancelled'
+            ? 'Support cancelled your meal plan.'
+            : target === 'paused'
+              ? 'Support paused your meal plan.'
+              : 'Support started your meal plan again.',
+        data: { type: 'meal_subscription_updated' },
+      },
+    ),
   );
 
   return json({ subscription: { id: row.id, status: row.status } }, 200);

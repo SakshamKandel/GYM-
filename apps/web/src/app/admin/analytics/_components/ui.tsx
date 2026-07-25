@@ -6,6 +6,8 @@ import {
   StatTile,
   type Column,
 } from '@/components/console';
+import { formatMoney } from '@/lib/format';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import type {
   AnalyticsData,
   CoachPerformance,
@@ -22,18 +24,12 @@ import type {
  * kit, themed with the shared tokens. Server-component friendly (pure render).
  */
 
-/** Formats a signed minor-unit amount as "NPR 12,300" (major units, rounded). */
-export function formatMoney(currency: string, amountMinor: number): string {
-  const major = Math.round(amountMinor / 100);
-  return `${currency} ${major.toLocaleString()}`;
-}
-
 /** Joins a per-currency list into "NPR 12,300 · USD 45", or "—" when empty. */
 export function formatMoneyList(list: CurrencyAmount[]): string {
   const nonZero = list.filter((a) => a.amountMinor !== 0);
   const shown = nonZero.length > 0 ? nonZero : list;
   if (shown.length === 0) return '—';
-  return shown.map((a) => formatMoney(a.currency, a.amountMinor)).join(' · ');
+  return shown.map((a) => formatMoney(a.amountMinor, a.currency)).join(' · ');
 }
 
 /** 'YYYY-MM' → "Jul 25" for a compact axis label. */
@@ -71,7 +67,7 @@ export function DeltaTiles({ deltas }: { deltas: AnalyticsData['deltas'] }) {
       <StatTile
         key={`rev-${r.currency}`}
         label={`Revenue · ${r.currency}`}
-        value={formatMoney(r.currency, r.current)}
+        value={formatMoney(r.current, r.currency)}
         hint="last 30 days"
         delta={deltaFor(r.current, r.prior)}
       />,
@@ -164,7 +160,7 @@ function RevenueSeries({
                   color: negative ? 'var(--gt-danger)' : 'var(--gt-text)',
                 }}
               >
-                {formatMoney(currency, p.amountMinor)}
+                {formatMoney(p.amountMinor, currency)}
               </div>
             </div>
           );
@@ -237,11 +233,10 @@ export function TierSnapshot({ rows }: { rows: TierCount[] }) {
                   width: 64,
                   flexShrink: 0,
                   fontSize: 13,
-                  textTransform: 'capitalize',
                   color: 'var(--gt-text)',
                 }}
               >
-                {r.tier}
+                {tierLabel(r.tier)}
               </div>
               <div
                 style={{
@@ -410,12 +405,6 @@ export function PromoTable({ rows }: { rows: PromoPerformance[] }) {
   );
 }
 
-const COACH_TIER_LABEL: Record<string, string> = {
-  silver: 'Silver',
-  gold: 'Gold',
-  elite: 'Elite',
-};
-
 const COACH_COLUMNS: Column<CoachPerformance>[] = [
   {
     key: 'coach',
@@ -434,7 +423,7 @@ const COACH_COLUMNS: Column<CoachPerformance>[] = [
           {r.displayName}
         </span>
         <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {COACH_TIER_LABEL[r.coachTier] ?? r.coachTier}
+          {tierLabel(r.coachTier)}
         </span>
       </div>
     ),

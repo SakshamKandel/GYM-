@@ -72,7 +72,7 @@ export function SetActionSheet({ set, unitPref, onSave, onDelete, saving }: Prop
       <ConfirmDialog
         visible={confirmDelete}
         title="Delete this set?"
-        message={`Remove set ${set.setNo} — ${formatWeightNumber(displayWeight(set.weightKg, unitPref))} ${unitPref} × ${set.reps}. This can't be undone.`}
+        message={`Remove set ${set.setNo}: ${formatWeightNumber(displayWeight(set.weightKg, unitPref))} ${unitPref} × ${set.reps}. This can't be undone.`}
         confirmLabel="Delete"
         cancelLabel="Cancel"
         danger

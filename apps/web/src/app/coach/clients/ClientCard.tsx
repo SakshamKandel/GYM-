@@ -1,10 +1,10 @@
 import Link from 'next/link';
 import { StatusChip, TierBadge } from '@/components/console';
+import { memberLabel } from '../_components/memberLabel';
 
 export interface Client {
   userId: string;
   displayName: string;
-  email: string;
   tier: 'starter' | 'silver' | 'gold' | 'elite';
   status: 'active' | 'suspended';
   unread: number;
@@ -28,14 +28,17 @@ function relativeTime(date: Date): string {
 /**
  * One assigned client. Whole card links to their client-detail hub (WP-10:
  * data + assign + notes + chat), replacing the old chat-only destination. Shows
- * name + email, the tier shield (identity mark, shown once), a suspended chip
- * when the account is suspended, last-active relative time, and an unread count.
- * Unread cards get a faint red left accent (the one place red is allowed —
- * an active-state signal).
+ * the display name, the tier shield (identity mark, shown once), a suspended
+ * chip when the account is suspended, last-active relative time, and an unread
+ * count. Unread cards get a faint red left accent (the one place red is
+ * allowed — an active-state signal).
+ *
+ * No email address: coaching stays in the app, and the card used to print the
+ * one detail a coach needs to take a client off it.
  */
 export function ClientCard({ client }: { client: Client }) {
   const hasUnread = client.unread > 0;
-  const name = client.displayName || client.email;
+  const name = memberLabel(client.displayName);
 
   return (
     <Link
@@ -83,18 +86,6 @@ export function ClientCard({ client }: { client: Client }) {
               {name}
             </span>
             <TierBadge tier={client.tier} />
-          </div>
-          <div
-            style={{
-              fontSize: 12,
-              color: 'var(--gt-text-dim)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              marginTop: 2,
-            }}
-          >
-            {client.email}
           </div>
         </div>
         {hasUnread ? (

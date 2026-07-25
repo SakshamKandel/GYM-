@@ -82,7 +82,7 @@ function ExercisePicker({
         } catch {
           if (cancelled) return;
           setResults([]);
-          setFetchError('Network error while searching the exercise library.');
+          setFetchError('Could not reach us just now, so the search did not run. Try again.');
           setLoading(false);
         }
       })();
@@ -325,7 +325,7 @@ export function UploadModal({
       video = data.video;
       upload = data.upload;
     } catch {
-      setError('Network error while starting the upload.');
+      setError('Could not reach us just now, so the upload did not start. Try again.');
       setPhase('idle');
       return;
     }
@@ -343,7 +343,7 @@ export function UploadModal({
       form.append('file', file);
       const up = await fetch(upload.url, { method: 'POST', body: form });
       if (!up.ok) {
-        setError('The file upload to the video host failed.');
+        setError('The file did not finish uploading. Check your connection and try again.');
         setPhase('idle');
         return;
       }
@@ -353,7 +353,7 @@ export function UploadModal({
       // the confirm needs.
       await up.json().catch(() => null);
     } catch {
-      setError('Network error while uploading the file.');
+      setError('Could not reach us just now, so the file did not finish uploading. Try again.');
       setPhase('idle');
       return;
     }
@@ -428,7 +428,7 @@ export function UploadModal({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           maxLength={200}
-          placeholder="e.g. Barbell back squat — form check"
+          placeholder="e.g. Barbell back squat form check"
           disabled={busy}
         />
 

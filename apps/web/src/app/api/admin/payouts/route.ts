@@ -4,8 +4,8 @@ import { z } from 'zod';
 import { requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
-import { coachWalletBalances } from '@/lib/promoEconomy';
-import { loadPartnerHeld } from '@/app/partner/_data';
+import { allCoachWalletBalances } from '@/lib/promoEconomy';
+import { loadPartnerHeldMinorMany, partnerHeldKey } from '@/app/partner/_data';
 
 export const runtime = 'nodejs';
 
@@ -24,6 +24,12 @@ export const runtime = 'nodejs';
  */
 
 const HISTORY_CAP = 100;
+/**
+ * Generous upper bound on the pending queue so one unbounded scan can never
+ * return the whole table. Real queues sit in the tens; hitting this would mean
+ * the queue has gone unworked for months.
+ */
+const PENDING_CAP = 500;
 
 const querySchema = z.object({ scope: z.enum(['coach', 'partner']).default('coach') });
 
@@ -67,7 +73,8 @@ async function coachQueue(db: ReturnType<typeof getDb>) {
       })
       .from(coachPayoutRequests)
       .where(eq(coachPayoutRequests.status, 'pending'))
-      .orderBy(asc(coachPayoutRequests.requestedAt)),
+      .orderBy(asc(coachPayoutRequests.requestedAt))
+      .limit(PENDING_CAP),
     db
       .select({
         id: coachPayoutRequests.id,
@@ -110,14 +117,16 @@ async function coachQueue(db: ReturnType<typeof getDb>) {
   }
 
   // Only pending rows need a live balance (to preview coverage); decided rows
-  // are historical. Balances are recomputed per coach from the ledger.
+  // are historical. Balances come from ONE grouped ledger query across just the
+  // pending coaches — a per-coach call meant a round-trip per queue row.
   const pendingCoachIds = [...new Set(pendingRows.map((r) => r.coachId))];
   const balanceByCoach = new Map<string, { currency: string; amountMinor: number }[]>();
-  await Promise.all(
-    pendingCoachIds.map(async (cid) => {
-      balanceByCoach.set(cid, await coachWalletBalances(cid));
-    }),
-  );
+  for (const b of await allCoachWalletBalances(pendingCoachIds)) {
+    const list = balanceByCoach.get(b.coachId);
+    const entry = { currency: b.currency, amountMinor: b.amountMinor };
+    if (list) list.push(entry);
+    else balanceByCoach.set(b.coachId, [entry]);
+  }
 
   const shape = (r: (typeof pendingRows)[number], includeBalance: boolean) => {
     const coach = coachById.get(r.coachId) ?? {
@@ -169,7 +178,8 @@ async function partnerQueue(db: ReturnType<typeof getDb>) {
       })
       .from(partnerPayoutRequests)
       .where(eq(partnerPayoutRequests.status, 'pending'))
-      .orderBy(asc(partnerPayoutRequests.requestedAt)),
+      .orderBy(asc(partnerPayoutRequests.requestedAt))
+      .limit(PENDING_CAP),
     db
       .select({
         id: partnerPayoutRequests.id,
@@ -199,16 +209,18 @@ async function partnerQueue(db: ReturnType<typeof getDb>) {
     for (const p of partnerRows) partnerById.set(p.id, { id: p.id, name: p.name });
   }
 
-  // Live held balance per pending partner (coverage preview; decided rows skip it).
-  const pendingPartnerIds = [...new Set(pendingRows.map((r) => r.partnerId))];
-  const heldByPartner = new Map<string, number>();
-  await Promise.all(
-    pendingPartnerIds.map(async (pid) => {
-      const currency = pendingRows.find((r) => r.partnerId === pid)?.currency ?? 'NPR';
-      const held = await loadPartnerHeld(db, pid, currency);
-      heldByPartner.set(pid, held.heldMinor);
-    }),
-  );
+  // Live held balance per pending partner (coverage preview; decided rows skip
+  // it) — summed in SQL for the whole queue at once, instead of pulling every
+  // partner's full wallet ledger into memory one partner at a time.
+  const pendingPairs = [
+    ...new Map(
+      pendingRows.map((r) => [
+        partnerHeldKey(r.partnerId, r.currency),
+        { partnerId: r.partnerId, currency: r.currency },
+      ]),
+    ).values(),
+  ];
+  const heldByKey = await loadPartnerHeldMinorMany(db, pendingPairs);
 
   const shape = (r: (typeof pendingRows)[number], includeBalance: boolean) => {
     const partner = partnerById.get(r.partnerId) ?? { id: r.partnerId, name: r.partnerId };
@@ -220,7 +232,9 @@ async function partnerQueue(db: ReturnType<typeof getDb>) {
       status: r.status,
       note: r.note,
       disbursementRef: r.disbursementRef,
-      balanceMinor: includeBalance ? heldByPartner.get(r.partnerId) ?? 0 : null,
+      balanceMinor: includeBalance
+        ? heldByKey.get(partnerHeldKey(r.partnerId, r.currency)) ?? 0
+        : null,
       requestedAt: r.requestedAt.toISOString(),
       decidedAt: r.decidedAt ? r.decidedAt.toISOString() : null,
     };

@@ -1,14 +1,18 @@
-import { exercises, planExercises, planWorkouts, plans } from '@gym/db';
-import { asc, count, inArray } from 'drizzle-orm';
+import { exercises, mealDeliveryConfig, planExercises, planWorkouts, plans } from '@gym/db';
+import { asc, count, eq, inArray } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
+import { loadDeliveryConfig } from '@/lib/meals';
 import { staffFromCookie } from '@/lib/staffSession';
 import { CatalogManager } from './_components/CatalogManager';
+import { DeliverySettingsForm } from './_components/DeliverySettingsForm';
 import type { ExerciseRow, PlanRow } from './_components/types';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Exercises & plans' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -84,6 +88,30 @@ async function loadPlans(): Promise<PlanRow[]> {
   return rows.map((r) => ({ ...r, workoutCount: workoutCountMap.get(r.id) ?? 0 }));
 }
 
+/**
+ * The meal-delivery fee/cutoff singleton plus when it was last saved.
+ * `loadDeliveryConfig` already falls back to the frozen @gym/shared defaults on
+ * a fresh install; `persisted` tells the editor whether it is showing a real
+ * row or those defaults.
+ */
+async function loadMealDeliveryConfig() {
+  const db = getDb();
+  const [config, metaRows] = await Promise.all([
+    loadDeliveryConfig(db),
+    db
+      .select({ updatedAt: mealDeliveryConfig.updatedAt })
+      .from(mealDeliveryConfig)
+      .where(eq(mealDeliveryConfig.id, 'singleton'))
+      .limit(1),
+  ]);
+  const meta = metaRows[0];
+  return {
+    config,
+    updatedAt: meta ? meta.updatedAt.toISOString() : null,
+    persisted: Boolean(meta),
+  };
+}
+
 export default async function AdminCatalogPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
@@ -92,10 +120,18 @@ export default async function AdminCatalogPage() {
 
   const [exerciseRows, planRows] = await Promise.all([loadExercises(), loadPlans()]);
 
+  // The meal-delivery fee/cutoff editor rides along on this page (it needs no
+  // nav item of its own) but is a DIFFERENT capability: it appears only for
+  // staff who also hold 'partners.manage', the key that already owns the
+  // meal-delivery vertical. A content_admin with catalog.manage alone never
+  // sees it, matching what PATCH /api/admin/meal-config enforces.
+  const canManageDelivery = permissions.has('partners.manage');
+  const delivery = canManageDelivery ? await loadMealDeliveryConfig() : null;
+
   return (
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
-        title="Exercise & plan catalog"
+        title="Exercises & plans"
         subtitle="Source of truth for the member exercise and plan library. Signed-in members receive saved edits on their next catalog refresh; offline devices show their last verified download. Deleting an exercise still used by a plan is blocked until it's removed from that plan."
       />
 
@@ -112,6 +148,14 @@ export default async function AdminCatalogPage() {
       </div>
 
       <CatalogManager exercises={exerciseRows} plans={planRows} />
+
+      {delivery ? (
+        <DeliverySettingsForm
+          config={delivery.config}
+          updatedAt={delivery.updatedAt}
+          persisted={delivery.persisted}
+        />
+      ) : null}
     </div>
   );
 }

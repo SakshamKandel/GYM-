@@ -68,7 +68,22 @@ import { getRepo } from '../../lib/repo';
  * additive (`repo.addSteps`), so manual corrections stick there.
  */
 
-export type StepPermission = 'granted' | 'denied' | 'undetermined' | 'unavailable';
+/**
+ * Sensor-permission state.
+ *
+ * 'denied' vs 'blocked' is the difference between "ask again" and "there is
+ * nothing left to ask": once the OS reports `canAskAgain === false` (iOS only
+ * ever prompts once; Android after "Don't ask again") calling
+ * `requestStepPermission()` returns instantly without a dialog, so the UI has
+ * to send the user to the system Settings app instead of re-offering a button
+ * that can no longer do anything.
+ */
+export type StepPermission =
+  | 'granted'
+  | 'denied'
+  | 'blocked'
+  | 'undetermined'
+  | 'unavailable';
 
 /**
  * Which source today's automatic steps come from RIGHT NOW:
@@ -224,7 +239,10 @@ export async function isPedometerAvailable(): Promise<boolean> {
 
 function toStepPermission(res: Pedometer.PermissionResponse): StepPermission {
   if (res.granted) return 'granted';
-  if (res.status === Pedometer.PermissionStatus.DENIED) return 'denied';
+  // Refused AND unaskable → only the system Settings app can turn it back on.
+  if (res.status === Pedometer.PermissionStatus.DENIED) {
+    return res.canAskAgain ? 'denied' : 'blocked';
+  }
   return 'undetermined';
 }
 

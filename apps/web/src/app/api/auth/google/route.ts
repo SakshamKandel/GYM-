@@ -1,6 +1,6 @@
-import { accounts, referrals } from '@gym/db';
-import { effectiveTier } from '@gym/shared';
-import { and, eq } from 'drizzle-orm';
+import { accounts } from '@gym/db';
+import { effectiveTier, maskPii } from '@gym/shared';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { canCreateSession } from '@/lib/accountStatus';
 import { createSession } from '@/lib/auth';
@@ -8,44 +8,8 @@ import { getDb } from '@/lib/db';
 import { allowedGoogleClientIds, verifyGoogleIdToken } from '@/lib/google';
 import { json, preflight, readJson } from '@/lib/http';
 import { verifyPassword } from '@/lib/password';
-import { grantDiscount } from '@/lib/promoEconomy';
-import { clientIp, rateLimit } from '@/lib/rateLimit';
-
-/** Referral reward window (SCALE-UP-PLAN §1.3 / §7.2). */
-const REFERRAL_DISCOUNT_PCT = 20;
-const REFERRAL_GRANT_DAYS = 90;
-
-/**
- * Same wiring as auth/register — NEW-ACCOUNT path only (step 3 below). If
- * anyone invited this email, flip their still-'pending' referral(s) to
- * 'joined' and grant BOTH parties a 20%/90-day discount. Best-effort: a
- * failure here must never fail the sign-in itself.
- */
-async function wireReferralsForNewAccount(accountId: string, email: string): Promise<void> {
-  try {
-    const db = getDb();
-    const joined = await db
-      .update(referrals)
-      .set({ inviteeId: accountId, status: 'joined' })
-      .where(and(eq(referrals.inviteeEmail, email), eq(referrals.status, 'pending')))
-      .returning({ referrerId: referrals.referrerId });
-
-    if (joined.length === 0) return;
-
-    const expiresAt = new Date(Date.now() + REFERRAL_GRANT_DAYS * 24 * 60 * 60 * 1000);
-    await grantDiscount({ accountId, source: 'referral', pct: REFERRAL_DISCOUNT_PCT, expiresAt });
-    for (const row of joined) {
-      await grantDiscount({
-        accountId: row.referrerId,
-        source: 'referral',
-        pct: REFERRAL_DISCOUNT_PCT,
-        expiresAt,
-      });
-    }
-  } catch {
-    // Best-effort — never fail sign-in for this.
-  }
-}
+import { wireReferralsForNewAccount } from '@/lib/promoEconomy';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 
 /**
  * POST /api/auth/google — exchange a verified Google ID token for a session.
@@ -79,8 +43,11 @@ export function OPTIONS() {
 }
 
 export async function POST(req: Request) {
-  // Token-guessing damping: 10 attempts/min per IP (in-memory, per instance).
-  const limited = rateLimit({
+  // Token-guessing ceiling: 10 attempts/min per IP. The `password` branch below
+  // links Google onto an existing password account, so this is a password
+  // endpoint too — it counts in the shared store when one is configured, and
+  // per instance when none is.
+  const limited = await rateLimitShared({
     route: 'auth/google',
     limit: 10,
     windowMs: 60_000,
@@ -183,7 +150,10 @@ export async function POST(req: Request) {
           .values({
             email: identity.email,
             googleSub: identity.sub,
-            displayName: identity.displayName,
+            // Masked on the way in: the name is shown to every coach the member
+            // works with, and a Google profile name is free text the member
+            // controls. Same rule as /api/auth/register.
+            displayName: maskPii(identity.displayName),
           })
           .returning(publicColumns)
       )[0];

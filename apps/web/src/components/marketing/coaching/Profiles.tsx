@@ -13,7 +13,7 @@ const SENIORITY = [
   {
     dot: 'bg-snow/50',
     name: 'Silver',
-    blurb: 'Verified and practicing — the entry seniority every coach starts at.',
+    blurb: 'Verified and practicing, the entry seniority every coach starts at.',
   },
   {
     dot: 'bg-gold',
@@ -23,7 +23,7 @@ const SENIORITY = [
   {
     dot: 'bg-red',
     name: 'Elite',
-    blurb: 'The platform’s most senior coaches — capacity fills fastest here.',
+    blurb: 'Our most senior coaches, so these are the rosters that fill first.',
   },
 ] as const;
 
@@ -47,7 +47,7 @@ export function CoachingProfiles() {
                 not vibes.
               </Display>
               <Lead className="mt-6">
-                Every coach passes admin verification before they appear in discovery — and
+                Every coach passes admin verification before they appear in discovery, and
                 everything you&rsquo;d want to ask is already on the profile: certifications,
                 specialties, years of practice, live capacity, and milestones they&rsquo;ve
                 logged for real clients.
@@ -55,8 +55,8 @@ export function CoachingProfiles() {
             </Reveal>
             <Reveal delay={120}>
               <ul className="mt-8 flex flex-col gap-3.5">
-                <CheckItem>Certifications, specialties and years — listed up front</CheckItem>
-                <CheckItem>Live capacity on every card — full rosters say so</CheckItem>
+                <CheckItem>Certifications, specialties and years, listed up front</CheckItem>
+                <CheckItem>Live capacity on every card, and full rosters say so</CheckItem>
                 <CheckItem>Client milestones logged by the coach, dated and public</CheckItem>
               </ul>
             </Reveal>
@@ -71,17 +71,17 @@ export function CoachingProfiles() {
                   {SENIORITY.map((t) => (
                     <div key={t.name} className="flex items-start gap-3">
                       <span aria-hidden className={`mt-[7px] size-2.5 shrink-0 rounded-full ${t.dot}`} />
-                      <p className="text-[14px] leading-relaxed text-dim">
+                      <p className="text-[14.5px] leading-relaxed text-dim">
                         <span className="font-display text-[15px] font-medium uppercase tracking-[0.04em] text-snow">
                           {t.name}
                         </span>{' '}
-                        — {t.blurb}
+                        · {t.blurb}
                       </p>
                     </div>
                   ))}
                 </div>
-                <p className="mt-5 font-mono text-[10.5px] uppercase tracking-[0.16em] text-faint">
-                  Granted by admin review — never self-assigned
+                <p className="mt-5 font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
+                  Granted by admin review, never self-assigned
                 </p>
               </div>
             </Reveal>

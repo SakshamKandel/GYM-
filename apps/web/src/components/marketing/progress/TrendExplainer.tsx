@@ -91,7 +91,7 @@ export function TrendExplainer() {
         <div className="grid items-center gap-14 lg:grid-cols-[0.9fr_1.1fr]">
           <div>
             <Reveal>
-              <Eyebrow>01 — Weight trend</Eyebrow>
+              <Eyebrow>01 · Weight trend</Eyebrow>
               <Display className="mt-4">
                 One number
                 <br />
@@ -99,14 +99,14 @@ export function TrendExplainer() {
               </Display>
               <Lead className="mt-6">
                 Your weight swings close to a kilo overnight for reasons that have nothing to
-                do with fat — water, salt, sleep, timing. The app plots every weigh-in, then
+                do with fat: water, salt, sleep, timing. The app plots every weigh-in, then
                 smooths them with an exponentially-weighted moving average so the line you
                 watch is the one that&rsquo;s actually moving.
               </Lead>
             </Reveal>
             <Reveal delay={140}>
               <ul className="mt-8 flex flex-col gap-3.5">
-                <CheckItem>A daily weigh-in takes five seconds — the math does the rest</CheckItem>
+                <CheckItem>A daily weigh-in takes five seconds. The math does the rest</CheckItem>
                 <CheckItem>The smoothing is unit-tested, not vibes-tuned</CheckItem>
                 <CheckItem>Your weekly report on Home reads the trend, never the spikes</CheckItem>
               </ul>
@@ -132,7 +132,7 @@ export function TrendExplainer() {
                     inView={inView}
                     label="Raw daily weigh-ins: jittery line swinging up to 0.8 kilograms day to day"
                   />
-                  <p className="mt-3 text-[13.5px] leading-relaxed text-dim">
+                  <p className="mt-3 text-[14.5px] leading-relaxed text-dim">
                     Jumps around on water, salt and sleep. Reading it daily is how diets die.
                   </p>
                 </div>
@@ -153,7 +153,7 @@ export function TrendExplainer() {
                     delay={400}
                     label="Smoothed trend of the same days: a calm line descending half a kilogram per week"
                   />
-                  <p className="mt-3 text-[13.5px] leading-relaxed text-dim">
+                  <p className="mt-3 text-[14.5px] leading-relaxed text-dim">
                     The same 30 days after smoothing. Steady, believable, worth acting on.
                   </p>
                 </div>

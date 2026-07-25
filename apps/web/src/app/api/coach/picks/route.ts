@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -65,11 +65,15 @@ export async function POST(req: Request) {
   }
 
   after(() =>
-    sendPushToAccount(userId, {
-      title: "Coach's pick",
-      body: 'Your coach picked you as this month’s spotlight member.',
-      data: { type: 'badge_earned', badgeId: 'coach_pick' },
-    }),
+    notify(
+      'badge_awarded',
+      { accountId: userId },
+      {
+        title: "Coach's pick",
+        body: 'Your coach picked you as this month’s spotlight member.',
+        data: { type: 'badge_earned', badgeId: 'coach_pick' },
+      },
+    ),
   );
 
   await logAudit(principal, 'coach.pick.award', 'account', userId, { monthKey });

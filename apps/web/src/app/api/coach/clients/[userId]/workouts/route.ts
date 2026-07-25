@@ -1,12 +1,13 @@
-import { type CoachAssignedWorkoutItem, coachAssignedWorkouts } from '@gym/db';
-import { maskPii } from '@gym/shared';
+import { coachAssignedWorkouts } from '@gym/db';
+import { maskPii, minTierFor } from '@gym/shared';
 import { asc, eq } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
+import { clientCanReceive, maskWorkoutItem } from '@/lib/coachContent';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -31,6 +32,17 @@ export const runtime = 'nodejs';
  * requireCoachOwnsUser(principal, userId) → 403 { error:'forbidden' } when the
  * caller has no ACTIVE assignment over this client (super_admin/main_admin
  * pass without one).
+ *
+ * TIER GATE, WRITE ONLY (SCALE-UP-PLAN §1.2): coach-assigned programs are a
+ * Silver-and-up benefit, so the member's app hides them below that floor. The
+ * write did not know that: a coach could spend ten minutes writing a program
+ * for a Starter client, the row would store, the push would fire, and the
+ * member's Train tab would show nothing — no signal to either side. POST now
+ * answers 409 { error:'tier_required', requiredTier } so the console can say
+ * which plan the client needs.
+ *
+ * GET is deliberately NOT gated. A client whose paid window lapsed keeps every
+ * plan they were already given, and their coach must still be able to read it.
  */
 
 const httpsUrl = z
@@ -68,16 +80,6 @@ const workoutColumns = {
   createdAt: coachAssignedWorkouts.createdAt,
   updatedAt: coachAssignedWorkouts.updatedAt,
 };
-
-/** Masks every client-visible free-text field of one item, in place-safe form. */
-function maskItem(item: CoachAssignedWorkoutItem): CoachAssignedWorkoutItem {
-  return {
-    ...item,
-    name: maskPii(item.name),
-    repRange: maskPii(item.repRange),
-    note: item.note !== undefined ? maskPii(item.note) : undefined,
-  };
-}
 
 export function OPTIONS() {
   return preflight();
@@ -120,6 +122,11 @@ export async function POST(
   if (!parsed.success) return json({ error: 'invalid' }, 400);
   const { title, notes, status, position, items } = parsed.data;
 
+  // Refuse rather than store something the member will never be shown.
+  if (!(await clientCanReceive(userId, 'coach_workouts'))) {
+    return json({ error: 'tier_required', requiredTier: minTierFor('coach_workouts') }, 409);
+  }
+
   const db = getDb();
 
   let resolvedPosition = position;
@@ -140,7 +147,7 @@ export async function POST(
       notes: maskPii(notes ?? ''),
       status: status ?? 'active',
       position: resolvedPosition,
-      items: items.map(maskItem),
+      items: items.map(maskWorkoutItem),
     })
     .returning(workoutColumns);
 
@@ -153,11 +160,15 @@ export async function POST(
 
   // Generic copy on purpose — the lock screen must never leak program details.
   after(() =>
-    sendPushToAccount(userId, {
-      title: 'New workout from your coach',
-      body: 'Your coach assigned you a new workout.',
-      data: { type: 'coach_plan' },
-    }),
+    notify(
+      'coach_plan',
+      { accountId: userId },
+      {
+        title: 'New workout from your coach',
+        body: 'Your coach assigned you a new workout.',
+        data: { type: 'coach_plan' },
+      },
+    ),
   );
 
   return json({ workout }, 201);

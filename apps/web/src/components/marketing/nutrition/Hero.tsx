@@ -27,7 +27,7 @@ export function NutritionHero() {
             <Reveal delay={700}>
               <Lead tone="dark" className="mt-7">
                 Scan a barcode, search dal bhat, or log your own recipe. The GM Method counts
-                kcal and macros against targets computed for your body — instantly, even with zero signal.
+                kcal and macros against targets computed for your body, instantly, even with zero signal.
               </Lead>
             </Reveal>
 
@@ -43,7 +43,7 @@ export function NutritionHero() {
             </Reveal>
 
             <Reveal delay={920}>
-              <p className="mt-8 font-mono text-[11.5px] uppercase tracking-[0.2em] text-faint">
+              <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-faint">
                 Open Food Facts · USDA · Works offline
               </p>
             </Reveal>

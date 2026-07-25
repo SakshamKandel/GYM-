@@ -18,7 +18,9 @@ import { NativeGoogleSignIn } from './NativeGoogleSignIn';
  *   flows are blocked by Google for installed apps).
  * - Web → expo-auth-session popup flow (requires a "Web application" OAuth
  *   client with localhost origins registered).
- * Env-gated: renders disabled until EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID is set.
+ *
+ * Shown ONLY where it can finish (see `googleSignInAvailable`). A button that
+ * can only fail is worse than no button: it reads as an offer.
  */
 
 // Closes the auth popup and delivers the result on web; no-op on native.
@@ -28,8 +30,28 @@ const WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
 const IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
 const ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID;
 
+/**
+ * Whether "Continue with Google" can actually complete on this platform with
+ * what this build was given.
+ *
+ * Every platform needs the web client id (it's the audience Google signs the
+ * identity into, and the only id our server checks). iPhones need a second
+ * one: Apple's Google sign-in goes out to Safari and comes back through an
+ * app-specific address that only exists when the build carries its own iOS
+ * client. Without it the sheet opens and the return trip never lands, so the
+ * button is not offered there at all.
+ *
+ * Exported so the sign-in screen can drop the "or" divider when neither
+ * provider button is shown.
+ */
+export function googleSignInAvailable(): boolean {
+  if (!WEB_CLIENT_ID) return false;
+  if (Platform.OS === 'ios') return Boolean(IOS_CLIENT_ID);
+  return true;
+}
+
 /** Web-only flow — safe home for the auth-session hook. */
-function WebGoogleButton({ webClientId }: { webClientId: string }) {
+function WebGoogleButton({ webClientId, returnTo }: { webClientId: string; returnTo?: string }) {
   const signInWithGoogle = useAuth((s) => s.signInWithGoogle);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,12 +68,12 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
   useEffect(() => {
     if (!response) return;
     if (response.type !== 'success') {
-      if (response.type === 'error') setError('Google sign-in was interrupted — try again');
+      if (response.type === 'error') setError('Google sign-in was interrupted. Try again');
       return;
     }
     const idToken = response.params['id_token'];
     if (!idToken) {
-      setError("Google didn't return a sign-in token — try again");
+      setError("Google sign-in didn't finish. Try again");
       return;
     }
     let cancelled = false;
@@ -63,7 +85,7 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
         successHaptic();
         // Shared staff-aware landing — a bare router.replace('/') bounced
         // staff accounts to /welcome ("login did nothing").
-        enterApp();
+        enterApp(returnTo);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -83,7 +105,7 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [response, signInWithGoogle]);
+  }, [response, signInWithGoogle, returnTo]);
 
   return (
     <View style={googleStyles.wrap}>
@@ -104,25 +126,22 @@ function WebGoogleButton({ webClientId }: { webClientId: string }) {
         </Animated.View>
       ) : null}
       {linkToken ? (
-        <GoogleLinkPrompt idToken={linkToken} onCancel={() => setLinkToken(null)} />
+        <GoogleLinkPrompt
+          idToken={linkToken}
+          returnTo={returnTo}
+          onCancel={() => setLinkToken(null)}
+        />
       ) : null}
     </View>
   );
 }
 
-export function GoogleSignInButton() {
-  if (!WEB_CLIENT_ID) {
-    return (
-      <View style={googleStyles.wrap}>
-        <GooglePill onPress={() => undefined} disabled busy={false} />
-        <AppText variant="caption" color={colors.textFaint} style={googleStyles.centered}>
-          Google sign-in activates once configured
-        </AppText>
-      </View>
-    );
-  }
+export function GoogleSignInButton({ returnTo }: { returnTo?: string }) {
+  // Belt and braces with the sign-in screen's own check: this button never
+  // renders anywhere it cannot finish.
+  if (!WEB_CLIENT_ID || !googleSignInAvailable()) return null;
   if (Platform.OS === 'web') {
-    return <WebGoogleButton webClientId={WEB_CLIENT_ID} />;
+    return <WebGoogleButton webClientId={WEB_CLIENT_ID} returnTo={returnTo} />;
   }
-  return <NativeGoogleSignIn webClientId={WEB_CLIENT_ID} />;
+  return <NativeGoogleSignIn webClientId={WEB_CLIENT_ID} returnTo={returnTo} />;
 }

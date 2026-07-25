@@ -1,10 +1,10 @@
 import Link from 'next/link';
 import { TierChip } from '@/components/console';
+import { memberInitial, memberLabel } from './memberLabel';
 
 export interface InboxUser {
   userId: string;
   displayName: string;
-  email: string;
   tier: 'starter' | 'silver' | 'gold' | 'elite';
   lastMessagePreview: string | null;
   lastMessageSender: 'user' | 'coach' | null;
@@ -59,9 +59,10 @@ function UnreadBadge({ count }: { count: number }) {
 
 /**
  * One assigned user in the inbox. The whole card links to their thread. Shows
- * name, tier chip, last-message preview (prefixed "You:" when the coach sent
- * it), relative time, and an unread badge. Unread rows get a faint left accent
- * and a slightly brighter preview. Server-component friendly.
+ * the display name (never an email — coaching stays in the app), tier chip,
+ * last-message preview (prefixed "You:" when the coach sent it), relative time,
+ * and an unread badge. Unread rows get a faint left accent and a slightly
+ * brighter preview. Server-component friendly.
  */
 export function UserRow({ user }: { user: InboxUser }) {
   const hasUnread = user.unreadCount > 0;
@@ -104,7 +105,7 @@ export function UserRow({ user }: { user: InboxUser }) {
           color: 'var(--gt-text-dim)',
         }}
       >
-        {(user.displayName || user.email).charAt(0).toUpperCase()}
+        {memberInitial(user.displayName)}
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -126,7 +127,7 @@ export function UserRow({ user }: { user: InboxUser }) {
               whiteSpace: 'nowrap',
             }}
           >
-            {user.displayName || user.email}
+            {memberLabel(user.displayName)}
           </span>
           <TierChip tier={user.tier} />
         </div>

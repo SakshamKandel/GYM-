@@ -1,4 +1,5 @@
 import { ktmAddDays, ktmDateString } from '@gym/shared';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { PageHeader, type ChartPoint } from '@/components/console';
 import { getDb } from '@/lib/db';
@@ -17,6 +18,7 @@ import { formatDateLabel } from './_format';
 import styles from './dashboard.module.css';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Today' };
 export const dynamic = 'force-dynamic';
 
 const EARNINGS_RANGE_DAYS = 30;
@@ -58,8 +60,8 @@ export default async function PartnerDashboardPage() {
   return (
     <div className={styles.page}>
       <PageHeader
-        title="Partner dashboard"
-        subtitle={`${partnerName} · ${formatDateLabel(today)} · Live kitchen and business performance.`}
+        title="Today"
+        subtitle={`${partnerName} · ${formatDateLabel(today)} · What the kitchen is cooking now, and how the week is going.`}
         secondaryAction={
           <Link href="/partner/history" className={styles.secondaryAction}>
             Order history

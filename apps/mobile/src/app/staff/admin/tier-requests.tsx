@@ -54,7 +54,7 @@ const TIER_LABEL: Record<CoachTier, string> = {
 };
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'not_found') return 'That request is no longer available.';
   return "Couldn't load the queue.";
@@ -66,14 +66,14 @@ function errorLine(code: StaffErrorCode): string {
  * current tier has already overtaken) as "Couldn't load the queue.", which
  * names the wrong operation and gives no actionable next step. */
 function decideErrorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
   if (code === 'not_an_upgrade')
-    return "The coach's tier already changed — this request is no longer an upgrade. Refresh the queue.";
+    return "The coach's tier already changed, so this request is no longer an upgrade. Refresh the queue.";
   if (code === 'not_found' || code === 'conflict')
-    return 'This request was already decided — refresh the queue.';
-  if (code === 'invalid') return 'Review note is too long — shorten it and try again.';
-  if (code === 'rate_limited') return 'Too many attempts — wait a moment and try again.';
+    return 'This request was already decided. Refresh the queue.';
+  if (code === 'invalid') return 'Review note is too long. Shorten it and try again.';
+  if (code === 'rate_limited') return 'Too many attempts. Wait a moment and try again.';
   return "Couldn't submit that decision. Try again.";
 }
 
@@ -272,7 +272,7 @@ export default function AdminTierRequestsScreen() {
 
             {COACH_TIER_RANK[selected.requestedTier] <= COACH_TIER_RANK[selected.coach.coachTier] ? (
               <AppText variant="caption" color={colors.warning}>
-                The requested tier isn&apos;t higher than the coach&apos;s current badge — approving
+                The requested tier isn&apos;t higher than the coach&apos;s current badge, so approving
                 won&apos;t change anything meaningful. Consider rejecting instead.
               </AppText>
             ) : null}

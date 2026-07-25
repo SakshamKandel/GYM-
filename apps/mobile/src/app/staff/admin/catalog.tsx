@@ -78,11 +78,11 @@ const GOALS: { key: GoalType; label: string }[] = [
 function errorLine(code: StaffErrorCode): string {
   switch (code) {
     case 'unauthorized':
-      return 'Your session expired — sign in again.';
+      return 'Your session expired. Sign in again.';
     case 'forbidden':
       return "You don't have permission to manage the catalog.";
     case 'conflict':
-      return 'That id is already in use — try another.';
+      return 'That id is already in use. Try another.';
     case 'invalid':
       return 'Some details were rejected. Check the fields and try again.';
     case 'not_found':
@@ -137,7 +137,7 @@ function CatalogSyncBanner() {
     <View style={styles.banner}>
       <Ionicons name="information-circle-outline" size={18} color={colors.textDim} />
       <AppText variant="caption" color={colors.textDim} style={styles.bannerText}>
-        Live catalog — signed-in members receive saved edits on their next refresh. Offline
+        Live catalog. Signed-in members receive saved edits on their next refresh. Offline
         devices keep their last verified download.
       </AppText>
     </View>
@@ -299,7 +299,7 @@ function ExerciseSheet({
           <AppTextInput
             value={form.slug}
             onChangeText={(t) => setForm((f) => ({ ...f, slug: t }))}
-            placeholder="Id (optional — generated from name if blank)"
+            placeholder="Id (optional, generated from name if blank)"
             autoCapitalize="none"
             autoCorrect={false}
             editable={!saving}
@@ -448,7 +448,7 @@ function ExercisesTab({ token }: { token: string }) {
         </View>
       ) : rows.length === 0 ? (
         <AppText variant="caption" color={colors.textFaint} style={styles.empty}>
-          No exercises match — try a different search, or add one.
+          No exercises match. Try a different search, or add one.
         </AppText>
       ) : (
         rows.map((row, i) => (
@@ -683,7 +683,7 @@ function PlanSheet({
 
         {editing ? (
           <AppText variant="caption" color={colors.textFaint}>
-            Workout structure isn’t editable from the app yet — use the web console for that.
+            Workout structure isn’t editable from the app yet. Use the web console for that.
           </AppText>
         ) : null}
 
@@ -747,7 +747,7 @@ function PlansTab({ token }: { token: string }) {
         </View>
       ) : rows.length === 0 ? (
         <AppText variant="caption" color={colors.textFaint} style={styles.empty}>
-          No plans yet — add the first one.
+          No plans yet. Add the first one.
         </AppText>
       ) : (
         rows.map((row, i) => (

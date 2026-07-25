@@ -10,9 +10,9 @@ import { StoreRow } from '@/components/marketing/download/StoreRow';
 import { WhatYouGet } from '@/components/marketing/download/WhatYouGet';
 
 export const metadata: Metadata = {
-  title: 'Download The GM Method — iOS & Android, offline-first',
+  title: 'Download The GM Method: iOS & Android, offline-first',
   description:
-    'Get The GM Method for iOS and Android. Use the whole tracker without an account, log every set offline, and start on a free Starter tier. App stores launching soon — join early access.',
+    'Get The GM Method for iOS and Android. Use the whole tracker without an account, log every set offline, and start on a free Starter tier. App stores launching soon. Join early access.',
 };
 
 export default function DownloadPage() {

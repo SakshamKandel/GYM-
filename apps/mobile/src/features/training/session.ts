@@ -15,6 +15,7 @@ import { getRepo } from '../../lib/repo';
 import { ensureTrainingCatalog, getCatalogPlanWorkout } from '../../lib/trainingCatalog';
 import { syncWorkouts } from '../sync/workoutSync';
 import { DEFAULT_ADHOC_SETS, DEFAULT_REST_SEC, nextIncompleteIndex } from './logic';
+import { armRestAlert, disarmRestAlert } from './restNotification';
 import type { CustomTemplate } from './templates';
 
 /**
@@ -56,6 +57,14 @@ interface SessionState {
   flashSetId: string | null;
   /** Optional effort rating for the NEXT logged set; consumed by commitSet. */
   pendingRpe: number | null;
+  /**
+   * Bumped every time the ACTIVE-WORKOUT identity may have changed (start,
+   * hydrate, finish, discard, reset). Surfaces outside the logger — the tab
+   * bar's live dot — watch this to know when to re-read the repo, because a
+   * cold store discarding a restored workout moves nothing else in this state
+   * (status/workoutId were already idle/null).
+   */
+  revision: number;
 
   /** Create a workout (or resume the active one). Used by /workout/start. */
   start: (planWorkoutId: string | null) => Promise<void>;
@@ -87,6 +96,11 @@ interface SessionState {
   clearFlash: () => void;
   /** Persist finish + streak. Returns the workout id for the recap route. */
   finish: () => Promise<string | null>;
+  /**
+   * Throw the open workout away. Works from a cold store too (falls back to
+   * the repo's active workout), so discarding after an app restart really
+   * deletes the row instead of silently leaving it to be resumed.
+   */
   discard: () => Promise<void>;
   reset: () => void;
 }
@@ -98,6 +112,17 @@ function stopRestTimer(): void {
     clearInterval(restTimer);
     restTimer = null;
   }
+}
+
+/**
+ * No rest is running any more: stop the tick AND drop the backgrounded
+ * end-of-rest alert. Anywhere `rest` goes null (skip, natural end, new
+ * workout, finish/discard) must go through here so a pocketed phone never
+ * buzzes for a rest the member already ended.
+ */
+function clearRest(): void {
+  stopRestTimer();
+  disarmRestAlert();
 }
 
 /**
@@ -234,7 +259,7 @@ export const useSession = create<SessionState>()((set, get) => {
       }
       const remaining = Math.ceil((r.endsAt - Date.now()) / 1000);
       if (remaining <= 0) {
-        stopRestTimer();
+        clearRest();
         warnHaptic();
         set({ rest: null });
       } else if (remaining !== r.remainingSec) {
@@ -253,6 +278,7 @@ export const useSession = create<SessionState>()((set, get) => {
     rest: null,
     flashSetId: null,
     pendingRpe: null,
+    revision: 0,
 
     start: async (planWorkoutId) => {
       const repo = await getRepo();
@@ -281,7 +307,7 @@ export const useSession = create<SessionState>()((set, get) => {
           e.lastSets = await repo.getLastSetsForExercise(e.exerciseId, log.id);
         }),
       );
-      stopRestTimer();
+      clearRest();
       set({
         status: 'active',
         workoutId: log.id,
@@ -292,6 +318,7 @@ export const useSession = create<SessionState>()((set, get) => {
         rest: null,
         flashSetId: null,
         pendingRpe: null,
+        revision: get().revision + 1,
       });
     },
 
@@ -319,7 +346,7 @@ export const useSession = create<SessionState>()((set, get) => {
           e.lastSets = await repo.getLastSetsForExercise(e.exerciseId, log.id);
         }),
       );
-      stopRestTimer();
+      clearRest();
       set({
         status: 'active',
         workoutId: log.id,
@@ -330,6 +357,7 @@ export const useSession = create<SessionState>()((set, get) => {
         rest: null,
         flashSetId: null,
         pendingRpe: null,
+        revision: get().revision + 1,
       });
     },
 
@@ -359,7 +387,7 @@ export const useSession = create<SessionState>()((set, get) => {
           e.lastSets = await repo.getLastSetsForExercise(e.exerciseId, log.id);
         }),
       );
-      stopRestTimer();
+      clearRest();
       set({
         status: 'active',
         workoutId: log.id,
@@ -370,6 +398,7 @@ export const useSession = create<SessionState>()((set, get) => {
         rest: null,
         flashSetId: null,
         pendingRpe: null,
+        revision: get().revision + 1,
       });
     },
 
@@ -418,7 +447,7 @@ export const useSession = create<SessionState>()((set, get) => {
       );
       let currentIdx = exercises.findIndex((e) => e.loggedSets.length < e.targetSets);
       if (currentIdx < 0) currentIdx = Math.max(0, exercises.length - 1);
-      stopRestTimer();
+      clearRest();
       set({
         status: 'active',
         workoutId: active.id,
@@ -429,6 +458,7 @@ export const useSession = create<SessionState>()((set, get) => {
         rest: null,
         flashSetId: null,
         pendingRpe: null,
+        revision: get().revision + 1,
       });
       return true;
     },
@@ -652,8 +682,12 @@ export const useSession = create<SessionState>()((set, get) => {
 
     startRest: (sec) => {
       if (sec <= 0) return;
-      set({ rest: { totalSec: sec, remainingSec: sec, endsAt: Date.now() + sec * 1000 } });
+      const endsAt = Date.now() + sec * 1000;
+      set({ rest: { totalSec: sec, remainingSec: sec, endsAt } });
       runRestTimer();
+      // Backgrounded phones get no tick and no haptic — arm the local alert
+      // so the rest still ends out loud. Fire-and-forget: logging never waits.
+      armRestAlert(endsAt);
     },
 
     adjustRest: (deltaSec) => {
@@ -662,17 +696,19 @@ export const useSession = create<SessionState>()((set, get) => {
       const endsAt = r.endsAt + deltaSec * 1000;
       const remaining = Math.ceil((endsAt - Date.now()) / 1000);
       if (remaining <= 0) {
-        stopRestTimer();
+        clearRest();
         set({ rest: null });
         return;
       }
       set({
         rest: { totalSec: Math.max(r.totalSec, remaining), remainingSec: remaining, endsAt },
       });
+      // ±15s moved the finish line — the alert follows it.
+      armRestAlert(endsAt);
     },
 
     skipRest: () => {
-      stopRestTimer();
+      clearRest();
       set({ rest: null });
     },
 
@@ -702,15 +738,20 @@ export const useSession = create<SessionState>()((set, get) => {
     },
 
     discard: async () => {
-      const s = get();
-      if (!s.workoutId) return;
       const repo = await getRepo();
-      await repo.deleteWorkout(s.workoutId);
+      // The store is memory-only, so after a cold start the id is null while
+      // the workout row is very much alive. Falling back to the repo's own
+      // active workout is what makes "Discard & start new" actually discard
+      // instead of silently no-op'ing (and then resuming the old session).
+      // getRepo() is already owner-scoped, so this can only ever reach the
+      // signed-in account's (or this guest session's) own workout.
+      const workoutId = get().workoutId ?? (await repo.getActiveWorkout())?.id ?? null;
+      if (workoutId !== null) await repo.deleteWorkout(workoutId);
       get().reset();
     },
 
     reset: () => {
-      stopRestTimer();
+      clearRest();
       set({
         status: 'idle',
         workoutId: null,
@@ -721,6 +762,7 @@ export const useSession = create<SessionState>()((set, get) => {
         rest: null,
         flashSetId: null,
         pendingRpe: null,
+        revision: get().revision + 1,
       });
     },
   };

@@ -60,7 +60,7 @@ export function NotesPanel({ userId }: { userId: string }) {
       setMsg({ kind: 'ok', text: 'Saved.' });
       setBusy(false);
     } catch {
-      setMsg({ kind: 'err', text: 'Network error. Retry.' });
+      setMsg({ kind: 'err', text: 'Could not reach us just now. Try again.' });
       setBusy(false);
     }
   }

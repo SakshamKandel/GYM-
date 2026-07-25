@@ -122,7 +122,7 @@ export function LogEditor({ exercise, unitPref, onLog, logging, appliedSuggestio
         <AppText variant="label" color={colors.textDim}>
           {setLabel}
         </AppText>
-        <AppText variant="caption" color={colors.textFaint} numberOfLines={1}>
+        <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
           {exercise.exerciseName}
         </AppText>
       </View>
@@ -137,7 +137,9 @@ export function LogEditor({ exercise, unitPref, onLog, logging, appliedSuggestio
         />
         <Stepper label="reps" value={reps} onChange={handleRepsChange} step={1} min={1} max={100} />
       </View>
-      {exercise.equipment === 'barbell' ? <PlateStrip weightKg={weightKg} /> : null}
+      {exercise.equipment === 'barbell' ? (
+        <PlateStrip weightKg={weightKg} unitPref={unitPref} />
+      ) : null}
       {/* Optional effort rating — tap again to clear; never blocks LOG SET. */}
       <View style={styles.rpeRow}>
         <AppText variant="label" color={colors.textFaint} style={styles.rpeLabel}>

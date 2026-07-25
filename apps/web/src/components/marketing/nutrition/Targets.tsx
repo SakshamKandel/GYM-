@@ -74,10 +74,10 @@ function TargetsFlow() {
                 inView ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0'
               }`}
             >
-              <p className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-dim">
+              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-dim">
                 {inp.label}
               </p>
-              <p className="mt-0.5 text-[13.5px] font-semibold text-snow">{inp.value}</p>
+              <p className="mt-0.5 text-[14.5px] font-semibold text-snow">{inp.value}</p>
             </div>
           ))}
         </div>
@@ -93,20 +93,20 @@ function TargetsFlow() {
             inView ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'
           }`}
         >
-          <p className="font-mono text-[9.5px] uppercase tracking-[0.18em] text-dim">
+          <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-dim">
             Daily targets
           </p>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="mkt-text-steel font-display text-[46px] font-medium leading-none">
               <CountUp to={2450} duration={1400} />
             </span>
-            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-dim">
+            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-dim">
               kcal
             </span>
           </div>
           <div className="mkt-divider my-4" />
           <div className="flex items-baseline justify-between">
-            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-dim">
+            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-dim">
               Protein
             </span>
             <span className="font-display text-[26px] font-medium text-snow">
@@ -115,7 +115,7 @@ function TargetsFlow() {
             </span>
           </div>
           <div className="mt-2.5 flex items-baseline justify-between">
-            <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-water">
+            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-water">
               Water
             </span>
             <span className="font-display text-[26px] font-medium text-snow">
@@ -140,7 +140,7 @@ export function NutritionTargets() {
 
           <div className="order-1 lg:order-2">
             <Reveal>
-              <Eyebrow>04 — Targets</Eyebrow>
+              <Eyebrow>04 · Targets</Eyebrow>
             </Reveal>
             <Reveal delay={80}>
               <Display size="lg" className="mt-4">
@@ -151,14 +151,14 @@ export function NutritionTargets() {
             </Reveal>
             <Reveal delay={160}>
               <Lead className="mt-6">
-                A two-minute onboarding quiz — goal, body, training days — feeds the target
+                A two-minute onboarding quiz (goal, body, training days) feeds the target
                 engine that sets your daily kcal, protein and water. Change your goal and
                 the numbers follow. No spreadsheet required.
               </Lead>
             </Reveal>
             <Reveal delay={240}>
               <ul className="mt-8 flex flex-col gap-3.5">
-                <CheckItem>12-step quiz, done once — edit any answer later</CheckItem>
+                <CheckItem>12-step quiz, done once, and you can edit any answer later</CheckItem>
                 <CheckItem>Targets recompute when your weight or goal changes</CheckItem>
                 <CheckItem>Water tracking with one-tap glasses against a daily goal</CheckItem>
                 <CheckItem>Rings on the Food dashboard fill toward today&rsquo;s targets</CheckItem>

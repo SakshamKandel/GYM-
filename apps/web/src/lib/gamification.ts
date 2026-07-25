@@ -1,8 +1,6 @@
 import {
   accounts,
   awardedBadges,
-  buddyLinks,
-  buddyQuestAwards,
   challengeMembers,
   checkIns,
   coachChallenges,
@@ -31,8 +29,7 @@ import {
   type BadgeProgressStats,
   type Rank,
 } from '@gym/shared';
-import { and, eq, gte, inArray, lt, or } from 'drizzle-orm';
-import { acceptedBuddyIds } from './buddy';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import { getDb } from './db';
 
 /**
@@ -47,8 +44,7 @@ import { getDb } from './db';
  *
  * Idempotency: xpEvents unique(accountId,kind,sourceKey), awardedBadges
  * unique(accountId,badgeId), restShieldUses unique(accountId,weekStart),
- * buddyQuestAwards unique(monthKey,accountA,accountB), coachPicks/
- * coachChallenges unique(coachId,monthKey) — every insert here uses
+ * coachPicks/coachChallenges unique(coachId,monthKey) — every insert here uses
  * onConflictDoNothing so re-running this function is always safe.
  *
  * `runAwardEngine` NEVER throws — any unexpected error is caught, logged, and
@@ -73,13 +69,6 @@ function monthKeyOf(iso: string): string {
 function addDaysIso(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-/** First day (yyyy-mm-01) of the month AFTER `monthKey` (yyyy-mm). */
-function nextMonthStart(monthKey: string): string {
-  const d = new Date(`${monthKey}-01T00:00:00Z`);
-  d.setUTCMonth(d.getUTCMonth() + 1);
   return d.toISOString().slice(0, 10);
 }
 
@@ -113,8 +102,8 @@ export interface GamificationResult {
 
 /**
  * Recompute everything for one account: XP ledger top-ups, weekly streak
- * cache, Rest Shield auto-consumption, badge awards, and buddy-quest /
- * coach-challenge completions. Safe to call as often as needed.
+ * cache, Rest Shield auto-consumption, badge awards, and coach-challenge
+ * completions. Safe to call as often as needed.
  *
  * NEVER throws — for the fire-and-forget `after()` callers (sync ingest,
  * check-in insert, coach flag restore) where a gamification bug must never
@@ -366,9 +355,6 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
 
   const prCount = realPrSets.length;
 
-  const buddyIds = await acceptedBuddyIds(db, accountId);
-  const hasBuddy = buddyIds.length > 0;
-
   // Distinct ISO weeks with a check-in — the crew check-in badges
   // (checkin_10/checkin_25) and rank gate are bounded per week, mirroring the
   // weekly check-in XP bound above (design law 1), not raw row counts.
@@ -382,7 +368,6 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
     streakWeeksBest: bestStreakWeeks,
     sessionDayIsos,
     checkInCount: checkInWeekCount,
-    hasBuddy,
   };
 
   const earnedBadgeIds = computeEarnedBadgeIds(badgeInput);
@@ -457,18 +442,8 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
     }
   }
 
-  // ── Buddy co-op quest completion (both sides >= 12 session-days in the
-  //    month, ranked only) — evaluated for current AND previous month for the
-  //    same late-sync/timezone reason as coach challenges above, for every
-  //    accepted buddy pair involving this account. Idempotent via
-  //    buddyQuestAwards unique(month, pair). ────────────────────────────────
-  await evaluateBuddyQuests(db, accountId, monthKey);
-  await evaluateBuddyQuests(db, accountId, previousMonthKey);
-
-  // Re-read the badge count AFTER every award path above (including the
-  // buddy-quest pass, which can award directly and isn't reflected in
-  // newBadgeIds) so `badges.earned` below is never stale by one on the exact
-  // call that completes a quest.
+  // Re-read the badge count AFTER every award path above so `badges.earned`
+  // below is never stale by one on the exact call that awards a badge.
   const finalBadgeCountRows = await db
     .select({ badgeId: awardedBadges.badgeId })
     .from(awardedBadges)
@@ -604,8 +579,8 @@ function liftBestsAndTonnage(rankedSets: readonly RankedSetRow[]): {
 export async function computeBadgeStatsForAccount(
   db: Db,
   accountId: string,
-): Promise<BadgeProgressStats> {
-  const [workoutRows, setRows, checkInRows, profileRows, buddyIds] = await Promise.all([
+): Promise<BadgeProgressStats & { hasBuddy: false }> {
+  const [workoutRows, setRows, checkInRows, profileRows] = await Promise.all([
     db
       .select({ id: syncedWorkouts.id, date: syncedWorkouts.date, ranked: syncedWorkouts.ranked })
       .from(syncedWorkouts)
@@ -628,7 +603,6 @@ export async function computeBadgeStatsForAccount(
       .from(gamificationProfiles)
       .where(eq(gamificationProfiles.accountId, accountId))
       .limit(1),
-    acceptedBuddyIds(db, accountId),
   ]);
 
   // Lifetime session-days count ALL finished workouts (ranked + unranked),
@@ -649,110 +623,14 @@ export async function computeBadgeStatsForAccount(
     // Distinct ISO weeks with a check-in — same weekly bounding as the
     // engine's checkin_* badge input (design law 1).
     checkInCount: new Set(checkInRows.map((c) => weekStartIso(c.date))).size,
-    hasBuddy: buddyIds.length > 0,
+    // Wire compatibility only: `hasBuddy` was dropped from BadgeProgressStats
+    // when the Buddy feature was deleted, but shipped mobile builds validate
+    // this payload with a schema that still REQUIRES the key — omitting it
+    // makes their whole stats object fail to parse, which silently hides every
+    // locked-badge progress bar. Always false now; safe to delete once those
+    // builds are out of circulation.
+    hasBuddy: false,
   };
-}
-
-/**
- * Checks every accepted-buddy pair involving `accountId` for this month's
- * "both log 12 session-days" co-op quest. Awards the `buddy_quest` badge to
- * BOTH sides + pushes both when a pair newly completes it. accountA/B are
- * stored lexicographically sorted so a pair has exactly one award row.
- */
-async function evaluateBuddyQuests(db: Db, accountId: string, monthKey: string): Promise<void> {
-  const links = await db
-    .select({ requesterId: buddyLinks.requesterId, addresseeId: buddyLinks.addresseeId })
-    .from(buddyLinks)
-    .where(
-      and(
-        eq(buddyLinks.status, 'accepted'),
-        or(eq(buddyLinks.requesterId, accountId), eq(buddyLinks.addresseeId, accountId)),
-      ),
-    );
-  const buddyIds = links.map((l) => (l.requesterId === accountId ? l.addresseeId : l.requesterId));
-  if (buddyIds.length === 0) return;
-
-  const QUEST_TARGET = 12;
-  const monthStart = `${monthKey}-01`;
-  // Upper-bound the window to this month only — otherwise a future-dated
-  // workout (client-supplied date, only regex-validated) would satisfy
-  // gte(monthStart) in EVERY future month's evaluation forever.
-  const monthEndExclusive = nextMonthStart(monthKey);
-
-  for (const buddyId of buddyIds) {
-    const [a, b] = accountId < buddyId ? [accountId, buddyId] : [buddyId, accountId];
-
-    const already = await db
-      .select({ id: buddyQuestAwards.id })
-      .from(buddyQuestAwards)
-      .where(
-        and(
-          eq(buddyQuestAwards.monthKey, monthKey),
-          eq(buddyQuestAwards.accountA, a),
-          eq(buddyQuestAwards.accountB, b),
-        ),
-      )
-      .limit(1);
-    if (already.length > 0) continue;
-
-    const [mineDays, theirsDays] = await Promise.all([
-      sessionDaysThisMonth(db, accountId, monthStart, monthEndExclusive),
-      sessionDaysThisMonth(db, buddyId, monthStart, monthEndExclusive),
-    ]);
-
-    if (mineDays >= QUEST_TARGET && theirsDays >= QUEST_TARGET) {
-      const inserted = await db
-        .insert(buddyQuestAwards)
-        .values({ monthKey, accountA: a, accountB: b })
-        .onConflictDoNothing({
-          target: [buddyQuestAwards.monthKey, buddyQuestAwards.accountA, buddyQuestAwards.accountB],
-        })
-        .returning({ id: buddyQuestAwards.id });
-      if (inserted.length === 0) continue; // lost the race to a concurrent call
-
-      for (const who of [accountId, buddyId]) {
-        await db
-          .insert(awardedBadges)
-          .values({ accountId: who, badgeId: 'buddy_quest', status: 'logged' })
-          .onConflictDoNothing({ target: [awardedBadges.accountId, awardedBadges.badgeId] });
-        await db
-          .insert(xpEvents)
-          .values({ accountId: who, kind: 'badge', sourceKey: 'buddy_quest', amount: XP_AWARDS.badge })
-          .onConflictDoNothing({ target: [xpEvents.accountId, xpEvents.kind, xpEvents.sourceKey] });
-      }
-
-      // B30 (WP-2): the buddy-quest completion push was removed — the Buddy
-      // feature was deleted end-to-end (2026-07-17/18), so this send site
-      // targeted a screen/deep-link that no longer exists. The badge + XP award
-      // above still land (idempotent) for legacy pairs; there is simply no push.
-    }
-  }
-}
-
-/**
- * Distinct RANKED session-days for an account within [monthStart, monthEnd)
- * (yyyy-mm-01, exclusive upper bound). The upper bound matters: without it a
- * future-dated workout (client-supplied date) would count toward every
- * future month's leaderboard/quest/challenge progress forever.
- */
-async function sessionDaysThisMonth(
-  db: Db,
-  accountId: string,
-  monthStart: string,
-  monthEndExclusive: string,
-): Promise<number> {
-  const rows = await db
-    .select({ date: syncedWorkouts.date })
-    .from(syncedWorkouts)
-    .where(
-      and(
-        eq(syncedWorkouts.accountId, accountId),
-        eq(syncedWorkouts.ranked, true),
-        gte(syncedWorkouts.date, monthStart),
-        lt(syncedWorkouts.date, monthEndExclusive),
-      ),
-    );
-  return new Set(rows.map((r) => r.date)).size;
 }
 
 /**

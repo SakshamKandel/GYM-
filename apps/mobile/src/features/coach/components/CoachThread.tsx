@@ -45,6 +45,13 @@ interface Props {
   starters?: string[];
   /** The coach's display name for bubbles/labels; defaults to Greece. */
   coachName?: string;
+  /**
+   * Optional one-time seed for the composer — used when a screen already knows
+   * what the message is about (e.g. /support opened from a meal order). Applied
+   * on mount only, so it never overwrites what the member is typing. Omit it and
+   * the composer starts empty exactly as before.
+   */
+  initialDraft?: string;
 }
 
 const MAX_LEN = 2000;
@@ -168,9 +175,13 @@ function CoachThreadSession({
   placeholder,
   starters,
   coachName,
+  initialDraft,
 }: Props) {
-  const { messages, loading, stale, sending, reload, send, sendError } = useCoachThread(kind);
-  const [draft, setDraft] = useState('');
+  const { messages, loading, stale, sending, reload, send, sendError, contactHidden } =
+    useCoachThread(kind);
+  // The seed is only an INITIAL value: it lands once, on mount, so later
+  // renders (and a changing prop) leave whatever the member typed alone.
+  const [draft, setDraft] = useState(initialDraft ?? '');
   const listRef = useRef<FlatList<CoachMessage>>(null);
   const inputRef = useRef<TextInput>(null);
 
@@ -295,7 +306,24 @@ function CoachThreadSession({
           <AppText variant="body" color={colors.error}>
             {sendError === 'forbidden'
               ? 'Messaging is an Elite feature.'
-              : "Couldn't send — check your connection and try again."}
+              : // Not a connection problem, and saying so sent people to their
+                // wifi settings: the server refuses to store a coach message
+                // with no coach behind it, so nobody would ever read this one.
+                sendError === 'coach_unavailable'
+                ? "You don't have a coach right now, so there's nobody to read this. Pick a coach and your messages go straight to them."
+                : "Couldn't send. Check your connection and try again."}
+          </AppText>
+        </View>
+      ) : null}
+
+      {/* Same row as a send error, quieter ink: the message DID land, we just
+          took the contact details out of it first. Only coach chat is masked
+          (support threads are not), and the server only ever sets the flag
+          there, so the kind check is belt and braces. */}
+      {contactHidden && kind === 'coach_chat' ? (
+        <View style={styles.errorRow}>
+          <AppText variant="body" color={colors.textDim}>
+            Sent, but we hid the contact details in that message. Coaching stays in the app.
           </AppText>
         </View>
       ) : null}

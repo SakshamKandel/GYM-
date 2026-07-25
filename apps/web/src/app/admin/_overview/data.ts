@@ -6,12 +6,14 @@ import {
   coachMessages,
   coachProfiles,
   coachTierRequests,
+  mealPaymentRequests,
   paymentRequests,
   planVideos,
 } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
 import { and, count, countDistinct, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/lib/db';
+import { loadMonthlyRevenue, type RevenueByCurrency } from '@/lib/overviewRevenue';
 
 export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
 
@@ -64,7 +66,10 @@ export interface OpsQueue {
   pendingApplications: number | null; // coach.application.review
   pendingTierRequests: number | null; // coach.application.review
   pendingPayments: number | null; // payments.review
-  revenueThisMonth: { currency: string; amountMinor: number }[] | null; // payments.review
+  /** Meal-order / subscription-cycle receipts awaiting review — payments.review. */
+  pendingMealPayments: number | null;
+  /** Net settled-minus-refunded revenue for the Nepal month — payments.review. */
+  revenueThisMonth: RevenueByCurrency[] | null;
   unreadSupport: number | null; // support.thread.read
 }
 
@@ -103,12 +108,14 @@ END`;
  * not see is ever queried, let alone returned. Everything is a pure read via
  * getDb — no API route needed here.
  *
- * Kept in lockstep BY HAND with the API twin (api/admin/overview/route.ts).
+ * Kept in lockstep BY HAND with the API twin (api/admin/overview/route.ts) —
+ * except the money, which is no longer hand-kept: both call
+ * `loadMonthlyRevenue` from @/lib/overviewRevenue (the two copies had already
+ * drifted to different months and a different revenue basis).
  */
 export async function loadOverview(perms: OverviewPerms): Promise<OverviewData> {
   const db = getDb();
   const now = new Date();
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
   const membership = perms.members ? await loadMembership(now) : null;
   const recentActivity = perms.audit ? await loadActivity() : null;
@@ -117,6 +124,7 @@ export async function loadOverview(perms: OverviewPerms): Promise<OverviewData> 
     pendingApplications: null,
     pendingTierRequests: null,
     pendingPayments: null,
+    pendingMealPayments: null,
     revenueThisMonth: null,
     unreadSupport: null,
   };
@@ -137,32 +145,23 @@ export async function loadOverview(perms: OverviewPerms): Promise<OverviewData> 
   }
 
   if (perms.payments) {
-    const [pending, revenue] = await Promise.all([
+    const [pending, pendingMeals, revenue] = await Promise.all([
       db
         .select({ n: count() })
         .from(paymentRequests)
         .where(eq(paymentRequests.status, 'pending')),
+      // Meal-order / subscription-cycle eSewa+Khalti receipts awaiting review —
+      // the sibling queue to `paymentRequests`, and previously invisible on this
+      // dashboard even though the API twin already reported it.
       db
-        .select({
-          currency: paymentRequests.currency,
-          // cast to text then Number() — a raw ::int sum overflows past ~21.4M
-          // minor units (E12).
-          total: sql<string>`sum(${paymentRequests.amountMinor})::text`,
-        })
-        .from(paymentRequests)
-        .where(
-          and(
-            eq(paymentRequests.status, 'approved'),
-            gte(paymentRequests.decidedAt, monthStart),
-          ),
-        )
-        .groupBy(paymentRequests.currency),
+        .select({ n: count() })
+        .from(mealPaymentRequests)
+        .where(eq(mealPaymentRequests.status, 'pending')),
+      loadMonthlyRevenue(now),
     ]);
     ops.pendingPayments = Number(pending[0]?.n ?? 0);
-    ops.revenueThisMonth = revenue.map((r) => ({
-      currency: r.currency,
-      amountMinor: Number(r.total ?? 0),
-    }));
+    ops.pendingMealPayments = Number(pendingMeals[0]?.n ?? 0);
+    ops.revenueThisMonth = revenue;
   }
 
   if (perms.support) {

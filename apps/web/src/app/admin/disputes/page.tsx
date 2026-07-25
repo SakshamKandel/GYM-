@@ -1,6 +1,7 @@
 import { accounts, mealDisputes, mealOrders, mealPartners } from '@gym/db';
 import { orderNumber } from '@gym/shared';
 import { asc, eq, inArray } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -9,6 +10,7 @@ import { staffFromCookie } from '@/lib/staffSession';
 import { DisputesQueue, type DisputeRow } from './_components/DisputesQueue';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Disputes' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -87,7 +89,7 @@ export default async function AdminDisputesPage() {
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Disputes"
-        subtitle="Every member-reported problem with a delivered order. Resolving here never moves money automatically — issue a refund from Meal Payments first if one is owed."
+        subtitle="Every member-reported problem with a delivered order. Resolving here never moves money. Open a dispute to refund its order first, if one is owed."
       />
 
       <div
@@ -103,7 +105,11 @@ export default async function AdminDisputesPage() {
         <StatTile label="Live total" value={disputes.length} />
       </div>
 
-      <DisputesQueue disputes={disputes} />
+      <DisputesQueue
+        disputes={disputes}
+        canViewMembers={permissions.has('members.read')}
+        canRefund={permissions.has('payments.review')}
+      />
     </div>
   );
 }

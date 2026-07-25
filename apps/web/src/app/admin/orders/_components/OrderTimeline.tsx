@@ -1,6 +1,8 @@
 'use client';
 
+import type { OrderStatus } from '@gym/shared';
 import { useEffect, useState } from 'react';
+import { formatShortDateTime, ORDER_STATUS_LABEL } from '@/lib/format';
 
 /**
  * Admin order-drawer timeline (Pack I-timeline / WP-8). Renders the append-only
@@ -22,16 +24,16 @@ interface TimelineEvent {
 
 const ACTOR_LABEL: Record<string, string> = {
   member: 'Member',
-  partner: 'Partner',
+  partner: 'Restaurant',
   admin: 'Admin',
 };
 
-const FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-});
+/** Raw DB status → the same words the rest of the console (and the restaurant)
+ * uses. Unknown/legacy values fall back to the stored string rather than a
+ * blank. */
+function statusLabel(status: string): string {
+  return ORDER_STATUS_LABEL[status as OrderStatus] ?? status;
+}
 
 export function OrderTimeline({ orderId }: { orderId: string }) {
   const [events, setEvents] = useState<TimelineEvent[] | null>(null);
@@ -88,12 +90,14 @@ export function OrderTimeline({ orderId }: { orderId: string }) {
           />
           <div style={{ minWidth: 0 }}>
             <div style={{ color: 'var(--gt-text)' }}>
-              {e.fromStatus ? `${e.fromStatus} → ${e.toStatus}` : `Created (${e.toStatus})`}
+              {e.fromStatus
+                ? `${statusLabel(e.fromStatus)} → ${statusLabel(e.toStatus)}`
+                : `Created (${statusLabel(e.toStatus)})`}
               {e.actorRole ? (
                 <span style={{ color: 'var(--gt-text-dim)' }}> · {ACTOR_LABEL[e.actorRole] ?? e.actorRole}</span>
               ) : null}
             </div>
-            <div style={{ color: 'var(--gt-text-dim)' }}>{FMT.format(new Date(e.createdAt))}</div>
+            <div style={{ color: 'var(--gt-text-dim)' }}>{formatShortDateTime(e.createdAt)}</div>
             {e.note ? <div style={{ marginTop: 2 }}>{e.note}</div> : null}
           </div>
         </div>

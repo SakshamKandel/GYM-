@@ -25,6 +25,13 @@ export interface SupportThreadRow {
   assignedTo: string | null;
   assignedToLabel: string | null;
   resolvedAt: string | null;
+  /**
+   * This member pays for priority support, so their ticket is answered first
+   * and the inbox says so out loud. Decided once in lib/supportThreads.ts
+   * (isPrioritySupport) and carried here, so the badge and the row order can
+   * never tell staff two different things.
+   */
+  priority: boolean;
 }
 
 /** One message in a thread — matches GET/POST /api/admin/support/threads/[accountId]. */

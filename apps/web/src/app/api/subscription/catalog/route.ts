@@ -6,6 +6,7 @@ import { billingMode } from '@/lib/billing';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
+import { loadPayee } from '@/lib/paymentPayee';
 import { bestActiveGrant } from '@/lib/promoEconomy';
 
 export const runtime = 'nodejs';
@@ -26,6 +27,13 @@ export const runtime = 'nodejs';
  *
  * Discount: the account's single best active discount_grants row (if any) is
  * applied to every non-zero tier price.
+ *
+ * Payee (ADDITIVE `payee` key, null when unconfigured): where a member actually
+ * sends the money for the manual-payment rail this response already implies.
+ * Without it the paywall asked for a transfer and a receipt while naming no
+ * wallet or account, so the only working way to buy anything could not be
+ * completed. `null` means no rail is configured and the paywall hides manual
+ * payment entirely rather than offering a destination-less transfer.
  */
 
 const TRIAL_DAYS = 2;
@@ -79,7 +87,7 @@ export async function GET(req: Request) {
   const currencies = new Set(complete.map((row) => row.currency));
   if (currencies.size !== 1) return json({ error: 'catalog_unavailable' }, 503);
 
-  const grant = await bestActiveGrant(me.id);
+  const [grant, payee] = await Promise.all([bestActiveGrant(me.id), loadPayee()]);
 
   const tiers = complete.map((p) => {
     if (p.tier === 'starter' || p.amountMinor === 0 || !grant) {
@@ -103,5 +111,8 @@ export async function GET(req: Request) {
   // self-serve endpoint returns 402 for every paid tier, so the client shows an
   // "Available in the app store" affordance (INTL) or the eSewa/Khalti section
   // (NP) instead of a Choose CTA that always fails.
-  return json({ region, currency, tiers, trialDays: TRIAL_DAYS, billingMode: billingMode() }, 200);
+  return json(
+    { region, currency, tiers, trialDays: TRIAL_DAYS, billingMode: billingMode(), payee },
+    200,
+  );
 }

@@ -1,20 +1,31 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useFocusEffect } from 'expo-router';
+import {
+  STALE_ALWAYS_REFETCH,
+  STALE_CATALOG_MS,
+  STALE_DIRECTORY_MS,
+} from '../../lib/resourceCache';
 import { isCurrentSessionRequest } from '../../lib/sessionRequest';
+import {
+  useSessionScopedResource,
+  type SessionScopedListState,
+} from '../../lib/useSessionScopedResource';
 import { useAuth } from '../../state/auth';
 import {
   fetchMealMenu,
   fetchMealPartners,
   fetchMealQuote,
   fetchMealSubscriptions,
+  fetchMyMealOrderPage,
   fetchMyMealOrders,
   listAddresses,
+  quoteMealPlan,
   quoteMealSubscriptionEdit,
   toMealsError,
   type MealAddress,
   type MealMenuFilters,
   type MealOrder,
   type MealPartner,
+  type MealPlanQuoteInput,
   type MealQuote,
   type MealQuoteInput,
   type MealSubscription,
@@ -24,72 +35,28 @@ import {
 } from './api';
 
 /**
- * Load-on-focus hooks for the meals feature, same shape as
- * features/gyms/hooks.ts (last-known state survives a transient failure; a
- * quiet retry covers the rest) — but every fetch here needs a signed-in
- * `token`, so a null token just holds the loading state at rest instead of
- * fetching (the screen renders its own "sign in" gate around that).
+ * Load-on-focus hooks for the meals feature. The account-scoped loader itself
+ * now lives in lib/useSessionScopedResource (features can't import each other,
+ * and the gyms feature needs the same guarantee) — last-known state survives a
+ * transient failure, a quiet retry covers the rest, and a response from a
+ * previous account can never land in the new one. Every fetch here needs a
+ * signed-in `token`, so a null token just holds the loading state at rest
+ * instead of fetching (the screen renders its own "sign in" gate around that).
+ *
+ * Caching, via the shared keys below: read-mostly lists (the partner directory,
+ * a partner's menu) may be served from memory for a few minutes instead of
+ * refetching every single time a screen regains focus. Anything the member is
+ * watching change — orders, subscriptions, addresses — keeps refetching on
+ * every focus and only shares requests that are already in flight together.
  */
 
-interface ListState<T> {
-  data: T[] | null;
-  loading: boolean;
-  error: boolean;
-  /** Re-run the fetch (e.g. after a mutation elsewhere on the screen). */
-  reload: () => void;
-  /** Clear the error flag and retry. */
-  retry: () => void;
-}
-
-function useLoadOnFocus<T>(token: string | null, fetcher: (token: string) => Promise<T[]>): ListState<T> {
-  const [snapshot, setSnapshot] = useState<{ token: string; data: T[] } | null>(null);
-  const [errorToken, setErrorToken] = useState<string | null>(null);
-  const requestSequence = useRef(0);
-
-  const reload = useCallback(() => {
-    if (!token) return;
-    const request = { token, sequence: ++requestSequence.current };
-    void (async () => {
-      try {
-        const next = await fetcher(token);
-        if (
-          !isCurrentSessionRequest(request, {
-            token: useAuth.getState().token,
-            sequence: requestSequence.current,
-          })
-        ) return;
-        setSnapshot({ token, data: next });
-        setErrorToken(null);
-      } catch {
-        if (
-          !isCurrentSessionRequest(request, {
-            token: useAuth.getState().token,
-            sequence: requestSequence.current,
-          })
-        ) return;
-        setErrorToken(token);
-      }
-    })();
-  }, [fetcher, token]);
-
-  useFocusEffect(
-    useCallback(() => {
-      reload();
-    }, [reload]),
-  );
-
-  const retry = useCallback(() => {
-    setErrorToken(null);
-    reload();
-  }, [reload]);
-
-  const data = token !== null && snapshot?.token === token ? snapshot.data : null;
-  const error = token !== null && errorToken === token;
-  return { data, loading: token !== null && data === null && !error, error, reload, retry };
-}
+export type ListState<T> = SessionScopedListState<T>;
 
 export function useMealPartners(token: string | null): ListState<MealPartner> {
-  return useLoadOnFocus(token, fetchMealPartners);
+  return useSessionScopedResource(token, fetchMealPartners, {
+    key: 'meals:partners',
+    staleMs: STALE_DIRECTORY_MS,
+  });
 }
 
 export function useMealMenu(
@@ -101,7 +68,7 @@ export function useMealMenu(
   const diet = filters?.diet;
   const date = filters?.date;
   const window = filters?.window;
-  return useLoadOnFocus(
+  return useSessionScopedResource(
     token && partnerId ? token : null,
     useCallback(
       (t: string) => {
@@ -110,22 +77,154 @@ export function useMealMenu(
       },
       [partnerId, goal, diet, date, window],
     ),
+    // Every filter is part of the key — one partner's breakfast menu must
+    // never be served for another's dinner. (The loader reads `key`/`staleMs`
+    // as plain values, so a fresh object each render costs nothing.)
+    partnerId
+      ? {
+          key: `meals:menu:${partnerId}:${goal ?? ''}:${diet ?? ''}:${date ?? ''}:${window ?? ''}`,
+          staleMs: STALE_CATALOG_MS,
+        }
+      : undefined,
   );
 }
 
 export function useMyMealOrders(token: string | null, scope: 'upcoming' | 'history'): ListState<MealOrder> {
-  return useLoadOnFocus(
+  return useSessionScopedResource(
     token,
     useCallback((t: string) => fetchMyMealOrders(t, scope), [scope]),
+    // Orders are never served from memory; the key only lets two screens
+    // asking at the same moment share one request.
+    { key: `meals:orders:${scope}`, staleMs: STALE_ALWAYS_REFETCH },
   );
 }
 
-export function useMyMealSubscriptions(token: string | null): ListState<MealSubscription> {
-  return useLoadOnFocus(token, fetchMealSubscriptions);
+/** How many past orders one page of history carries. */
+const HISTORY_PAGE_SIZE = 25;
+
+export interface MealOrderHistoryState extends ListState<MealOrder> {
+  /** The server has at least one more page of past orders. */
+  hasMore: boolean;
+  loadingMore: boolean;
+  /** The last "show older" attempt failed — the UI offers a retry. */
+  moreError: boolean;
+  loadMore: () => void;
 }
 
+interface HistoryPages {
+  token: string;
+  orders: MealOrder[];
+  nextOffset: number | null;
+}
+
+/**
+ * The member's past orders, PAGED. The list used to render whatever the first
+ * response happened to contain and then just stop — a member with a long
+ * history simply couldn't reach their older orders (or the receipts and
+ * disputes hanging off them). This keeps the account-scoping guarantees of
+ * `useSessionScopedResource` for the first page and appends further pages via
+ * the server's `nextOffset` cursor.
+ */
+export function useMealOrderHistory(token: string | null): MealOrderHistoryState {
+  const [pages, setPages] = useState<HistoryPages | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState(false);
+  // One sequence per concern: a first-page reload invalidates any in-flight
+  // "show older" fetch, and an older first-page response can never overwrite a
+  // newer one (the same rule useSessionScopedResource applies to its snapshot).
+  const firstSeqRef = useRef(0);
+  const moreSeqRef = useRef(0);
+
+  const fetchFirstPage = useCallback(async (t: string): Promise<MealOrder[]> => {
+    const sequence = ++firstSeqRef.current;
+    const page = await fetchMyMealOrderPage(t, 'history', { limit: HISTORY_PAGE_SIZE, offset: 0 });
+    if (sequence !== firstSeqRef.current) return page.orders;
+    // Any pending "show older" belongs to the list we just replaced.
+    moreSeqRef.current += 1;
+    setPages({ token: t, orders: page.orders, nextOffset: page.nextOffset });
+    setLoadingMore(false);
+    setMoreError(false);
+    return page.orders;
+  }, []);
+
+  // Deliberately NOT given a shared-cache key: `fetchFirstPage` also writes
+  // this hook instance's paging state, so it must run for every load rather
+  // than being shared with (or skipped for) another instance.
+  const base = useSessionScopedResource(token, fetchFirstPage);
+  // Anything loaded under a different account reads as "nothing yet" — same
+  // rule the base resource applies to its own snapshot.
+  const scoped = token !== null && pages?.token === token ? pages : null;
+
+  const loadMore = useCallback(() => {
+    if (!token || loadingMore) return;
+    const current = pages;
+    if (!current || current.token !== token || current.nextOffset === null) return;
+    const offset = current.nextOffset;
+    const request = { token, sequence: ++moreSeqRef.current };
+    setLoadingMore(true);
+    setMoreError(false);
+    void (async () => {
+      try {
+        const page = await fetchMyMealOrderPage(token, 'history', {
+          limit: HISTORY_PAGE_SIZE,
+          offset,
+        });
+        if (!isCurrentSessionRequest(request, { token: useAuth.getState().token, sequence: moreSeqRef.current })) {
+          return;
+        }
+        setPages((prev) => {
+          // The list was reloaded (or paged again) underneath this response.
+          if (!prev || prev.token !== token || prev.nextOffset !== offset) return prev;
+          // Newer orders can shift an offset-paged window, so a row already on
+          // screen must never be appended twice.
+          const seen = new Set(prev.orders.map((o) => o.id));
+          return {
+            token,
+            orders: [...prev.orders, ...page.orders.filter((o) => !seen.has(o.id))],
+            nextOffset: page.nextOffset,
+          };
+        });
+        setLoadingMore(false);
+      } catch {
+        if (!isCurrentSessionRequest(request, { token: useAuth.getState().token, sequence: moreSeqRef.current })) {
+          return;
+        }
+        // Keep the pages already on screen; the row turns into a retry.
+        setMoreError(true);
+        setLoadingMore(false);
+      }
+    })();
+  }, [token, loadingMore, pages]);
+
+  return {
+    ...base,
+    data: base.data === null ? null : (scoped?.orders ?? base.data),
+    hasMore: scoped?.nextOffset != null,
+    loadingMore,
+    moreError,
+    loadMore,
+  };
+}
+
+export function useMyMealSubscriptions(token: string | null): ListState<MealSubscription> {
+  return useSessionScopedResource(token, fetchMealSubscriptions, {
+    key: 'meals:subscriptions',
+    staleMs: STALE_ALWAYS_REFETCH,
+  });
+}
+
+/**
+ * Saved delivery addresses. Shared by checkout, the plan editor and both gym
+ * screens (which use the default address as a "home base" for distance), so the
+ * dedupe matters — but the member edits this list themselves, so it is never
+ * served from memory: every focus refetches, and every screen that changes an
+ * address already calls `reload`, which always goes to the network.
+ */
 export function useMealAddresses(token: string | null): ListState<MealAddress> {
-  return useLoadOnFocus(token, listAddresses);
+  return useSessionScopedResource(token, listAddresses, {
+    key: 'meals:addresses',
+    staleMs: STALE_ALWAYS_REFETCH,
+  });
 }
 
 /**
@@ -216,6 +315,67 @@ export function useMealQuote(
     };
   }
   return { quote, status, errorCode, errorDetails };
+}
+
+/**
+ * Debounced, server-authoritative price preview for a weekly plan the member
+ * hasn't created yet (POST /api/meals/plan-quote). Signup used to show no
+ * price at all — the first time anyone saw what a plan cost was after they had
+ * already started it. Same `status` contract as {@link useMealQuote}: only
+ * `'ready'` means the shown per-day price matches the plan on screen.
+ */
+export function useMealPlanQuote(
+  token: string | null,
+  input: MealPlanQuoteInput | null,
+): {
+  quote: MealSubscriptionPlanQuote | null;
+  status: MealQuoteStatus;
+  errorCode: string | null;
+} {
+  const [quote, setQuote] = useState<MealSubscriptionPlanQuote | null>(null);
+  const [status, setStatus] = useState<MealQuoteStatus>('idle');
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const key = token && input ? JSON.stringify(input) : null;
+  const scope = token && key ? `${token}|${key}` : null;
+  const [stateScope, setStateScope] = useState<string | null>(null);
+  const seqRef = useRef(0);
+
+  useEffect(() => {
+    if (!token || !input || !key) {
+      seqRef.current += 1;
+      setStateScope(null);
+      setStatus('idle');
+      setQuote(null);
+      setErrorCode(null);
+      return;
+    }
+    const request = { token, sequence: ++seqRef.current };
+    setStateScope(scope);
+    setStatus('loading');
+    setErrorCode(null);
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const next = await quoteMealPlan(token, input);
+          if (!isCurrentSessionRequest(request, { token: useAuth.getState().token, sequence: seqRef.current })) return;
+          setQuote(next);
+          setStatus('ready');
+        } catch (error) {
+          if (!isCurrentSessionRequest(request, { token: useAuth.getState().token, sequence: seqRef.current })) return;
+          setQuote(null);
+          setErrorCode(toMealsError(error).code);
+          setStatus('error');
+        }
+      })();
+    }, QUOTE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, key, scope]);
+
+  if (stateScope !== scope) {
+    return { quote: null, status: scope === null ? 'idle' : 'loading', errorCode: null };
+  }
+  return { quote, status, errorCode };
 }
 
 /** Debounced, server-authoritative preview for the recurring-plan edit form. */

@@ -2,10 +2,13 @@ import 'server-only';
 
 import {
   accounts,
+  coachMessages,
   mealAvailability,
   mealBillingCycles,
+  mealDisputes,
   mealOrderEvents,
   mealOrderItems,
+  mealOrderRatings,
   mealOrders,
   meals,
   mealSubSkips,
@@ -16,12 +19,17 @@ import {
   type Db,
 } from '@gym/db';
 import {
+  LIVE_DISPUTE_STATUSES,
   TERMINAL_ORDER_STATUSES,
   ktmAddDays,
+  ktmDateString,
   ktmDayOfWeek,
   partnerBalance,
+  ratingAggregateFromTotals,
   weekBoundsFor,
   type CycleStatus,
+  type DisputeReason,
+  type DisputeStatus,
   type MealCurrency,
   type MealDietType,
   type MealGoalTag,
@@ -31,7 +39,7 @@ import {
   type PartnerLedgerRow,
   type PartnerLedgerType,
 } from '@gym/shared';
-import { and, asc, desc, eq, gte, inArray, lte, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lte, ne, notInArray, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { effectivePermissionSet, type Permission, type Principal } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -118,6 +126,12 @@ export interface PartnerMenuItem {
   isActive: boolean;
   sortOrder: number;
   availability: { dayOfWeek: number; window: MealWindow }[];
+  /**
+   * The subset of `availability` the partner has flagged sold out right now.
+   * Kept as its OWN list so the schedule shape above is unchanged: sold-out is
+   * a temporary "we ran out" state, not part of the weekly schedule.
+   */
+  soldOutSlots: { dayOfWeek: number; window: MealWindow }[];
 }
 
 /** The resolved partner-portal context for a server component. */
@@ -333,14 +347,21 @@ export async function loadPartnerMenu(db: Db, partnerId: string): Promise<Partne
       mealId: mealAvailability.mealId,
       dayOfWeek: mealAvailability.dayOfWeek,
       window: mealAvailability.window,
+      soldOut: mealAvailability.soldOut,
     })
     .from(mealAvailability)
     .where(inArray(mealAvailability.mealId, ids));
   const availByMeal = new Map<string, { dayOfWeek: number; window: MealWindow }[]>();
+  const soldOutByMeal = new Map<string, { dayOfWeek: number; window: MealWindow }[]>();
   for (const a of availRows) {
     const list = availByMeal.get(a.mealId) ?? [];
     list.push({ dayOfWeek: a.dayOfWeek, window: a.window });
     availByMeal.set(a.mealId, list);
+    if (a.soldOut) {
+      const soldOut = soldOutByMeal.get(a.mealId) ?? [];
+      soldOut.push({ dayOfWeek: a.dayOfWeek, window: a.window });
+      soldOutByMeal.set(a.mealId, soldOut);
+    }
   }
 
   return rows.map((m) => ({
@@ -361,6 +382,7 @@ export async function loadPartnerMenu(db: Db, partnerId: string): Promise<Partne
     isActive: m.isActive,
     sortOrder: m.sortOrder,
     availability: availByMeal.get(m.id) ?? [],
+    soldOutSlots: soldOutByMeal.get(m.id) ?? [],
   }));
 }
 
@@ -968,15 +990,99 @@ export async function loadPartnerHeld(
   };
 }
 
+/** Map key for {@link loadPartnerHeldMinorMany} — held is per partner AND currency. */
+export function partnerHeldKey(partnerId: string, currency: string): string {
+  return `${partnerId}:${currency}`;
+}
+
 /**
- * Subscription-revenue the platform holds for the partner: Σ `amountMinor` of
- * PAID (prepaid digital) billing cycles across the partner's subscriptions. A
- * transparency figure surfaced on the Subscriptions page (WP-7 imports this);
- * it is informational — one-time order held drives the payout balance.
+ * Held balance (minor units) for MANY partner+currency pairs in TWO grouped
+ * queries — the exact math of {@link loadPartnerHeld} (live delivered-digital-paid
+ * earned + ledger adjustments − ledger payouts), summed IN SQL rather than by
+ * fetching every ledger row into Node. The admin payout queue previews coverage
+ * for every pending partner at once, so calling loadPartnerHeld per partner cost
+ * two round-trips per row (and pulled that partner's whole ledger each time).
+ *
+ * Returns a map keyed by {@link partnerHeldKey}; every requested pair gets an
+ * entry (0 when the partner has no orders and no ledger).
+ */
+export async function loadPartnerHeldMinorMany(
+  db: Db,
+  pairs: readonly { partnerId: string; currency: string }[],
+): Promise<Map<string, number>> {
+  const held = new Map<string, number>();
+  if (pairs.length === 0) return held;
+  const partnerIds = [...new Set(pairs.map((p) => p.partnerId))];
+
+  const [earnedRows, ledgerRows] = await Promise.all([
+    // Earned base — same filters as loadPartnerAllTime's `digitalMinor`
+    // (delivered, paid, esewa/khalti), grouped by partner. Currency-agnostic,
+    // exactly as the per-partner path.
+    db
+      .select({
+        partnerId: mealOrders.partnerId,
+        digital: sql<string>`coalesce(sum(${mealOrders.totalMinor}) filter (where ${mealOrders.paymentMethod} in ('esewa','khalti') and ${mealOrders.paymentStatus} = 'paid'), 0)::text`,
+      })
+      .from(mealOrders)
+      .where(and(inArray(mealOrders.partnerId, partnerIds), eq(mealOrders.status, 'delivered')))
+      .groupBy(mealOrders.partnerId),
+    // Ledger movements per partner+currency. `not in ('earning','payout')`
+    // mirrors partnerBalance's else-branch (anything that isn't an earning or a
+    // payout folds into adjustments). sum(int) → bigint cast to text + Number()
+    // so a large lifetime ledger can't overflow an ::int cast.
+    db
+      .select({
+        partnerId: partnerWalletLedger.partnerId,
+        currency: partnerWalletLedger.currency,
+        adjustment: sql<string>`coalesce(sum(${partnerWalletLedger.amountMinor}) filter (where ${partnerWalletLedger.type} not in ('earning','payout')), 0)::text`,
+        paid: sql<string>`coalesce(sum(${partnerWalletLedger.amountMinor}) filter (where ${partnerWalletLedger.type} = 'payout'), 0)::text`,
+      })
+      .from(partnerWalletLedger)
+      .where(inArray(partnerWalletLedger.partnerId, partnerIds))
+      .groupBy(partnerWalletLedger.partnerId, partnerWalletLedger.currency),
+  ]);
+
+  const earnedByPartner = new Map<string, number>();
+  for (const r of earnedRows) earnedByPartner.set(r.partnerId, Number(r.digital));
+  const movementByKey = new Map<string, { adjustmentMinor: number; paidMinor: number }>();
+  for (const r of ledgerRows) {
+    movementByKey.set(partnerHeldKey(r.partnerId, r.currency), {
+      adjustmentMinor: Number(r.adjustment),
+      paidMinor: Number(r.paid),
+    });
+  }
+
+  for (const { partnerId, currency } of pairs) {
+    const key = partnerHeldKey(partnerId, currency);
+    const move = movementByKey.get(key);
+    held.set(
+      key,
+      (earnedByPartner.get(partnerId) ?? 0) + (move?.adjustmentMinor ?? 0) - (move?.paidMinor ?? 0),
+    );
+  }
+  return held;
+}
+
+/**
+ * Prepaid subscription money for weeks the partner has NOT finished delivering:
+ * Σ `amountMinor` of PAID (prepaid digital) billing cycles whose Sun–Sat week
+ * has not yet ended (KTM). A transparency figure on the Subscriptions page —
+ * "cash already collected for meals still to cook".
+ *
+ * It used to sum every paid cycle ever recorded, with nothing subtracted, so it
+ * only ever grew: a partner delivering steadily for a year saw a "held" number
+ * a year's revenue tall, most of it long since delivered and already counted
+ * (and payable) through the delivered-order held balance. Capping it at the
+ * current + future weeks makes it mean what it says, and stops it double-
+ * counting money that is already withdrawable.
+ *
+ * Deliberately NOT part of the payout floor: {@link loadPartnerHeld} is the
+ * single money path for what a partner may withdraw, and it is correct as-is.
  */
 export async function loadPartnerSubscriptionHeldMinor(
   db: Db,
   partnerId: string,
+  today: string = ktmDateString(new Date()),
 ): Promise<number> {
   const [row] = await db
     .select({
@@ -984,7 +1090,9 @@ export async function loadPartnerSubscriptionHeldMinor(
     })
     .from(mealBillingCycles)
     .innerJoin(mealSubscriptions, eq(mealSubscriptions.id, mealBillingCycles.subscriptionId))
-    .where(eq(mealSubscriptions.partnerId, partnerId));
+    .where(
+      and(eq(mealSubscriptions.partnerId, partnerId), gte(mealBillingCycles.weekEnd, today)),
+    );
   return Number(row?.held ?? '0');
 }
 
@@ -1020,6 +1128,377 @@ function serializePayoutRequest(r: {
     disbursementRef: r.disbursementRef,
     requestedAt: r.requestedAt.toISOString(),
     decidedAt: r.decidedAt ? r.decidedAt.toISOString() : null,
+  };
+}
+
+// ── Customer feedback: ratings + reported problems ──────────────────────────
+//
+// Members rate a delivered order and can report a problem with it, and until now
+// neither ever reached the restaurant that cooked it: the star was aggregated
+// only into public discovery, and a complaint went straight to staff. A kitchen
+// that cannot see what its customers said cannot fix anything.
+//
+// Both projections keep the §2 isolation rule: scoped to the caller's OWN
+// partnerId, and NO member identity leaves this layer. A note is already
+// maskPii'd at write time; here it is attributed to the order, never to a person.
+
+/** One member note left on a delivered order (no member identity). */
+export interface PartnerRatingNote {
+  orderId: string;
+  stars: number;
+  note: string;
+  createdAt: string;
+  deliveryDate: string;
+  window: MealWindow;
+}
+
+/** The partner's own star record: average, count, spread, and recent notes. */
+export interface PartnerRatingSummary {
+  /** One-decimal average over valid 1-5 stars. 0 when never rated. */
+  average: number;
+  /** Number of ratings behind the average. 0 when never rated. */
+  count: number;
+  /** How many ratings landed on each star, 1 → 5. */
+  distribution: { stars: number; count: number }[];
+  /** Newest notes first. Star-only ratings (no words) are not listed here. */
+  recent: PartnerRatingNote[];
+}
+
+const RATING_NOTE_LIMIT = 20;
+
+/**
+ * The partner's own rating record. The average is folded through the SHARED
+ * {@link ratingAggregateFromTotals}, the same helper public discovery uses, so
+ * the number a restaurant sees and the number a member sees can never drift
+ * apart by a rounding rule.
+ */
+export async function loadPartnerRatingSummary(
+  db: Db,
+  partnerId: string,
+): Promise<PartnerRatingSummary> {
+  const [totals, notes] = await Promise.all([
+    db
+      .select({
+        n: sql<string>`count(*) filter (where ${mealOrderRatings.stars} between 1 and 5)::text`,
+        sum: sql<string>`coalesce(sum(${mealOrderRatings.stars}) filter (where ${mealOrderRatings.stars} between 1 and 5), 0)::text`,
+        s1: sql<string>`count(*) filter (where ${mealOrderRatings.stars} = 1)::text`,
+        s2: sql<string>`count(*) filter (where ${mealOrderRatings.stars} = 2)::text`,
+        s3: sql<string>`count(*) filter (where ${mealOrderRatings.stars} = 3)::text`,
+        s4: sql<string>`count(*) filter (where ${mealOrderRatings.stars} = 4)::text`,
+        s5: sql<string>`count(*) filter (where ${mealOrderRatings.stars} = 5)::text`,
+      })
+      .from(mealOrderRatings)
+      .where(eq(mealOrderRatings.partnerId, partnerId)),
+    db
+      .select({
+        orderId: mealOrderRatings.orderId,
+        stars: mealOrderRatings.stars,
+        note: mealOrderRatings.note,
+        createdAt: mealOrderRatings.createdAt,
+        deliveryDate: mealOrders.deliveryDate,
+        window: mealOrders.window,
+      })
+      .from(mealOrderRatings)
+      .innerJoin(mealOrders, eq(mealOrders.id, mealOrderRatings.orderId))
+      .where(and(eq(mealOrderRatings.partnerId, partnerId), ne(mealOrderRatings.note, '')))
+      .orderBy(desc(mealOrderRatings.createdAt))
+      .limit(RATING_NOTE_LIMIT),
+  ]);
+
+  const row = totals[0];
+  const aggregate = ratingAggregateFromTotals(Number(row?.sum ?? '0'), Number(row?.n ?? '0'));
+  return {
+    average: aggregate.average,
+    count: aggregate.count,
+    distribution: [
+      { stars: 5, count: Number(row?.s5 ?? '0') },
+      { stars: 4, count: Number(row?.s4 ?? '0') },
+      { stars: 3, count: Number(row?.s3 ?? '0') },
+      { stars: 2, count: Number(row?.s2 ?? '0') },
+      { stars: 1, count: Number(row?.s1 ?? '0') },
+    ],
+    recent: notes.map((n) => ({
+      orderId: n.orderId,
+      stars: n.stars,
+      note: n.note,
+      createdAt: n.createdAt.toISOString(),
+      deliveryDate: n.deliveryDate,
+      window: n.window,
+    })),
+  };
+}
+
+/** One reported problem raised against one of the partner's own orders. */
+export interface PartnerDisputeRow {
+  id: string;
+  orderId: string;
+  reason: DisputeReason;
+  /** The member's own words (already masked at write time). May be empty. */
+  note: string;
+  status: DisputeStatus;
+  /** What the platform team decided, once they have decided. */
+  resolution: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+  deliveryDate: string;
+  window: MealWindow;
+  totalMinor: number;
+  currency: MealCurrency;
+}
+
+const DISPUTE_LIMIT = 50;
+
+/** Live-dispute rank: still open on top, then newest first. */
+function disputeRank(status: DisputeStatus): number {
+  return (LIVE_DISPUTE_STATUSES as readonly DisputeStatus[]).includes(status) ? 0 : 1;
+}
+
+/**
+ * Problems members reported about THIS partner's orders, live ones first. The
+ * partner cannot change a dispute (resolution stays admin-authoritative and
+ * never auto-refunds), but it can finally see one, which is the difference
+ * between a complaint it can answer and a complaint it never hears about.
+ */
+export async function loadPartnerDisputes(
+  db: Db,
+  partnerId: string,
+): Promise<PartnerDisputeRow[]> {
+  const rows = await db
+    .select({
+      id: mealDisputes.id,
+      orderId: mealDisputes.orderId,
+      reason: mealDisputes.reason,
+      note: mealDisputes.note,
+      status: mealDisputes.status,
+      resolution: mealDisputes.resolution,
+      createdAt: mealDisputes.createdAt,
+      decidedAt: mealDisputes.decidedAt,
+      deliveryDate: mealOrders.deliveryDate,
+      window: mealOrders.window,
+      totalMinor: mealOrders.totalMinor,
+      currency: mealOrders.currency,
+    })
+    .from(mealDisputes)
+    .innerJoin(mealOrders, eq(mealOrders.id, mealDisputes.orderId))
+    .where(eq(mealOrders.partnerId, partnerId))
+    .orderBy(desc(mealDisputes.createdAt))
+    .limit(DISPUTE_LIMIT);
+
+  return rows
+    .map((r) => ({
+      id: r.id,
+      orderId: r.orderId,
+      reason: r.reason as DisputeReason,
+      note: r.note,
+      status: r.status as DisputeStatus,
+      resolution: r.resolution,
+      createdAt: r.createdAt.toISOString(),
+      decidedAt: r.decidedAt ? r.decidedAt.toISOString() : null,
+      deliveryDate: r.deliveryDate,
+      window: r.window,
+      totalMinor: r.totalMinor,
+      currency: r.currency,
+    }))
+    .sort((a, b) => disputeRank(a.status) - disputeRank(b.status));
+}
+
+/** How many reported problems on this partner's orders are still live. */
+export async function countLivePartnerDisputes(db: Db, partnerId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<string>`count(*)::text` })
+    .from(mealDisputes)
+    .innerJoin(mealOrders, eq(mealOrders.id, mealDisputes.orderId))
+    .where(
+      and(
+        eq(mealOrders.partnerId, partnerId),
+        inArray(mealDisputes.status, [...LIVE_DISPUTE_STATUSES]),
+      ),
+    );
+  return Number(row?.n ?? '0');
+}
+
+// ── Messages with the platform team ─────────────────────────────────────────
+//
+// The portal used to tell restaurants to "contact admin support", which did not
+// exist for them: the support inbox is reached from the member app, and a
+// partner has no member app. Rather than leave that instruction pointing at
+// nothing, the portal writes into the SAME `coach_messages` support thread the
+// staff inbox already reads and replies to, keyed by the partner's own account.
+// No new rail, no new queue for staff to remember to check.
+
+/** One message in the partner ↔ platform-team thread. */
+export interface PartnerSupportMessage {
+  id: string;
+  /** Who wrote it: the restaurant, or the platform team. */
+  from: 'you' | 'team';
+  body: string;
+  createdAt: string;
+  /** Team replies the partner has not opened yet (own messages are never unread). */
+  unread: boolean;
+}
+
+/** Newest N messages kept; the thread is a conversation, not an archive. */
+const SUPPORT_HISTORY_LIMIT = 100;
+
+/** The partner's own support thread, oldest → newest (the reading order). */
+export async function loadPartnerSupportThread(
+  db: Db,
+  accountId: string,
+): Promise<PartnerSupportMessage[]> {
+  const rows = await db
+    .select({
+      id: coachMessages.id,
+      sender: coachMessages.sender,
+      body: coachMessages.body,
+      createdAt: coachMessages.createdAt,
+      readByUser: coachMessages.readByUser,
+    })
+    .from(coachMessages)
+    .where(and(eq(coachMessages.accountId, accountId), eq(coachMessages.kind, 'support')))
+    .orderBy(desc(coachMessages.createdAt))
+    .limit(SUPPORT_HISTORY_LIMIT);
+  rows.reverse();
+
+  return rows.map((r) => ({
+    id: r.id,
+    from: r.sender === 'coach' ? ('team' as const) : ('you' as const),
+    body: r.body,
+    createdAt: r.createdAt.toISOString(),
+    unread: r.sender === 'coach' && !r.readByUser,
+  }));
+}
+
+/** Replies from the platform team the partner has not opened yet. */
+export async function countUnreadTeamReplies(db: Db, accountId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<string>`count(*)::text` })
+    .from(coachMessages)
+    .where(
+      and(
+        eq(coachMessages.accountId, accountId),
+        eq(coachMessages.kind, 'support'),
+        eq(coachMessages.sender, 'coach'),
+        eq(coachMessages.readByUser, false),
+      ),
+    );
+  return Number(row?.n ?? '0');
+}
+
+// ── Live portal alerts ──────────────────────────────────────────────────────
+
+/** One newly-arrived order, in the smallest shape the alert bar needs. */
+export interface PartnerAlertOrder {
+  orderId: string;
+  placedAt: string;
+  deliveryDate: string;
+  window: MealWindow;
+  itemCount: number;
+  totalMinor: number;
+}
+
+/** Everything the portal-wide alert bar watches for, in one read. */
+export interface PartnerAlerts {
+  /** Server clock at read time — the client's cursor for the next poll. */
+  serverTime: string;
+  /** Orders that arrived after the caller's cursor and still need the kitchen. */
+  newOrders: PartnerAlertOrder[];
+  /**
+   * True when MORE new orders exist than `newOrders` lists. The bar then says
+   * "20+" instead of a count it cannot stand behind.
+   */
+  moreNewOrders: boolean;
+  /** Every order still open, new or not. */
+  activeCount: number;
+  liveDisputes: number;
+  unreadTeamReplies: number;
+  currency: string;
+}
+
+/** How many new orders the bar lists individually before it just counts them. */
+const ALERT_ORDER_LIMIT = 20;
+
+/**
+ * The alert read: new orders since `since`, plus the two other things a
+ * restaurant should not have to go looking for (a reported problem, a reply
+ * from the platform team).
+ *
+ * `since` null means "first poll of this browser" — the cursor is established
+ * and NOTHING is reported as new, so opening the portal never dumps the whole
+ * backlog on the kitchen as if it had just arrived.
+ */
+export async function loadPartnerAlerts(
+  db: Db,
+  partnerId: string,
+  accountId: string,
+  currency: string,
+  since: Date | null,
+): Promise<PartnerAlerts> {
+  const serverTime = new Date();
+  const terminal = [...TERMINAL_ORDER_STATUSES];
+
+  interface NewOrderRow {
+    orderId: string;
+    placedAt: Date;
+    deliveryDate: string;
+    window: MealWindow;
+    totalMinor: number;
+    itemCount: string;
+  }
+
+  // Over-fetch by one so "more than we list" is a fact, not a guess.
+  const newOrders = async (): Promise<NewOrderRow[]> => {
+    if (!since) return [];
+    return db
+      .select({
+        orderId: mealOrders.id,
+        placedAt: mealOrders.placedAt,
+        deliveryDate: mealOrders.deliveryDate,
+        window: mealOrders.window,
+        totalMinor: mealOrders.totalMinor,
+        itemCount: sql<string>`(
+          select coalesce(sum(${mealOrderItems.qty}), 0)::text
+          from ${mealOrderItems}
+          where ${mealOrderItems.orderId} = ${mealOrders.id}
+        )`,
+      })
+      .from(mealOrders)
+      .where(
+        and(
+          eq(mealOrders.partnerId, partnerId),
+          notInArray(mealOrders.status, terminal),
+          gt(mealOrders.placedAt, since),
+        ),
+      )
+      .orderBy(desc(mealOrders.placedAt))
+      .limit(ALERT_ORDER_LIMIT + 1);
+  };
+
+  const [activeRow, newRows, liveDisputes, unreadTeamReplies] = await Promise.all([
+    db
+      .select({ n: sql<string>`count(*)::text` })
+      .from(mealOrders)
+      .where(and(eq(mealOrders.partnerId, partnerId), notInArray(mealOrders.status, terminal))),
+    newOrders(),
+    countLivePartnerDisputes(db, partnerId),
+    countUnreadTeamReplies(db, accountId),
+  ]);
+
+  const capped = newRows.slice(0, ALERT_ORDER_LIMIT);
+  return {
+    serverTime: serverTime.toISOString(),
+    newOrders: capped.map((r) => ({
+      orderId: r.orderId,
+      placedAt: r.placedAt.toISOString(),
+      deliveryDate: r.deliveryDate,
+      window: r.window,
+      itemCount: Number(r.itemCount),
+      totalMinor: r.totalMinor,
+    })),
+    moreNewOrders: newRows.length > ALERT_ORDER_LIMIT,
+    activeCount: Number(activeRow[0]?.n ?? '0'),
+    liveDisputes,
+    unreadTeamReplies,
+    currency,
   };
 }
 

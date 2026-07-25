@@ -53,7 +53,7 @@ export default function MembershipCardDesignScreen() {
 
       <ScreenHeader eyebrow="Membership card" title="Choose a design" style={styles.header} />
       <AppText variant="caption" color={colors.textDim} style={styles.headerCaption}>
-        Pick the face your card shows everywhere — Settings and the front-desk screen.
+        Pick the face your card shows everywhere: Settings and the front-desk screen.
       </AppText>
 
       <View style={styles.list}>

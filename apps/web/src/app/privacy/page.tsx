@@ -7,7 +7,7 @@ import { ArrowLink, Container, Display, Lead, Section } from '@/components/marke
 export const metadata: Metadata = {
   title: 'Privacy policy | The GM Method',
   description:
-    'How the GM Method fitness app handles account, health, coaching, and payment data — in plain language.',
+    'How the GM Method fitness app handles account, health, coaching, and payment data, in plain language.',
 };
 
 /** One numbered clause on the cream reading surface. */
@@ -59,7 +59,7 @@ export default function PrivacyPage() {
                 needed, and the controls available to you.
               </Lead>
               <p className="mt-7 font-mono text-[11.5px] uppercase tracking-[0.2em] text-faint">
-                Last updated · 19 July 2026
+                Last updated · 25 July 2026
               </p>
             </Reveal>
 
@@ -103,7 +103,27 @@ export default function PrivacyPage() {
                   </p>
                 </Clause>
 
-                <Clause index="05" heading="Your controls">
+                <Clause index="05" heading="Coach tips written by AI">
+                  <p>
+                    The short coach tip on the Home and Progress screens is written by a language
+                    model run by Groq, Inc. It is the only AI feature in the app. To write it we
+                    send Groq a fixed list of numbers about your training and body: what you are
+                    training for, whether you use kilograms or pounds, your trend weight, your goal
+                    weight, your height, which way your weight is moving and how fast, sessions
+                    logged this week, your weekly streak, days since your last session, total
+                    weight lifted this week, and how many personal bests you set in the last month.
+                  </p>
+                  <p>
+                    Nothing else is sent. Your name, email, messages, coach notes, food logs,
+                    photos, orders, and payment details never reach the model, and neither does any
+                    text you have typed. Tips are general training suggestions, not medical advice.
+                    If a goal weight looks outside a healthy range for your height, the app answers
+                    with a fixed message from us suggesting a professional instead of asking the
+                    model for anything.
+                  </p>
+                </Clause>
+
+                <Clause index="06" heading="Your controls">
                   <ul className="flex flex-col gap-3">
                     {[
                       'Update profile and privacy preferences in Settings.',
@@ -124,7 +144,7 @@ export default function PrivacyPage() {
                   </ul>
                 </Clause>
 
-                <Clause index="06" heading="Retention and deletion">
+                <Clause index="07" heading="Retention and deletion">
                   <p>
                     Data is kept only for as long as needed to provide the service, meet legal and
                     payment record obligations, resolve disputes, prevent fraud, and protect users.
@@ -134,7 +154,7 @@ export default function PrivacyPage() {
                   </p>
                 </Clause>
 
-                <Clause index="07" heading="Security">
+                <Clause index="08" heading="Security">
                   <p>
                     We use scoped access controls, validated API payloads, session controls, and
                     protected credential storage. No system is risk-free. If you believe your
@@ -142,7 +162,7 @@ export default function PrivacyPage() {
                   </p>
                 </Clause>
 
-                <Clause index="08" heading="Questions">
+                <Clause index="09" heading="Questions">
                   <p>
                     Open <strong className="font-semibold text-ink">Support</strong> in the app for
                     privacy questions or requests. Staff, coaches, and meal partners can use the

@@ -128,7 +128,7 @@ export function MenuBrowseScreen() {
         }`}
       >
         <span className="rounded-full bg-cream px-4 py-2 text-[11.5px] font-semibold text-ink shadow-pop">
-          Added — {lastAdded}
+          Added · {lastAdded}
         </span>
       </div>
       <AppTabBar active="meals" />

@@ -66,8 +66,8 @@ export function StreakDetailSheet({ streak }: { streak: WeeklyStreakData }) {
 
   const onTrack = streak.thisWeekDays >= streak.weeklyTarget;
   const statusText = onTrack
-    ? "This week's in the bag — keep it burning."
-    : "You're on a roll — keep it burning.";
+    ? "This week's in the bag. Keep it burning."
+    : "You're on a roll. Keep it burning.";
 
   const unit = streak.weeks === 1 ? 'Week' : 'Weeks';
   const thisWeekText = `${streak.thisWeekDays} of ${streak.weeklyTarget} this week`;

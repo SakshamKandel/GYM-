@@ -1,9 +1,13 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { z } from 'zod';
 import {
+  COACH_CLIENT_READ_DEFAULT_DAYS,
+  DISPUTE_STATUSES,
   ORDER_STATUSES,
   STAFF_ROLES,
   isPermission,
+  type DisputeStatus,
+  type MealDeliveryConfig,
   type OrderStatus,
   type Permission,
   type StaffRole,
@@ -268,6 +272,19 @@ export async function getMeStaff(token: string): Promise<StaffIdentity> {
 // Coach console
 // ════════════════════════════════════════════════════════════════
 
+/**
+ * How a client is named anywhere in the COACH console.
+ *
+ * Coaching stays inside the app, so the coach-facing routes no longer return
+ * member email addresses at all. Screens used to render "name or email", which
+ * now falls through to an empty string and leaves a nameless client showing as
+ * a blank row. Fall back to a neutral word instead, never an address. The admin
+ * console is a separate, permissioned surface and still shows real addresses.
+ */
+export function coachClientLabel(displayName: string | null | undefined): string {
+  return displayName?.trim() || 'Client';
+}
+
 const coachInboxRowSchema = z.object({
   id: z.string(),
   displayName: z.string(),
@@ -341,25 +358,43 @@ export async function markCoachThreadRead(userId: string, token: string): Promis
   parse(okSchema, data);
 }
 
-const coachReplySchema = z.object({ message: coachThreadMessageSchema });
+/**
+ * `contactHidden` is additive and OPTIONAL: an older server simply omits it and
+ * the console shows nothing extra. True means the reply was stored with contact
+ * details taken out, so the coach can be told rather than left believing a
+ * phone number went through.
+ */
+const coachReplySchema = z.object({
+  message: coachThreadMessageSchema,
+  contactHidden: z.boolean().optional(),
+});
+
+export interface CoachReply {
+  message: CoachThreadMessage;
+  /** The stored reply differs from what was typed — contact details were taken
+   * out before it was saved. Undefined on an older server. */
+  contactHidden?: boolean;
+}
 
 /**
  * POST /api/coach/threads/[userId]/reply {body} → inserts the human coach's
- * reply and returns the inserted row. 'invalid' for an empty/too-long body,
- * 'forbidden' with no active assignment.
+ * reply and returns the inserted row, plus whether contact details were taken
+ * out of it on the way in. 'invalid' for an empty/too-long body, 'forbidden'
+ * with no active assignment.
  */
 export async function replyToClient(
   userId: string,
   body: string,
   token: string,
-): Promise<CoachThreadMessage> {
+): Promise<CoachReply> {
   const data = await staffRequest({
     method: 'POST',
     path: `/api/coach/threads/${encodeURIComponent(userId)}/reply`,
     token,
     body: { body },
   });
-  return parse(coachReplySchema, data).message;
+  const parsed = parse(coachReplySchema, data);
+  return { message: parsed.message, contactHidden: parsed.contactHidden };
 }
 
 // One portfolio certification row: {title ≤80, issuer ≤80, year number|null}.
@@ -2818,28 +2853,68 @@ export async function requestPayout(
 // Admin console — payout queue (P1-12)
 // ════════════════════════════════════════════════════════════════
 
+/** Which earner rail the queue is reading — coaches or restaurant partners. */
+export type PayoutScope = 'coach' | 'partner';
+
+/**
+ * Whoever is owed the money. The server sends a `coach` on the coach rail and a
+ * `partner` on the partner rail; both collapse to this one shape so a screen
+ * renders either rail with the same row (a restaurant name sits where a coach
+ * name sits; `coachTier` is null for partners, who have no tier).
+ */
+export interface PayoutEarner {
+  id: string;
+  label: string;
+  coachTier: CoachTier | null;
+}
+
+const payoutPartnerSchema = z.object({ id: z.string(), name: z.string() });
+
 const payoutRequestRowSchema = z.object({
   id: z.string(),
-  coach: tierRequestCoachSchema,
+  // Exactly one of these is present, decided by the requested scope.
+  coach: tierRequestCoachSchema.nullish(),
+  partner: payoutPartnerSchema.nullish(),
   amountMinor: z.number(),
   currency: z.string(),
   status: payoutStatusSchema,
   note: z.string().nullable().catch(null),
   disbursementRef: z.string().nullable().catch(null),
-  // Only populated on PENDING rows (the coach's live ledger balance in the
+  // Only populated on PENDING rows (the earner's live ledger balance in the
   // requested currency, so the admin can see coverage before approving);
   // null on decided/history rows. `.catch(null)` tolerates an older server.
   balanceMinor: z.number().nullable().catch(null),
   requestedAt: z.string(),
   decidedAt: z.string().nullable().catch(null),
 });
-export type PayoutRequestRow = z.infer<typeof payoutRequestRowSchema>;
+
+export interface PayoutRequestRow {
+  id: string;
+  earner: PayoutEarner;
+  amountMinor: number;
+  currency: string;
+  status: PayoutStatus;
+  note: string | null;
+  disbursementRef: string | null;
+  balanceMinor: number | null;
+  requestedAt: string;
+  decidedAt: string | null;
+}
 
 function parsePayoutRows(raw: unknown): PayoutRequestRow[] {
   if (!Array.isArray(raw)) return [];
   return raw.flatMap((r): PayoutRequestRow[] => {
     const parsed = payoutRequestRowSchema.safeParse(r);
-    return parsed.success ? [parsed.data] : [];
+    if (!parsed.success) return [];
+    const { coach, partner, ...rest } = parsed.data;
+    const earner: PayoutEarner | null = coach
+      ? { id: coach.id, label: coach.displayName, coachTier: coach.coachTier }
+      : partner
+        ? { id: partner.id, label: partner.name, coachTier: null }
+        : null;
+    // Neither earner means an unusable row — drop it rather than show a blank
+    // name against a real amount of money.
+    return earner ? [{ ...rest, earner }] : [];
   });
 }
 
@@ -2855,32 +2930,43 @@ export interface PayoutQueue {
 }
 
 /**
- * GET /api/admin/payouts → the payout review queue: ALL pending requests plus
- * a capped tail of decided history (no `status` filter — the server always
+ * GET /api/admin/payouts?scope= → the payout review queue: ALL pending requests
+ * plus a capped tail of decided history (no `status` filter — the server always
  * returns both buckets in one call; the caller derives per-status tabs by
- * filtering `history` locally). Requires `payouts.review`.
+ * filtering `history` locally). `scope` picks the earner rail: 'coach'
+ * (default, unchanged) or 'partner' for restaurant withdrawals. Requires
+ * `payouts.review`.
  */
-export async function getPayoutRequests(token: string): Promise<PayoutQueue> {
-  const data = await staffRequest({ method: 'GET', path: '/api/admin/payouts', token });
+export async function getPayoutRequests(
+  token: string,
+  scope: PayoutScope = 'coach',
+): Promise<PayoutQueue> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/payouts?scope=${scope}`,
+    token,
+  });
   return parse(payoutQueueSchema, data);
 }
 
 /**
- * POST /api/admin/payouts/[id] {action:'approve', disbursementRef, note?} |
- * {action:'reject', note?} → decide a pending payout. Approve requires a
+ * POST /api/admin/payouts/[id] {action:'approve', scope, disbursementRef, note?}
+ * | {action:'reject', scope, note?} → decide a pending payout. `scope` must
+ * match the rail the row came from ('coach' default, or 'partner') — it selects
+ * which request table and wallet ledger the server touches. Approve requires a
  * non-empty `disbursementRef` (the bank/eSewa/Khalti transaction reference),
- * re-checks the coach's LIVE ledger balance at decision time, and posts the
- * negative wallet-ledger entry server-side; reject frees the coach's
- * one-pending slot. 'not_found' for an unknown id; 'conflict' (409, server
+ * re-checks the earner's LIVE ledger balance at decision time, and posts the
+ * payout ledger entry server-side; reject frees the earner's one-pending slot.
+ * 'not_found' for an unknown id; 'conflict' (409, server
  * `{error:'already_decided'}`) when another admin already decided it in the
  * meantime — the caller should refetch the queue rather than retry blindly;
- * 'insufficient_balance' when the coach's balance no longer covers the
+ * 'insufficient_balance' when the earner's balance no longer covers the
  * request. Requires `payouts.review`.
  */
 export async function decidePayoutRequest(
   id: string,
   action: DecideAction,
-  options: { disbursementRef?: string; note?: string },
+  options: { disbursementRef?: string; note?: string; scope?: PayoutScope },
   token: string,
 ): Promise<void> {
   const data = await staffRequest({
@@ -2889,6 +2975,7 @@ export async function decidePayoutRequest(
     token,
     body: {
       action,
+      scope: options.scope ?? 'coach',
       ...(options.disbursementRef !== undefined
         ? { disbursementRef: options.disbursementRef }
         : {}),
@@ -4164,20 +4251,54 @@ export async function clearPermissionOverride(
 // Coach console — attention queue (coach.user.read)
 // ════════════════════════════════════════════════════════════════
 
+/**
+ * The week rollup stored on a check-in row. The server sends an object; older
+ * builds of this client typed it as a string, so it always parsed to null and
+ * the numbers never reached a screen. Each field is independently `.catch`'d so
+ * one odd value can't drop the whole rollup.
+ */
+const checkInSummarySchema = z
+  .object({
+    sessions: z.number().catch(0),
+    volumeKg: z.number().catch(0),
+    prCount: z.number().catch(0),
+  })
+  .nullable()
+  .catch(null);
+export type CheckInSummary = z.infer<typeof checkInSummarySchema>;
+
+/**
+ * The latest check-in carried on an attention row. `coachReplyMessageId` is the
+ * answered marker: the coach reply route writes it, and it is the ONE field
+ * that decides whether this check-in still needs an answer. Sleep/energy/
+ * soreness are 1-5 self-ratings.
+ */
 const attentionCheckInSchema = z
   .object({
     id: z.string(),
     date: z.string().catch(''),
     note: z.string().nullable().catch(null),
-    summary: z.string().nullable().catch(null),
+    summary: checkInSummarySchema,
+    bodyweightKg: z.number().nullable().catch(null),
+    sleep: z.number().nullable().catch(null),
+    energy: z.number().nullable().catch(null),
+    soreness: z.number().nullable().catch(null),
+    coachReplyMessageId: z.string().nullable().catch(null),
   })
   .nullable()
   .catch(null);
+export type AttentionCheckIn = NonNullable<z.infer<typeof attentionCheckInSchema>>;
 
+/**
+ * NO `email` here on purpose. The coach-facing routes stopped returning member
+ * addresses (coaching stays inside the app, and an address printed beside a
+ * name is the shortcut off it). Zod strips unknown keys, so an older server
+ * that still sends one parses fine — it just never reaches a screen. Name a
+ * member with `coachClientLabel`, never an address.
+ */
 const coachAttentionRowSchema = z.object({
   id: z.string(),
   displayName: z.string(),
-  email: z.string().catch(''),
   tier: tierSchema.catch('starter'),
   lastWorkoutAt: z.string().nullable().catch(null),
   lastCheckInAt: z.string().nullable().catch(null),
@@ -4201,6 +4322,191 @@ export async function getCoachAttention(token: string): Promise<CoachAttentionRo
   return parse(coachAttentionSchema, data).clients;
 }
 
+const checkInReplySchema = z.object({
+  message: coachThreadMessageSchema,
+  contactHidden: z.boolean().catch(false),
+});
+
+export interface CheckInReply {
+  message: CoachThreadMessage;
+  /** True when contact details were taken out before the reply was stored. */
+  contactHidden: boolean;
+}
+
+/**
+ * POST /api/coach/check-ins/[id]/reply {body} → answers ONE check-in.
+ *
+ * This is not the same call as `replyToClient`. Both land a coach message in
+ * the client's thread, but only this one links the message back to the
+ * check-in, which is what marks it answered everywhere else (the attention
+ * queue, the check-in history, the web console). Replying from the thread
+ * leaves the check-in sitting in the queue forever, so anything answering a
+ * specific check-in must come through here.
+ *
+ * Requires `coach.message.user` plus an active assignment over the member the
+ * check-in belongs to (the server reads the member off the check-in row).
+ */
+export async function replyToCheckIn(
+  checkInId: string,
+  body: string,
+  token: string,
+): Promise<CheckInReply> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/coach/check-ins/${encodeURIComponent(checkInId)}/reply`,
+    token,
+    body: { body },
+  });
+  const parsed = parse(checkInReplySchema, data);
+  return { message: parsed.message, contactHidden: parsed.contactHidden };
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — one client's check-in history (coach.user.read)
+// ════════════════════════════════════════════════════════════════
+
+const clientCheckInSchema = z.object({
+  id: z.string(),
+  date: z.string().catch(''),
+  bodyweightKg: z.number().nullable().catch(null),
+  sleep: z.number().nullable().catch(null),
+  energy: z.number().nullable().catch(null),
+  soreness: z.number().nullable().catch(null),
+  note: z.string().nullable().catch(null),
+  summary: checkInSummarySchema,
+  /** Server-computed: true once a coach reply is linked to this check-in. */
+  replied: z.boolean().catch(false),
+  createdAt: z.string().catch(''),
+});
+export type ClientCheckIn = z.infer<typeof clientCheckInSchema>;
+
+const clientCheckInsSchema = z.object({ checkIns: resilientRows(clientCheckInSchema) });
+
+/**
+ * GET /api/coach/check-ins?userId= → one client's check-in history, newest
+ * first. Requires `coach.user.read` and an active assignment over that client.
+ */
+export async function getClientCheckIns(
+  userId: string,
+  token: string,
+): Promise<ClientCheckIn[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/check-ins?userId=${encodeURIComponent(userId)}`,
+    token,
+  });
+  return parse(clientCheckInsSchema, data).checkIns;
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — private client note (coach.user.read / coach.message.user)
+// ════════════════════════════════════════════════════════════════
+
+const clientNoteSchema = z.object({
+  note: z.string().catch(''),
+  updatedAt: z.string().nullable().catch(null),
+});
+export type ClientNote = z.infer<typeof clientNoteSchema>;
+
+/**
+ * GET /api/coach/clients/[userId]/notes → the SIGNED-IN coach's private note
+ * about this client. Never shown to the member, and scoped to `coachId = me`,
+ * so two coaches never read each other's notes. Empty string when unwritten.
+ */
+export async function getClientNote(userId: string, token: string): Promise<ClientNote> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/notes`,
+    token,
+  });
+  return parse(clientNoteSchema, data);
+}
+
+/**
+ * PUT /api/coach/clients/[userId]/notes {note} → create or replace the note.
+ * The server takes contact details out before storing, so what comes back is
+ * the authority on what was saved. Requires `coach.message.user`.
+ */
+export async function saveClientNote(
+  userId: string,
+  note: string,
+  token: string,
+): Promise<ClientNote> {
+  const data = await staffRequest({
+    method: 'PUT',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/notes`,
+    token,
+    body: { note },
+  });
+  return parse(clientNoteSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — saved quick replies (coach.message.user)
+// ════════════════════════════════════════════════════════════════
+
+const messageTemplateSchema = z.object({
+  id: z.string(),
+  title: z.string().catch(''),
+  body: z.string(),
+  createdAt: z.string().catch(''),
+});
+export type MessageTemplate = z.infer<typeof messageTemplateSchema>;
+
+const messageTemplatesSchema = z.object({
+  templates: resilientRows(messageTemplateSchema),
+});
+const messageTemplateEnvelope = z.object({ template: messageTemplateSchema });
+
+/**
+ * GET /api/coach/message-templates → the signed-in coach's saved quick
+ * replies, newest first. Self-scoped server-side. Requires
+ * `coach.message.user`.
+ */
+export async function getMessageTemplates(token: string): Promise<MessageTemplate[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: '/api/coach/message-templates',
+    token,
+  });
+  return parse(messageTemplatesSchema, data).templates;
+}
+
+/**
+ * POST /api/coach/message-templates {title?, body} → save one. A coach may
+ * keep 40; past that the server answers 409, which surfaces here as 'conflict'
+ * so the screen can say "delete one first". Requires `coach.message.user`.
+ */
+export async function createMessageTemplate(
+  input: { title?: string; body: string },
+  token: string,
+): Promise<MessageTemplate> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: '/api/coach/message-templates',
+    token,
+    body: {
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      body: input.body,
+    },
+  });
+  return parse(messageTemplateEnvelope, data).template;
+}
+
+/**
+ * DELETE /api/coach/message-templates/[id] → drop one of MY quick replies.
+ * The route scopes the delete by `coachId = me`, so another coach's template
+ * can never be removed even by guessing its id. Requires `coach.message.user`.
+ */
+export async function deleteMessageTemplate(id: string, token: string): Promise<void> {
+  const data = await staffRequest({
+    method: 'DELETE',
+    path: `/api/coach/message-templates/${encodeURIComponent(id)}`,
+    token,
+  });
+  parse(okSchema, data);
+}
+
 // ════════════════════════════════════════════════════════════════
 // Coach console — progression review queue (coach.user.read / coach.message.user)
 // ════════════════════════════════════════════════════════════════
@@ -4208,10 +4514,10 @@ export async function getCoachAttention(token: string): Promise<CoachAttentionRo
 export type SuggestionStatus = 'pending' | 'approved' | 'adjusted';
 const suggestionStatusSchema = z.enum(['pending', 'approved', 'adjusted']);
 
+/** Name only — see coachAttentionRowSchema for why no address comes back. */
 const reviewUserSchema = z.object({
   id: z.string(),
   displayName: z.string().catch(''),
-  email: z.string().catch(''),
 });
 
 const reviewSuggestionSchema = z.object({
@@ -4507,4 +4813,586 @@ export async function quoteMealOrder(input: MealQuoteInput, token: string): Prom
     },
   });
   return parse(mealQuoteSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Coach console — client read panels (coach.user.read)
+// ════════════════════════════════════════════════════════════════
+//
+// Every route below is guarded by `coach.user.read` PLUS an active assignment
+// over the client, so a lapsed assignment surfaces as 'forbidden' rather than
+// leaking a stranger's logs. None of them return a member email address.
+
+const clientOverviewSchema = z.object({
+  client: z.object({
+    memberSince: z.string().nullable().catch(null),
+    assignedAt: z.string().nullable().catch(null),
+    country: z.string().nullable().catch(null),
+  }),
+  training: z.object({
+    totalSessions: z.number().catch(0),
+    sessionsLast30: z.number().catch(0),
+    volumeLast30Kg: z.number().catch(0),
+    prCount: z.number().catch(0),
+    lastWorkoutAt: z.string().nullable().catch(null),
+  }),
+  body: z.object({
+    latestBodyweightKg: z.number().nullable().catch(null),
+    latestBodyweightDate: z.string().nullable().catch(null),
+    checkInCount: z.number().catch(0),
+    lastCheckInDate: z.string().nullable().catch(null),
+  }),
+  engagement: z.object({
+    xpTotal: z.number().catch(0),
+    streakWeeks: z.number().catch(0),
+    bestStreakWeeks: z.number().catch(0),
+  }),
+});
+export type ClientOverview = z.infer<typeof clientOverviewSchema>;
+
+/** GET /api/coach/clients/[userId]/overview → the headline numbers. */
+export async function getClientOverview(
+  userId: string,
+  token: string,
+): Promise<ClientOverview> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/overview`,
+    token,
+  });
+  return parse(clientOverviewSchema, data);
+}
+
+const loggedSetSchema = z.object({
+  exerciseName: z.string().catch(''),
+  setNo: z.number().catch(0),
+  weightKg: z.number().catch(0),
+  reps: z.number().catch(0),
+  rpe: z.number().nullable().catch(null),
+  isPr: z.boolean().catch(false),
+});
+export type LoggedSet = z.infer<typeof loggedSetSchema>;
+
+const loggedWorkoutSchema = z.object({
+  id: z.string(),
+  date: z.string().catch(''),
+  name: z.string().catch(''),
+  durationSec: z.number().nullable().catch(null),
+  /** false = flagged as implausible, so it is left out of every credited stat. */
+  ranked: z.boolean().catch(true),
+  sets: resilientRows(loggedSetSchema).catch([]),
+});
+export type LoggedWorkout = z.infer<typeof loggedWorkoutSchema>;
+
+const clientWorkoutsLogSchema = z.object({
+  workouts: resilientRows(loggedWorkoutSchema),
+  hasMore: z.boolean().catch(false),
+});
+export type ClientWorkoutsLog = z.infer<typeof clientWorkoutsLogSchema>;
+
+/**
+ * GET /api/coach/clients/[userId]/workouts-log?limit= → the client's most
+ * recent logged sessions with every set, newest first.
+ */
+export async function getClientWorkoutsLog(
+  userId: string,
+  token: string,
+  limit = 10,
+): Promise<ClientWorkoutsLog> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/workouts-log?limit=${limit}`,
+    token,
+  });
+  return parse(clientWorkoutsLogSchema, data);
+}
+
+const trendPointSchema = z.object({
+  date: z.string(),
+  kg: z.number(),
+  trendKg: z.number(),
+});
+export type TrendPoint = z.infer<typeof trendPointSchema>;
+
+const clientWeightSchema = z.object({
+  points: resilientRows(trendPointSchema),
+  summary: z.object({
+    direction: z.enum(['up', 'down', 'flat']).catch('flat'),
+    deltaKg: z.number().catch(0),
+    ratePerWeekKg: z.number().catch(0),
+  }),
+});
+export type ClientWeight = z.infer<typeof clientWeightSchema>;
+
+/**
+ * GET /api/coach/clients/[userId]/weight → the same EWMA-smoothed trend the
+ * member sees on their own Body tab, so the two never disagree.
+ */
+export async function getClientWeight(userId: string, token: string): Promise<ClientWeight> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/weight`,
+    token,
+  });
+  return parse(clientWeightSchema, data);
+}
+
+const prRecordSchema = z.object({
+  exerciseName: z.string().catch(''),
+  weightKg: z.number().catch(0),
+  reps: z.number().catch(0),
+  e1rm: z.number().catch(0),
+  loggedAt: z.string().catch(''),
+});
+export type PrRecord = z.infer<typeof prRecordSchema>;
+
+const clientPrsSchema = z.object({
+  records: resilientRows(prRecordSchema),
+  totalPrs: z.number().catch(0),
+});
+export type ClientPrs = z.infer<typeof clientPrsSchema>;
+
+/** GET /api/coach/clients/[userId]/prs → best lift per exercise, heaviest first. */
+export async function getClientPrs(userId: string, token: string): Promise<ClientPrs> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/prs`,
+    token,
+  });
+  return parse(clientPrsSchema, data);
+}
+
+const clientPhotoSchema = z.object({
+  id: z.string(),
+  takenOn: z.string().catch(''),
+  note: z.string().nullable().catch(null),
+  /** Freshly signed on every request — never cache or persist it. */
+  url: z.string(),
+});
+export type ClientPhoto = z.infer<typeof clientPhotoSchema>;
+
+const clientPhotosSchema = z.object({ photos: resilientRows(clientPhotoSchema) });
+
+/**
+ * GET /api/coach/clients/[userId]/photos → the client's progress photos,
+ * newest first, behind short-lived signed URLs minted per request. Rate
+ * limited to 30 a minute per coach, which surfaces as 'rate_limited'; a
+ * platform with no image host configured answers 503 → 'not_configured'.
+ */
+export async function getClientPhotos(userId: string, token: string): Promise<ClientPhoto[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/photos`,
+    token,
+  });
+  return parse(clientPhotosSchema, data).photos;
+}
+
+/**
+ * The nutrition + body reads share a contract with the server
+ * (@gym/shared coachClientRead), but that contract is `.strict()` — it exists
+ * so the ROUTE can fail loudly on its own bad rollup. A shipped phone must not
+ * blank a whole panel because a later server added a field, so these mirror the
+ * same shape leniently, the way every other schema in this file does.
+ */
+/** One food the client logged. The name is member free text, masked server-side. */
+const foodEntrySchema = z.object({
+  id: z.string(),
+  meal: z.enum(['breakfast', 'lunch', 'dinner', 'snacks']).catch('snacks'),
+  foodName: z.string().catch(''),
+  grams: z.number().catch(0),
+  kcal: z.number().catch(0),
+  protein: z.number().catch(0),
+  carbs: z.number().catch(0),
+  fat: z.number().catch(0),
+});
+export type ClientFoodEntry = z.infer<typeof foodEntrySchema>;
+
+const nutritionDaySchema = z.object({
+  date: z.string(),
+  kcal: z.number().catch(0),
+  protein: z.number().catch(0),
+  carbs: z.number().catch(0),
+  fat: z.number().catch(0),
+  waterMl: z.number().catch(0),
+  entries: resilientRows(foodEntrySchema).catch([]),
+});
+export type ClientNutritionDay = z.infer<typeof nutritionDaySchema>;
+
+const nutritionTargetsSchema = z
+  .object({
+    kcal: z.number().nullable().catch(null),
+    protein: z.number().nullable().catch(null),
+    carbs: z.number().nullable().catch(null),
+    fat: z.number().nullable().catch(null),
+    waterMl: z.number().nullable().catch(null),
+  })
+  .nullable()
+  .catch(null);
+export type ClientNutritionTargets = z.infer<typeof nutritionTargetsSchema>;
+
+const clientNutritionSchema = z.object({
+  /** false = this client has logged no food or water in the window. */
+  synced: z.boolean().catch(false),
+  days: resilientRows(nutritionDaySchema),
+  rangeDays: z.number().catch(COACH_CLIENT_READ_DEFAULT_DAYS),
+  targets: nutritionTargetsSchema,
+});
+export type ClientNutrition = z.infer<typeof clientNutritionSchema>;
+
+/**
+ * GET /api/coach/clients/[userId]/nutrition?days= → the client's own food and
+ * water log rolled up per day (oldest first) with their daily targets.
+ */
+export async function getClientNutrition(
+  userId: string,
+  token: string,
+  days = COACH_CLIENT_READ_DEFAULT_DAYS,
+): Promise<ClientNutrition> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/nutrition?days=${days}`,
+    token,
+  });
+  return parse(clientNutritionSchema, data);
+}
+
+const measurementSchema = z.object({
+  id: z.string(),
+  date: z.string(),
+  waistCm: z.number().nullable().catch(null),
+  chestCm: z.number().nullable().catch(null),
+  armCm: z.number().nullable().catch(null),
+  hipCm: z.number().nullable().catch(null),
+  thighCm: z.number().nullable().catch(null),
+});
+export type ClientMeasurement = z.infer<typeof measurementSchema>;
+
+const clientBodySchema = z.object({
+  /** false = this client has logged no weight or measurements in the window. */
+  synced: z.boolean().catch(false),
+  points: resilientRows(trendPointSchema),
+  summary: z.object({
+    direction: z.enum(['up', 'down', 'flat']).catch('flat'),
+    deltaKg: z.number().catch(0),
+    ratePerWeekKg: z.number().catch(0),
+  }),
+  measurements: resilientRows(measurementSchema),
+  rangeDays: z.number().catch(COACH_CLIENT_READ_DEFAULT_DAYS),
+});
+export type ClientBody = z.infer<typeof clientBodySchema>;
+
+/**
+ * GET /api/coach/clients/[userId]/body?days= → smoothed bodyweight points plus
+ * the client's logged measurements (newest first).
+ */
+export async function getClientBody(
+  userId: string,
+  token: string,
+  days = COACH_CLIENT_READ_DEFAULT_DAYS,
+): Promise<ClientBody> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/coach/clients/${encodeURIComponent(userId)}/body?days=${days}`,
+    token,
+  });
+  return parse(clientBodySchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — order disputes (orders.review)
+// ════════════════════════════════════════════════════════════════
+
+const disputeStatusSchema = z.enum(
+  DISPUTE_STATUSES as unknown as [DisputeStatus, ...DisputeStatus[]],
+);
+
+const disputeAccountSchema = z.object({
+  id: z.string(),
+  email: z.string().catch(''),
+  displayName: z.string().catch(''),
+});
+
+const disputeRowSchema = z.object({
+  id: z.string(),
+  orderId: z.string(),
+  /** The short human order code — show this, never the raw id. */
+  orderNumber: z.string().catch(''),
+  account: disputeAccountSchema,
+  partnerName: z.string().catch(''),
+  order: z.object({
+    totalMinor: z.number().catch(0),
+    currency: z.string().catch('NPR'),
+    status: orderStatusSchema.catch('pending'),
+    paymentStatus: orderPaymentStatusSchema.catch('unpaid'),
+    deliveryDate: z.string().catch(''),
+    window: z.string().catch(''),
+  }),
+  reason: z.string().catch('other'),
+  note: z.string().catch(''),
+  status: disputeStatusSchema,
+  resolution: z.string().nullable().catch(null),
+  createdAt: z.string().catch(''),
+  decidedAt: z.string().nullable().catch(null),
+});
+export type DisputeRow = z.infer<typeof disputeRowSchema>;
+
+const disputesSchema = z.object({ disputes: resilientRows(disputeRowSchema) });
+
+/** Which slice of the dispute queue to load. 'live' = open + reviewing. */
+export type DisputeScope = 'live' | 'resolved' | 'rejected' | 'all';
+
+/**
+ * GET /api/admin/disputes?status= → member-raised problems with delivered
+ * orders. 'live' (the default) is the working queue, oldest first so nothing
+ * ages at the back; the decided views come back newest first. Requires
+ * `orders.review`.
+ */
+export async function getDisputes(
+  token: string,
+  scope: DisputeScope = 'live',
+): Promise<DisputeRow[]> {
+  const query = scope === 'live' ? '' : `?status=${scope}`;
+  const data = await staffRequest({
+    method: 'GET',
+    path: `/api/admin/disputes${query}`,
+    token,
+  });
+  return parse(disputesSchema, data).disputes;
+}
+
+/**
+ * POST /api/admin/disputes/[id] {toStatus, resolution?} → record the outcome
+ * and tell the member.
+ *
+ * This NEVER moves money: a member owed a refund is refunded on the meal
+ * payments queue, which carries its own reversal and audit. An illegal or
+ * raced transition answers 409 → 'conflict', so reload rather than retry.
+ * Requires `orders.review`.
+ */
+export async function decideDispute(
+  id: string,
+  toStatus: Exclude<DisputeStatus, 'open'>,
+  resolution: string | undefined,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'POST',
+    path: `/api/admin/disputes/${encodeURIComponent(id)}`,
+    token,
+    body: {
+      toStatus,
+      ...(resolution !== undefined && resolution !== '' ? { resolution } : {}),
+    },
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — gym listing moderation (gyms.manage)
+// ════════════════════════════════════════════════════════════════
+
+export type GymReportStatus = 'open' | 'resolved' | 'dismissed';
+export type GymReviewStatus = 'visible' | 'hidden';
+export type GymEnquiryStatus = 'open' | 'contacted' | 'closed';
+
+const gymReportRowSchema = z.object({
+  id: z.string(),
+  gymId: z.string(),
+  gymName: z.string().catch(''),
+  gymSlug: z.string().catch(''),
+  /** Which part of the listing the member says is wrong. */
+  field: z.string().catch(''),
+  note: z.string().catch(''),
+  status: z.enum(['open', 'resolved', 'dismissed']).catch('open'),
+  createdAt: z.string().catch(''),
+  reporterEmail: z.string().catch(''),
+});
+export type GymReportRow = z.infer<typeof gymReportRowSchema>;
+
+const gymReportsSchema = z.object({ reports: resilientRows(gymReportRowSchema) });
+
+/**
+ * GET /api/admin/gyms/reports → member-flagged listing corrections. Open ones
+ * first, longest-waiting at the top. Requires `gyms.manage`.
+ */
+export async function getGymReports(token: string): Promise<GymReportRow[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: '/api/admin/gyms/reports',
+    token,
+  });
+  return parse(gymReportsSchema, data).reports;
+}
+
+/**
+ * PATCH /api/admin/gyms/reports/[id] {status} → 'resolved' once the listing is
+ * fixed, 'dismissed' when the report was wrong or a duplicate. Both are final;
+ * a member can always file a fresh one. Audited. Requires `gyms.manage`.
+ */
+export async function decideGymReport(
+  id: string,
+  status: 'resolved' | 'dismissed',
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/gyms/reports/${encodeURIComponent(id)}`,
+    token,
+    body: { status },
+  });
+  parse(okSchema, data);
+}
+
+const gymReviewRowSchema = z.object({
+  id: z.string(),
+  gymId: z.string(),
+  gymName: z.string().catch(''),
+  gymSlug: z.string().catch(''),
+  stars: z.number().catch(0),
+  note: z.string().catch(''),
+  status: z.enum(['visible', 'hidden']).catch('visible'),
+  createdAt: z.string().catch(''),
+  authorEmail: z.string().catch(''),
+});
+export type GymReviewRow = z.infer<typeof gymReviewRowSchema>;
+
+const gymReviewsSchema = z.object({ reviews: resilientRows(gymReviewRowSchema) });
+
+/**
+ * GET /api/admin/gyms/reviews → every member review, newest first, both
+ * visible and hidden. Requires `gyms.manage`.
+ */
+export async function getGymReviews(token: string): Promise<GymReviewRow[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: '/api/admin/gyms/reviews',
+    token,
+  });
+  return parse(gymReviewsSchema, data).reviews;
+}
+
+/**
+ * PATCH /api/admin/gyms/reviews/[id] {status} → hide or show one review.
+ * Hiding drops it from the public list AND the star rating straight away.
+ * Audited either way. Requires `gyms.manage`.
+ */
+export async function moderateGymReview(
+  id: string,
+  status: GymReviewStatus,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/gyms/reviews/${encodeURIComponent(id)}`,
+    token,
+    body: { status },
+  });
+  parse(okSchema, data);
+}
+
+const gymEnquiryRowSchema = z.object({
+  id: z.string(),
+  gymId: z.string(),
+  gymName: z.string().catch(''),
+  gymSlug: z.string().catch(''),
+  passId: z.string().nullable().catch(null),
+  /** The day-pass name resolved server-side; null = a general membership ask. */
+  passTitle: z.string().nullable().catch(null),
+  message: z.string().catch(''),
+  status: z.enum(['open', 'contacted', 'closed']).catch('open'),
+  createdAt: z.string().catch(''),
+  memberName: z.string().catch(''),
+  memberEmail: z.string().catch(''),
+});
+export type GymEnquiryRow = z.infer<typeof gymEnquiryRowSchema>;
+
+const gymEnquiriesSchema = z.object({ enquiries: resilientRows(gymEnquiryRowSchema) });
+
+/**
+ * GET /api/admin/gyms/enquiries → membership and day-pass leads. Waiting ones
+ * first, longest-waiting at the top. Each member here was told someone would
+ * get back to them. Requires `gyms.manage`.
+ */
+export async function getGymEnquiries(token: string): Promise<GymEnquiryRow[]> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: '/api/admin/gyms/enquiries',
+    token,
+  });
+  return parse(gymEnquiriesSchema, data).enquiries;
+}
+
+/**
+ * PATCH /api/admin/gyms/enquiries/[id] {status} → move one lead along.
+ * Reopening is allowed on purpose: a member who replies weeks later cannot
+ * file again. Audited. Requires `gyms.manage`.
+ */
+export async function setGymEnquiryStatus(
+  id: string,
+  status: GymEnquiryStatus,
+  token: string,
+): Promise<void> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: `/api/admin/gyms/enquiries/${encodeURIComponent(id)}`,
+    token,
+    body: { status },
+  });
+  parse(okSchema, data);
+}
+
+// ════════════════════════════════════════════════════════════════
+// Admin console — meal delivery fees + cutoffs (partners.manage)
+// ════════════════════════════════════════════════════════════════
+
+const deliveryConfigSchema = z.object({
+  smallOrderFeeMinor: z.number(),
+  smallOrderThresholdMinor: z.number(),
+  deliveryFeeMinor: z.number(),
+  freeDeliveryThresholdMinor: z.number(),
+  lunchCutoffPrevDayHour: z.number(),
+  dinnerCutoffSameDayHour: z.number(),
+});
+
+const deliveryConfigResponseSchema = z.object({
+  config: deliveryConfigSchema,
+  updatedAt: z.string().nullable().catch(null),
+  /** false = never saved, so `config` is the built-in fallback. */
+  persisted: z.boolean().catch(false),
+});
+export type DeliverySettings = z.infer<typeof deliveryConfigResponseSchema>;
+export type DeliveryConfigPatch = Partial<MealDeliveryConfig>;
+
+/**
+ * GET /api/admin/meal-config → the one fee + cutoff row every quote, order and
+ * weekly plan invoice prices itself from. Requires `partners.manage`.
+ */
+export async function getDeliverySettings(token: string): Promise<DeliverySettings> {
+  const data = await staffRequest({
+    method: 'GET',
+    path: '/api/admin/meal-config',
+    token,
+  });
+  return parse(deliveryConfigResponseSchema, data);
+}
+
+/**
+ * PATCH /api/admin/meal-config → save ONLY the fields that changed, so two
+ * people editing different amounts don't overwrite each other. Money is in
+ * minor units (paisa); cutoffs are Kathmandu hours 0-23. Out-of-range values
+ * answer 400 → 'invalid'. Audited with before/after. Requires
+ * `partners.manage`.
+ */
+export async function updateDeliverySettings(
+  patch: DeliveryConfigPatch,
+  token: string,
+): Promise<DeliverySettings> {
+  const data = await staffRequest({
+    method: 'PATCH',
+    path: '/api/admin/meal-config',
+    token,
+    body: { ...patch },
+  });
+  return parse(deliveryConfigResponseSchema, data);
 }

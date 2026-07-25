@@ -1,14 +1,15 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
-import { formatMoney, ktmDateString } from '@gym/shared';
+import { formatMoney, isSlotOrderable, ktmAddDays, ktmDateString, ktmDayOfWeek } from '@gym/shared';
 import {
   AppText,
   AppTextInput,
   Button,
+  Chip,
   ConfirmDialog,
   EmptyState,
   enterDown,
@@ -27,7 +28,7 @@ import { useMyMealSubscriptions } from '../../features/meals/hooks';
 import { skipMealDay, toMealsError, updateMealSubscription, type MealSubscription } from '../../features/meals/api';
 import { CyclePaymentPanel } from '../../features/meals/components/CyclePaymentPanel';
 import { SubscriptionPlanCard } from '../../features/meals/components/SubscriptionPlanCard';
-import { mealErrorMessage } from '../../features/meals/logic';
+import { mealErrorMessage, weekdayLabel } from '../../features/meals/logic';
 import { pushPath, replacePath } from '../../features/meals/nav';
 
 /**
@@ -65,7 +66,39 @@ const styles = StyleSheet.create({
   },
   retryText: { flex: 1 },
   skipForm: { gap: spacing.sm },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
 });
+
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const SKIP_WINDOW_DAYS = 14;
+
+/** "Today" / "Tomorrow" / "Mon 28 Jul" for a skippable delivery date. */
+function skipDayLabel(date: string, today: string): string {
+  if (date === today) return 'Today';
+  if (date === ktmAddDays(today, 1)) return 'Tomorrow';
+  const month = MONTH_LABELS[Number(date.slice(5, 7)) - 1] ?? '';
+  return `${weekdayLabel(ktmDayOfWeek(date))} ${Number(date.slice(8, 10))} ${month}`.trim();
+}
+
+/**
+ * This plan's own delivery dates over the next two weeks that are still before
+ * their cutoff — mirroring the exact rules the skip route enforces (a
+ * subscribed weekday, today or later, on/after the plan's start, pre-cutoff),
+ * so every chip the member can tap is one the server will accept. The skip
+ * itself still round-trips; this only replaces typing a date by hand.
+ */
+function skippableDates(sub: MealSubscription, now: Date): { date: string; label: string }[] {
+  const today = ktmDateString(now);
+  const out: { date: string; label: string }[] = [];
+  for (let i = 0; i < SKIP_WINDOW_DAYS; i += 1) {
+    const date = ktmAddDays(today, i);
+    if (date < sub.startDate) continue;
+    if (!sub.daysOfWeek.includes(ktmDayOfWeek(date))) continue;
+    if (!isSlotOrderable(date, sub.window, now)) continue;
+    out.push({ date, label: skipDayLabel(date, today) });
+  }
+  return out;
+}
 
 export default function MyMealSubscriptionsScreen() {
   const status = useAuth((s) => s.status);
@@ -84,6 +117,8 @@ export default function MyMealSubscriptionsScreen() {
   const [skipDate, setSkipDate] = useState('');
   const [skipError, setSkipError] = useState<string | null>(null);
   const [skipping, setSkipping] = useState(false);
+  // Computed once per sheet opening, so the choices can't shift under a tap.
+  const skipOptions = useMemo(() => (skipSub ? skippableDates(skipSub, new Date()) : []), [skipSub]);
 
   const [paySub, setPaySub] = useState<MealSubscription | null>(null);
 
@@ -112,7 +147,7 @@ export default function MyMealSubscriptionsScreen() {
         const base = mealErrorMessage(apiErr.code);
         setActionError(
           refund && refund.estimatedMinor > 0 && refund.currency
-            ? `${base} Estimated refund: ${formatMoney(refund.estimatedMinor, refund.currency)} for ${refund.unusedDays} unused day${refund.unusedDays === 1 ? '' : 's'} — contact support to complete it.`
+            ? `${base} Estimated refund: ${formatMoney(refund.estimatedMinor, refund.currency)} for ${refund.unusedDays} unused day${refund.unusedDays === 1 ? '' : 's'}. Contact support to complete it.`
             : base,
         );
         warnHaptic();
@@ -151,12 +186,12 @@ export default function MyMealSubscriptionsScreen() {
         </PressableScale>
       </Animated.View>
 
-      <ScreenHeader eyebrow="Meals" title="My subscriptions" style={styles.header} />
+      <ScreenHeader eyebrow="Meals" title="My meal plans" style={styles.header} />
 
       {status !== 'signedIn' ? (
         <EmptyState
           icon="repeat-outline"
-          title="Sign in to see your plans"
+          title="Sign in to see your meal plans"
           actionLabel="Sign in"
           onAction={() => pushPath('/auth/sign-in')}
         />
@@ -166,13 +201,13 @@ export default function MyMealSubscriptionsScreen() {
             <Animated.View entering={enterFade(0)}>
               <PressableScale
                 accessibilityRole="button"
-                accessibilityLabel="Couldn't load your plans. Tap to retry."
+                accessibilityLabel="Your meal plans could not be loaded. Tap to retry."
                 onPress={retry}
                 style={styles.retryRow}
               >
                 <Ionicons name="cloud-offline" size={14} color={colors.textDim} />
                 <AppText variant="caption" style={styles.retryText}>
-                  Couldn&apos;t load your plans — tap to retry.
+                  Your meal plans could not be loaded. Tap to retry.
                 </AppText>
                 <Ionicons name="refresh" size={15} color={colors.textDim} />
               </PressableScale>
@@ -180,7 +215,7 @@ export default function MyMealSubscriptionsScreen() {
           ) : null}
 
           {loading ? (
-            <Animated.View entering={enterFade(0)} style={styles.skeletons} accessibilityLabel="Loading plans">
+            <Animated.View entering={enterFade(0)} style={styles.skeletons} accessibilityLabel="Loading meal plans">
               {Array.from({ length: 2 }, (_, i) => (
                 <SkeletonRow key={i} style={styles.skeletonRow} />
               ))}
@@ -189,8 +224,8 @@ export default function MyMealSubscriptionsScreen() {
             <Animated.View entering={enterUp(0)}>
               <EmptyState
                 icon="repeat-outline"
-                title="No plans yet"
-                body="Set up a weekly plan from a partner's menu."
+                title="No meal plans yet"
+                body="Set up a weekly meal plan from a partner's menu."
                 art={<EmptyArt variant="food" />}
                 actionLabel="Browse partners"
                 onAction={() => pushPath('/meals')}
@@ -219,7 +254,7 @@ export default function MyMealSubscriptionsScreen() {
 
       <ConfirmDialog
         visible={pending !== null}
-        title={`${actionVerb} plan`}
+        title={`${actionVerb} meal plan`}
         message={actionError ?? `${actionVerb} this weekly meal plan?`}
         confirmLabel={actionVerb}
         cancelLabel="Back"
@@ -234,8 +269,26 @@ export default function MyMealSubscriptionsScreen() {
       <Sheet visible={skipSub !== null} onClose={() => setSkipSub(null)} title="Skip a delivery day">
         <View style={styles.skipForm}>
           <AppText variant="body" color={colors.textDim}>
-            Enter the date to skip (YYYY-MM-DD). It must be one of this plan&apos;s delivery days and still before
-            that slot&apos;s cutoff.
+            Pick the delivery you want to skip.
+          </AppText>
+          {skipOptions.length > 0 ? (
+            <View style={styles.chipRow}>
+              {skipOptions.map((o) => (
+                <Chip
+                  key={o.date}
+                  label={o.label}
+                  selected={skipDate === o.date}
+                  onPress={() => setSkipDate(o.date)}
+                />
+              ))}
+            </View>
+          ) : (
+            <AppText variant="caption" color={colors.textDim}>
+              Nothing to skip in the next two weeks. You can still type a date below.
+            </AppText>
+          )}
+          <AppText variant="caption" color={colors.textFaint}>
+            Or type another date (YYYY-MM-DD).
           </AppText>
           <AppTextInput
             value={skipDate}

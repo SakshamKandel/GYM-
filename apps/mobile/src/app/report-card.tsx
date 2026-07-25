@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Share, StyleSheet, View } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { displayWeight } from '@gym/shared';
-import { colors, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
   Button,
   Card,
+  enterDown,
+  PressableScale,
   Screen,
   ScreenHeader,
   SectionLabel,
@@ -16,7 +21,6 @@ import { useGamificationBadges } from '../features/gamification/store';
 import { useWeeklyStreak } from '../features/streak/hooks';
 import { addDays, todayIso } from '../lib/dates';
 import { getRepo } from '../lib/repo';
-import { useAuth } from '../state/auth';
 import { useProfile } from '../state/profile';
 
 /**
@@ -24,7 +28,8 @@ import { useProfile } from '../state/profile';
  * and badges earned in the trailing 30 days, plus the current streak, with
  * a native-Share export so a member can post their month somewhere else.
  * Pulled entirely from local SQLite (repo) + already-hydrated gamification
- * state — no new network surface needed.
+ * state — no new network surface needed, so it reads the same signed in or
+ * out (the repo has a durable signed-out namespace of its own).
  */
 
 const WINDOW_DAYS = 30;
@@ -36,6 +41,15 @@ interface MonthStats {
 }
 
 const styles = StyleSheet.create({
+  backRow: { marginBottom: spacing.lg },
+  backBtn: {
+    width: touch.min,
+    height: touch.min,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   statsCard: { marginTop: spacing.lg },
   statsRow: { flexDirection: 'row' },
   statCell: { flex: 1, alignItems: 'center' },
@@ -45,7 +59,6 @@ const styles = StyleSheet.create({
 });
 
 export default function ReportCardScreen() {
-  const authStatus = useAuth((s) => s.status);
   const unitPref = useProfile((s) => s.unitPref);
   const streak = useWeeklyStreak();
   const badges = useGamificationBadges((s) => s.badges);
@@ -95,15 +108,27 @@ export default function ReportCardScreen() {
     }
   }
 
+  function goBack(): void {
+    if (router.canGoBack()) router.back();
+    else router.replace('/(tabs)/progress');
+  }
+
   return (
     <Screen scroll>
+      <Animated.View entering={enterDown()} style={styles.backRow}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          onPress={goBack}
+          style={styles.backBtn}
+        >
+          <Ionicons name="chevron-back" size={24} color={colors.text} />
+        </PressableScale>
+      </Animated.View>
+
       <ScreenHeader eyebrow="Your last 30 days" title="Report card" />
 
-      {authStatus !== 'signedIn' ? (
-        <AppText variant="body" color={colors.textDim} style={styles.statsCard}>
-          Sign in to see your recap.
-        </AppText>
-      ) : stats === null ? (
+      {stats === null ? (
         <View style={styles.skeletons}>
           <Skeleton height={120} />
         </View>

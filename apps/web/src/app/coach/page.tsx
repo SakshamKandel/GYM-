@@ -1,11 +1,13 @@
 import { accounts, coachAssignments, coachMessages } from '@gym/db';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { EmptyState, PageHeader, StatTile } from '@/components/console';
 import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
 import { type InboxUser, UserRow } from './_components/UserRow';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Inbox' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -40,7 +42,6 @@ async function loadInbox(coachId: string): Promise<InboxUser[]> {
     .select({
       userId: accounts.id,
       displayName: accounts.displayName,
-      email: accounts.email,
       tier: accounts.tier,
       lastAt: agg.lastAt,
       unread: agg.unread,
@@ -89,7 +90,6 @@ async function loadInbox(coachId: string): Promise<InboxUser[]> {
     return {
       userId: r.userId,
       displayName: r.displayName,
-      email: r.email,
       tier: r.tier,
       lastMessagePreview: preview?.body ?? null,
       lastMessageSender: preview?.sender ?? null,
@@ -137,7 +137,7 @@ export default async function CoachInboxPage() {
       {users.length === 0 ? (
         <EmptyState
           title="No clients assigned yet"
-          description="Once an admin assigns clients to you, their threads appear here — newest and unread first."
+          description="Once an admin assigns clients to you, their threads appear here, newest and unread first."
         />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

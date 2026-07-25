@@ -1,6 +1,6 @@
 import { gyms } from '@gym/db';
 import { distanceKm, gymPublicListResponseSchema } from '@gym/shared';
-import { and, asc, count, eq, ilike, or } from 'drizzle-orm';
+import { and, asc, count, eq, gte, ilike, isNull, lte, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
@@ -30,7 +30,55 @@ export const runtime = 'nodejs';
  *
  * B17 fix: `rating`/`reviewCount` are the REAL aggregate from visible
  * `gym_reviews` (see `_lib.ts`) — never the admin-authored columns.
+ *
+ * Nearest-first can't be paged in SQL (the haversine sort happens in JS), so
+ * that branch bounds its scan instead: a generous bounding box around the
+ * origin plus a hard row cap, then the sort + page slice. `total` still counts
+ * every matching listing, so it can exceed what the nearest-first branch can
+ * page through.
  */
+
+/** Bounded scan for the nearest-first branch. ~500 km covers the whole service
+ * area with room to spare; the cap is the backstop as the directory grows. */
+const NEARBY_BOX_KM = 500;
+const NEARBY_SCAN_CAP = 500;
+const KM_PER_DEGREE_LAT = 111.32;
+
+/** Cheap lat/lng box around an origin — a prefilter for the JS distance sort,
+ * not a precise radius. Listings with no coordinates are kept (they can't be
+ * boxed and already sort last). */
+function nearbyBox(lat: number, lng: number) {
+  const latDelta = NEARBY_BOX_KM / KM_PER_DEGREE_LAT;
+  const cosLat = Math.abs(Math.cos((lat * Math.PI) / 180));
+  const lngDelta = cosLat < 0.02 ? 180 : NEARBY_BOX_KM / (KM_PER_DEGREE_LAT * cosLat);
+  const minLng = lng - lngDelta;
+  const maxLng = lng + lngDelta;
+  // Near the poles / across the date line the longitude window stops being a
+  // simple range — keep the latitude band alone (still bounded).
+  const lngUsable = lngDelta < 180 && minLng >= -180 && maxLng <= 180;
+  return or(
+    isNull(gyms.lat),
+    isNull(gyms.lng),
+    and(
+      gte(gyms.lat, lat - latDelta),
+      lte(gyms.lat, lat + latDelta),
+      lngUsable ? gte(gyms.lng, minLng) : undefined,
+      lngUsable ? lte(gyms.lng, maxLng) : undefined,
+    ),
+  );
+}
+
+/** Columns the public card needs — shared by both list branches. */
+const cardColumns = {
+  id: gyms.id,
+  slug: gyms.slug,
+  name: gyms.name,
+  category: gyms.category,
+  city: gyms.city,
+  lat: gyms.lat,
+  lng: gyms.lng,
+  crowdData: gyms.crowdData,
+};
 
 const querySchema = z.object({
   lat: z.coerce.number().min(-90).max(90).optional(),
@@ -82,32 +130,24 @@ export async function GET(req: Request) {
 
     const hasOrigin = lat !== undefined && lng !== undefined;
 
-    const rows = hasOrigin
+    // Nearest-first: pull a bounded neighbourhood, sort + page it below.
+    const scanned = hasOrigin
       ? await db
-          .select({
-            id: gyms.id,
-            slug: gyms.slug,
-            name: gyms.name,
-            category: gyms.category,
-            city: gyms.city,
-            lat: gyms.lat,
-            lng: gyms.lng,
-            crowdData: gyms.crowdData,
-          })
+          .select(cardColumns)
           .from(gyms)
-          .where(where)
+          .where(and(where, nearbyBox(lat, lng)))
           .orderBy(asc(gyms.name))
+          .limit(NEARBY_SCAN_CAP)
+      : null;
+
+    // An origin with nothing around it (or a bad saved geo) must not empty the
+    // directory — fall back to the plain, SQL-paged list.
+    const sortInJs = scanned !== null && scanned.length > 0;
+
+    const rows = sortInJs
+      ? scanned
       : await db
-          .select({
-            id: gyms.id,
-            slug: gyms.slug,
-            name: gyms.name,
-            category: gyms.category,
-            city: gyms.city,
-            lat: gyms.lat,
-            lng: gyms.lng,
-            crowdData: gyms.crowdData,
-          })
+          .select(cardColumns)
           .from(gyms)
           .where(where)
           .orderBy(asc(gyms.name))
@@ -129,7 +169,9 @@ export async function GET(req: Request) {
       });
     }
 
-    const paged = hasOrigin ? withDistance.slice(offset, offset + limit) : withDistance;
+    // Only the JS-sorted branch still needs slicing — the fallback already
+    // came back paged from SQL.
+    const paged = sortInJs ? withDistance.slice(offset, offset + limit) : withDistance;
 
     const ids = paged.map((r) => r.id);
     const [photosByGym, ratingByGym] = await Promise.all([

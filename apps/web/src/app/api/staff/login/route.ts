@@ -7,7 +7,7 @@ import { effectivePermissionSet, logAudit } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { verifyPassword } from '@/lib/password';
-import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 import { setStaffCookie } from '@/lib/staffSession';
 
 export const runtime = 'nodejs';
@@ -45,8 +45,11 @@ export function OPTIONS() {
  * account is not staff — no oracle for probing staff emails.
  */
 export async function POST(req: Request) {
-  // Staff creds are the crown jewels — same 10/min/IP damping as member login.
-  const limited = rateLimit({
+  // Staff credentials are the crown jewels — same 10/min/IP ceiling as member
+  // login, and counted in the shared store when one is configured so the ten
+  // is ten in total rather than ten per warm instance. No store configured
+  // (local development) → the per-instance counter, unchanged.
+  const limited = await rateLimitShared({
     route: 'staff/login',
     limit: 10,
     windowMs: 60_000,

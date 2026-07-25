@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
-import { getReferrals, toRewardsError, type Referral } from '../../../lib/api/client';
+import {
+  getReferrals,
+  toRewardsError,
+  type InviteInfo,
+  type Referral,
+} from '../../../lib/api/client';
 import { isCurrentSessionRequest } from '../../../lib/sessionRequest';
 import { useAuth } from '../../../state/auth';
 
@@ -13,6 +18,8 @@ import { useAuth } from '../../../state/auth';
 
 export interface ReferralsData {
   referrals: Referral[];
+  /** The member's own code and the reward terms. null until the first load lands. */
+  invite: InviteInfo | null;
   /** True when the latest refresh failed and we're showing the last known state. */
   stale: boolean;
   /** True only for the very first load with nothing fetched yet. */
@@ -20,10 +27,16 @@ export interface ReferralsData {
   reload: () => void;
 }
 
+interface Snapshot {
+  token: string;
+  referrals: Referral[];
+  invite: InviteInfo | null;
+}
+
 export function useReferrals(): ReferralsData {
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
-  const [snapshot, setSnapshot] = useState<{ token: string; referrals: Referral[] } | null>(null);
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [staleToken, setStaleToken] = useState<string | null>(null);
   const [loadingToken, setLoadingToken] = useState<string | null>(null);
   const requestSequence = useRef(0);
@@ -55,7 +68,7 @@ export function useReferrals(): ReferralsData {
             sequence: requestSequence.current,
           })
         ) return;
-        setSnapshot({ token, referrals: next });
+        setSnapshot({ token, referrals: next.referrals, invite: next.invite });
         setStaleToken(null);
       } catch (err) {
         const current = useAuth.getState();
@@ -91,8 +104,10 @@ export function useReferrals(): ReferralsData {
     }, [reload]),
   );
 
-  const referrals = snapshot?.token === token ? snapshot.referrals : [];
+  const active = snapshot?.token === token ? snapshot : null;
+  const referrals = active?.referrals ?? [];
+  const invite = active?.invite ?? null;
   const stale = token !== null && staleToken === token;
   const loading = token !== null && snapshot?.token !== token && loadingToken === token;
-  return { referrals, stale, loading, reload };
+  return { referrals, invite, stale, loading, reload };
 }

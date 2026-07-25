@@ -1,5 +1,6 @@
 import { accounts, coachApplications } from '@gym/db';
 import { desc, eq, ne } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -11,6 +12,7 @@ import {
 } from './_components/ApplicationsManager';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Coach applications' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -123,7 +125,11 @@ export default async function AdminApplicationsPage() {
         <StatTile label="Rejected" value={rejected} />
       </div>
 
-      <ApplicationsManager applications={applications} canReview={canReview} />
+      <ApplicationsManager
+        applications={applications}
+        canReview={canReview}
+        canViewMembers={permissions.has('members.read')}
+      />
     </div>
   );
 }

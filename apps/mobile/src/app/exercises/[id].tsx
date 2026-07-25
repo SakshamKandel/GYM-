@@ -24,9 +24,10 @@ import { ExerciseVideo } from '../../features/training/components/ExerciseVideo'
 import { useExerciseHistory, usePlanVideo } from '../../features/training/hooks';
 import { formatWeightNumber } from '../../features/training/logic';
 import { getExercise } from '../../lib/exercises';
-import { isExerciseInCatalogPlan, useTrainingCatalog } from '../../lib/trainingCatalog';
+import { useTrainingCatalog } from '../../lib/trainingCatalog';
 import { isMuscleGroup } from '../../lib/muscleMap';
 import { posterDate } from '../../lib/dates';
+import { tierName } from '../../lib/tier';
 import { useProfile } from '../../state/profile';
 
 /**
@@ -179,8 +180,8 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   sessionRight: { alignItems: 'flex-end', flexShrink: 1, minWidth: 0 },
-  // Locked "Greece's demo" card — charcoal block row (no border — separation
-  // by fill contrast), tap routes to plans.
+  // Locked "Coach demo" card — charcoal block row (no border — separation
+  // by fill contrast), tap routes to memberships.
   lockedCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -190,17 +191,9 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   lockedText: { flex: 1, gap: spacing.xs / 2 },
-  // "Coming soon" chip — small, quiet, only for seed-plan exercises.
-  comingSoonChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    alignSelf: 'flex-start',
-    backgroundColor: colors.surface,
-    borderRadius: radius.full,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-  },
+  // One quiet line when the video host is down — honest that we couldn't
+  // check, instead of the silence that reads as "there is no video".
+  videoNote: { marginTop: spacing.md },
 });
 
 /** Outlined fact pill (level · equipment · muscle group). */
@@ -277,10 +270,11 @@ export default function ExerciseDetailScreen() {
   // one the body map knows (some rare groups aren't mapped — plain pill then).
   const anatomyMuscle = isMuscleGroup(exercise.muscleGroup) ? exercise.muscleGroup : null;
 
-  // Greece's coach demo. The gated playback API is the source of truth (it mints
-  // a signed, per-tier stream). 'ready' → play, 'locked' → paywall teaser for
-  // the required tier, otherwise an honest "coming soon" for plan exercises.
-  const isPlanExercise = isExerciseInCatalogPlan(exerciseId);
+  // The coach demo. The gated playback API is the source of truth (it mints a
+  // signed, per-tier stream). 'ready' → play, 'locked' → paywall teaser for the
+  // required membership. Anything else shows nothing: the screen used to
+  // promise a "coming soon" demo for catalog exercises, which was a promise
+  // nobody had committed to keeping.
   const posterUri = images[0];
   // Local const so the null-check narrows into the rep-max map callback below.
   const bestE1RmKg = history.bestE1RmKg;
@@ -292,10 +286,7 @@ export default function ExerciseDetailScreen() {
     date: h.date,
     value: displayWeight(h.e1rm, unitPref),
   }));
-  const lockedTierLabel =
-    planVideo.status === 'locked'
-      ? planVideo.requiredTier.charAt(0).toUpperCase() + planVideo.requiredTier.slice(1)
-      : 'Gold';
+  const lockedTierLabel = planVideo.status === 'locked' ? tierName(planVideo.requiredTier) : 'Gold';
 
   return (
     <Screen scroll>
@@ -389,27 +380,25 @@ export default function ExerciseDetailScreen() {
           <SectionLabel>Coach demo</SectionLabel>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel={`Greece's demo video. Unlock with the ${lockedTierLabel} plan.`}
+            accessibilityLabel={`Coach demo. Unlock with the ${lockedTierLabel} membership.`}
             onPress={() => router.push('/subscribe' as Href)}
             style={styles.lockedCard}
           >
             <IconChip icon="videocam" color={colors.surfaceRaised} iconColor={colors.accent} />
             <View style={styles.lockedText}>
-              <AppText variant="bodyBold">{"Greece's demo"}</AppText>
+              <AppText variant="bodyBold">Coach demo</AppText>
               <AppText variant="caption" color={colors.textDim}>
-                {`Watch the GM technique — ${lockedTierLabel} plan.`}
+                {`Watch it on the ${lockedTierLabel} membership.`}
               </AppText>
             </View>
             <Tag label={lockedTierLabel} variant="filled" />
           </PressableScale>
         </Animated.View>
-      ) : isPlanExercise ? (
-        <Animated.View entering={enterUp(2)} style={styles.pillRow}>
-          <View style={styles.comingSoonChip}>
-            <AppText variant="caption" color={colors.textDim}>
-              {"🎥 Greece's demo — coming soon"}
-            </AppText>
-          </View>
+      ) : planVideo.status === 'unavailable' ? (
+        <Animated.View entering={enterUp(2)} style={styles.videoNote}>
+          <AppText variant="caption" color={colors.textDim}>
+            The coach demo could not be loaded. Try again in a moment.
+          </AppText>
         </Animated.View>
       ) : null}
 

@@ -229,8 +229,8 @@ export function MembershipCardMarble({ tier, holderName, memberId, signedIn, exp
       : `, valid through ${expiry.dateLabel}`
     : '';
   const label = `${TIER_TITLE[tier]} gym membership card for ${name}${
-    signedIn ? '' : ', local profile — sign in to sync'
-  }${expiryLabel}${onPress ? '. Opens subscription options.' : ''}`;
+    signedIn ? '' : ', not signed in. Sign in to save your membership'
+  }${expiryLabel}${onPress ? '. Opens membership options.' : ''}`;
 
   // Stone cut per tier (see DARK_STONE): Calacatta = dark veins on light
   // stone; Nero Marquina = light veins with a soft sheen bloom on dark stone.

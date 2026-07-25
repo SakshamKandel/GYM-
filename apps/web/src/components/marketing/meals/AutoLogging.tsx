@@ -61,7 +61,7 @@ function Ring({
           {value}
         </span>
       </div>
-      <span className="font-mono text-[9.5px] uppercase tracking-[0.16em] text-dim">{label}</span>
+      <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-dim">{label}</span>
     </div>
   );
 }
@@ -86,7 +86,7 @@ export function AutoLogging() {
               </Display>
               <Lead tone="light" className="mt-6">
                 The moment your order lands, its kcal and macros post straight into your Food
-                diary — the same diary your targets live on. No searching, no eyeballing the
+                diary, the same diary your targets live on. No searching, no eyeballing the
                 portion, no forgetting.
               </Lead>
             </Reveal>
@@ -107,13 +107,13 @@ export function AutoLogging() {
                   <div className="rounded-inner bg-white/5 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <p className="text-[14.5px] font-semibold text-snow">Paneer power bowl</p>
-                        <p className="mt-0.5 text-[12px] text-dim">
+                        <p className="text-[16px] font-semibold text-snow">Paneer power bowl</p>
+                        <p className="mt-0.5 text-[14.5px] text-dim">
                           Himalaya Bowl Kitchen · Rs 490
                         </p>
                       </div>
                       <span
-                        className={`inline-flex shrink-0 items-center gap-1.5 rounded-full bg-mint/15 px-3 py-1.5 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-mint transition-all duration-300 ${
+                        className={`inline-flex shrink-0 items-center gap-1.5 rounded-full bg-mint/15 px-3 py-1.5 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-mint transition-all duration-300 ${
                           delivered ? 'scale-100 opacity-100' : 'scale-90 opacity-0'
                         }`}
                       >
@@ -138,8 +138,8 @@ export function AutoLogging() {
                   {/* Diary rings */}
                   <div className="rounded-inner bg-white/5 p-5">
                     <div className="flex items-baseline justify-between">
-                      <p className="text-[14px] font-semibold text-snow">Food diary</p>
-                      <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-faint">
+                      <p className="text-[16px] font-semibold text-snow">Food diary</p>
+                      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
                         Mon · Jul 21
                       </p>
                     </div>
@@ -149,7 +149,7 @@ export function AutoLogging() {
                       ))}
                     </div>
                     <p
-                      className={`mt-5 flex items-center gap-2 font-mono text-[10px] font-medium uppercase tracking-[0.16em] transition-colors duration-500 ${
+                      className={`mt-5 flex items-center gap-2 font-mono text-[11px] font-medium uppercase tracking-[0.16em] transition-colors duration-500 ${
                         filled ? 'text-red-glow' : 'text-faint'
                       }`}
                     >

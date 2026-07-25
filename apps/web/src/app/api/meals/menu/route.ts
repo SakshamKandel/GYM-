@@ -47,11 +47,15 @@ export async function GET(req: Request) {
   const db = getDb();
 
   const [partner] = await db
-    .select({ id: mealPartners.id })
+    .select({ id: mealPartners.id, acceptingOrders: mealPartners.acceptingOrders })
     .from(mealPartners)
     .where(and(eq(mealPartners.id, partnerId), eq(mealPartners.isActive, true)))
     .limit(1);
-  if (!partner) return json({ meals: [] }, 200);
+  // `acceptingOrders` is ADDITIVE alongside the frozen `meals` array: the
+  // partner's operational pause, so a client can render the menu read-only
+  // ("Closed right now") instead of letting a member build a cart that
+  // checkout will reject. An unknown/deactivated partner reads as closed.
+  if (!partner) return json({ meals: [], acceptingOrders: false }, 200);
 
   const predicates = [
     eq(meals.partnerId, partnerId),
@@ -113,7 +117,10 @@ export async function GET(req: Request) {
   }
 
   return json(
-    { meals: result.map((m) => ({ ...m, soldOut: soldOutIds.has(m.id) })) },
+    {
+      meals: result.map((m) => ({ ...m, soldOut: soldOutIds.has(m.id) })),
+      acceptingOrders: partner.acceptingOrders,
+    },
     200,
   );
 }

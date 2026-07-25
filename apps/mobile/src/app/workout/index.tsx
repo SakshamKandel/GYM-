@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { SetLog } from '@gym/shared';
 import { useBottomClearance } from '../../lib/systemBars';
-import { colors, radius, spacing } from '@gym/ui-tokens';
+import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
   AppText,
   Button,
@@ -15,6 +17,7 @@ import {
   enterUp,
   FractionStat,
   layoutSpring,
+  PressableScale,
   Sheet,
 } from '../../components/ui';
 import { SuggestionRow } from '../../features/progression/components/SuggestionRow';
@@ -68,6 +71,15 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingHorizontal: spacing.gutter,
     paddingVertical: spacing.sm,
+  },
+  /** Minimize — icon affordance, not a CTA: leaves the session running. */
+  minimizeBtn: {
+    width: touch.min,
+    height: touch.min,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   /** Eyebrow (workout name) over the big Oswald elapsed clock — header order. */
   clockWrap: { flex: 1, gap: spacing.xs },
@@ -278,6 +290,13 @@ export default function WorkoutScreen() {
     setFinishPrompt(totalSets === 0 ? 'discard' : 'finish');
   };
 
+  // Step out without ending anything — the session stays active, so the live
+  // dot on the tab bar and the Train tab's Resume card lead straight back in.
+  const handleMinimize = (): void => {
+    if (router.canGoBack()) router.back();
+    else replacePath('/(tabs)/train');
+  };
+
   const handleLog = (weightKg: number, reps: number): void => {
     if (logging) return;
     setLogging(true);
@@ -309,6 +328,15 @@ export default function WorkoutScreen() {
   return (
     <View style={[styles.root, { paddingTop: insets.top + TOP_AIR }]}>
       <Animated.View entering={enterDown(0)} style={[styles.contentCap, styles.topStrip]}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Minimize workout"
+          accessibilityHint="Leaves this screen and keeps the workout running"
+          onPress={handleMinimize}
+          style={styles.minimizeBtn}
+        >
+          <Ionicons name="chevron-down" size={24} color={colors.text} />
+        </PressableScale>
         <View style={styles.clockWrap}>
           <AppText variant="label" numberOfLines={1}>
             {session.workoutName}
@@ -346,7 +374,7 @@ export default function WorkoutScreen() {
         {session.exercises.length === 0 ? (
           <View style={styles.empty}>
             <AppText variant="body" color={colors.textDim} center>
-              Freestyle session — add your first exercise.
+              Freestyle session. Add your first exercise.
             </AppText>
           </View>
         ) : null}
@@ -438,7 +466,7 @@ export default function WorkoutScreen() {
         title="Finish workout?"
         message={
           totalSets === 1
-            ? 'Only 1 set logged — save it and see your recap?'
+            ? 'Only 1 set logged. Save it and see your recap?'
             : 'Save this session and see your recap.'
         }
         confirmLabel="Finish"
@@ -452,7 +480,7 @@ export default function WorkoutScreen() {
       <ConfirmDialog
         visible={finishPrompt === 'discard'}
         title="Discard workout?"
-        message="Nothing logged yet — this session won't be saved."
+        message="Nothing logged yet, so this session won't be saved."
         confirmLabel="Discard"
         cancelLabel="Keep training"
         danger

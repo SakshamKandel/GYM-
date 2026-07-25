@@ -51,7 +51,7 @@ export function PinSetupSheet({ visible, onClose, onSet }: Props) {
 
   async function submitConfirm(): Promise<void> {
     if (draft !== first) {
-      setError("PINs didn't match — try again.");
+      setError("PINs didn't match. Try again.");
       setDraft('');
       return;
     }

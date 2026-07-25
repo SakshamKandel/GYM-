@@ -24,6 +24,11 @@ export const runtime = 'nodejs';
  *    daysSinceCheckIn) descending, and clients with NO data at all first —
  *    silence is the loudest signal. Plain sorted list, no scoring model.
  *
+ * Member EMAIL is deliberately absent: coaching happens in the app, and a
+ * coach console that prints a member's address hands over the one detail that
+ * makes leaving the platform easy. Display name only; the admin console is the
+ * permissioned place where a real address is visible.
+ *
  * Guarded by requirePermission('coach.user.read'). Ownership is intrinsic:
  * the roster query only returns clients assigned to the caller.
  */
@@ -78,7 +83,6 @@ export async function GET(req: Request) {
     .select({
       id: accounts.id,
       displayName: accounts.displayName,
-      email: accounts.email,
       tier: accounts.tier,
       tierExpiresAt: accounts.tierExpiresAt,
       lastWorkoutAt,
@@ -110,7 +114,6 @@ export async function GET(req: Request) {
       return {
         id: r.id,
         displayName: r.displayName,
-        email: r.email,
         // Membership identity for the tier shield — server-authoritative
         // effective tier, never a gameplay/scoring input.
         tier: effectiveTier(r.tier, r.tierExpiresAt, new Date(now)),

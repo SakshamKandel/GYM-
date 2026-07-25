@@ -20,7 +20,6 @@ function emptyInput(overrides: Partial<BadgeComputeInput> = {}): BadgeComputeInp
     streakWeeksBest: 0,
     sessionDayIsos: [],
     checkInCount: 0,
-    hasBuddy: false,
     ...overrides,
   };
 }
@@ -65,7 +64,6 @@ function emptyStats(overrides: Partial<BadgeProgressStats> = {}): BadgeProgressS
     prCount: 0,
     streakWeeksBest: 0,
     checkInCount: 0,
-    hasBuddy: false,
     ...overrides,
   };
 }
@@ -136,7 +134,6 @@ describe('badgeProgress', () => {
       prCount: 25,
       checkInCount: 10,
       lifetimeTonnageKg: 50_000,
-      hasBuddy: true,
     });
     const earned = new Set(
       computeEarnedBadgeIds({ ...stats, sessionDayIsos: ['2026-07-01'] }),
@@ -296,7 +293,6 @@ describe('computeEarnedBadgeIds — mileage, records, crew', () => {
   it('never awards retired or event-driven crew badges from the pure pass', () => {
     const maxedOut = computeEarnedBadgeIds(
       emptyInput({
-        hasBuddy: true,
         checkInCount: 999,
         lifetimeSessionDays: 999,
         lifetimeTonnageKg: 10_000_000,
@@ -314,7 +310,6 @@ describe('computeEarnedBadgeIds — mileage, records, crew', () => {
   it('a fully maxed input earns every non-event-driven badge (41 of 42)', () => {
     const maxedOut = computeEarnedBadgeIds(
       emptyInput({
-        hasBuddy: true,
         checkInCount: 999,
         lifetimeSessionDays: 999,
         lifetimeTonnageKg: 10_000_000,

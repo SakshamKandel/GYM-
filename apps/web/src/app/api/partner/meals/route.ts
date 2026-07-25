@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { requirePartner } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { isOwnImageDeliveryUrl } from '@/lib/uploads';
 import { loadPartnerMenu } from '@/app/partner/_data';
 
 export const runtime = 'nodejs';
@@ -17,10 +18,27 @@ export const runtime = 'nodejs';
  */
 
 const macroInt = z.number().int().min(0).max(100_000);
+
+/**
+ * A dish photo must be a delivery URL our own POST /api/uploads/image minted for
+ * `kind: 'meal_photo'` — the exact same check every other image field runs. A
+ * free-form URL would let a partner point the menu at any host (including a
+ * Cloudinary `image/fetch/<remote-url>` that proxies attacker-controlled bytes
+ * and leaks every member's request metadata).
+ */
+const mealImageUrl = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine(
+    (v) => isOwnImageDeliveryUrl(v, ['meal_photo']),
+    'imageUrl must be a delivery URL minted by /api/uploads/image',
+  );
+
 const upsertSchema = z.object({
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().max(1000).default(''),
-  imageUrl: z.string().trim().max(2000).nullable().optional(),
+  imageUrl: mealImageUrl.nullable().optional(),
   kcal: macroInt,
   proteinG: macroInt,
   carbsG: macroInt,

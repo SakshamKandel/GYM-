@@ -1,12 +1,13 @@
-import { type CoachDietPlanItem, type CoachDietPlanMeal, coachDietPlans } from '@gym/db';
-import { maskPii } from '@gym/shared';
+import { coachDietPlans } from '@gym/db';
+import { maskPii, minTierFor } from '@gym/shared';
 import { asc, eq } from 'drizzle-orm';
 import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requireCoachOwnsUser, requirePermission } from '@/lib/authz';
+import { clientCanReceive, maskDietMeal } from '@/lib/coachContent';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { sendPushToAccount } from '@/lib/push';
+import { notify } from '@/lib/notify';
 
 export const runtime = 'nodejs';
 
@@ -25,6 +26,15 @@ export const runtime = 'nodejs';
  * suggestions/flags coach-write routes use) + requireCoachOwnsUser(principal,
  * userId) → 403 { error:'forbidden' } when the caller has no ACTIVE
  * assignment over this client (super_admin/main_admin pass without one).
+ *
+ * TIER GATE, WRITE ONLY (SCALE-UP-PLAN §1.2): coach-written diet plans are a
+ * Gold-and-up benefit, and the member's app hides them below that floor. The
+ * write used to ignore that and store a plan nobody would ever be shown, with
+ * no signal to the coach or the member. POST now answers 409
+ * { error:'tier_required', requiredTier } naming the plan the client needs.
+ *
+ * GET is deliberately NOT gated: a client whose paid window lapsed keeps the
+ * plans they already have, and their coach must still be able to read them.
  */
 
 const dietItemSchema = z.object({
@@ -58,20 +68,6 @@ const dietColumns = {
   createdAt: coachDietPlans.createdAt,
   updatedAt: coachDietPlans.updatedAt,
 };
-
-/** Masks every client-visible free-text field of one food item. */
-function maskItem(item: CoachDietPlanItem): CoachDietPlanItem {
-  return {
-    ...item,
-    name: maskPii(item.name),
-    qty: maskPii(item.qty),
-    note: item.note !== undefined ? maskPii(item.note) : undefined,
-  };
-}
-
-function maskMeal(meal: CoachDietPlanMeal): CoachDietPlanMeal {
-  return { ...meal, items: meal.items.map(maskItem) };
-}
 
 export function OPTIONS() {
   return preflight();
@@ -114,6 +110,11 @@ export async function POST(
   if (!parsed.success) return json({ error: 'invalid' }, 400);
   const { title, notes, status, meals } = parsed.data;
 
+  // Refuse rather than store something the member will never be shown.
+  if (!(await clientCanReceive(userId, 'coach_diet'))) {
+    return json({ error: 'tier_required', requiredTier: minTierFor('coach_diet') }, 409);
+  }
+
   const inserted = await getDb()
     .insert(coachDietPlans)
     .values({
@@ -122,7 +123,7 @@ export async function POST(
       title: maskPii(title),
       notes: maskPii(notes ?? ''),
       status: status ?? 'active',
-      meals: meals.map(maskMeal),
+      meals: meals.map(maskDietMeal),
     })
     .returning(dietColumns);
 
@@ -133,11 +134,15 @@ export async function POST(
 
   // Generic copy on purpose — the lock screen must never leak plan details.
   after(() =>
-    sendPushToAccount(userId, {
-      title: 'New diet plan from your coach',
-      body: 'Your coach assigned you a new diet plan.',
-      data: { type: 'coach_plan' },
-    }),
+    notify(
+      'coach_plan',
+      { accountId: userId },
+      {
+        title: 'New diet plan from your coach',
+        body: 'Your coach assigned you a new diet plan.',
+        data: { type: 'coach_plan' },
+      },
+    ),
   );
 
   return json({ plan }, 201);

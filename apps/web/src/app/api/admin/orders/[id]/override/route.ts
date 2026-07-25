@@ -8,6 +8,7 @@ import {
   type OrderStatus,
 } from '@gym/shared';
 import { eq } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -130,10 +131,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if ((toStatus === 'cancelled' || toStatus === 'refused') && reason) {
     const code = orderNumber(id);
     const title = toStatus === 'refused' ? 'Why delivery was refused' : 'Why your order was cancelled';
-    void notify(
-      'order_status',
-      { accountId: result.order.accountId },
-      { title, body: `Order ${code}: ${maskPii(reason)}`, data: { type: 'order', id } },
+    after(() =>
+      notify(
+        'order_status',
+        { accountId: result.order.accountId },
+        { title, body: `Order ${code}: ${maskPii(reason)}`, data: { type: 'order', id } },
+      ),
     );
   }
 

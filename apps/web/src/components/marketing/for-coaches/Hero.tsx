@@ -35,7 +35,7 @@ export function CoachHero() {
             <Reveal delay={700}>
               <p className="mt-7 max-w-xl text-[17px] leading-relaxed text-dim">
                 Bring your clients or find new ones. The GM Method gives verified coaches a
-                public profile, a proper client console, and a promo code that pays — you do
+                public profile, a proper client console, and a promo code that pays. You do
                 the coaching, the app does the admin.
               </p>
             </Reveal>
@@ -52,7 +52,7 @@ export function CoachHero() {
             </Reveal>
 
             <Reveal delay={920}>
-              <p className="mt-8 font-mono text-[11.5px] uppercase tracking-[0.2em] text-faint">
+              <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-faint">
                 Verified by the GM team · Capacity-gated · Rs wallet payouts
               </p>
             </Reveal>
@@ -73,7 +73,7 @@ export function CoachHero() {
               <div className="mkt-text-steel font-display text-5xl font-medium sm:text-6xl">
                 <CountUp to={s.value} suffix={s.suffix} />
               </div>
-              <p className="mt-2.5 font-mono text-[11.5px] uppercase tracking-[0.16em] text-dim">
+              <p className="mt-2.5 font-mono text-[12px] uppercase tracking-[0.16em] text-dim">
                 {s.caption}
               </p>
             </Reveal>

@@ -32,7 +32,7 @@ export function GymsClosingCta() {
         </Reveal>
         <Reveal delay={120}>
           <p className="mx-auto mt-6 max-w-md text-[16px] leading-relaxed text-snow/80">
-            Verified gyms near you — in the same app as your training, your food and
+            Verified gyms near you, in the same app as your training, your food and
             your coach.
           </p>
         </Reveal>

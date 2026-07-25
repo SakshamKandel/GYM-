@@ -12,6 +12,7 @@ import {
   StatusChip,
   Toolbar,
 } from '@/components/console';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import { UploadModal } from '@/app/admin/content/_components/UploadModal';
 import type { VideoDetail } from '@/app/admin/content/_components/types';
 import { type CoachVideoRow, type Tier, TIERS } from './types';
@@ -123,7 +124,7 @@ export function CoachVideoLibrary({
           x.id === row.id ? { ...x, tierRequired: row.tierRequired } : x,
         ),
       );
-      setRowError({ id: row.id, msg: 'Network error.' });
+      setRowError({ id: row.id, msg: 'Could not reach us just now. Try again.' });
     } finally {
       setBusyId(null);
     }
@@ -154,7 +155,7 @@ export function CoachVideoLibrary({
         prev.map((x) => (x.id === row.id ? { ...x, status: 'removed' } : x)),
       );
     } catch {
-      setRowError({ id: row.id, msg: 'Network error.' });
+      setRowError({ id: row.id, msg: 'Could not reach us just now. Try again.' });
     } finally {
       setBusyId(null);
     }
@@ -254,10 +255,9 @@ export function CoachVideoLibrary({
             style={{
               fontSize: 13,
               color: 'var(--gt-text-dim)',
-              textTransform: 'capitalize',
             }}
           >
-            {v.tierRequired}
+            {tierLabel(v.tierRequired)}
           </span>
         ) : (
           <select
@@ -269,13 +269,12 @@ export function CoachVideoLibrary({
               width: 'auto',
               padding: '6px 10px',
               fontSize: 13,
-              textTransform: 'capitalize',
             }}
             aria-label={`Required tier for ${v.title}`}
           >
             {TIERS.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {tierLabel(t)}
               </option>
             ))}
           </select>
@@ -335,12 +334,11 @@ export function CoachVideoLibrary({
               fontSize: 15,
             }}
           >
-            Video hosting not configured
+            Video uploads are switched off
           </div>
           <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-            Uploads are disabled until the video host keys are added to the
-            server environment. Existing videos still list, but new ones
-            can&apos;t be created yet.
+            You can&apos;t add a new video right now. Ask an admin to enable
+            video uploads. Videos you already have keep working.
           </div>
         </Card>
       ) : null}
@@ -373,7 +371,7 @@ export function CoachVideoLibrary({
           description={
             configured
               ? 'Upload your first form-check video to show it inside a training plan.'
-              : 'Add video host keys to the server, then upload your first form-check video.'
+              : 'Video uploads are switched off. Ask an admin to enable them, then your first form-check video can go up.'
           }
           action={
             configured ? (

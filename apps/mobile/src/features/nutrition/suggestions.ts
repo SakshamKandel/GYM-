@@ -50,7 +50,7 @@ export function macroProfile(food: FoodItem): MacroProfile {
 }
 
 function buildLine(remainingKcal: number, kcal: number, protein: number, proteinMode: boolean): string {
-  if (!proteinMode) return "Protein's done — this tops up energy";
+  if (!proteinMode) return "Protein's done, so this tops up energy";
   const left = Math.round(remainingKcal);
   const p = Math.round(protein);
   if (kcal > left) return `${p}g protein · a touch over your ${left} kcal`;

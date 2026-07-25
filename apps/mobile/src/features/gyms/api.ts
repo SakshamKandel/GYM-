@@ -122,7 +122,7 @@ async function gymsRequest(path: string): Promise<unknown> {
   try {
     res = await fetchWithTimeout(`${BASE_URL}${path}`, { method: 'GET', headers: { Accept: 'application/json' } });
   } catch {
-    throw new GymsApiError('network', "Can't reach the server");
+    throw new GymsApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   if (res.ok) {
@@ -166,7 +166,7 @@ async function authedGymsRequest(opts: {
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new GymsApiError('network', "Can't reach the server");
+    throw new GymsApiError('network', "We couldn't connect. Check your connection and try again");
   }
 
   if (res.ok) {
@@ -219,9 +219,23 @@ export async function fetchGyms(opts?: {
 
 /** GET /api/gyms/[slug] → one gym's full detail. Throws 'not_found' for a
  * draft/archived/unverified/unknown slug. An optional `token` (member,
- * signed in) adds `isFavorited` to the response; omit it when signed out. */
-export async function fetchGymDetail(slug: string): Promise<GymDetail> {
-  const data = await gymsRequest(`/api/gyms/${encodeURIComponent(slug)}`);
+ * signed in) adds `isFavorited` to the response; omit it when signed out —
+ * without it the server cannot tell whether the member saved this gym, so the
+ * heart on the detail screen always came back empty. */
+export async function fetchGymDetail(slug: string, token?: string | null): Promise<GymDetail> {
+  const path = `/api/gyms/${encodeURIComponent(slug)}`;
+  if (token) {
+    try {
+      const data = await authedGymsRequest({ method: 'GET', path, token });
+      return parse(gymPublicDetailResponseSchema, data).gym;
+    } catch (err) {
+      // A session the server won't accept costs the saved flag, nothing else:
+      // the listing itself is public. Fall back to the anonymous read rather
+      // than telling the member this gym doesn't exist.
+      if (toGymsError(err).code !== 'unauthorized') throw err;
+    }
+  }
+  const data = await gymsRequest(path);
   return parse(gymPublicDetailResponseSchema, data).gym;
 }
 

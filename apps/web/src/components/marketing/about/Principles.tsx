@@ -11,7 +11,7 @@ import { Container, Display, Eyebrow, Lead, Section } from '../ui';
 const PRINCIPLES: { title: string; body: string; glyph: ReactNode }[] = [
   {
     title: 'Offline-first',
-    body: 'Gyms have bad signal. Every set writes to your phone first and syncs later. Logging never waits for the network — it confirms in under 100 ms.',
+    body: 'Gyms have bad signal. Every set writes to your phone first and syncs later. Logging never waits for the network. It confirms in under 100 ms.',
     glyph: (
       <g fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M7 18a4 4 0 0 1-.5-8 5.5 5.5 0 0 1 10.4-1.3" />
@@ -34,7 +34,7 @@ const PRINCIPLES: { title: string; body: string; glyph: ReactNode }[] = [
   },
   {
     title: 'Private',
-    body: 'No ads. We never sell your data. Coach chat masks personal details on the server, and your progress photos stay yours — authenticated delivery only.',
+    body: 'No ads. We never sell your data. Coach chat masks personal details on the server, and your progress photos stay yours, with authenticated delivery only.',
     glyph: (
       <g fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <rect x="5" y="10.5" width="14" height="9" rx="2.5" />
@@ -45,7 +45,7 @@ const PRINCIPLES: { title: string; body: string; glyph: ReactNode }[] = [
   },
   {
     title: 'Tested',
-    body: 'PR detection, macro math and weight smoothing are unit-tested. The numbers you see are the numbers that are true — not a best guess.',
+    body: 'PR detection, macro math and weight smoothing are unit-tested. The numbers you see are the numbers that are true, not a best guess.',
     glyph: (
       <g fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <rect x="6" y="4.5" width="12" height="15" rx="2.5" />
@@ -67,8 +67,8 @@ export function AboutPrinciples() {
             exceptions.
           </Display>
           <Lead className="mt-6">
-            These aren&rsquo;t taglines. They&rsquo;re written into the codebase as hard rules
-            every feature has to pass before it ships.
+            These are not taglines. Every new part of the app has to pass all four before we
+            ship it.
           </Lead>
         </Reveal>
 

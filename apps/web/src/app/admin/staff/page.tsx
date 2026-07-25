@@ -1,5 +1,6 @@
 import { accounts, admins, coachProfiles } from '@gym/db';
 import { asc, eq, ne } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { getDb } from '@/lib/db';
 import { effectivePermissionSet } from '@/lib/authz';
@@ -7,6 +8,7 @@ import { staffFromCookie } from '@/lib/staffSession';
 import { type StaffMember, StaffManager } from './_components/StaffManager';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Staff & roles' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -71,6 +73,12 @@ export default async function AdminStaffPage() {
       staff={staff}
       currentAccountId={principal.id}
       callerRole={principal.role}
+      // Per-account permission overrides are a SEPARATE capability from handing
+      // out roles: the routes behind that panel require 'permissions.override',
+      // which sits in no role preset. Without this flag the panel opened for
+      // anyone who could reach this page — a delegated roles.grant holder got a
+      // "Permissions" button that 403'd the moment it loaded.
+      canOverridePermissions={permissions.has('permissions.override')}
     />
   );
 }

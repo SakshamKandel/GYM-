@@ -9,11 +9,20 @@ export const runtime = 'nodejs';
 /**
  * Admin console — the audit trail.
  *
- *  GET /api/admin/audit?action=&actor=&cursor=
+ *  GET /api/admin/audit?action=&actor=&targetType=&targetId=&cursor=
  *    - `action`  → exact-match filter on audit_log.action (dropdown of known actions).
  *    - `actor`   → case-insensitive substring match on the actor's email
  *                  (joined accounts.email). Rows whose actorId is null / actor
  *                  account was deleted never match an actor filter.
+ *    - `targetType`/`targetId` → exact-match filters on the audited OBJECT
+ *                  (e.g. targetType='account' + the member's id), which is what
+ *                  answers "who changed this member, and when". Both are pushed
+ *                  into the same condition list as everything else so Postgres
+ *                  can use the audit_log_target (target_type, target_id) index —
+ *                  the index existed with no consumer until this filter landed.
+ *                  Either may be supplied alone; the pair is the index-friendly
+ *                  case and the one the member drawer's "View full history"
+ *                  link sends.
  *    - `cursor`  → keyset page token: "<createdAtISO>|<id>". Returns rows
  *                  strictly OLDER than the cursor tuple, newest-first.
  *
@@ -39,12 +48,18 @@ export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
   const action = params.get('action')?.trim() || null;
   const actor = params.get('actor')?.trim() || null;
+  const targetType = params.get('targetType')?.trim() || null;
+  const targetId = params.get('targetId')?.trim() || null;
   const cursor = params.get('cursor')?.trim() || null;
 
   const conditions = [];
 
   if (action) conditions.push(eq(auditLog.action, action));
   if (actor) conditions.push(ilike(accounts.email, `%${actor}%`));
+  // Exact matches (not ILIKE): both columns are opaque identifiers, and exact
+  // equality is what lets the planner use audit_log_target.
+  if (targetType) conditions.push(eq(auditLog.targetType, targetType));
+  if (targetId) conditions.push(eq(auditLog.targetId, targetId));
 
   // Keyset: rows strictly older than the cursor tuple (createdAt, id).
   // "createdAt < cur.createdAt OR (createdAt = cur.createdAt AND id < cur.id)".

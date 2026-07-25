@@ -12,6 +12,7 @@ import Animated, {
 import { Ionicons } from '@expo/vector-icons';
 import { router, type Href } from 'expo-router';
 import { colors, radius, spacing } from '@gym/ui-tokens';
+import { PRESS_SPRING } from './motion';
 import { blurActiveElement } from '../../lib/blurActiveElement';
 import { tapHaptic } from '../../lib/haptics';
 import { useBottomClearance } from '../../lib/systemBars';
@@ -40,8 +41,13 @@ type IconName = ComponentProps<typeof Ionicons>['name'];
 export const TAB_ICONS: Record<string, { active: IconName; idle: IconName }> = {
   index: { active: 'home', idle: 'home-outline' },
   train: { active: 'barbell', idle: 'barbell-outline' },
-  food: { active: 'restaurant', idle: 'restaurant-outline' },
-  meals: { active: 'fast-food', idle: 'fast-food-outline' },
+  // Food (logging what you ate) and Meals (ordering delivery) previously used
+  // restaurant vs fast-food: two cutlery/burger glyphs that read as the same
+  // thing at 22dp. With no text labels in this bar the icon IS the only cue, so
+  // they now carry deliberately unlike silhouettes — an apple for tracking,
+  // a carry bag for ordering.
+  food: { active: 'nutrition', idle: 'nutrition-outline' },
+  meals: { active: 'bag-handle', idle: 'bag-handle-outline' },
   gyms: { active: 'location', idle: 'location-outline' },
   progress: { active: 'trending-up', idle: 'trending-up-outline' },
 };
@@ -75,7 +81,10 @@ export const FLOATING_TAB_SPACE = 96;
  * faster than it charges so attention lands on the new tab. */
 const CHARGE_SPRING = { damping: 17, stiffness: 190, mass: 0.9 };
 const DRAIN_SPRING = { damping: 22, stiffness: 260, mass: 0.7 };
-const PRESS_SPRING = { damping: 22, stiffness: 420, mass: 0.6 };
+// Press uses the shared token, not a local copy: a tab press is the same
+// gesture as any other press in the app and must feel identical. This file
+// previously declared its own PRESS_SPRING, which shadowed the token by name,
+// so the tab bar drifted stiffer than every other pressable.
 
 const styles = StyleSheet.create({
   wrap: {

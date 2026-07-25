@@ -99,7 +99,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       .where(eq(mealOrders.id, dispute.orderId))
       .limit(1);
     const code = order ? orderNumber(order.id) : orderNumber(dispute.orderId);
-    const outcome = toStatus === 'resolved' ? 'resolved' : 'reviewed — no further action';
+    const outcome = toStatus === 'resolved' ? 'resolved' : 'reviewed with no further action';
     const body = maskedResolution
       ? `Your report on order ${code} was ${outcome}: ${maskedResolution}`
       : `Your report on order ${code} was ${outcome}.`;

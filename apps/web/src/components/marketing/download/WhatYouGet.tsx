@@ -10,8 +10,8 @@ import { CheckItem, Container, Display, Eyebrow, Lead, Section } from '../ui';
 const ITEMS = [
   'Coach-built workout plans and a gym mode that flows set to set.',
   'Macro tracking with a Nepali + global food database and barcode scan.',
-  'Smoothed weight trends, measurements and progress photos — kept private.',
-  '3D anatomy you can tap — 17 muscle zones, offline.',
+  'Smoothed weight trends, measurements and progress photos, kept private.',
+  '3D anatomy you can tap: 17 muscle zones, offline.',
   'Meal delivery, verified gyms and real human coaching when you want them.',
   'Every set logs in under 100 ms, online or off.',
 ] as const;

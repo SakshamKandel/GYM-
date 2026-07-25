@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { formatMoney } from '@/lib/format';
 
 /**
  * Per-partner revenue panel for the admin partners drawer. Fetches the read-only
@@ -29,12 +30,6 @@ interface RevenueResponse {
   heldMinor: number;
   paidOutMinor: number;
   ledgerDerived: boolean;
-}
-
-/** `25000, 'NPR'` → `Rs 250` · `250, 'USD'` → `$2.50`. */
-function formatMoney(amountMinor: number, currency: string): string {
-  const major = amountMinor / 100;
-  return currency === 'NPR' ? `Rs ${major.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : `$${major.toFixed(2)}`;
 }
 
 export function PartnerRevenuePanel({ partnerId }: { partnerId: string }) {

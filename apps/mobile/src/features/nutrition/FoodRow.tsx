@@ -14,6 +14,10 @@ import { sourceTagLabel } from './logic';
  * (brief §11c): icon-chip anchor, name + brand/macros, kcal per 100 g in
  * Oswald on the right rail. Rows in a stack are separated by gaps, never
  * hairline dividers.
+ *
+ * The tile itself is a plain View: the "open this food" pressable and the
+ * favorite star sit side by side as siblings, so a screen reader can reach
+ * both. Nesting the star inside the row pressable hid it from VoiceOver.
  */
 
 interface Props {
@@ -41,6 +45,14 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     padding: spacing.lg,
     minHeight: 64,
+  },
+  /** Everything that opens the food — the row's own pressable region. */
+  rowContent: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
   },
   info: { flex: 1, minWidth: 0, gap: 2 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
@@ -84,13 +96,44 @@ export function FoodRow({ item, onPress, favorite, onToggleFavorite }: Props) {
   const macros = `P ${Math.round(item.proteinPer100)} · C ${Math.round(item.carbsPer100)} · F ${Math.round(item.fatPer100)}`;
   const tag = sourceTagLabel(item.source);
   return (
-    <PressableScale
-      accessibilityRole="button"
-      accessibilityLabel={`${item.name}, ${sub}`}
-      onPress={() => onPress(item)}
-      style={styles.row}
-    >
-      <IconChip icon={SOURCE_ICONS[item.source]} />
+    <View style={styles.row}>
+      <PressableScale
+        accessibilityRole="button"
+        accessibilityLabel={`${item.name}, ${sub}`}
+        onPress={() => onPress(item)}
+        style={styles.rowContent}
+      >
+        <IconChip icon={SOURCE_ICONS[item.source]} />
+        <View style={styles.info}>
+          <View style={styles.nameRow}>
+            <AppText variant="bodyBold" numberOfLines={1} style={styles.name}>
+              {item.name}
+            </AppText>
+            {item.nutriScore ? (
+              <View
+                style={[styles.scoreDot, { backgroundColor: NUTRI_COLORS[item.nutriScore] }]}
+                accessibilityLabel={`Nutri-Score ${item.nutriScore.toUpperCase()}`}
+              >
+                <AppText style={styles.scoreLetter} tabular={false}>
+                  {item.nutriScore.toUpperCase()}
+                </AppText>
+              </View>
+            ) : null}
+            {tag !== null ? <Tag label={tag} variant="dim" /> : null}
+          </View>
+          <AppText variant="caption" numberOfLines={1} tabular>
+            {item.brand ? `${item.brand} · ${macros}` : macros}
+          </AppText>
+        </View>
+        <View style={styles.kcalCol}>
+          <AppText style={styles.kcal} tabular>
+            {Math.round(item.kcalPer100)}
+          </AppText>
+          <AppText variant="caption" color={colors.textFaint} tabular={false}>
+            kcal/100g
+          </AppText>
+        </View>
+      </PressableScale>
       {onToggleFavorite ? (
         <Pressable
           accessibilityRole="button"
@@ -109,35 +152,6 @@ export function FoodRow({ item, onPress, favorite, onToggleFavorite }: Props) {
           />
         </Pressable>
       ) : null}
-      <View style={styles.info}>
-        <View style={styles.nameRow}>
-          <AppText variant="bodyBold" numberOfLines={1} style={styles.name}>
-            {item.name}
-          </AppText>
-          {item.nutriScore ? (
-            <View
-              style={[styles.scoreDot, { backgroundColor: NUTRI_COLORS[item.nutriScore] }]}
-              accessibilityLabel={`Nutri-Score ${item.nutriScore.toUpperCase()}`}
-            >
-              <AppText style={styles.scoreLetter} tabular={false}>
-                {item.nutriScore.toUpperCase()}
-              </AppText>
-            </View>
-          ) : null}
-          {tag !== null ? <Tag label={tag} variant="dim" /> : null}
-        </View>
-        <AppText variant="caption" numberOfLines={1} tabular>
-          {item.brand ? `${item.brand} · ${macros}` : macros}
-        </AppText>
-      </View>
-      <View style={styles.kcalCol}>
-        <AppText style={styles.kcal} tabular>
-          {Math.round(item.kcalPer100)}
-        </AppText>
-        <AppText variant="caption" color={colors.textFaint} tabular={false}>
-          kcal/100g
-        </AppText>
-      </View>
-    </PressableScale>
+    </View>
   );
 }

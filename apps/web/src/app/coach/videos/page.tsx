@@ -1,5 +1,6 @@
 import { exercises, planVideos } from '@gym/db';
 import { desc, eq } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { PageHeader, StatTile } from '@/components/console';
 import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
@@ -8,6 +9,7 @@ import type { CoachVideoRow, Tier, VideoStatus } from './_components/types';
 import { CoachVideoLibrary } from './_components/CoachVideoLibrary';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Videos' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -75,7 +77,7 @@ export default async function CoachVideosPage() {
     <div style={{ maxWidth: 1100 }}>
       <PageHeader
         title="Videos"
-        subtitle="Form-check videos shown inside the training plans. Each video is gated to a membership tier — members below it don't see it. Add, re-tier, or remove any video here."
+        subtitle="Form-check videos shown inside the training plans. Each video is gated to a membership tier, so members below it don't see it. Add, re-tier, or remove any video here."
       />
 
       <div

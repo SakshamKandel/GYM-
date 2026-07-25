@@ -19,6 +19,10 @@ export const runtime = 'nodejs';
  *                     (Pack K). Guarded by requireCoachOwnsUser(X) → 403 when
  *                     the caller has no active assignment over that client.
  *
+ * The member identity is a display name only — no email. Coaching stays in the
+ * app, and an address in the coach console is the one detail that makes moving
+ * off it easy.
+ *
  * Guarded by requirePermission('coach.user.read'); the reply write guard
  * (requireCoachOwnsUser) lives on the reply route.
  */
@@ -101,7 +105,6 @@ export async function GET(req: Request) {
       user: {
         id: accounts.id,
         displayName: accounts.displayName,
-        email: accounts.email,
       },
     })
     .from(checkIns)

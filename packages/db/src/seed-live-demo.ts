@@ -20,7 +20,10 @@ import {
  *    with an 8-meal macro-tagged menu available every day for both windows,
  *    plus the delivery-config singleton. Idempotent throughout.
  *
- * Run from packages/db:  pnpm --filter @gym/db seed:live-demo
+ * OFF BY DEFAULT: everything here is member-visible, and it lands in whatever
+ * database DATABASE_URL happens to point at. See `demoSeedBlockedReason` below.
+ *
+ * Run from packages/db:  SEED_DEMO=yes pnpm --filter @gym/db seed:live-demo
  */
 
 config({ path: '../../.env' });
@@ -93,7 +96,43 @@ const MENU: MealSeed[] = [
   },
 ];
 
+/**
+ * Demo seeding is opt-in. A non-empty DATABASE_URL is not consent: the repo-root
+ * .env can easily be pointed at the live database, and this script writes a
+ * restaurant and a full menu that real members would see in the app. So refuse
+ * unless someone turned it on for this run, and never run under a production
+ * NODE_ENV. Returns the message to show, or null when it is safe to continue.
+ */
+function demoSeedBlockedReason(): string | null {
+  if (process.env.NODE_ENV === 'production') {
+    return [
+      'Refusing to run: NODE_ENV is set to "production".',
+      'This seed creates a demo restaurant and menu that members can see in the app.',
+      '',
+      'If this really is a test database, say so on purpose:',
+      '  NODE_ENV=development SEED_DEMO=yes pnpm --filter @gym/db seed:live-demo',
+    ].join('\n');
+  }
+  if (process.env.SEED_DEMO !== 'yes') {
+    return [
+      'Refusing to run: demo seeding is off by default.',
+      'This seed creates a demo restaurant and menu that members can see in the app,',
+      'in whatever database DATABASE_URL points at.',
+      '',
+      'Check DATABASE_URL is a local or test database, then opt in:',
+      '  SEED_DEMO=yes pnpm --filter @gym/db seed:live-demo',
+    ].join('\n');
+  }
+  return null;
+}
+
 async function main(): Promise<void> {
+  const blocked = demoSeedBlockedReason();
+  if (blocked !== null) {
+    console.error(blocked);
+    process.exit(1);
+  }
+
   const databaseUrl = process.env.DATABASE_URL;
   if (databaseUrl === undefined || databaseUrl === '') {
     throw new Error('DATABASE_URL missing — put it in the repo-root .env');

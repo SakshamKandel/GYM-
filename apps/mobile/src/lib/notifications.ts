@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { router, type Href } from 'expo-router';
 import { colors } from '@gym/ui-tokens';
@@ -13,20 +14,23 @@ export { deepLinkForNotification } from './notificationRouting';
  *  - the first-3-workouts activation nudge (ONE local notification),
  *  - the app-wide notification foundation (foreground handler + Android
  *    'default' channel that the push server targets),
- *  - Expo push-token registration for buddy pushes, and
+ *  - push-token registration so coach replies, meal orders and support
+ *    answers can reach the phone, and
  *  - the local, recurring reminder set (workout schedule / morning nudge /
  *    weekly check-in) surfaced in Settings.
  *
  * Rules honoured here:
  *  - No-op on web (expo-notifications scheduling is native-only here).
  *  - Never throws into the UI — every call is wrapped in try/catch.
- *  - Opt-in, with ONE explicit ask surface: onboarding's "Stay on track" step
- *    (`requestPermission()` / prompting `registerForPushNotificationsAsync`)
- *    and Settings toggles (workout/morning/check-in reminders, which the
- *    user just flipped, so a prompt there is expected). Everywhere else
+ *  - Opt-in, and only ever asked from a surface the user just tapped:
+ *    onboarding's "Stay on track" step (`requestPermission()` / prompting
+ *    `registerForPushNotificationsAsync`), the Settings reminder toggles
+ *    (workout/morning/check-in — the user just flipped one, so a prompt is
+ *    expected), and the "Turn on notifications" button on /notifications
+ *    (shown only when permission is still askable). Everywhere else
  *    (cold-start push registration, the first-workouts quest, the streak
- *    saver) only CHECKS the current permission via `hasPermission()` — no
- *    surprise OS dialogs outside the two ask surfaces above.
+ *    saver) only CHECKS the current permission via `hasPermission()` /
+ *    `getNotificationPermissionState()` — no surprise OS dialogs.
  */
 
 /** Stable id so the reminder can always be found and cancelled. */
@@ -76,6 +80,43 @@ async function hasPermission(): Promise<boolean> {
     return (await Notifications.getPermissionsAsync()).granted;
   } catch {
     return false;
+  }
+}
+
+/**
+ * What the OS currently allows, for screens that need to EXPLAIN the state
+ * rather than just act on it:
+ *  - 'granted'     — notifications can arrive.
+ *  - 'canAsk'      — undecided; a prompt is still possible.
+ *  - 'blocked'     — turned off for good; only phone Settings can undo it.
+ *  - 'unsupported' — web, or the module isn't available.
+ *
+ * Read-only, like `hasPermission` — it never shows a dialog.
+ */
+export type NotificationPermissionState = 'granted' | 'canAsk' | 'blocked' | 'unsupported';
+
+export async function getNotificationPermissionState(): Promise<NotificationPermissionState> {
+  if (!isSupported()) return 'unsupported';
+  try {
+    const current = await Notifications.getPermissionsAsync();
+    if (current.granted) return 'granted';
+    return current.canAskAgain ? 'canAsk' : 'blocked';
+  } catch {
+    return 'unsupported';
+  }
+}
+
+/**
+ * Set (or, with 0, clear) the app-icon badge. Never throws and resolves even
+ * where badges aren't supported — some Android launchers ignore them, which is
+ * fine: the in-app inbox is always the source of truth.
+ */
+export async function setNotificationBadgeCount(count: number): Promise<void> {
+  if (!isSupported()) return;
+  try {
+    await Notifications.setBadgeCountAsync(Math.max(0, Math.round(count)));
+  } catch {
+    // Launcher/OS doesn't support badges — nothing else to do.
   }
 }
 
@@ -173,12 +214,13 @@ function registerNotificationDeepLinks(): void {
 /**
  * Wire up the app-wide notification behaviour: show banners/list + play sound
  * even while the app is foregrounded, and create the Android 'default' channel
- * (importance MAX, red accent light) that the push server sends buddy pushes
- * to. Idempotent and crash-safe — safe to call once on mount.
+ * (importance MAX, red accent light) that the push server targets. Idempotent
+ * and crash-safe — safe to call once on mount.
  */
 export async function setupNotifications(): Promise<void> {
   if (!isSupported()) return;
   registerNotificationDeepLinks();
+  registerPushTokenRotation();
   try {
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
@@ -195,7 +237,7 @@ export async function setupNotifications(): Promise<void> {
   if (Platform.OS === 'android') {
     try {
       await Notifications.setNotificationChannelAsync('default', {
-        name: 'GYM Tracker',
+        name: 'The GM Method',
         importance: Notifications.AndroidImportance.MAX,
         lightColor: colors.accent,
       });
@@ -206,11 +248,21 @@ export async function setupNotifications(): Promise<void> {
 }
 
 // ════════════════════════════════════════════════════════════════
-// Native FCM push-token registration (buddy pushes).
+// Push-token registration — ONE address per phone, and it has to be an
+// address our sender can actually reach.
 //
-// We use the DEVICE (native FCM) token, not the Expo token, so our own
-// server can send via the Firebase Admin SDK directly — no Expo/EAS account
-// needed. Requires google-services.json baked into the Android build.
+// Android: `getDevicePushTokenAsync()` hands back the native Firebase Cloud
+// Messaging token, which the server sends to directly. Requires
+// google-services.json baked into the Android build.
+//
+// iOS: the same call hands back an APNs token, which is Apple's address
+// format. Firebase Cloud Messaging refuses those outright, so registering
+// one meant every iPhone was stored as a recipient that could never be
+// delivered to — no error anywhere, just silence. iPhones therefore
+// register the Expo push token instead (`getExpoPushTokenAsync`, the answer
+// expo-notifications provides for exactly this case): one address the
+// server can post to, which Expo hands on to Apple for us. The server tells
+// the two apart by their shape, so nothing else in the app changes.
 // ════════════════════════════════════════════════════════════════
 
 /**
@@ -221,30 +273,71 @@ export async function setupNotifications(): Promise<void> {
 let pendingUnregister: Promise<boolean> | null = null;
 
 /**
- * getDevicePushTokenAsync can pend forever (e.g. APNs registration with no
+ * Fetching a push address can pend forever (e.g. APNs registration with no
  * network) — bound it so the sign-out chain behind it always proceeds.
  */
 const DEVICE_TOKEN_TIMEOUT_MS = 5_000;
 
-/** This device's native FCM token, or null when unavailable within the bound. */
-async function currentDeviceToken(): Promise<string | null> {
+/**
+ * The EAS project an Expo push token is attributed to. Baked into the build
+ * from app.json (`extra.eas.projectId`); read defensively because the config
+ * is untyped at the leaf.
+ */
+function easProjectId(): string | null {
+  const fromEas = Constants.easConfig?.projectId;
+  if (typeof fromEas === 'string' && fromEas !== '') return fromEas;
+  const extra: unknown = Constants.expoConfig?.extra;
+  const eas =
+    extra !== null && typeof extra === 'object' ? (extra as { eas?: unknown }).eas : undefined;
+  const projectId =
+    eas !== null && typeof eas === 'object'
+      ? (eas as { projectId?: unknown }).projectId
+      : undefined;
+  return typeof projectId === 'string' && projectId !== '' ? projectId : null;
+}
+
+/** Resolve a promise to null if it hasn't settled inside the bound. */
+async function withinBound<T>(work: Promise<T>): Promise<T | null> {
   const timeout = new Promise<null>((resolve) => {
     setTimeout(() => resolve(null), DEVICE_TOKEN_TIMEOUT_MS);
   });
-  const tokenResponse = await Promise.race([
-    Notifications.getDevicePushTokenAsync(),
-    timeout,
-  ]);
-  if (!tokenResponse) return null;
-  const deviceToken = typeof tokenResponse.data === 'string' ? tokenResponse.data : '';
-  return deviceToken || null;
+  return await Promise.race([work, timeout]);
 }
 
 /**
- * Register this device's native FCM push token with the server so buddy
- * pushes can arrive. No-ops (returns false) when signed out, unsupported, or
- * permission is denied. Never throws — the app works fine without remote push
- * (local reminders are unaffected).
+ * This phone's push address in the form the server can send to: the native
+ * FCM token on Android, the Expo push token on iOS (see the block comment
+ * above). Null when it can't be obtained inside the bound, when the build
+ * has no EAS project id, or when anything throws — the app works fine
+ * without remote push, so this never surfaces an error.
+ */
+async function currentPushToken(): Promise<string | null> {
+  try {
+    if (Platform.OS === 'ios') {
+      const projectId = easProjectId();
+      // Without a project id Expo cannot issue an address, and an APNs token
+      // would be worse than nothing (stored, never deliverable).
+      if (projectId === null) return null;
+      const expoToken = await withinBound(Notifications.getExpoPushTokenAsync({ projectId }));
+      const token = expoToken !== null && typeof expoToken.data === 'string' ? expoToken.data : '';
+      return token || null;
+    }
+    const deviceToken = await withinBound(Notifications.getDevicePushTokenAsync());
+    const token =
+      deviceToken !== null && typeof deviceToken.data === 'string' ? deviceToken.data : '';
+    return token || null;
+  } catch {
+    // Offline, permission revoked mid-flight, or push isn't set up in this
+    // build. Registration simply doesn't happen; local reminders still do.
+    return null;
+  }
+}
+
+/**
+ * Register this phone's push address with the server so coach replies, order
+ * updates and support answers can arrive. No-ops (returns false) when signed
+ * out, unsupported, or permission is denied. Never throws — the app works
+ * fine without remote push (local reminders are unaffected).
  *
  * `askIfUndetermined` (default false) picks which permission check gates
  * registration:
@@ -276,11 +369,10 @@ export async function registerForPushNotificationsAsync(
     // below so a sign-out mid-flight can never be overtaken by this register.
     const authToken = auth.token;
 
-    // Native device token = the raw FCM token on Android (Firebase must be
-    // configured via google-services.json at build time for this to resolve).
-    // Bounded (5s) like currentDeviceToken so a hung native call can't leave
-    // a registration pending indefinitely across a sign-out.
-    const deviceToken = await currentDeviceToken();
+    // FCM token on Android, Expo push token on iOS — the only two shapes the
+    // server can actually deliver to. Bounded (5s) so a hung native call
+    // can't leave a registration pending indefinitely across a sign-out.
+    const deviceToken = await currentPushToken();
     if (!deviceToken) return false;
 
     // Re-read auth AFTER the awaits: if the user signed out (or switched
@@ -298,11 +390,69 @@ export async function registerForPushNotificationsAsync(
   }
 }
 
+// ── Token rotation ────────────────────────────────────────────
+//
+// A push token can be rolled by the push service WHILE the app is running
+// (app data cleared, restore-from-backup, FCM housekeeping). The old token
+// dies immediately, so without this the account is unreachable by push until
+// the next cold start re-registers.
+
+let tokenRotationRegistered = false;
+
 /**
- * Sign-out counterpart: tell the server to forget this device's FCM token so
- * the account signing out stops receiving buddy pushes here. Takes the auth
- * token explicitly because it runs during sign-out, after local auth state
- * is already cleared. Best-effort, never throws.
+ * Adopt a freshly-rotated device token: register it against the CURRENT
+ * session so pushes keep landing. Deliberately uses the token handed to the
+ * listener instead of calling `registerForPushNotificationsAsync()` — that
+ * helper calls `getDevicePushTokenAsync()`, which expo-notifications warns
+ * re-triggers this very listener (infinite loop).
+ *
+ * Android only. On iPhones this listener fires with the rotated APNs token,
+ * which the server can't use — and doesn't need to: the Expo push token we
+ * registered stays the same address, because expo-notifications re-points it
+ * at the new APNs token by itself.
+ */
+async function adoptRotatedPushToken(token: Notifications.DevicePushToken): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    const deviceToken = typeof token.data === 'string' ? token.data : '';
+    if (!deviceToken) return;
+
+    // Same ordering guarantee as registration: a sign-out's unregister must
+    // land before we re-register this device.
+    if (pendingUnregister) await pendingUnregister;
+
+    if (!(await hasPermission())) return;
+
+    // Read auth AFTER the awaits above (same discipline as registration): a
+    // sign-out mid-flight must not get its device re-registered.
+    const auth = useAuth.getState();
+    if (auth.status !== 'signedIn' || auth.token === null) return;
+
+    await registerPushToken(deviceToken, 'android', auth.token);
+  } catch {
+    // Offline, unauthorized, or Firebase not configured — the next cold-start
+    // registration picks the new token up.
+  }
+}
+
+/** Install the rotation listener exactly once (from `setupNotifications`). */
+function registerPushTokenRotation(): void {
+  if (tokenRotationRegistered) return;
+  tokenRotationRegistered = true;
+  try {
+    Notifications.addPushTokenListener((token) => {
+      void adoptRotatedPushToken(token);
+    });
+  } catch {
+    // Notifications module unavailable — cold-start registration still runs.
+  }
+}
+
+/**
+ * Sign-out counterpart: tell the server to forget this phone's push address
+ * so the account signing out stops receiving notifications here. Takes the
+ * auth token explicitly because it runs during sign-out, after local auth
+ * state is already cleared. Best-effort, never throws.
  */
 export function unregisterPushNotificationsAsync(authToken: string): Promise<boolean> {
   const task = doUnregisterPush(authToken);
@@ -315,13 +465,27 @@ export function unregisterPushNotificationsAsync(authToken: string): Promise<boo
 
 async function doUnregisterPush(authToken: string): Promise<boolean> {
   if (!isSupported()) return false;
+  let deviceToken: string | null = null;
   try {
-    const deviceToken = await currentDeviceToken();
+    deviceToken = await currentPushToken();
     if (!deviceToken) return false;
     await unregisterPushToken(deviceToken, authToken);
     return true;
   } catch {
-    // No token, Firebase not configured, offline — nothing to unregister.
+    // The server still maps this device to the account that just signed out
+    // (offline, or the session was already revoked), so it would keep pushing
+    // here. We can't retry the delete without a session — drop the push
+    // registration instead, which stops delivery at the OS level. The server
+    // row self-heals: the next send gets `registration-token-not-registered`
+    // back and prunes it. A fresh token is issued on the next sign-in (and the
+    // rotation listener above picks it up if it arrives mid-session).
+    if (deviceToken) {
+      try {
+        await Notifications.unregisterForNotificationsAsync();
+      } catch {
+        // Not supported / module unavailable — nothing further we can do.
+      }
+    }
     return false;
   }
 }

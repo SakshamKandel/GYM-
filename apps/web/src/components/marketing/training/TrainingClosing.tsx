@@ -35,7 +35,7 @@ const LINKS = [
     n: '01',
     title: 'Food',
     href: '/nutrition',
-    blurb: 'Macros without the math — barcode scans, Nepali + global databases, water and Nutri-Score.',
+    blurb: 'Macros without the math: barcode scans, Nepali + global databases, water and Nutri-Score.',
   },
   {
     n: '02',
@@ -47,7 +47,7 @@ const LINKS = [
     n: '03',
     title: 'Pricing',
     href: '/pricing',
-    blurb: 'Priced for Nepal and the world — two currencies, real coaching tiers, no ads ever.',
+    blurb: 'Priced for Nepal and the world: two currencies, real coaching tiers, no ads ever.',
   },
 ] as const;
 
@@ -83,7 +83,7 @@ export function TrainingCrossLinks() {
                   <h3 className="font-display text-2xl font-medium uppercase text-ink">
                     {l.title}
                   </h3>
-                  <p className="mt-2 text-[14px] leading-relaxed text-gravel">{l.blurb}</p>
+                  <p className="mt-2 text-[14.5px] leading-relaxed text-gravel">{l.blurb}</p>
                 </div>
               </Link>
             </StaggerItem>
@@ -142,7 +142,7 @@ export function TrainingCta() {
           </Magnetic>
         </Reveal>
         <Reveal delay={440}>
-          <p className="mt-8 font-mono text-[11.5px] uppercase tracking-[0.2em] text-faint">
+          <p className="mt-8 font-mono text-[12px] uppercase tracking-[0.2em] text-faint">
             iOS · Android · Offline-first · No ads
           </p>
         </Reveal>

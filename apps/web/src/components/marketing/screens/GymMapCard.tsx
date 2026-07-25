@@ -129,7 +129,7 @@ export function GymMapCard() {
       </div>
 
       <p className="mt-5 font-mono text-[11px] uppercase tracking-[0.16em] text-faint">
-        Stylised view — the app shows each gym&rsquo;s exact pin and one-tap directions
+        Stylised view. The app shows each gym&rsquo;s exact pin and one-tap directions
       </p>
     </div>
   );

@@ -6,12 +6,17 @@ import { AppText, AppTextInput, Button, Chip } from '../../../components/ui';
 import { fileMealDispute, toMealsError, type MealDisputeReason } from '../api';
 import { DISPUTE_REASONS, disputeReasonLabel, mealErrorMessage } from '../logic';
 import { warnHaptic } from '../../../lib/haptics';
+import { useFiledDisputes } from './disputeRecord';
 
 /**
  * "Report a problem" — the non-delivery / dispute rail (Pack E). Only ever
  * rendered from a terminal delivered/paid order; resolution is
  * admin-authoritative and NEVER auto-refunds (this only files the case and
  * pings staff — see `@gym/shared`'s disputes.ts and the WP-3 dispute route).
+ *
+ * A sent report is remembered on the device (disputeRecord.ts) so the order it
+ * belongs to can keep showing it. Both endings say the same true thing about
+ * what comes next: a person answers, and the answer arrives as a notification.
  */
 
 const styles = StyleSheet.create({
@@ -46,10 +51,23 @@ export function DisputePanel({ token, orderId, onDone }: Props) {
     void (async () => {
       try {
         await fileMealDispute(token, orderId, { reason, note: note.trim() || undefined });
+        useFiledDisputes.getState().remember(orderId, reason);
         setDone(true);
         onDone();
       } catch (err) {
-        setError(mealErrorMessage(toMealsError(err).code));
+        const code = toMealsError(err).code;
+        if (code === 'dispute_exists') {
+          // A live report already exists for this order — most often filed on
+          // another device, so nothing is stored here to show and inventing a
+          // reason and a date would be worse than saying nothing. Point at the
+          // place the answer really turns up, not at the status screen the
+          // shared copy still promises.
+          setError(
+            "You've already reported this order. We'll write to you with what we can do, and it lands in your notifications.",
+          );
+        } else {
+          setError(mealErrorMessage(code));
+        }
         warnHaptic();
       } finally {
         setSubmitting(false);
@@ -63,7 +81,8 @@ export function DisputePanel({ token, orderId, onDone }: Props) {
         <Ionicons name="checkmark-circle" size={28} color={colors.success} />
         <AppText variant="bodyBold">We&apos;ve got your report</AppText>
         <AppText variant="caption" color={colors.textDim} center>
-          Our team will review this order and follow up.
+          It stays on this order while someone looks at it. We&apos;ll write to you with what we can
+          do, and it lands in your notifications.
         </AppText>
       </View>
     );

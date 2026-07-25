@@ -7,6 +7,8 @@
  *  - orders       — fee computation + member/partner order serialization
  *  - advance      — the one race-safe CAS status-advance path (+ event + push)
  *  - materialize  — on-read subscription order spawn + weekly prepaid billing
+ *  - orderEvents  — append-only audit rows for bulk (non-CAS) status changes
+ *  - soldOut      — per-slot sold-out lookup for the checkout pre-flight
  */
 export { loadDeliveryConfig } from './config';
 export {
@@ -21,6 +23,7 @@ export {
   autoPauseIfOverdue,
   materializeDueOrders,
   staleAwaitingCycles,
+  type MaterializeOptions,
   type MaterializeScope,
   type StaleCycle,
 } from './materialize';
@@ -36,7 +39,21 @@ export {
   atomicSubscriptionEditSql,
   type AtomicSubscriptionEditOutcome,
 } from './subscriptionEdit';
-export { guardedMealSoftDeleteSql } from './menuSubscriptionSafety';
+export {
+  guardedMealPatchSql,
+  guardedMealSoftDeleteSql,
+  type MealPatchFields,
+} from './menuSubscriptionSafety';
+export {
+  guardedOrderItemInsertSql,
+  mealOrderItemsLockSql,
+  type GuardedOrderItemInsertArgs,
+} from './orderItemsSql';
+export { appendBulkOrderEvents, type BulkOrderTransition } from './orderEvents';
+export { soldOutMealIdsForSlot } from './soldOut';
+// Exported for any other raw-SQL builder: a bare array param renders as a ROW
+// constructor in drizzle's `sql` template, never as a Postgres array.
+export { pgIntArray, pgTextArray } from './pgArray';
 export {
   buildCycleInvoice,
   buildSubscriptionCycleAdjustments,

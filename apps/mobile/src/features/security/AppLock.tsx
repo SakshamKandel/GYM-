@@ -126,7 +126,7 @@ export function AppLock({ children }: { children: ReactNode }) {
     setPrompting(true);
     try {
       const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Unlock GYM Tracker',
+        promptMessage: 'Unlock The GM Method',
         cancelLabel: 'Cancel',
       });
       if (result.success) {
@@ -156,7 +156,7 @@ export function AppLock({ children }: { children: ReactNode }) {
         setShowPinPad(false);
         setPinDraft('');
       } else {
-        setPinError('Wrong PIN — try again.');
+        setPinError('Wrong PIN. Try again.');
         setPinDraft('');
       }
     } finally {
@@ -208,7 +208,7 @@ export function AppLock({ children }: { children: ReactNode }) {
       <Animated.View entering={enterUp(0)} style={styles.lockContent}>
         <Image source={MASCOT} style={styles.mascot} contentFit="contain" />
         <View style={styles.titleBlock}>
-          <AppText variant="label">GYM Tracker</AppText>
+          <AppText variant="label">The GM Method</AppText>
           <AppText variant="heading">Locked</AppText>
         </View>
         <View style={styles.actionBlock}>

@@ -75,16 +75,16 @@ const TIER_LABEL: Record<Tier, string> = {
 };
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have coach access.";
   return "Couldn't load your clients.";
 }
 
 function requestErrorLine(code: StaffErrorCode): string {
-  if (code === 'full') return 'Your roster is at capacity — raise it in your profile.';
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
-  if (code === 'not_found') return 'This request is no longer pending — pull to refresh.';
-  return "Couldn't update this request — try again.";
+  if (code === 'full') return 'Your roster is at capacity. Raise it in your profile.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
+  if (code === 'not_found') return 'This request is no longer pending. Pull to refresh.';
+  return "Couldn't update this request. Try again.";
 }
 
 /** Short relative age ("3m", "2h", "5d") with an absolute fallback. */
@@ -155,8 +155,8 @@ function CoachToolLink({
   );
 }
 
-/** One client row — attention bar (unread), avatar-initial, name + email,
- * tier tag, unread badge. Borderless charcoal block per the row sketch. */
+/** One client row — attention bar (unread), avatar-initial, name, tier tag,
+ * unread badge. Borderless charcoal block per the row sketch. */
 function ClientRow({ row, index }: { row: CoachInboxRow; index: number }) {
   const name = shortName(row);
   const initial = name.charAt(0).toUpperCase();
@@ -401,7 +401,7 @@ function WalletPromoCard({
       ) : null}
 
       <AppText variant="caption" color={colors.textDim} style={styles.walletCaption}>
-        30% off for them — 30% to you.
+        30% off for them, 30% to you.
       </AppText>
     </Animated.View>
   );
@@ -609,7 +609,7 @@ export default function CoachInboxScreen() {
           <CoachToolLink
             icon="pulse-outline"
             title="Attention queue"
-            subtitle="Clients sorted stalest-first — work the list top-down"
+            subtitle="Clients sorted stalest-first, so work the list top-down"
             route={STAFF_ROUTES.coachAttention}
           />
           <CoachToolLink
@@ -730,7 +730,7 @@ export default function CoachInboxScreen() {
           ListEmptyComponent={
             <View style={styles.emptyRoster}>
               <AppText variant="caption" center color={colors.textDim}>
-                No active clients yet — members you accept appear here.
+                No active clients yet. Members you accept appear here.
               </AppText>
             </View>
           }

@@ -127,9 +127,9 @@ export function TopBar({
           }}
           style={{
             width: '100%',
-            height: 40,
+            height: 44,
             padding: '0 12px 0 34px',
-            borderRadius: 10,
+            borderRadius: 'var(--gt-radius-sm)',
             border: '1px solid var(--gt-border)',
             background: 'var(--gt-surface-sunken)',
             color: 'var(--gt-text)',
@@ -180,11 +180,11 @@ export function TopBar({
                 aria-hidden
                 style={{
                   position: 'absolute',
-                  top: 7,
-                  right: 8,
+                  top: 9,
+                  right: 10,
                   width: 8,
                   height: 8,
-                  borderRadius: 999,
+                  borderRadius: 'var(--gt-radius-pill)',
                   background: 'var(--gt-accent)',
                   border: '1.5px solid var(--gt-surface)',
                 }}
@@ -197,7 +197,7 @@ export function TopBar({
           style={{
             width: 34,
             height: 34,
-            borderRadius: 999,
+            borderRadius: 'var(--gt-radius-pill)',
             background: 'var(--gt-accent-weak)',
             color: 'var(--gt-accent-strong)',
             display: 'inline-flex',
@@ -217,13 +217,15 @@ export function TopBar({
   );
 }
 
+// 44px square: the top-bar icon controls are the smallest tap targets in the
+// console shell, and it ships a mobile layout.
 const iconControl: React.CSSProperties = {
-  width: 40,
-  height: 40,
+  width: 44,
+  height: 44,
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  borderRadius: 10,
+  borderRadius: 'var(--gt-radius-sm)',
   border: '1px solid var(--gt-border)',
   background: 'var(--gt-surface)',
   color: 'var(--gt-text-dim)',

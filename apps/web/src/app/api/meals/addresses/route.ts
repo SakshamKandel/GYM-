@@ -1,5 +1,5 @@
 import { savedAddresses } from '@gym/db';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
@@ -88,16 +88,8 @@ export async function POST(req: Request) {
   const data = parsed.data;
 
   const db = getDb();
-  // A new default demotes the account's other defaults first (best-effort; the
-  // read below reflects the final state).
-  if (data.isDefault) {
-    await db
-      .update(savedAddresses)
-      .set({ isDefault: false })
-      .where(and(eq(savedAddresses.accountId, me.id), eq(savedAddresses.isDefault, true)));
-  }
 
-  const [row] = await db
+  const insertAddress = db
     .insert(savedAddresses)
     .values({
       accountId: me.id,
@@ -110,6 +102,25 @@ export async function POST(req: Request) {
       isDefault: data.isDefault ?? false,
     })
     .returning();
+
+  // A new default demotes the account's existing one FIRST — the order is
+  // load-bearing under `saved_addresses_one_default` (account_id WHERE
+  // is_default). Both statements ride one batch (neon-http runs a batch as a
+  // single transaction), so a failed insert rolls the demote back with it
+  // instead of committing alone and leaving the account with NO default.
+  const [row] = data.isDefault
+    ? (
+        await db.batch([
+          db
+            .update(savedAddresses)
+            .set({ isDefault: false })
+            .where(
+              and(eq(savedAddresses.accountId, me.id), eq(savedAddresses.isDefault, true)),
+            ),
+          insertAddress,
+        ])
+      )[1]
+    : await insertAddress;
 
   return json({ address: serialize(row) }, 201);
 }
@@ -133,14 +144,7 @@ export async function PATCH(req: Request) {
   if (fields.lng !== undefined) set.lng = fields.lng;
   if (isDefault !== undefined) set.isDefault = isDefault;
 
-  if (isDefault === true) {
-    await db
-      .update(savedAddresses)
-      .set({ isDefault: false })
-      .where(and(eq(savedAddresses.accountId, me.id), eq(savedAddresses.isDefault, true)));
-  }
-
-  const updated = await db
+  const applyUpdate = db
     .update(savedAddresses)
     .set(set)
     .where(
@@ -151,6 +155,44 @@ export async function PATCH(req: Request) {
       ),
     )
     .returning();
+
+  // Promoting a new default is two writes, and `saved_addresses_one_default`
+  // (account_id WHERE is_default) makes the ORDER load-bearing: demote the old
+  // one before promoting the new one. Both statements ride one batch (neon-http
+  // runs a batch as a single transaction), so a failure between them can no
+  // longer commit the demote alone and leave the account with NO default. The
+  // demote also requires the target row to exist (EXISTS, same caller-scoped
+  // predicate as the update), so a not_found PATCH strips nothing either.
+  const updated =
+    isDefault === true
+      ? (
+          await db.batch([
+            db
+              .update(savedAddresses)
+              .set({ isDefault: false })
+              .where(
+                and(
+                  eq(savedAddresses.accountId, me.id),
+                  eq(savedAddresses.isDefault, true),
+                  ne(savedAddresses.id, id),
+                  exists(
+                    db
+                      .select({ one: sql`1` })
+                      .from(savedAddresses)
+                      .where(
+                        and(
+                          eq(savedAddresses.id, id),
+                          eq(savedAddresses.accountId, me.id),
+                          eq(savedAddresses.isDeleted, false),
+                        ),
+                      ),
+                  ),
+                ),
+              ),
+            applyUpdate,
+          ])
+        )[1]
+      : await applyUpdate;
   const row = updated[0];
   if (!row) return json({ error: 'not_found' }, 404);
 

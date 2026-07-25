@@ -1,7 +1,7 @@
 'use client';
 
-import { formatMoney } from '@gym/shared';
-import { useMemo, useState } from 'react';
+import { orderNumber } from '@gym/shared';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Button,
@@ -9,8 +9,12 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  SearchField,
   StatusChip,
 } from '@/components/console';
+import { formatDateLabel, formatDateTime, formatMoney } from '@/lib/format';
+import { ConfirmDialog } from '../../_components/ConfirmDialog';
+import { MemberLink } from '../../_components/MemberLink';
 
 export type MealPaymentStatus = 'pending' | 'approved' | 'rejected' | 'refunded';
 
@@ -63,14 +67,6 @@ const TABS: readonly { key: 'all' | MealPaymentStatus; label: string }[] = [
   { key: 'all', label: 'All' },
 ];
 
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-});
-
 const METHOD_LABEL: Record<MealPaymentRequestRow['method'], string> = {
   esewa: 'eSewa',
   khalti: 'Khalti',
@@ -90,11 +86,28 @@ function receiptUnusable(url: string): boolean {
   return !/^https?:\/\//i.test(url);
 }
 
+/** 'lunch' / 'dinner' → the words a person uses. Unknown/absent → ''. */
+function windowText(w: string | null): string {
+  return w === 'lunch' ? 'Lunch' : w === 'dinner' ? 'Dinner' : '';
+}
+
+/**
+ * What this receipt is paying for. Order targets lead with the SAME order
+ * number the orders board and the dispute queue show (`orderNumber(id)`) —
+ * before this, disputes named an order one way and the refund queue another, so
+ * the handoff between them was a manual guessing game.
+ */
 function targetLabel(t: MealPaymentRequestRow['target']): string {
   if (t.kind === 'order') {
-    return t.deliveryDate ? `Order · ${t.deliveryDate} ${t.window ?? ''}`.trim() : 'Order';
+    const parts = [t.id ? `Order ${orderNumber(t.id)}` : 'Order'];
+    if (t.deliveryDate) parts.push(formatDateLabel(t.deliveryDate));
+    const w = windowText(t.window);
+    if (w) parts.push(w);
+    return parts.join(' · ');
   }
-  return t.weekStart && t.weekEnd ? `Weekly plan · ${t.weekStart} – ${t.weekEnd}` : 'Weekly plan';
+  return t.weekStart && t.weekEnd
+    ? `Weekly plan · ${formatDateLabel(t.weekStart)} – ${formatDateLabel(t.weekEnd)}`
+    : 'Weekly plan';
 }
 
 /**
@@ -108,22 +121,76 @@ function targetLabel(t: MealPaymentRequestRow['target']): string {
 export function MealPaymentsQueue({
   requests,
   counts,
+  canViewMembers,
+  focusOrderId,
 }: {
   requests: MealPaymentRequestRow[];
   counts: MealPaymentStatusCounts;
+  /** Viewer holds `members.read`, so member names can link to the record. */
+  canViewMembers: boolean;
+  /**
+   * Order this queue was opened FOR — the disputes queue links here with
+   * `?orderId=`, because a dispute that deserves money back is refunded on this
+   * page and nowhere else. We open that order's receipt straight away instead of
+   * making the operator find it.
+   */
+  focusOrderId: string | null;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<(typeof TABS)[number]['key']>('pending');
+  const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [refundReason, setRefundReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which irreversible action is waiting on a confirm ('refund' moves money
+  // back, 'reject' turns down a receipt the member says they paid).
+  const [pendingAction, setPendingAction] = useState<'refund' | 'reject' | null>(null);
+
+  // Deep link from a dispute: find that order's receipt, switch to the tab that
+  // holds it, and open it. Runs once per incoming orderId.
+  const focusTarget = useMemo(
+    () =>
+      focusOrderId
+        ? requests.find((r) => r.target.kind === 'order' && r.target.id === focusOrderId) ?? null
+        : null,
+    [focusOrderId, requests],
+  );
+
+  // Applied ONCE per incoming order id: after a refund the page refreshes and
+  // `requests` gets a new identity, and without this guard the drawer would pop
+  // straight back open on the row that was just decided.
+  const appliedFocus = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusOrderId || appliedFocus.current === focusOrderId) return;
+    appliedFocus.current = focusOrderId;
+    if (!focusTarget) return;
+    setTab(focusTarget.status);
+    setSelectedId(focusTarget.id);
+    setNote('');
+    setRefundReason('');
+    setError(null);
+  }, [focusOrderId, focusTarget]);
 
   const filtered = useMemo(() => {
-    if (tab === 'all') return requests;
-    return requests.filter((r) => r.status === tab);
-  }, [requests, tab]);
+    // The server ships pending-first then decided (each newest-first within its
+    // own group, so an old unreviewed receipt can never be truncated away), so
+    // the "All" tab must be re-sorted globally by submitted-time to read as one
+    // reverse-chronological stream instead of two stitched blocks.
+    const inTab =
+      tab === 'all'
+        ? [...requests].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        : requests.filter((r) => r.status === tab);
+    const q = query.trim().toLowerCase();
+    if (!q) return inTab;
+    return inTab.filter((r) =>
+      [r.account.displayName, r.account.email, targetLabel(r.target)]
+        .join(' ')
+        .toLowerCase()
+        .includes(q),
+    );
+  }, [requests, tab, query]);
 
   const selected = requests.find((r) => r.id === selectedId) ?? null;
   const receiptBad = selected ? receiptUnusable(selected.receiptUrl) : false;
@@ -133,11 +200,13 @@ export function MealPaymentsQueue({
     setNote('');
     setRefundReason('');
     setError(null);
+    setPendingAction(null);
   }
 
   function closeDrawer() {
     if (busy) return;
     setSelectedId(null);
+    setPendingAction(null);
   }
 
   function tabCount(key: 'all' | MealPaymentStatus): number {
@@ -183,7 +252,7 @@ export function MealPaymentsQueue({
       setSelectedId(null);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setBusy(false);
     }
   }
@@ -206,7 +275,7 @@ export function MealPaymentsQueue({
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
         setError(
           data?.error === 'non_refundable'
-            ? 'Non-refundable — the order is in production/past cutoff, or the cycle week has begun.'
+            ? 'Non-refundable. The order is in production or past cutoff, or the cycle week has begun.'
             : 'This payment was already refunded or is no longer approved. Refreshing…',
         );
         setBusy(false);
@@ -227,9 +296,20 @@ export function MealPaymentsQueue({
       setSelectedId(null);
       router.refresh();
     } catch {
-      setError('Network error.');
+      setError('Could not reach us just now. Try again.');
       setBusy(false);
     }
+  }
+
+  /**
+   * Runs whichever irreversible action the confirm dialog was opened for, then
+   * closes it. One exit point, so no error path can leave the dialog stuck open
+   * over a decision that already went through.
+   */
+  async function runPendingAction() {
+    if (pendingAction === 'refund') await refund();
+    else if (pendingAction === 'reject') await decide('reject');
+    setPendingAction(null);
   }
 
   const columns: Column<MealPaymentRequestRow>[] = [
@@ -238,18 +318,12 @@ export function MealPaymentsQueue({
       header: 'Member',
       render: (r) => (
         <div style={{ minWidth: 0 }}>
-          <div
-            style={{
-              fontFamily: 'var(--font-heading)',
-              fontWeight: 600,
-              fontSize: 14,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {r.account.displayName || r.account.email}
-          </div>
+          <MemberLink
+            id={r.account.id}
+            name={r.account.displayName}
+            email={r.account.email}
+            canView={canViewMembers}
+          />
           <div
             style={{
               fontSize: 12,
@@ -301,7 +375,7 @@ export function MealPaymentsQueue({
       align: 'right',
       render: (r) => (
         <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {DATE_FMT.format(new Date(r.createdAt))}
+          {formatDateTime(r.createdAt)}
         </span>
       ),
     },
@@ -309,6 +383,33 @@ export function MealPaymentsQueue({
 
   return (
     <>
+      {focusOrderId && !focusTarget ? (
+        <div
+          role="status"
+          style={{
+            marginBottom: 16,
+            padding: '10px 12px',
+            borderRadius: 10,
+            border: '1px solid color-mix(in srgb, var(--gt-warning) 40%, transparent)',
+            background: 'var(--gt-warning-weak)',
+            color: 'var(--gt-text)',
+            fontSize: 13,
+          }}
+        >
+          No manual payment on file for order {orderNumber(focusOrderId)}. Nothing to refund here,
+          so that order was paid another way (cash on delivery, or a card).
+        </div>
+      ) : null}
+
+      <div style={{ marginBottom: 16, maxWidth: 340 }}>
+        <SearchField
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search member, email or order"
+          aria-label="Search meal payments"
+        />
+      </div>
+
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         {TABS.map((t) => {
           const active = tab === t.key;
@@ -346,7 +447,12 @@ export function MealPaymentsQueue({
           rows={filtered}
           rowKey={(r) => r.id}
           onRowClick={openRow}
-          empty="No requests in this status."
+          rowAriaLabel={(r) =>
+            `Review ${r.account.displayName || r.account.email}'s ${formatMoney(r.amountMinor, r.currency)} receipt`
+          }
+          empty={
+            query.trim() ? 'No receipts match that search.' : 'No requests in this status.'
+          }
         />
       )}
 
@@ -373,9 +479,9 @@ export function MealPaymentsQueue({
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 14 }}>
               <Row label="Amount">{formatMoney(selected.amountMinor, selected.currency)}</Row>
               <Row label="Method">{METHOD_LABEL[selected.method]}</Row>
-              <Row label="Submitted">{DATE_FMT.format(new Date(selected.createdAt))}</Row>
+              <Row label="Submitted">{formatDateTime(selected.createdAt)}</Row>
               {selected.decidedAt ? (
-                <Row label="Decided">{DATE_FMT.format(new Date(selected.decidedAt))}</Row>
+                <Row label="Decided">{formatDateTime(selected.decidedAt)}</Row>
               ) : null}
             </div>
 
@@ -439,11 +545,11 @@ export function MealPaymentsQueue({
                 />
                 {receiptBad ? (
                   <div style={{ fontSize: 12, color: 'var(--gt-warning)' }}>
-                    Approve is disabled until the receipt loads — reload the queue and try again.
+                    Approve is disabled until the receipt loads. Reload the queue and try again.
                   </div>
                 ) : null}
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <Button variant="danger" disabled={busy} onClick={() => void decide('reject')}>
+                  <Button variant="danger" disabled={busy} onClick={() => setPendingAction('reject')}>
                     {busy ? 'Saving…' : 'Reject'}
                   </Button>
                   <Button
@@ -482,7 +588,9 @@ export function MealPaymentsQueue({
                   style={{ resize: 'vertical', fontFamily: 'inherit' }}
                 />
                 <div>
-                  <Button variant="danger" disabled={busy} onClick={() => void refund()}>
+                  {/* Money leaving the business never fires on one click — the
+                      confirm names the member and the exact amount (FIX 5). */}
+                  <Button variant="danger" disabled={busy} onClick={() => setPendingAction('refund')}>
                     {busy ? 'Refunding…' : 'Refund payment'}
                   </Button>
                 </div>
@@ -493,6 +601,57 @@ export function MealPaymentsQueue({
           </div>
         ) : null}
       </Drawer>
+
+      <ConfirmDialog
+        open={selected != null && pendingAction != null}
+        title={pendingAction === 'refund' ? 'Refund this payment?' : 'Reject this receipt?'}
+        summary={
+          selected ? (
+            pendingAction === 'refund' ? (
+              <>
+                {formatMoney(selected.amountMinor, selected.currency)} goes back to{' '}
+                <strong>{selected.account.displayName || selected.account.email}</strong> and the
+                paid mark is reversed. This cannot be undone.
+              </>
+            ) : (
+              <>
+                <strong>{selected.account.displayName || selected.account.email}</strong> is told
+                their {formatMoney(selected.amountMinor, selected.currency)} receipt was not
+                accepted, and nothing is marked paid.
+              </>
+            )
+          ) : (
+            ''
+          )
+        }
+        details={
+          selected
+            ? [
+                { label: 'Member', value: selected.account.displayName || selected.account.email },
+                { label: 'Paying for', value: targetLabel(selected.target) },
+                {
+                  label: 'Amount',
+                  value: (
+                    <span className="gt-numeric">
+                      {formatMoney(selected.amountMinor, selected.currency)}
+                    </span>
+                  ),
+                },
+                { label: 'Method', value: METHOD_LABEL[selected.method] },
+              ]
+            : undefined
+        }
+        confirmLabel={
+          selected && pendingAction === 'refund'
+            ? `Refund ${formatMoney(selected.amountMinor, selected.currency)}`
+            : 'Reject receipt'
+        }
+        busyLabel={pendingAction === 'refund' ? 'Refunding…' : 'Saving…'}
+        cancelLabel="Go back"
+        busy={busy}
+        onCancel={() => setPendingAction(null)}
+        onConfirm={() => void runPendingAction()}
+      />
     </>
   );
 }

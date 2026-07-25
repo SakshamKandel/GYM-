@@ -60,8 +60,8 @@ export function ReportGymSheet({ visible, onClose, gymSlug, gymName, token }: Pr
       setSubmitting(false);
       setError(
         err instanceof GymsApiError && err.code === 'rate_limited'
-          ? "You've reported a few of these already — try again later."
-          : "Couldn't send your report — check your connection and try again.",
+          ? "You've reported a few of these already. Try again later."
+          : "Couldn't send your report. Check your connection and try again.",
       );
     }
   }
@@ -80,7 +80,7 @@ export function ReportGymSheet({ visible, onClose, gymSlug, gymName, token }: Pr
         <View style={styles.successRow}>
           <Ionicons name="checkmark-circle" size={48} color={colors.success} />
           <AppText variant="body" color={colors.textDim} style={{ textAlign: 'center' }}>
-            Thanks for the heads-up — the team will review {gymName}&apos;s listing.
+            Thanks for the heads-up. The team will review {gymName}&apos;s listing.
           </AppText>
           <Button label="Done" onPress={handleClose} />
         </View>

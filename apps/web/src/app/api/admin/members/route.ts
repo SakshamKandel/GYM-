@@ -1,7 +1,7 @@
 import { accounts, admins } from '@gym/db';
 import { and, asc, eq, gt, ilike, type SQL } from 'drizzle-orm';
 import { requirePermission } from '@/lib/authz';
-import { getDb } from '@/lib/db';
+import { escapeLike, getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 
 export const runtime = 'nodejs';
@@ -40,13 +40,6 @@ export const runtime = 'nodejs';
  *
  * Guarded by requirePermission('members.read'); super_admin passes too.
  */
-
-/** Escapes ILIKE metacharacters so user input can't widen or corrupt the
- * pattern (ESCAPE '\' is Postgres's default for LIKE/ILIKE). Without this a
- * literal '%' in the query matches every row and '_' matches any character. */
-function escapeLike(raw: string): string {
-  return raw.replace(/[\\%_]/g, '\\$&');
-}
 
 const PAGE_SIZE = 50;
 const TIERS = ['starter', 'silver', 'gold', 'elite'] as const;

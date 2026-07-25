@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge, Button, EmptyState, TextField } from '@/components/console';
+import { memberLabel } from '../../_components/memberLabel';
 import { SkeletonBars } from '../../_components/SkeletonBars';
 
 /**
@@ -25,7 +26,6 @@ import { SkeletonBars } from '../../_components/SkeletonBars';
 interface SuggestionUser {
   id: string;
   displayName: string;
-  email: string;
 }
 
 interface Suggestion {
@@ -105,7 +105,7 @@ export function ReviewQueue() {
         setLoadError(
           res.status === 401
             ? 'Your session expired. Sign in again.'
-            : 'Could not load the review queue. Try again.',
+            : 'Could not load these suggestions. Try again.',
         );
         setState('error');
         return;
@@ -114,7 +114,7 @@ export function ReviewQueue() {
       setSuggestions(data.suggestions);
       setState('ready');
     } catch {
-      setLoadError('Network error. Check your connection and retry.');
+      setLoadError('Could not reach us just now. Check your connection and try again.');
       setState('error');
     }
   }, []);
@@ -176,7 +176,7 @@ export function ReviewQueue() {
     } catch {
       setRowError({
         id: suggestion.id,
-        msg: 'Network error. Check your connection and retry.',
+        msg: 'Could not reach us just now. Check your connection and try again.',
       });
       setBusyId(null);
     }
@@ -234,7 +234,7 @@ export function ReviewQueue() {
     return (
       <EmptyState
         title="Nothing to review"
-        description="New progression suggestions appear here after your clients finish and sync a workout. Come back after their next session."
+        description="New suggestions land here once a client finishes a workout in the app. Come back after their next session."
       />
     );
   }
@@ -275,9 +275,8 @@ export function ReviewQueue() {
                 fontSize: 14,
               }}
             >
-              {user.displayName || user.email}
+              {memberLabel(user.displayName)}
             </span>
-            <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{user.email}</span>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -390,7 +389,7 @@ export function ReviewQueue() {
                         <TextField
                           label="Note (optional)"
                           maxLength={NOTE_MAX_LEN}
-                          placeholder="Why you changed it — the member sees this"
+                          placeholder="Why you changed it. The member sees this"
                           value={adjust.note}
                           onChange={(e) =>
                             setAdjust((prev) =>

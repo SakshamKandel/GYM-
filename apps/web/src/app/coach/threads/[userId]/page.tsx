@@ -1,15 +1,18 @@
 import { accounts, coachMessages } from '@gym/db';
 import { and, desc, eq } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { TierChip } from '@/components/console';
 import { requireCoachOwnsUser } from '@/lib/authz';
 import { requireCoachPage } from '@/lib/coachPage';
 import { getDb } from '@/lib/db';
+import { memberInitial, memberLabel } from '../../_components/memberLabel';
 import { MessageList, type ThreadMessage } from '../../_components/MessageList';
 import { ReplyBox } from '../../_components/ReplyBox';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Conversation' };
 export const dynamic = 'force-dynamic';
 
 /** Most-recent messages loaded for first paint; MessageList polls for newer. */
@@ -25,6 +28,10 @@ interface PageProps {
  * isn't assigned — we hide existence rather than surface a 403 in the UI). The
  * history renders with mobile-mirrored bubble sides (client right / coach left)
  * and a sticky reply composer that POSTs to the coach reply API.
+ *
+ * The header names the client and shows their tier, and nothing else. Their
+ * email address used to sit under the name; it is gone, because the whole
+ * point of keeping coaching in the app is that contact details do not travel.
  *
  * This render is now PURE (no mutation): the old GET-render `db.update`
  * mark-read was reachable on any RSC prefetch of an inbox `<Link>`, silently
@@ -47,7 +54,6 @@ export default async function CoachThreadPage({ params }: PageProps) {
     .select({
       id: accounts.id,
       displayName: accounts.displayName,
-      email: accounts.email,
       tier: accounts.tier,
     })
     .from(accounts)
@@ -81,7 +87,8 @@ export default async function CoachThreadPage({ params }: PageProps) {
     createdAt: new Date(m.createdAt),
   }));
 
-  const monogram = (user.displayName || user.email).charAt(0).toUpperCase();
+  const name = memberLabel(user.displayName);
+  const monogram = memberInitial(user.displayName);
 
   return (
     <div style={{ maxWidth: 760, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -145,20 +152,9 @@ export default async function CoachThreadPage({ params }: PageProps) {
                 whiteSpace: 'nowrap',
               }}
             >
-              {user.displayName || user.email}
+              {name}
             </h1>
             <TierChip tier={user.tier} />
-          </div>
-          <div
-            style={{
-              fontSize: 12,
-              color: 'var(--gt-text-dim)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {user.email}
           </div>
         </div>
         <span

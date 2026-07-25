@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import {
   GoogleSignin,
@@ -18,14 +18,24 @@ import { describeGoogleError, GoogleLinkPrompt, GooglePill, googleStyles } from 
  * Native Google sign-in (Android/iOS) via the platform Google SDK — the
  * browser-redirect flow is blocked by Google on installed apps, this is the
  * supported path. Needs the WEB client id (idToken audience) + the Android
- * client (package + SHA-1) registered in the same Google Cloud project.
+ * client (package + SHA-1) registered in the same Google Cloud project, and
+ * on iPhones the app's OWN iOS client id (the sheet returns through an
+ * address only that client owns). `googleSignInAvailable()` keeps the button
+ * off any platform missing its half of that.
  * Web builds resolve NativeGoogleSignIn.web.tsx instead of this file.
  */
+
+const IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
 
 let configured = false;
 function ensureConfigured(webClientId: string): void {
   if (configured) return;
-  GoogleSignin.configure({ webClientId, offlineAccess: false });
+  GoogleSignin.configure({
+    webClientId,
+    // iOS only: without this the sheet opens and the return trip never lands.
+    ...(Platform.OS === 'ios' && IOS_CLIENT_ID ? { iosClientId: IOS_CLIENT_ID } : null),
+    offlineAccess: false,
+  });
   configured = true;
 }
 
@@ -58,7 +68,13 @@ function extractIdToken(result: unknown): string | null {
   return null;
 }
 
-export function NativeGoogleSignIn({ webClientId }: { webClientId: string }) {
+export function NativeGoogleSignIn({
+  webClientId,
+  returnTo,
+}: {
+  webClientId: string;
+  returnTo?: string;
+}) {
   const signInWithGoogle = useAuth((s) => s.signInWithGoogle);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,7 +100,7 @@ export function NativeGoogleSignIn({ webClientId }: { webClientId: string }) {
       successHaptic();
       // Shared staff-aware landing — a bare router.replace('/') bounced
       // staff accounts to /welcome ("login did nothing").
-      enterApp();
+      enterApp(returnTo);
     } catch (err) {
       warnHaptic();
       // Our own API errors FIRST: ApiError extends Error and carries a `code`
@@ -104,12 +120,13 @@ export function NativeGoogleSignIn({ webClientId }: { webClientId: string }) {
       if (isErrorWithCode(err)) {
         if (err.code === statusCodes.SIGN_IN_CANCELLED) return;
         if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-          setError('Google Play services unavailable on this phone');
+          setError("This phone doesn't have Google Play services, so Google sign-in can't run here. Use email instead");
           return;
         }
         if (err.code === statusCodes.IN_PROGRESS) return;
         // DEVELOPER_ERROR = client ids/SHA-1 mismatch in the Google console.
-        setError('Google setup mismatch — check the client ids in the console');
+        // Nothing the member can act on, so don't hand them our setup notes.
+        setError("Google sign-in isn't working in this version of the app. Use email for now");
         return;
       }
       setError(describeGoogleError(toApiError(err).code));
@@ -129,7 +146,11 @@ export function NativeGoogleSignIn({ webClientId }: { webClientId: string }) {
         </Animated.View>
       ) : null}
       {linkToken ? (
-        <GoogleLinkPrompt idToken={linkToken} onCancel={() => setLinkToken(null)} />
+        <GoogleLinkPrompt
+          idToken={linkToken}
+          returnTo={returnTo}
+          onCancel={() => setLinkToken(null)}
+        />
       ) : null}
     </View>
   );

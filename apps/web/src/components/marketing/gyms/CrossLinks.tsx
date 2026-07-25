@@ -25,7 +25,7 @@ const LINKS = [
     n: '03',
     title: 'Download',
     href: '/download',
-    blurb: 'iOS and Android. Offline-first, no ads — log a set in under 100 ms, even underground.',
+    blurb: 'iOS and Android. Offline-first, no ads, and a set logs in under 100 ms, even underground.',
   },
 ] as const;
 

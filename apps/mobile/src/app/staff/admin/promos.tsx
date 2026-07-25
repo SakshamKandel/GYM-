@@ -50,9 +50,9 @@ import { useAuth } from '../../../state/auth';
 const NON_CUSTOM_DURATIONS = DURATION_OPTIONS.filter((o) => o.key !== 'custom');
 
 function errorLine(code: StaffErrorCode): string {
-  if (code === 'unauthorized') return 'Your session expired — sign in again.';
+  if (code === 'unauthorized') return 'Your session expired. Sign in again.';
   if (code === 'forbidden') return "You don't have access to this.";
-  if (code === 'conflict') return 'That code already exists — try another.';
+  if (code === 'conflict') return 'That code already exists. Try another.';
   if (code === 'invalid') return "Some details were rejected. Check the fields and try again.";
   return "Couldn't load promo codes.";
 }
@@ -187,7 +187,7 @@ function CreateSheet({
             <AppTextInput
               value={ownerQuery}
               onChangeText={setOwnerQuery}
-              placeholder="Search coaches — leave blank for a house code"
+              placeholder="Search coaches, or leave blank for a house code"
               autoCapitalize="none"
             />
             {ownerResults.length > 0 ? (

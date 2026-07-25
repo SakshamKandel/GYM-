@@ -1,9 +1,9 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { accounts, passwordResetTokens } from '@gym/db';
-import { and, eq, isNull, ne } from 'drizzle-orm';
+import { accounts } from '@gym/db';
+import { and, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   adminRoleOf,
+  auditIp,
   logAudit,
   requireOutranks,
   requirePermission,
@@ -11,6 +11,7 @@ import {
 } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { mintPasswordResetToken, passwordResetUrl } from '@/lib/passwordReset';
 
 export const runtime = 'nodejs';
 
@@ -18,12 +19,15 @@ export const runtime = 'nodejs';
  * Admin credential tools for a single member (P1-7, gated
  * `members.manage_credentials`, super/main only per the role presets).
  *
- *  - POST  → mint a single-use, 1-hour password-reset token. Only the SHA-256
- *            HASH is stored (mirrors the sessions table); the plaintext token is
- *            returned ONCE to the admin, who relays the link out of band — there
- *            is no email infrastructure, so the console says so explicitly. Any
- *            older outstanding (unused) token for the account is invalidated so
- *            at most one live token exists. The member redeems via the public
+ *  - POST  → mint a single-use, 1-hour password-reset token (mintPasswordResetToken
+ *            in @/lib/passwordReset — the SAME mint the self-serve
+ *            POST /api/auth/forgot-password route uses, so both produce tokens
+ *            one redemption path understands). Only the SHA-256 HASH is stored
+ *            (mirrors the sessions table); the plaintext token is returned ONCE
+ *            to the admin, who relays the link out of band — email delivery is
+ *            still unwired, so the console says so explicitly. Any older
+ *            outstanding (unused) token for the account is invalidated so at
+ *            most one live token exists. The member redeems via the public
  *            POST /api/auth/reset-password route.
  *
  *  - PATCH {email?, displayName?} → correct login identity. Email is
@@ -35,18 +39,6 @@ export const runtime = 'nodejs';
  * member-id existence oracle to a caller lacking the permission: the permission
  * check runs before the account lookup.
  */
-
-const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
-
-function sha256(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-function getIp(req: Request): string | null {
-  const fwd = req.headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]?.trim() ?? null;
-  return req.headers.get('x-real-ip');
-}
 
 export function OPTIONS() {
   return preflight();
@@ -73,27 +65,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   const account = rows[0];
   if (!account) return json({ error: 'not_found' }, 404);
 
-  // Invalidate any prior outstanding (unused) token for this account so only
-  // ONE live reset link can ever exist — marking them used is enough for the
-  // redemption CAS to reject them.
-  await db
-    .update(passwordResetTokens)
-    .set({ usedAt: new Date() })
-    .where(
-      and(
-        eq(passwordResetTokens.accountId, id),
-        isNull(passwordResetTokens.usedAt),
-      ),
-    );
-
-  const token = randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + RESET_TTL_MS);
-  await db.insert(passwordResetTokens).values({
-    accountId: id,
-    tokenHash: sha256(token),
-    expiresAt,
-    createdBy: actor.id,
-  });
+  // Shared mint: invalidates any prior outstanding token for this account (only
+  // ONE live reset link may exist), then stores the SHA-256 hash with a 1-hour
+  // expiry. `actor.id` records which admin issued it.
+  const { token, expiresAt } = await mintPasswordResetToken(db, id, actor.id);
 
   await logAudit(
     actor,
@@ -101,15 +76,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     'account',
     id,
     { email: account.email },
-    getIp(req),
+    auditIp(req),
   );
 
   // The "link" for the member to open. No email is sent — the admin copies this
-  // and hands it over. The redemption endpoint is POST /api/auth/reset-password;
-  // resetUrl points at the conventional public page path so a future reset
-  // screen can read the `token` query param and post it there.
+  // and hands it over. It points at the public /reset-password page, which reads
+  // the `token` query param and posts it to POST /api/auth/reset-password.
   const origin = new URL(req.url).origin;
-  const resetUrl = `${origin}/reset-password?token=${token}`;
+  const resetUrl = passwordResetUrl(origin, token);
 
   return json(
     {
@@ -140,7 +114,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (!parsed.success) return json({ error: 'invalid' }, 400);
 
   const db = getDb();
-  const ip = getIp(req);
+  const ip = auditIp(req);
 
   // Rank guard: renaming/re-emailing a peer/higher admin's account is a staff
   // identity change the caller may not outrank.

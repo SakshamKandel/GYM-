@@ -8,6 +8,10 @@ export const dynamic = 'force-dynamic';
  * Vercel Cron → renewal-nudge scan (Pack B / WP-2). Guarded by CRON_SECRET
  * (fail-closed) and gated by NOTIFICATIONS_CRON_ENABLED. Idempotent via
  * per-account dedupe keys. Driven by `/api/cron/tick`; Pro may schedule directly.
+ *
+ * Nothing in this repo calls this route, and that is deliberate: it is the
+ * alternative entry point for a per-scan schedule, and for re-running just this
+ * scan by hand without firing the rest.
  */
 export async function GET(req: Request) {
   const denied = cronGuard(req);

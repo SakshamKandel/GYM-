@@ -41,7 +41,7 @@ export function StoreControls({
       }
       router.refresh();
     } catch {
-      setError('Network error. Try again.');
+      setError('Could not reach us just now. Try again.');
     } finally {
       setBusy(false);
     }
@@ -70,7 +70,7 @@ export function StoreControls({
             </div>
             <p style={{ margin: '6px 0 0', fontSize: 14, color: 'var(--gt-text-dim)', maxWidth: '56ch' }}>
               {store.paused
-                ? 'Members cannot place new orders. Existing orders are unaffected — finish and deliver them as normal. Resume when you are ready to take orders again.'
+                ? 'Members cannot place new orders. Existing orders are unaffected. Finish and deliver them as normal. Resume when you are ready to take orders again.'
                 : 'Your kitchen is live. Pause to stop taking new orders while you are on holiday or fully booked, without hiding items one by one.'}
             </p>
           </div>

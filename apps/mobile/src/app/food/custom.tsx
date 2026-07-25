@@ -279,7 +279,7 @@ export default function CustomFoodScreen() {
       <Animated.View entering={enterUp(7)} style={styles.pinned}>
         {error ? (
           <AppText variant="caption" color={colors.error} center style={styles.error}>
-            {"Couldn't save — try again."}
+            {"Couldn't save. Try again."}
           </AppText>
         ) : null}
         <Button

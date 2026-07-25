@@ -13,7 +13,6 @@ import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { notify } from '@/lib/notify';
 import { coachWalletBalances } from '@/lib/promoEconomy';
-import { sendPushToAccount } from '@/lib/push';
 import { clientIp } from '@/lib/rateLimit';
 import { loadPartnerHeld } from '@/app/partner/_data';
 
@@ -116,11 +115,15 @@ async function decideCoach(
     );
 
     after(() =>
-      sendPushToAccount(request.coachId, {
-        title: 'Payout request update',
-        body: 'Your payout request was not approved this time.',
-        data: { type: 'payout_decided' },
-      }),
+      notify(
+        'payout_status_coach',
+        { accountId: request.coachId },
+        {
+          title: 'Payout request update',
+          body: 'Your payout request was not approved this time.',
+          data: { type: 'payout_decided' },
+        },
+      ),
     );
 
     return json({ ok: true }, 200);
@@ -205,11 +208,15 @@ async function decideCoach(
     );
 
     after(() =>
-      sendPushToAccount(request.coachId, {
-        title: 'Payout approved',
-        body: 'Your payout has been approved and disbursed.',
-        data: { type: 'payout_decided' },
-      }),
+      notify(
+        'payout_status_coach',
+        { accountId: request.coachId },
+        {
+          title: 'Payout approved',
+          body: 'Your payout has been approved and disbursed.',
+          data: { type: 'payout_decided' },
+        },
+      ),
     );
   }
 
@@ -258,15 +265,19 @@ async function decidePartner(
       ip,
     );
 
-    // Server-templated content — no user free text (§7.2-S2). Fire-and-forget.
-    void notify(
-      'payout_status_partner',
-      { partnerId: request.partnerId },
-      {
-        title: 'Payout request update',
-        body: 'Your payout request was not approved this time.',
-        data: { type: 'payout' },
-      },
+    // Server-templated content — no user free text (§7.2-S2). Deferred with
+    // after() so the response returns immediately but the platform keeps the
+    // function alive until dispatch finishes (a bare `void` can be frozen).
+    after(() =>
+      notify(
+        'payout_status_partner',
+        { partnerId: request.partnerId },
+        {
+          title: 'Payout request update',
+          body: 'Your payout request was not approved this time.',
+          data: { type: 'payout' },
+        },
+      ),
     );
 
     return json({ ok: true }, 200);
@@ -365,14 +376,16 @@ async function decidePartner(
       ip,
     );
 
-    void notify(
-      'payout_status_partner',
-      { partnerId: request.partnerId },
-      {
-        title: 'Payout approved',
-        body: 'Your payout has been approved and disbursed.',
-        data: { type: 'payout' },
-      },
+    after(() =>
+      notify(
+        'payout_status_partner',
+        { partnerId: request.partnerId },
+        {
+          title: 'Payout approved',
+          body: 'Your payout has been approved and disbursed.',
+          data: { type: 'payout' },
+        },
+      ),
     );
   }
 

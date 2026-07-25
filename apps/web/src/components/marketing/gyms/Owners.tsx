@@ -11,7 +11,7 @@ const STEPS = [
   {
     n: '01',
     title: 'Reach out',
-    body: 'Tell us about your gym through the contact page — where it is, what it offers, when it opens.',
+    body: 'Tell us about your gym through the contact page: where it is, what it offers, when it opens.',
   },
   {
     n: '02',
@@ -41,7 +41,7 @@ export function OwnersBand() {
           <Reveal delay={100}>
             <Lead tone="light" className="mt-6">
               The Gyms tab is curated by the GM team, not scraped from the internet.
-              Every listing is added and maintained by hand — and getting yours in front
+              Every listing is added and maintained by hand, and getting yours in front
               of people who train every day starts with one message.
             </Lead>
           </Reveal>

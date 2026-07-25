@@ -1,11 +1,14 @@
 import { accounts, auditLog } from '@gym/db';
 import { alias } from 'drizzle-orm/pg-core';
 import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { Card, CardHeader, StatTile } from '@/components/console';
 import { getDb } from '@/lib/db';
 import { effectivePermissionSet } from '@/lib/authz';
+import { formatShortDateTime } from '@/lib/format';
 import { staffFromCookie } from '@/lib/staffSession';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import {
   type MemberRow,
   type Tier,
@@ -13,6 +16,7 @@ import {
 } from './_components/SubscriptionsManager';
 
 export const runtime = 'nodejs';
+export const metadata: Metadata = { title: 'Subscriptions' };
 export const dynamic = 'force-dynamic';
 
 const MEMBER_CAP = 200;
@@ -143,13 +147,6 @@ async function loadTierChanges(): Promise<TierChange[]> {
   });
 }
 
-const DATE_FMT = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-});
-
 export default async function AdminSubscriptionsPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
@@ -194,13 +191,16 @@ export default async function AdminSubscriptionsPage() {
         <StatTile
           label="Paid tiers"
           value={paid}
-          hint="silver · gold · elite · effective"
+          hint="Silver, Gold and Elite, counting only memberships still running"
         />
         <StatTile label="Gold" value={byTier.gold} />
         <StatTile label="Elite" value={byTier.elite} />
       </div>
 
-      <SubscriptionsManager members={members} />
+      <SubscriptionsManager
+        members={members}
+        canViewMembers={permissions.has('members.read')}
+      />
 
       <div style={{ marginTop: 28 }}>
         <Card padded={false}>
@@ -240,7 +240,7 @@ export default async function AdminSubscriptionsPage() {
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {DATE_FMT.format(c.createdAt)}
+                    {formatShortDateTime(c.createdAt)}
                   </span>
                   <span style={{ flex: 1, minWidth: 0, fontSize: 14 }}>
                     <span style={{ fontWeight: 600 }}>
@@ -250,11 +250,10 @@ export default async function AdminSubscriptionsPage() {
                     <span
                       className="gt-numeric"
                       style={{
-                        textTransform: 'uppercase',
                         letterSpacing: '0.04em',
                       }}
                     >
-                      {c.tier ?? '—'}
+                      {c.tier ? tierLabel(c.tier) : '—'}
                     </span>
                     {c.reason ? (
                       <span

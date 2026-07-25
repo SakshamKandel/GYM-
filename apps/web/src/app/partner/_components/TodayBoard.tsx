@@ -32,10 +32,15 @@ import styles from './board.module.css';
  * order for the current KTM day, split into a lunch and a dinner lane, each a
  * kanban of the fulfillment columns (Pending → Confirmed → Preparing → Out for
  * delivery). One-tap advance is optimistic and self-heals on a CAS conflict
- * (409 → refetch). The board polls every 15s, flags brand-new orders with a
- * badge + document-title flash, an audible chime that repeats until
- * acknowledged (B8), and highlights any order whose delivery window has
- * already started but isn't delivered.
+ * (409 → refetch). The board polls every 15s, badges orders that arrived since
+ * this page opened, and highlights any order whose delivery window has already
+ * started but isn't delivered.
+ *
+ * The bell (sound, the tab title, the "you have unseen orders" count) is NOT
+ * here: it lives in PartnerAlerts, mounted by the layout, so it keeps watch on
+ * every page of the portal instead of only this one. Two owners would have
+ * meant two chimes for one order, and no chime at all while the partner was on
+ * the menu or earnings page — which is where a kitchen usually is.
  *
  * Visual language (2026-07-21 professional pass): a live-pill toolbar,
  * per-status column dots and card edge strips (amber → blue → orange, red for
@@ -44,8 +49,6 @@ import styles from './board.module.css';
  */
 
 const POLL_MS = 15_000;
-const CHIME_REPEAT_MS = 20_000;
-const SOUND_PREF_KEY = 'gt-partner-board-sound';
 
 /** Board columns, left→right, matching the natural fulfillment flow. */
 const COLUMNS: { status: OrderStatus; label: string }[] = [
@@ -70,39 +73,6 @@ function nextAction(from: OrderStatus): OrderStatus | null {
   return to ?? null;
 }
 
-/**
- * Play a short two-tone chime via Web Audio (B8). Best-effort: browsers block
- * audio before any user gesture, and older browsers may lack the API — both
- * fail silently, leaving the visual badge + title flash as the fallback signal.
- */
-function playChime(ctxRef: { current: AudioContext | null }) {
-  try {
-    const AudioCtxCtor: typeof AudioContext | undefined =
-      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioCtxCtor) return;
-    if (!ctxRef.current) ctxRef.current = new AudioCtxCtor();
-    const ctx = ctxRef.current;
-    if (ctx.state === 'suspended') void ctx.resume();
-    const now = ctx.currentTime;
-    [880, 1318.5].forEach((freq, i) => {
-      const start = now + i * 0.16;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.3, start + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(start);
-      osc.stop(start + 0.18);
-    });
-  } catch {
-    /* audio unavailable — visual badge + title flash remain */
-  }
-}
-
 export function TodayBoard({
   orders: initial,
   today,
@@ -120,31 +90,8 @@ export function TodayBoard({
   const [newIds, setNewIds] = useState<Set<string>>(() => new Set());
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [pollFailed, setPollFailed] = useState(false);
-  const [soundOn, setSoundOn] = useState(true);
 
   const knownIds = useRef<Set<string>>(new Set(initial.map((o) => o.orderId)));
-  const audioCtxRef = useRef<AudioContext | null>(null);
-
-  // Sound-on/off preference persists across visits (localStorage) — a kitchen
-  // that mutes the board once shouldn't have to re-mute it every shift.
-  useEffect(() => {
-    try {
-      setSoundOn(window.localStorage.getItem(SOUND_PREF_KEY) !== 'off');
-    } catch {
-      /* storage unavailable (private mode) — default stays on */
-    }
-  }, []);
-  function toggleSound() {
-    setSoundOn((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(SOUND_PREF_KEY, next ? 'on' : 'off');
-      } catch {
-        /* storage unavailable — the toggle still works for this session */
-      }
-      return next;
-    });
-  }
 
   const todaysOrders = useMemo(
     () => orders.filter((o) => o.deliveryDate === today),
@@ -169,10 +116,16 @@ export function TodayBoard({
     return () => clearInterval(t);
   }, []);
 
-  // 15s polling — server is the source of truth; detect newly-arrived ids.
+  // 15s polling — the board redraws from the source of truth and detects
+  // newly-arrived ids. `materialize=skip` keeps the poll a pure read: the page
+  // already spawned any due subscription deliveries when it loaded, so having
+  // every open kitchen re-drive that write pass four times a minute only piles
+  // work on the database.
   const poll = useCallbackRef(async () => {
     try {
-      const res = await fetch('/api/partner/orders?scope=active', { credentials: 'include' });
+      const res = await fetch('/api/partner/orders?scope=active&materialize=skip', {
+        credentials: 'include',
+      });
       if (!res.ok) {
         setPollFailed(true);
         return;
@@ -188,7 +141,6 @@ export function TodayBoard({
           for (const o of fresh) next.add(o.orderId);
           return next;
         });
-        if (soundOn) playChime(audioCtxRef);
       }
       for (const o of fetched) knownIds.current.add(o.orderId);
       setOrders(fetched);
@@ -205,30 +157,6 @@ export function TodayBoard({
     return () => clearInterval(t);
   }, [poll]);
 
-  // Title flash while unreviewed new orders exist (cleared on interaction).
-  useEffect(() => {
-    if (newIds.size === 0) return;
-    const base = document.title;
-    let on = false;
-    const t = setInterval(() => {
-      on = !on;
-      document.title = on ? `(${newIds.size}) New order${newIds.size === 1 ? '' : 's'}` : base;
-    }, 1000);
-    return () => {
-      clearInterval(t);
-      document.title = base;
-    };
-  }, [newIds.size]);
-
-  // Repeat-until-ack (B8): a backgrounded/asleep kitchen shouldn't miss a new
-  // order because it played once. Re-chimes on an interval for as long as any
-  // new order sits un-acknowledged; stops the instant `acknowledgeNew` fires.
-  useEffect(() => {
-    if (newIds.size === 0 || !soundOn) return;
-    const t = setInterval(() => playChime(audioCtxRef), CHIME_REPEAT_MS);
-    return () => clearInterval(t);
-  }, [newIds.size, soundOn]);
-
   async function advance(orderId: string, toStatus: OrderStatus, reason?: string) {
     setBusyId(orderId);
     setErrorById((e) => ({ ...e, [orderId]: '' }));
@@ -243,9 +171,9 @@ export function TodayBoard({
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         const msg =
           body.error === 'payment_required'
-            ? 'Not paid yet — approve the payment before confirming.'
+            ? 'Not paid yet. Approve the payment before confirming.'
             : body.error === 'conflict' || body.error === 'illegal_transition'
-              ? 'This order changed — refreshing.'
+              ? 'This order changed. Refreshing.'
               : 'Could not update. Try again.';
         setErrorById((e) => ({ ...e, [orderId]: msg }));
         if (body.error === 'conflict' || body.error === 'illegal_transition') void poll();
@@ -255,7 +183,7 @@ export function TodayBoard({
       setOrders((list) => list.map((o) => (o.orderId === orderId ? body.order : o)));
       router.refresh();
     } catch {
-      setErrorById((e) => ({ ...e, [orderId]: 'Network error. Try again.' }));
+      setErrorById((e) => ({ ...e, [orderId]: 'Could not reach us just now. Try again.' }));
     } finally {
       setBusyId(null);
     }
@@ -276,24 +204,15 @@ export function TodayBoard({
           <span className={`${styles.livePill} ${pollFailed ? styles.livePillPaused : ''}`}>
             <span className="gt-live-dot" aria-hidden />
             {pollFailed
-              ? 'Live updates paused — retrying'
+              ? 'Live updates paused, retrying'
               : `Live · every 15s · ${todaysOrders.length} today`}
           </span>
           {newIds.size > 0 ? (
             <button onClick={acknowledgeNew} className={styles.newOrdersBtn}>
-              {newIds.size} new order{newIds.size === 1 ? '' : 's'} · review
+              {newIds.size} arrived since you opened this page · clear
             </button>
           ) : null}
         </div>
-        <button
-          onClick={toggleSound}
-          aria-label={soundOn ? 'Mute new-order chime' : 'Unmute new-order chime'}
-          title={soundOn ? 'New-order chime is on' : 'New-order chime is muted'}
-          className={styles.soundToggle}
-        >
-          <span aria-hidden="true">{soundOn ? '🔔' : '🔕'}</span>
-          {soundOn ? 'Sound on' : 'Muted'}
-        </button>
       </div>
 
       {hasOverdue ? (

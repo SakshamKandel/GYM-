@@ -79,7 +79,7 @@ function Pill({
       style={{
         display: 'inline-block',
         padding: '2px 10px',
-        borderRadius: 999,
+        borderRadius: 'var(--gt-radius-pill)',
         border: `1px solid ${border}`,
         background: bg,
         color: fg,

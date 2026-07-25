@@ -84,7 +84,7 @@ export function GymReviewsSection({
         ) : reviews.length === 0 ? (
           <View style={styles.empty}>
             <AppText variant="body" color={colors.textDim}>
-              No reviews yet — be the first to share how this gym is.
+              No reviews yet. Be the first to share how this gym is.
             </AppText>
           </View>
         ) : (

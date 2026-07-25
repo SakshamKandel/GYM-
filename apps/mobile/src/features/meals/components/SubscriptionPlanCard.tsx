@@ -69,7 +69,7 @@ export function SubscriptionPlanCard({ sub, onAction, onSkip, onPay, onEdit }: P
           <AppText variant="label" color={colors.textDim}>
             {sub.planType === 'fixed_meal' ? 'Fixed meal' : "Chef's rotation"}
           </AppText>
-          <AppText variant="bodyBold">{sub.window === 'lunch' ? 'Lunch plan' : 'Dinner plan'}</AppText>
+          <AppText variant="bodyBold">{sub.window === 'lunch' ? 'Lunch meal plan' : 'Dinner meal plan'}</AppText>
         </View>
         <Tag label={statusLabel(sub.status)} variant="outline" color={statusTone(sub.status)} />
       </View>
@@ -136,14 +136,14 @@ export function SubscriptionPlanCard({ sub, onAction, onSkip, onPay, onEdit }: P
             </View>
             <AppText variant="caption" color={colors.textDim}>
               {underReview
-                ? `Week of ${bill.weekStart} — we'll confirm once staff review your receipt.`
-                : `Week of ${bill.weekStart} — deliveries pause until this is paid.`}
+                ? `Week of ${bill.weekStart}. We'll confirm once staff review your receipt.`
+                : `Week of ${bill.weekStart}. Deliveries pause until this is paid.`}
             </AppText>
           </View>
           {underReview ? null : (
             <PressableScale
               accessibilityRole="button"
-              accessibilityLabel={`Pay the ${formatMoney(bill.amountMinor, bill.currency)} bill for this plan`}
+              accessibilityLabel={`Pay the ${formatMoney(bill.amountMinor, bill.currency)} bill for this meal plan`}
               onPress={() => onPay(sub)}
               style={[styles.actionBtn, styles.payBtn]}
             >
@@ -159,7 +159,7 @@ export function SubscriptionPlanCard({ sub, onAction, onSkip, onPay, onEdit }: P
         <View style={styles.actionsRow}>
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel="Edit this plan"
+            accessibilityLabel="Edit this meal plan"
             onPress={() => onEdit(sub)}
             style={styles.actionBtn}
           >
@@ -168,7 +168,7 @@ export function SubscriptionPlanCard({ sub, onAction, onSkip, onPay, onEdit }: P
           {sub.status === 'active' ? (
             <PressableScale
               accessibilityRole="button"
-              accessibilityLabel="Pause this plan"
+              accessibilityLabel="Pause this meal plan"
               onPress={() => onAction(sub, 'pause')}
               style={styles.actionBtn}
             >
@@ -177,7 +177,7 @@ export function SubscriptionPlanCard({ sub, onAction, onSkip, onPay, onEdit }: P
           ) : (
             <PressableScale
               accessibilityRole="button"
-              accessibilityLabel="Resume this plan"
+              accessibilityLabel="Resume this meal plan"
               onPress={() => onAction(sub, 'resume')}
               style={styles.actionBtn}
             >
@@ -196,7 +196,7 @@ export function SubscriptionPlanCard({ sub, onAction, onSkip, onPay, onEdit }: P
           ) : null}
           <PressableScale
             accessibilityRole="button"
-            accessibilityLabel="Cancel this plan"
+            accessibilityLabel="Cancel this meal plan"
             onPress={() => onAction(sub, 'cancel')}
             style={[styles.actionBtn, styles.actionBtnDanger]}
           >

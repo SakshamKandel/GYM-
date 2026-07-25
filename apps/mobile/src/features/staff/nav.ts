@@ -81,6 +81,8 @@ export const STAFF_ROUTES = {
   adminPayouts: '/staff/admin/payouts',
   /** All-partners meal-order oversight (orders.review — super/main). */
   adminOrders: '/staff/admin/orders',
+  /** Member claims about delivered orders (orders.review — super/main). */
+  adminDisputes: '/staff/admin/disputes',
   /** Meal-delivery manual-payment review queue (payments.review). */
   adminMealPayments: '/staff/admin/meal-payments',
   /** Platform analytics dashboard (analytics.read — super/main). */
@@ -97,6 +99,10 @@ export const STAFF_ROUTES = {
   adminPartners: '/staff/admin/partners',
   /** Nearby-gyms directory CRUD (gyms.manage — super/main). */
   adminGyms: '/staff/admin/gyms',
+  /** Gym reports, reviews and membership enquiries (gyms.manage — super/main). */
+  adminGymModeration: '/staff/admin/gym-moderation',
+  /** Meal delivery fees + order cutoffs (partners.manage — super/main). */
+  adminDeliverySettings: '/staff/admin/delivery-settings',
   /** Referral/trial abuse dashboard + trial reset (subscription.override). */
   adminAbuse: '/staff/admin/abuse',
   /** Per-account permission override editor (permissions.override — super/main). */

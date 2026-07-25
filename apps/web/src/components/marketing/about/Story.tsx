@@ -23,7 +23,7 @@ export function AboutStory() {
             <div className="space-y-5 text-[16px] leading-relaxed text-dim">
               <p>
                 Most people trying to get fit end up running a workout app, a calorie app, a
-                delivery app and a coach on WhatsApp — four disconnected tabs and a lot of
+                delivery app and a coach on WhatsApp: four disconnected tabs and a lot of
                 copy-paste. Nothing talks to anything else, and the friction is where progress
                 quietly dies.
               </p>
@@ -39,13 +39,13 @@ export function AboutStory() {
             <div className="space-y-5 text-[16px] leading-relaxed text-dim">
               <p>
                 So The GM Method folds all of it into one app. Workouts, food, weight, meal
-                delivery, verified gyms and real human coaching — one home screen, one login you
+                delivery, verified gyms and real human coaching. One home screen, one login you
                 don&rsquo;t even need to create.
               </p>
               <p>
                 It&rsquo;s offline-first because the gyms we train in have bad signal. It&rsquo;s
                 unit-tested because the numbers should be true. And it&rsquo;s priced for Nepal
-                first, then the rest of the world — not the other way around.
+                first, then the rest of the world, not the other way around.
               </p>
             </div>
           </Reveal>
