@@ -874,9 +874,18 @@ export async function createSqliteRepo(): Promise<RepoStore> {
       return rows.map(toSet);
     },
     async getBestE1Rm(exerciseId, excludeWorkoutId) {
+      // epley1Rm is monotone non-decreasing in weight at a fixed rep count, so
+      // the best estimate can only ever come from the heaviest set logged at
+      // each rep count. Letting SQLite fold the exercise's whole history down
+      // to at most one row per rep count (13 at most) keeps the answer bit-for-
+      // bit identical — the same epley1Rm still does the maths — while the
+      // set-commit path, which has to confirm in under 100ms, stops pulling
+      // every historical set across the bridge. It also retires an unbounded
+      // Math.max(...spread), which could overflow the stack on a long history.
       const rows = await db.getAllAsync<{ weight_kg: number; reps: number }>(
-        `SELECT weight_kg, reps FROM set_logs WHERE owner_id = ? AND exercise_id = ?
-         AND workout_log_id != ? AND reps <= 12`,
+        `SELECT reps, MAX(weight_kg) AS weight_kg FROM set_logs
+         WHERE owner_id = ? AND exercise_id = ? AND workout_log_id != ? AND reps <= 12
+         GROUP BY reps`,
         ownerId, exerciseId, excludeWorkoutId,
       );
       if (rows.length === 0) return null;

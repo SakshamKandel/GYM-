@@ -135,6 +135,23 @@ export function firstOrderableSlotIndex(
   return slots.findIndex((s) => s.orderable && !closedKeys.has(slotKey(s.date, s.window)));
 }
 
+/**
+ * Index of the first orderable slot in the delivery WINDOW the member was
+ * browsing on the partner menu, or `-1` when that window has nothing open.
+ * The menu is filtered by window, so a member reading the dinner menu means
+ * dinner — checkout preselects it instead of dropping them on whatever slot
+ * happens to be next (they can still pick another chip).
+ */
+export function firstOrderableSlotIndexForWindow(
+  slots: readonly UpcomingSlot[],
+  window: MealWindow,
+  closedKeys: ReadonlySet<string> = new Set<string>(),
+): number {
+  return slots.findIndex(
+    (s) => s.window === window && s.orderable && !closedKeys.has(slotKey(s.date, s.window)),
+  );
+}
+
 // ── Order status timeline ────────────────────────────────────────
 
 export interface TimelineStep {

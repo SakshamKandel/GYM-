@@ -17,6 +17,8 @@ import { mealLabel } from './logic';
 
 interface Props {
   log: FoodLog;
+  /** Correct the entry (portion or meal) instead of deleting and re-adding it. */
+  onEdit: (log: FoodLog) => void;
   onRemove: (log: FoodLog) => void;
 }
 
@@ -29,9 +31,10 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   macroRow: { flexDirection: 'row', justifyContent: 'space-around' },
+  actions: { gap: spacing.sm },
 });
 
-export function FoodLogDetailSheet({ log, onRemove }: Props) {
+export function FoodLogDetailSheet({ log, onEdit, onRemove }: Props) {
   const reduceMotion = useReducedMotion();
   const kcal = Math.round(log.kcal);
 
@@ -69,11 +72,16 @@ export function FoodLogDetailSheet({ log, onRemove }: Props) {
         <MacroRing label="Fat" current={log.fat} color={colors.fat} delay={260} />
       </View>
 
-      <Button
-        label={`Remove from ${meal.toLowerCase()}`}
-        variant="danger"
-        onPress={() => onRemove(log)}
-      />
+      <View style={styles.actions}>
+        {/* Getting a portion slightly wrong is the common case, so correcting
+            it comes first and deleting stays the exception. */}
+        <Button label="Change portion or meal" onPress={() => onEdit(log)} />
+        <Button
+          label={`Remove from ${meal.toLowerCase()}`}
+          variant="danger"
+          onPress={() => onRemove(log)}
+        />
+      </View>
     </View>
   );
 }

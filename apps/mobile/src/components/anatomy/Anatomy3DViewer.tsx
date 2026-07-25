@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, InteractionManager, StyleSheet, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { useReducedMotion } from 'react-native-reanimated';
 import { colors, radius, spacing } from '@gym/ui-tokens';
@@ -57,6 +57,12 @@ const styles = StyleSheet.create({
 
 type ViewerStatus = 'loading' | 'ready' | 'error';
 const LOAD_TIMEOUT_MS = 15_000;
+/**
+ * Backstop for the deferred document build below: if the screen never reports
+ * its interactions as settled, the body still arrives instead of sitting on
+ * the loading state until the timeout above gives up on it.
+ */
+const BUILD_FALLBACK_MS = 2_000;
 
 export function Anatomy3DViewer({
   selected,
@@ -70,9 +76,39 @@ export function Anatomy3DViewer({
   const reduceMotion = useReducedMotion();
   const [status, setStatus] = useState<ViewerStatus>('loading');
 
-  const [html] = useState(() =>
-    buildViewerHtml({ selected, side, autoRotate: !reduceMotion && selected === null }),
-  );
+  /**
+   * The viewer document embeds three.js, the Draco decoder and the anatomy
+   * model as base64, so assembling it costs roughly 3.5 million characters on
+   * the JS thread. Building it during mount stalled the first paint of every
+   * screen that hosts the body — and the Train tab mounts this section twice
+   * on a cold entry (it remounts once the next workout resolves), so the first
+   * document was assembled and thrown away before anything could show it.
+   *
+   * Building it after the screen settles keeps that work off the first paint,
+   * and cancelling on unmount means a discarded mount never pays for a
+   * document nothing will display. The mount-time selection/side stay baked in
+   * (closure capture), exactly as before, and the loading state below is the
+   * same one the viewer already showed until its ready handshake.
+   */
+  const [html, setHtml] = useState<string | null>(null);
+  useEffect(() => {
+    let built = false;
+    const build = (): void => {
+      if (built) return;
+      built = true;
+      setHtml(buildViewerHtml({ selected, side, autoRotate: !reduceMotion && selected === null }));
+    };
+    const handle = InteractionManager.runAfterInteractions(build);
+    const fallback = setTimeout(build, BUILD_FALLBACK_MS);
+    return () => {
+      built = true;
+      handle.cancel();
+      clearTimeout(fallback);
+    };
+    // Built once per mount from the mount-time state, same as before; later
+    // selection/side changes ride the `highlight` bridge message below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (status !== 'loading') return undefined;
@@ -121,31 +157,33 @@ export function Anatomy3DViewer({
 
   return (
     <View style={[styles.panel, { height }]}>
-      <WebView
-        ref={webRef}
-        source={{ html }}
-        originWhitelist={['*']}
-        style={styles.webview}
-        containerStyle={{ backgroundColor: 'transparent' }}
-        onMessage={onMessage}
-        onError={() => setStatus('error')}
-        onHttpError={() => setStatus('error')}
-        javaScriptEnabled
-        domStorageEnabled={false}
-        scrollEnabled={false}
-        overScrollMode="never"
-        setBuiltInZoomControls={false}
-        androidLayerType="hardware"
-        // let the WebView own its drag gestures inside the parent ScrollView
-        nestedScrollEnabled
-        accessible
-        accessibilityLabel={
-          selected
-            ? `Interactive 3D body. ${MUSCLE_LABELS[selected]} highlighted.`
-            : 'Interactive 3D muscle body.'
-        }
-        accessibilityHint="Drag to rotate, pinch to zoom, or use the muscle buttons below."
-      />
+      {html === null ? null : (
+        <WebView
+          ref={webRef}
+          source={{ html }}
+          originWhitelist={['*']}
+          style={styles.webview}
+          containerStyle={{ backgroundColor: 'transparent' }}
+          onMessage={onMessage}
+          onError={() => setStatus('error')}
+          onHttpError={() => setStatus('error')}
+          javaScriptEnabled
+          domStorageEnabled={false}
+          scrollEnabled={false}
+          overScrollMode="never"
+          setBuiltInZoomControls={false}
+          androidLayerType="hardware"
+          // let the WebView own its drag gestures inside the parent ScrollView
+          nestedScrollEnabled
+          accessible
+          accessibilityLabel={
+            selected
+              ? `Interactive 3D body. ${MUSCLE_LABELS[selected]} highlighted.`
+              : 'Interactive 3D muscle body.'
+          }
+          accessibilityHint="Drag to rotate, pinch to zoom, or use the muscle buttons below."
+        />
+      )}
       {status === 'loading' ? (
         <View style={styles.loadingWrap} pointerEvents="none" accessibilityLiveRegion="polite">
           <ActivityIndicator color={colors.accent} />

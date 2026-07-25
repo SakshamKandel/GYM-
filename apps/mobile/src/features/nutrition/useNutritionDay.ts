@@ -30,6 +30,13 @@ const EMPTY: DayState = {
 export function useNutritionDay(date: string): DayState & {
   addWater: (deltaMl: number) => Promise<void>;
   deleteLog: (id: string) => Promise<void>;
+  /**
+   * Put a just-deleted entry back, exactly as it was — the undo behind the
+   * remove action. Keeping the original id is what makes this an undo rather
+   * than a re-add: the sync queue collapses the delete and the restore into a
+   * single "this entry still exists" for that id.
+   */
+  restoreLog: (log: FoodLog) => Promise<void>;
   /** Persist pre-built logs (e.g. yesterday's clones) then reload the day. */
   copyLogs: (cloned: FoodLog[]) => Promise<void>;
 } {
@@ -78,6 +85,21 @@ export function useNutritionDay(date: string): DayState & {
     [load],
   );
 
+  const restoreLog = useCallback(
+    async (log: FoodLog) => {
+      const repo = await getRepo();
+      try {
+        await repo.logFood(log);
+      } catch (err) {
+        console.error('[nutrition] undo remove failed', err);
+        throw err;
+      }
+      const next = await load();
+      setState(next);
+    },
+    [load],
+  );
+
   const copyLogs = useCallback(
     async (cloned: FoodLog[]) => {
       const repo = await getRepo();
@@ -96,5 +118,5 @@ export function useNutritionDay(date: string): DayState & {
     [load],
   );
 
-  return { ...state, addWater, deleteLog, copyLogs };
+  return { ...state, addWater, deleteLog, restoreLog, copyLogs };
 }

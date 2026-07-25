@@ -28,6 +28,19 @@ type TipState =
 const TIP_TTL_MS = 30 * 60 * 1000;
 let lastTipFetchAt = 0;
 
+export interface AiTipOptions {
+  /**
+   * Hold the request until the caller's own numbers have settled. A screen
+   * whose payload is assembled from several local reads that resolve one after
+   * another would otherwise ask for a tip per read, and every one of those is a
+   * real model call. While this is false the hook simply stays idle, which the
+   * cards already render as the same loading state.
+   *
+   * Defaults to true, so a caller with nothing to wait for behaves as before.
+   */
+  ready?: boolean;
+}
+
 /**
  * Fetch a short coach tip. The caller passes a builder for the CLOSED payload
  * (card kind plus the member's training and body numbers) so the tip refreshes
@@ -40,10 +53,16 @@ let lastTipFetchAt = 0;
  * do not re-ask. "New tip" bumps a variety counter that rides along as a plain
  * number, and the server appends it to its own prompt so the next answer takes
  * a different angle. Screen refocus does the same, but only after the TTL.
+ *
+ * Ordering: every request carries a monotonic sequence and only the newest may
+ * write state. Without it, two calls started moments apart (numbers landing, or
+ * a "New tip" tap over a request still in flight) showed whichever ANSWERED
+ * last, which is not the same thing as the freshest.
  */
 export function useAiTip(
   buildInput: () => AiTipRequestInput,
   deps: unknown[],
+  options?: AiTipOptions,
 ): {
   state: TipState;
   refresh: () => void;
@@ -53,8 +72,12 @@ export function useAiTip(
   const [variety, setVariety] = useState(0);
   const cache = useRef<Map<string, { text: string; source: TipSource }>>(new Map());
   const inputKey = JSON.stringify(buildInput());
+  const ready = options?.ready ?? true;
+  // Newest request wins; bumped by EVERY attempt, cache hits included.
+  const requestSequence = useRef(0);
 
   const fetchTip = useCallback(async () => {
+    const sequence = ++requestSequence.current;
     if (token === null) {
       // No account, so no access to the server's key. Degrade quietly.
       setState({ status: 'error' });
@@ -73,6 +96,9 @@ export function useAiTip(
     }
     setState({ status: 'loading' });
     const outcome = await getAiTip({ ...input, variety }, token);
+    // A newer request started while this one was in flight — its answer is the
+    // one the member must end up reading.
+    if (sequence !== requestSequence.current) return;
     if (outcome.kind === 'unavailable') {
       setState({ status: 'error' });
       return;
@@ -85,8 +111,9 @@ export function useAiTip(
   }, [inputKey, token, variety]);
 
   useEffect(() => {
+    if (!ready) return;
     void fetchTip();
-  }, [fetchTip]);
+  }, [fetchTip, ready]);
 
   // Revisiting the screen brings a fresh tip, but only once the TTL has
   // lapsed, so rapid tab-hopping reuses what is already on screen. The very

@@ -4,6 +4,7 @@ import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { optimizedImageUrl } from '@/lib/video/cloudinaryProvider';
 import { coachRatingFor, loadCoachRatings } from './_lib';
 
 export const runtime = 'nodejs';
@@ -25,6 +26,17 @@ const COACH_TIER_RANK: Record<'silver' | 'gold' | 'elite', number> = {
   gold: 2,
   silver: 1,
 };
+
+/**
+ * Widest a directory avatar is ever painted: the 56dp CoachCard portrait, so
+ * ~168px on a 3x screen. Coaches upload phone-camera originals, and the whole
+ * directory shipped every one of them at full resolution into that circle.
+ * `optimizedImageUrl` caps the delivered width and negotiates format/quality on
+ * the way out; the stored URL is untouched, and a signed/foreign/already-
+ * transformed URL passes through exactly as it is. The full-bleed profile hero
+ * lives on GET /api/coaches/[id], which is sized for itself.
+ */
+const COACH_AVATAR_MAX_WIDTH = 256;
 
 export function OPTIONS() {
   return preflight();
@@ -94,13 +106,20 @@ export async function GET(req: Request) {
   // `photoUrl` mirrors `avatarUrl` — the canonical name going forward; the
   // legacy key stays so already-shipped mobile parsers keep working.
   const coaches = rows
-    .map(({ capacity, ...coach }) => ({
-      ...coach,
-      displayName: coach.displayName || 'Coach',
-      photoUrl: coach.avatarUrl,
-      hasCapacity: coach.activeClients < capacity,
-      ...coachRatingFor(ratings, coach.id),
-    }))
+    .map(({ capacity, ...coach }) => {
+      const avatarUrl =
+        coach.avatarUrl === null
+          ? null
+          : optimizedImageUrl(coach.avatarUrl, { maxWidth: COACH_AVATAR_MAX_WIDTH });
+      return {
+        ...coach,
+        displayName: coach.displayName || 'Coach',
+        avatarUrl,
+        photoUrl: avatarUrl,
+        hasCapacity: coach.activeClients < capacity,
+        ...coachRatingFor(ratings, coach.id),
+      };
+    })
     .sort((a, b) => {
       const rankDiff = COACH_TIER_RANK[b.coachTier] - COACH_TIER_RANK[a.coachTier];
       if (rankDiff !== 0) return rankDiff;

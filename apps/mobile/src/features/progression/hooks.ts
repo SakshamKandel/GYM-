@@ -5,7 +5,11 @@ import { suggestProgression } from '@gym/shared';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
 import { getSuggestions, ProgressionApiError, type ServerSuggestion } from './api';
-import { buildProgressionInput, type EngineExercise } from './engineInput';
+import {
+  buildProgressionInput,
+  clearProgressionHistoryCache,
+  type EngineExercise,
+} from './engineInput';
 
 /**
  * The logging flow's view of "what should I lift next?".
@@ -49,6 +53,9 @@ let fetchInFlight = false;
  */
 export function clearServerSuggestions(): void {
   useServerSuggestions.setState({ byExercise: {} });
+  // The local engine's cached history window is the same member's training
+  // data — it leaves with them.
+  clearProgressionHistoryCache();
 }
 
 /**

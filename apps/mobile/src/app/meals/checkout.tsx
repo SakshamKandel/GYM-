@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
@@ -28,19 +28,22 @@ import { cartSubtotalMinor, useMealCart } from '../../features/meals/cartStore';
 import { useMealAddresses, useMealPartners, useMealQuote } from '../../features/meals/hooks';
 import {
   createMealOrder,
+  mealsPayee,
   toMealsError,
   type MealAddress,
   type MealOrder,
   type MealPaymentMethod,
   type MealQuoteInput,
+  type MealWindow,
 } from '../../features/meals/api';
 import { AddressSheet } from '../../features/meals/components/AddressSheet';
 import { deliveryStatus, DeliveryBadge } from '../../features/meals/components/DeliveryBadge';
 import { ReceiptUploadPanel } from '../../features/meals/components/ReceiptUploadPanel';
 import { PayeeDetailsCard } from '../../components/payments/PayeeDetailsCard';
-import { supportsRail, usePayee } from '../../lib/api/payee';
+import { supportsRail } from '../../lib/api/payee';
 import {
   firstOrderableSlotIndex,
+  firstOrderableSlotIndexForWindow,
   isDigitalMethod,
   mealErrorMessage,
   mealUnavailableLineMessage,
@@ -64,6 +67,14 @@ import { pushPath, replacePath } from '../../features/meals/nav';
  * (slot → address → payment → notes → tip), payment methods as tappable
  * radio rows with per-method hints, and a receipt-style summary card with an
  * Oswald total mirrored into the Place-order CTA.
+ *
+ * The slot picker opens on the delivery window the member was browsing (the
+ * menu passes `?window=`), so the order lands on the menu they actually read;
+ * every other slot stays one tap away.
+ *
+ * A failed quote is recoverable in place: the total block carries the reason
+ * and either a retry (same inputs, fresh request) or a way back to the menu
+ * when a meal in the cart has gone.
  *
  * Payment honesty: eSewa and Khalti are offered ONLY when the operator has
  * published a wallet for them, and picking one shows that wallet right here,
@@ -153,6 +164,7 @@ const styles = StyleSheet.create({
     marginRight: spacing.sm,
   },
   divider: { height: 1, backgroundColor: colors.borderStrong, marginVertical: spacing.sm },
+  quoteError: { gap: spacing.sm },
   totalValue: { fontFamily: type.display, fontSize: 28, color: colors.text, letterSpacing: 0.5 },
   errorText: { marginTop: spacing.sm },
 });
@@ -206,12 +218,19 @@ function PaymentOption({
 }
 
 export default function CheckoutScreen() {
+  // The delivery window the member was reading the menu for (`?window=`). The
+  // menu is filtered by window, so arriving here and being handed a different
+  // slot meant ordering for a menu they never saw. Anything else (no param,
+  // a stale link) falls back to the plain "next orderable slot" default.
+  const { window: browsedWindowParam } = useLocalSearchParams<{ window?: string }>();
+  const browsedWindow: MealWindow | null =
+    browsedWindowParam === 'lunch' || browsedWindowParam === 'dinner' ? browsedWindowParam : null;
   const token = useAuth((s) => s.token);
   const partnerId = useMealCart((s) => s.partnerId);
   const lines = useMealCart((s) => s.lines);
   const clearCart = useMealCart((s) => s.clear);
 
-  const { data: partners } = useMealPartners(token);
+  const { data: partners, loading: partnersLoading } = useMealPartners(token);
   const partner = partners?.find((p) => p.id === partnerId) ?? null;
 
   const slots = useMemo(() => upcomingSlots(new Date(), 6), []);
@@ -222,8 +241,13 @@ export default function CheckoutScreen() {
   const [closedSlotKeys, setClosedSlotKeys] = useState<ReadonlySet<string>>(() => new Set<string>());
   // The slot list starts at TODAY's lunch, which has usually passed its cutoff
   // already — defaulting to index 0 opened checkout on a dead slot every time.
-  // Start on the first slot that can actually be ordered instead.
-  const [slotIdx, setSlotIdx] = useState(() => Math.max(0, firstOrderableSlotIndex(slots)));
+  // Start on the first orderable slot in the window the member was browsing,
+  // and on the first orderable slot of any window when that one is all closed.
+  const [slotIdx, setSlotIdx] = useState(() => {
+    const browsed =
+      browsedWindow !== null ? firstOrderableSlotIndexForWindow(slots, browsedWindow) : -1;
+    return Math.max(0, browsed !== -1 ? browsed : firstOrderableSlotIndex(slots));
+  });
   const slot = slots[slotIdx] ?? slots[0];
   const slotOpen = !!slot?.orderable && !closedSlotKeys.has(slotKey(slot.date, slot.window));
 
@@ -252,7 +276,12 @@ export default function CheckoutScreen() {
   // Which rails can actually take this order's money. A wallet with no
   // published id is not offered at all — the member would have nowhere to send
   // the transfer the receipt step then asks them to prove.
-  const { payee, loading: payeeLoading } = usePayee(token, 'meals');
+  //
+  // Read off the partner list this screen already loads: the partners response
+  // carries the payee (features/meals/api.ts), so asking a second endpoint for
+  // it was a second request to the very same route.
+  const payee = mealsPayee(partners);
+  const payeeLoading = partnersLoading;
   const codAvailable = partner?.acceptsCod !== false;
   const esewaAvailable = supportsRail(payee, 'esewa');
   const khaltiAvailable = supportsRail(payee, 'khalti');
@@ -329,6 +358,7 @@ export default function CheckoutScreen() {
     status: quoteStatus,
     errorCode: quoteErrorCode,
     errorDetails: quoteErrorDetails,
+    retry: retryQuote,
   } = useMealQuote(token, quoteInput);
   // B11: a deleted/deactivated meal names the specific line instead of a bare
   // slot message.
@@ -336,6 +366,15 @@ export default function CheckoutScreen() {
     quoteStatus === 'error' && quoteErrorCode === 'meal_unavailable'
       ? mealUnavailableLineMessage((quoteErrorDetails?.mealName as string | null | undefined) ?? null)
       : null;
+  // A failed quote blocks "Place order", so the message must name a way out
+  // the member actually has on this screen: change the order on the menu when
+  // a meal has gone, otherwise ask for the total again.
+  const quoteFixIsMenu = quoteMealUnavailable !== null;
+  const quoteErrorText =
+    quoteMealUnavailable ??
+    (quoteErrorCode === null || quoteErrorCode === 'network'
+      ? "We couldn't work out your total. Check your connection, then try again."
+      : mealErrorMessage(quoteErrorCode));
 
   function goBack(): void {
     if (router.canGoBack()) router.back();
@@ -696,9 +735,20 @@ export default function CheckoutScreen() {
               Updating totals…
             </AppText>
           ) : quoteStatus === 'error' ? (
-            <AppText variant="body" color={colors.error}>
-              {quoteMealUnavailable ?? mealErrorMessage(quoteErrorCode ?? 'network')}
-            </AppText>
+            <View style={styles.quoteError}>
+              <AppText variant="body" color={colors.error}>
+                {quoteErrorText}
+              </AppText>
+              {quoteFixIsMenu ? (
+                <Button
+                  label="Change your order"
+                  variant="secondary"
+                  onPress={() => (partnerId ? pushPath(`/meals/${partnerId}`) : pushPath('/meals'))}
+                />
+              ) : (
+                <Button label="Try again" variant="secondary" onPress={retryQuote} />
+              )}
+            </View>
           ) : quote?.deliversTo === false ? (
             <AppText variant="body" color={colors.warning}>
               This address is outside {partner?.name ?? "this partner's"} delivery area, so the order may be

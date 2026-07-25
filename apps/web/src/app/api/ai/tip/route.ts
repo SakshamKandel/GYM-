@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { groqComplete, isGroqConfigured } from '@/lib/groq';
 import { json, preflight, readJson } from '@/lib/http';
-import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -45,7 +45,16 @@ export const runtime = 'nodejs';
  * cap, so it can neither be repurposed as an open LLM proxy nor run up a bill.
  */
 
-/** 6/min catches a stuck client; 60/day is far above a real member's use. */
+/**
+ * 6/min catches a stuck client; 60/day is far above a real member's use.
+ *
+ * Both budgets are counted in the SHARED store (`rateLimitShared`) because this
+ * is the one route where every call costs money at the model provider: the
+ * per-instance limiter hands each warm serverless instance its own allowance,
+ * so the real daily bill was 60 calls times however many instances happened to
+ * be warm. With no shared store configured it falls back to the in-memory
+ * limiter, so local development behaves exactly as before.
+ */
 const PER_MINUTE_LIMIT = 6;
 const PER_DAY_LIMIT = 60;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -337,7 +346,7 @@ export async function POST(req: Request) {
   const user = await userForToken(token);
   if (!user) return json({ error: 'unauthorized' }, 401);
 
-  const perMinute = rateLimit({
+  const perMinute = await rateLimitShared({
     route: 'ai/tip',
     limit: PER_MINUTE_LIMIT,
     windowMs: 60_000,
@@ -359,7 +368,7 @@ export async function POST(req: Request) {
   if (!isGroqConfigured()) return tipResponse(null, 'not_configured');
 
   // The daily budget only counts calls that actually reach the model.
-  const perDay = rateLimit({
+  const perDay = await rateLimitShared({
     route: 'ai/tip/day',
     limit: PER_DAY_LIMIT,
     windowMs: DAY_MS,

@@ -46,11 +46,15 @@ import {
 import {
   ACTIVITY_OPTIONS,
   BIRTH_YEAR,
+  cmToInches,
   DAYS_PER_WEEK,
   draftTargets,
+  formatFeetInches,
   formatWeightValue,
   GOAL_OPTIONS,
   HEIGHT_CM,
+  HEIGHT_IN,
+  inchesToCm,
   SEX_OPTIONS,
   TOTAL_STEPS,
   UNIT_OPTIONS,
@@ -83,9 +87,9 @@ import {
  */
 
 /** Steps whose OptionCards auto-advance (no bottom button). */
-const OPTION_STEPS = new Set([3, 6, 8, 9]);
+const OPTION_STEPS = new Set([2, 4, 7, 8]);
 /** Permission step renders its own Allow/Later buttons — no shared footer. */
-const PERMISSION_STEP = 11;
+const PERMISSION_STEP = 10;
 
 /**
  * Field checks that mirror the account screens (features/auth/validation.ts)
@@ -109,23 +113,35 @@ function passwordIssue(password: string): string | null {
   return null;
 }
 
+/**
+ * One question per step, and step one is a real question: the standalone
+ * "hello, this takes 60 seconds" screen collected nothing and contradicted the
+ * Welcome poster's own estimate, so the introduction rides along with the first
+ * thing we actually need. Units are asked before height and weight, so nobody
+ * who lifts in pounds is handed a centimetre dial.
+ */
 const SCRIPT: Record<number, { q: string; caption?: string }> = {
-  1: { q: "I'm Newie. Greece built me to get you strong. 60 seconds of questions, then we lift." },
-  2: { q: 'First things first. What should I call you?', caption: "Skip it and I'll call you Athlete." },
-  3: { q: "What's your sex? My calorie math needs it." },
-  4: { q: 'What year were you born?', caption: 'Sets your calorie-burn baseline.' },
+  1: {
+    q: "I'm Newie, your coach. First things first: what should I call you?",
+    caption: "Skip it and I'll call you Athlete.",
+  },
+  2: { q: "What's your sex? My calorie math needs it." },
+  3: { q: 'What year were you born?', caption: 'Sets your calorie-burn baseline.' },
+  4: {
+    q: 'Which units do you lift in?',
+    caption: 'Everything I ask after this uses them. Switch anytime in Settings.',
+  },
   5: { q: 'How tall are you?' },
-  6: { q: 'Which units do you lift in?', caption: 'Switch anytime in Settings.' },
-  7: { q: "Where's the scale at today?", caption: "A best guess is fine. We'll track the real trend." },
-  8: { q: 'Now the big one. What are we chasing?' },
-  9: { q: 'How active are you outside the gym?', caption: 'Workouts are counted separately.' },
-  10: { q: 'How many days a week can you give me?', caption: 'Be honest. Consistency beats ambition.' },
-  11: {
+  6: { q: "Where's the scale at today?", caption: "A best guess is fine. We'll track the real trend." },
+  7: { q: 'Now the big one. What are we chasing?' },
+  8: { q: 'How active are you outside the gym?', caption: 'Workouts are counted separately.' },
+  9: { q: 'How many days a week can you give me?', caption: 'Be honest. Consistency beats ambition.' },
+  10: {
     q: 'One more thing. Stay on track?',
     caption:
       "I'll ping you when your coach replies or when you miss a day, and count your daily steps. Change this anytime in Settings.",
   },
-  12: { q: "Here's your program. The GM Method takes it from here." },
+  11: { q: "Here's your program. The GM Method takes it from here." },
 };
 
 /**
@@ -401,8 +417,6 @@ export function OnboardingWizard() {
   function renderAnswers() {
     switch (step) {
       case 1:
-        return null;
-      case 2:
         return (
           <AppTextInput
             value={draft.name}
@@ -414,7 +428,7 @@ export function OnboardingWizard() {
             accessibilityLabel="Your name"
           />
         );
-      case 3:
+      case 2:
         return (
           <View style={styles.cards}>
             {SEX_OPTIONS.map((o) => (
@@ -428,7 +442,7 @@ export function OnboardingWizard() {
             ))}
           </View>
         );
-      case 4:
+      case 3:
         return (
           <View style={styles.stepperWrap}>
             <Stepper
@@ -442,21 +456,7 @@ export function OnboardingWizard() {
             />
           </View>
         );
-      case 5:
-        return (
-          <View style={styles.stepperWrap}>
-            <Stepper
-              value={draft.heightCm}
-              onChange={(v) => patch({ heightCm: v })}
-              step={1}
-              min={HEIGHT_CM.min}
-              max={HEIGHT_CM.max}
-              label="cm"
-              big
-            />
-          </View>
-        );
-      case 6:
+      case 4:
         return (
           <View style={styles.cards}>
             {UNIT_OPTIONS.map((o) => (
@@ -470,7 +470,37 @@ export function OnboardingWizard() {
             ))}
           </View>
         );
-      case 7:
+      case 5:
+        // Height follows the unit choice made a question earlier: feet and
+        // inches for anyone lifting in pounds, centimetres for everyone else.
+        // Stored as centimetres either way.
+        return (
+          <View style={styles.stepperWrap}>
+            {draft.unitPref === 'lb' ? (
+              <Stepper
+                value={cmToInches(draft.heightCm)}
+                onChange={(v) => patch({ heightCm: inchesToCm(v) })}
+                step={1}
+                min={HEIGHT_IN.min}
+                max={HEIGHT_IN.max}
+                format={formatFeetInches}
+                label="Height"
+                big
+              />
+            ) : (
+              <Stepper
+                value={draft.heightCm}
+                onChange={(v) => patch({ heightCm: v })}
+                step={1}
+                min={HEIGHT_CM.min}
+                max={HEIGHT_CM.max}
+                label="cm"
+                big
+              />
+            )}
+          </View>
+        );
+      case 6:
         return (
           <View style={styles.stepperWrap}>
             <Stepper
@@ -485,7 +515,7 @@ export function OnboardingWizard() {
             />
           </View>
         );
-      case 8:
+      case 7:
         return (
           <View style={styles.cards}>
             {GOAL_OPTIONS.map((o) => (
@@ -499,7 +529,7 @@ export function OnboardingWizard() {
             ))}
           </View>
         );
-      case 9:
+      case 8:
         return (
           <View style={styles.cards}>
             {ACTIVITY_OPTIONS.map((o) => (
@@ -513,7 +543,7 @@ export function OnboardingWizard() {
             ))}
           </View>
         );
-      case 10:
+      case 9:
         return (
           <View style={styles.stepperWrap}>
             <Stepper
@@ -527,7 +557,7 @@ export function OnboardingWizard() {
             />
           </View>
         );
-      case 11:
+      case 10:
         return (
           <View style={styles.permissionActions}>
             <Button
@@ -677,16 +707,14 @@ export function OnboardingWizard() {
   const script = needsAccount ? ACCOUNT_SCRIPT : (SCRIPT[step] ?? SCRIPT[TOTAL_STEPS]!);
   const footerLabel = needsAccount
     ? 'Create account'
-    : step === 1
-      ? "Let's talk"
-      : step === TOTAL_STEPS
-        ? "Let's go"
-        : 'Continue';
+    : step === TOTAL_STEPS
+      ? "Let's go"
+      : 'Continue';
   const footerAction = needsAccount
     ? () => void createAccount()
     : step === TOTAL_STEPS
       ? () => void finish()
-      : step === 2
+      : step === 1
         ? submitName
         : next;
   const onFirstStep = step === 1;
@@ -783,7 +811,8 @@ export function OnboardingWizard() {
               </>
             ) : null}
             {/* Setup is for new members; a returning one shouldn't have to
-                answer 12 questions to find the door back to their account. */}
+                answer the whole wizard to find the door back to their
+                account. */}
             {onFirstStep || needsAccount ? (
               <PressableScale
                 accessibilityRole="button"

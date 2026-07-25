@@ -132,11 +132,52 @@ export function toApiError(err: unknown): ApiError {
   return err instanceof ApiError ? err : new ApiError('network');
 }
 
-/** Authenticated Neon-backed plan and exercise snapshot for member training. */
-export async function getTrainingCatalog(token: string): Promise<TrainingCatalog> {
+/**
+ * Outcome of one catalog read.
+ *  - 'catalog'   → a full, validated snapshot: store it and show it.
+ *  - 'unchanged' → the server confirmed the revision we asked about is still
+ *                  the current one, so the snapshot we already hold stands and
+ *                  nothing was downloaded. Only ever returned for a revision
+ *                  this call actually sent.
+ */
+export type TrainingCatalogResult =
+  | { kind: 'catalog'; catalog: TrainingCatalog }
+  | { kind: 'unchanged' };
+
+/** Shape of the server's revisions-match answer (see the route's doc comment). */
+const CATALOG_REVISION_PATTERN = /^[a-f0-9]{64}$/;
+const trainingCatalogUnchangedSchema = z.object({
+  notModified: z.literal(true),
+  revision: z.string().regex(CATALOG_REVISION_PATTERN),
+});
+
+/**
+ * Authenticated Neon-backed plan and exercise snapshot for member training.
+ *
+ * Pass `knownRevision` (the revision of the snapshot already on the device) to
+ * skip re-downloading a library that has not changed: the server answers with a
+ * tiny confirmation instead, and this resolves to `{ kind: 'unchanged' }`. The
+ * conditional read is best-effort in every direction — a revision that isn't
+ * shaped like one the server mints, a server that predates the feature, or any
+ * answer that doesn't confirm the exact revision we asked about all fall
+ * straight through to a normal full read, so a stale library can never be
+ * mistaken for a current one.
+ */
+export async function getTrainingCatalog(
+  token: string,
+  knownRevision?: string | null,
+): Promise<TrainingCatalogResult> {
+  const conditional =
+    typeof knownRevision === 'string' && CATALOG_REVISION_PATTERN.test(knownRevision)
+      ? knownRevision
+      : null;
+  const url = conditional
+    ? `${BASE_URL}/api/me/training-catalog?revision=${encodeURIComponent(conditional)}`
+    : `${BASE_URL}/api/me/training-catalog`;
+
   let response: Response;
   try {
-    response = await fetchWithTimeout(`${BASE_URL}/api/me/training-catalog`, {
+    response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
     });
@@ -146,9 +187,18 @@ export async function getTrainingCatalog(token: string): Promise<TrainingCatalog
   if (response.status === 401) throw new ApiError('unauthorized');
   if (!response.ok) throw new ApiError('network');
   try {
-    const parsed = trainingCatalogSchema.safeParse(await response.json());
+    const body = (await response.json()) as unknown;
+    if (conditional !== null) {
+      const unchanged = trainingCatalogUnchangedSchema.safeParse(body);
+      // The revision has to come back identical: anything else is a body we
+      // don't understand, and the full parse below is the honest answer to it.
+      if (unchanged.success && unchanged.data.revision === conditional) {
+        return { kind: 'unchanged' };
+      }
+    }
+    const parsed = trainingCatalogSchema.safeParse(body);
     if (!parsed.success) throw new ApiError('network', 'invalid training catalog');
-    return parsed.data;
+    return { kind: 'catalog', catalog: parsed.data };
   } catch (error: unknown) {
     if (error instanceof ApiError) throw error;
     throw new ApiError('network', 'invalid training catalog');
@@ -559,6 +609,11 @@ export type RewardsErrorCode =
   | 'trial_used'
   /** Trial: the requested tier isn't above the account's current tier. */
   | 'not_an_upgrade'
+  /**
+   * Trial: the account already holds a paid or longer-dated membership, so the
+   * server refused rather than overwrite it with a two-day trial window.
+   */
+  | 'subscription_active'
   | 'forbidden'
   | 'unauthorized'
   | 'network';
@@ -589,7 +644,8 @@ function rewardsServerErrorCode(raw: string): RewardsErrorCode | null {
     raw === 'not_new_member' ||
     raw === 'grant_failed' ||
     raw === 'trial_used' ||
-    raw === 'not_an_upgrade'
+    raw === 'not_an_upgrade' ||
+    raw === 'subscription_active'
     ? (raw as RewardsErrorCode)
     : null;
 }

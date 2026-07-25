@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, InteractionManager, StyleSheet, View } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 import { colors, radius, spacing } from '@gym/ui-tokens';
 import { AppText, Chip } from '../ui';
@@ -52,6 +52,12 @@ const styles = StyleSheet.create({
 
 type ViewerStatus = 'loading' | 'ready' | 'error';
 const LOAD_TIMEOUT_MS = 15_000;
+/**
+ * Backstop for the deferred document build below: if the page never reports
+ * its interactions as settled, the body still arrives instead of sitting on
+ * the loading state until the timeout above gives up on it.
+ */
+const BUILD_FALLBACK_MS = 2_000;
 
 export function Anatomy3DViewer({
   selected,
@@ -65,11 +71,36 @@ export function Anatomy3DViewer({
   const reduceMotion = useReducedMotion();
   const [status, setStatus] = useState<ViewerStatus>('loading');
 
-  // Build the document once; initial state is baked in so the first paint is
-  // already correct even before the ready handshake completes.
-  const [html] = useState(() =>
-    buildViewerHtml({ selected, side, autoRotate: !reduceMotion && selected === null }),
-  );
+  /**
+   * Build the document once; initial state is baked in so the first paint is
+   * already correct even before the ready handshake completes.
+   *
+   * It embeds three.js, the Draco decoder and the anatomy model as base64, so
+   * assembling it costs roughly 3.5 million characters on the JS thread.
+   * Deferring it past the screen's first interactions keeps that work off the
+   * first paint, and cancelling on unmount means a host that mounts and
+   * immediately remounts this viewer (the Train tab does, once its next
+   * workout resolves) never builds a document nothing will display.
+   */
+  const [html, setHtml] = useState<string | null>(null);
+  useEffect(() => {
+    let built = false;
+    const build = (): void => {
+      if (built) return;
+      built = true;
+      setHtml(buildViewerHtml({ selected, side, autoRotate: !reduceMotion && selected === null }));
+    };
+    const handle = InteractionManager.runAfterInteractions(build);
+    const fallback = setTimeout(build, BUILD_FALLBACK_MS);
+    return () => {
+      built = true;
+      handle.cancel();
+      clearTimeout(fallback);
+    };
+    // Built once per mount from the mount-time state, same as before; later
+    // selection/side changes ride the `highlight` message below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (status !== 'loading') return undefined;
@@ -130,16 +161,18 @@ export function Anatomy3DViewer({
   return (
     <View style={[styles.panel, { height }]}>
       {/* Runtime, decoder, and model are embedded so srcDoc stays fully offline. */}
-      <iframe
-        ref={frameRef}
-        srcDoc={html}
-        title="3D muscle anatomy"
-        style={{ border: 'none', width: '100%', height: '100%', background: colors.bg }}
-        // The generated document is self-contained; scripts are allowed but it
-        // receives no same-origin access to the host app.
-        sandbox="allow-scripts"
-        onError={() => setStatus('error')}
-      />
+      {html === null ? null : (
+        <iframe
+          ref={frameRef}
+          srcDoc={html}
+          title="3D muscle anatomy"
+          style={{ border: 'none', width: '100%', height: '100%', background: colors.bg }}
+          // The generated document is self-contained; scripts are allowed but it
+          // receives no same-origin access to the host app.
+          sandbox="allow-scripts"
+          onError={() => setStatus('error')}
+        />
+      )}
       {status === 'loading' ? (
         <View style={styles.loadingWrap} pointerEvents="none" accessibilityLiveRegion="polite">
           <ActivityIndicator color={colors.accent} />

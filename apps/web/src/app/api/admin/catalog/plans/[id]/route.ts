@@ -1,5 +1,6 @@
 import { exercises, planExercises, planWorkouts, plans } from '@gym/db';
 import { asc, eq, inArray } from 'drizzle-orm';
+import type { BatchItem } from 'drizzle-orm/batch';
 import { z } from 'zod';
 import { logAudit, requirePermission } from '@/lib/authz';
 import { getDb } from '@/lib/db';
@@ -19,14 +20,19 @@ export const runtime = 'nodejs';
  *    every existing plan_workouts row for this plan is deleted (cascades
  *    plan_exercises) and the supplied array is inserted fresh. This is a
  *    whole-structure replace, not a diff — simpler and safer to reason about
- *    than per-row CRUD for a small nested structure, at the cost of NOT being
- *    atomic (neon-http has no transactions, per project convention): a crash
- *    between the delete and the re-insert would leave the plan's workouts
- *    empty until the admin retries the save. Acceptable for a low-concurrency
- *    internal content tool; flagged here rather than silently assumed safe.
+ *    than per-row CRUD for a small nested structure.
  *    Every `exerciseId` referenced must already exist in the exercise
  *    catalog — an unknown id surfaces as 400 `unknown_exercise` (validated
- *    up front, so a partial delete+insert never happens because of a typo).
+ *    up front, so the write is never even attempted for a typo).
+ *
+ *    The whole save is ONE write. neon-http has no interactive transaction,
+ *    but `db.batch` sends its statements as a single server-side transaction:
+ *    the plan fields, the clear-out and both inserts commit together or not at
+ *    all. It used to be a loop — one round trip per workout plus one per
+ *    workout's exercises, up to ~120 for a full 12-week plan — with the delete
+ *    already committed, so a failure part-way through (Neon connection reset,
+ *    statement timeout, a serverless eviction) left the plan holding half a
+ *    programme, or none of it, until an admin noticed and saved again.
  *  - DELETE → cascades workouts + exercises (FK ON DELETE CASCADE).
  *
  * Guarded by requirePermission('catalog.manage').
@@ -148,11 +154,16 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const existing = await db.select({ id: plans.id }).from(plans).where(eq(plans.id, id)).limit(1);
   if (existing.length === 0) return json({ error: 'not_found' }, 404);
 
-  if (Object.keys(topLevel).length > 0) {
-    await db.update(plans).set(topLevel).where(eq(plans.id, id));
-  }
+  const updatePlan =
+    Object.keys(topLevel).length > 0
+      ? db.update(plans).set(topLevel).where(eq(plans.id, id))
+      : null;
 
-  if (workouts !== undefined) {
+  if (workouts === undefined) {
+    // Top-level fields only. The schema's refine guarantees at least one key
+    // was sent, so with no `workouts` there is always something to update.
+    if (updatePlan) await updatePlan;
+  } else {
     // Validate every referenced exerciseId exists BEFORE touching any rows —
     // avoids deleting the current structure only to fail on the re-insert.
     const referencedIds = [...new Set(workouts.flatMap((w) => w.exercises.map((e) => e.exerciseId)))];
@@ -168,31 +179,37 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       }
     }
 
-    await db.delete(planWorkouts).where(eq(planWorkouts.planId, id));
-
+    // Ids are minted here rather than by the database so a workout's exercises
+    // can be built in the same pass, and both inserts can go in one statement.
+    const workoutValues: (typeof planWorkouts.$inferInsert)[] = [];
+    const exerciseValues: (typeof planExercises.$inferInsert)[] = [];
     for (const w of workouts) {
       const workoutId = crypto.randomUUID();
-      await db.insert(planWorkouts).values({
-        id: workoutId,
-        planId: id,
-        week: w.week,
-        day: w.day,
-        name: w.name,
-      });
-      if (w.exercises.length > 0) {
-        await db.insert(planExercises).values(
-          w.exercises.map((e) => ({
-            id: crypto.randomUUID(),
-            planWorkoutId: workoutId,
-            exerciseId: e.exerciseId,
-            position: e.position,
-            sets: e.sets,
-            repRange: e.repRange,
-            restSec: e.restSec,
-          })),
-        );
+      workoutValues.push({ id: workoutId, planId: id, week: w.week, day: w.day, name: w.name });
+      for (const e of w.exercises) {
+        exerciseValues.push({
+          id: crypto.randomUUID(),
+          planWorkoutId: workoutId,
+          exerciseId: e.exerciseId,
+          position: e.position,
+          sets: e.sets,
+          repRange: e.repRange,
+          restSec: e.restSec,
+        });
       }
     }
+
+    // Order matters inside the transaction: clear out, then the workouts they
+    // hang off, then the exercises. An empty `workouts: []` is a deliberate
+    // "this plan has no sessions yet" and stops after the delete.
+    const statements: [BatchItem<'pg'>, ...BatchItem<'pg'>[]] = [
+      db.delete(planWorkouts).where(eq(planWorkouts.planId, id)),
+    ];
+    if (workoutValues.length > 0) statements.push(db.insert(planWorkouts).values(workoutValues));
+    if (exerciseValues.length > 0) statements.push(db.insert(planExercises).values(exerciseValues));
+    if (updatePlan) statements.push(updatePlan);
+
+    await db.batch(statements);
   }
 
   await logAudit(

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
-import { loadPhotosByGym, loadRatingAggregates, publicCrowdData, ratingFor } from './_lib';
+import { loadCoverPhotoByGym, loadRatingAggregates, publicCrowdData, ratingFor } from './_lib';
 
 export const runtime = 'nodejs';
 
@@ -174,13 +174,16 @@ export async function GET(req: Request) {
     const paged = sortInJs ? withDistance.slice(offset, offset + limit) : withDistance;
 
     const ids = paged.map((r) => r.id);
-    const [photosByGym, ratingByGym] = await Promise.all([
-      loadPhotosByGym(ids),
+    // One cover photo per gym — the card paints `photos[0]` and nothing else,
+    // so the rest of each gallery stays on the detail route where it is used.
+    const [coverByGym, ratingByGym] = await Promise.all([
+      loadCoverPhotoByGym(ids),
       loadRatingAggregates(ids),
     ]);
 
     const gymCards = paged.map((r) => {
       const crowdData = publicCrowdData(r.crowdData);
+      const cover = coverByGym.get(r.id);
       return {
         id: r.id,
         slug: r.slug,
@@ -190,7 +193,9 @@ export async function GET(req: Request) {
         lat: r.lat,
         lng: r.lng,
         distanceKm: r.distanceKm,
-        photos: (photosByGym.get(r.id) ?? []).map(({ deliveryUrl }) => ({ deliveryUrl })),
+        // Still an array (shipped clients read `photos[0]`) — it just holds the
+        // one photo the card paints, or nothing when the gym has no photo.
+        photos: cover ? [{ deliveryUrl: cover.deliveryUrl }] : [],
         ...ratingFor(ratingByGym, r.id),
         ...(crowdData ? { crowdData } : {}),
       };

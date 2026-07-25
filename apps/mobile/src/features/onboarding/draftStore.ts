@@ -68,6 +68,32 @@ function clampStep(value: unknown): number {
 }
 
 /**
+ * Step numbers moved in v2: the opening screen that collected nothing is gone,
+ * and the units question now comes before height and weight. A run saved by an
+ * older build has to be pointed at the question it was really on — otherwise a
+ * member who put the phone down mid-setup comes back either repeating an
+ * answer or, worse, past a question that never got asked.
+ *
+ * Height (old 5) and units (old 6) both land on the new units question: under
+ * the old order neither of them had been asked units yet, and that is now the
+ * question that comes first.
+ */
+const V1_TO_V2_STEP: Record<number, number> = {
+  1: 1, // intro → the name question that absorbed it
+  2: 1, // name
+  3: 2, // sex
+  4: 3, // born
+  5: 4, // height → units, which now precedes it
+  6: 4, // units
+  7: 6, // weight
+  8: 7, // goal
+  9: 8, // activity
+  10: 9, // days a week
+  11: 10, // stay on track
+  12: 11, // targets + account
+};
+
+/**
  * Rebuild a draft from whatever was on disk, field by field. The blob can come
  * from an older build (a field the wizard has since added is simply missing) or
  * from a corrupted file, and a bad number here would feed the steppers values
@@ -124,6 +150,15 @@ export const useOnboardingProgress = create<OnboardingProgressState>()(
       name: STORAGE_KEY,
       storage: createJSONStorage(() => mmkvStorage),
       partialize: (s) => ({ step: s.step, draft: s.draft }),
+      version: 2,
+      // Answers are always kept — only the step pointer is remapped.
+      migrate: (persisted, version) => {
+        if (!isRecord(persisted) || version >= 2) return persisted;
+        const raw = persisted['step'];
+        const old =
+          typeof raw === 'number' && Number.isFinite(raw) ? Math.round(raw) : 1;
+        return { ...persisted, step: V1_TO_V2_STEP[old] ?? 1 };
+      },
       merge: (persisted, current) => {
         if (!isRecord(persisted)) return current;
         return {

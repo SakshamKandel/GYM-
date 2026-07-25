@@ -22,13 +22,17 @@ import { uid } from '../../lib/id';
 import { getRepo } from '../../lib/repo';
 import {
   MEALS,
+  PORTION_GRAMS,
   buildFoodLog,
+  clampPortionGrams,
   mealLabel,
   parseDateParam,
+  parseGramsParam,
   parseMealParam,
   parseStringParam,
   portionMacros,
 } from '../../features/nutrition/logic';
+import { rememberedPortion, useFoodMemory } from '../../features/nutrition/foodMemory';
 import { FOOD_TAB_HREF } from '../../features/nutrition/nav';
 
 const styles = StyleSheet.create({
@@ -155,11 +159,24 @@ function QualityChips({ food }: { food: FoodItem }) {
 }
 
 export default function PortionScreen() {
-  const params = useLocalSearchParams<{ foodId?: string; meal?: string; date?: string }>();
+  const params = useLocalSearchParams<{
+    foodId?: string;
+    meal?: string;
+    date?: string;
+    logId?: string;
+    grams?: string;
+  }>();
   const foodId = parseStringParam(params.foodId);
   const date = parseDateParam(params.date);
+  // Correction mode: this screen is standing in for an entry that already
+  // exists, so saving replaces it instead of adding a second one.
+  const editLogId = parseStringParam(params.logId);
+  const editing = editLogId.length > 0;
+  const editGrams = parseGramsParam(params.grams);
+  const rememberPortion = useFoodMemory((s) => s.rememberPortion);
+  const openedWithMeal = parseMealParam(params.meal);
 
-  const [meal, setMeal] = useState<Meal>(parseMealParam(params.meal));
+  const [meal, setMeal] = useState<Meal>(openedWithMeal);
   const [food, setFood] = useState<FoodItem | null | undefined>(undefined);
   const [grams, setGrams] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
@@ -172,7 +189,16 @@ export default function PortionScreen() {
       .then((item) => {
         if (!active) return;
         setFood(item);
-        if (item) setGrams(Math.max(5, Math.round(item.servingGrams ?? 100)));
+        // What the member is most likely to want, in order: the portion this
+        // entry was already logged at, the portion they last used for this
+        // food, the packet's own serving, then a plain 100 g.
+        if (item) {
+          setGrams(
+            editGrams ??
+              rememberedPortion(foodId) ??
+              clampPortionGrams(item.servingGrams ?? 100),
+          );
+        }
       })
       .catch(() => {
         // A rejected lookup renders the explicit "Food not found" branch
@@ -182,7 +208,7 @@ export default function PortionScreen() {
     return () => {
       active = false;
     };
-  }, [foodId]);
+  }, [foodId, editGrams]);
 
   async function logIt(): Promise<void> {
     if (!food || grams === null || saving) return;
@@ -190,7 +216,32 @@ export default function PortionScreen() {
     setError(false);
     try {
       const repo = await getRepo();
-      await repo.logFood(buildFoodLog({ id: uid(), date, meal, food, grams }));
+      if (editing) {
+        // Corrections keep the entry's own id, so the sync queue sees one food
+        // log changing rather than one vanishing and an unrelated one
+        // appearing.
+        const corrected = buildFoodLog({ id: editLogId, date, meal, food, grams });
+        await repo.deleteFoodLog(editLogId);
+        try {
+          await repo.logFood(corrected);
+        } catch (err) {
+          // Put the entry back exactly as it was rather than let a correction
+          // lose it. The values come from the params this screen opened with,
+          // which are the entry as the member last saw it.
+          const original = buildFoodLog({
+            id: editLogId,
+            date,
+            meal: openedWithMeal,
+            food,
+            grams: editGrams ?? grams,
+          });
+          await repo.logFood(original).catch(() => undefined);
+          throw err;
+        }
+      } else {
+        await repo.logFood(buildFoodLog({ id: uid(), date, meal, food, grams }));
+      }
+      rememberPortion(food.id, grams);
       logHaptic();
       router.dismissTo(FOOD_TAB_HREF);
     } catch {
@@ -271,7 +322,7 @@ export default function PortionScreen() {
       >
         <Animated.View entering={enterUp(0)} style={styles.nameWrap}>
           <AppText variant="label" numberOfLines={1}>
-            {food.brand ? food.brand : 'Log food'}
+            {food.brand ? food.brand : editing ? 'Edit entry' : 'Log food'}
           </AppText>
           <AppText variant="display" numberOfLines={2} style={styles.name}>
             {food.name}
@@ -285,8 +336,8 @@ export default function PortionScreen() {
               value={grams}
               onChange={setGrams}
               step={5}
-              min={5}
-              max={2000}
+              min={PORTION_GRAMS.min}
+              max={PORTION_GRAMS.max}
               label="Grams"
               big
             />
@@ -376,7 +427,7 @@ export default function PortionScreen() {
           </AppText>
         ) : null}
         <Button
-          label={`Log to ${mealLabel(meal).toLowerCase()}`}
+          label={editing ? 'Save changes' : `Log to ${mealLabel(meal).toLowerCase()}`}
           onPress={() => void logIt()}
           loading={saving}
         />

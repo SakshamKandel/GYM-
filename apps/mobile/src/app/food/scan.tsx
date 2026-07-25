@@ -19,6 +19,11 @@ import { useBottomClearance } from '../../lib/systemBars';
 import { lookupBarcode } from '../../lib/api/openFoodFacts';
 import { getRepo } from '../../lib/repo';
 import { parseDateParam, parseMealParam } from '../../features/nutrition/logic';
+import {
+  barcodeMissedBefore,
+  rememberedBarcodeFood,
+  useFoodMemory,
+} from '../../features/nutrition/foodMemory';
 import { customHref, portionHref } from '../../features/nutrition/nav';
 
 /**
@@ -33,7 +38,8 @@ import { customHref, portionHref } from '../../features/nutrition/nav';
 type ScanPhase =
   | { kind: 'scanning' }
   | { kind: 'busy' }
-  | { kind: 'notFound' }
+  /** `seenBefore` = this exact barcode has already come up empty on this device. */
+  | { kind: 'notFound'; barcode: string; seenBefore: boolean }
   | { kind: 'error' };
 
 // Sanctioned rgba: photo scrim over the live camera feed (brief §2).
@@ -164,6 +170,7 @@ export default function ScanScreen() {
   // useBottomClearance falls back to the 48dp system bar so the result sheet's
   // bottom button stays tappable.
   const bottomClearance = useBottomClearance();
+  const rememberBarcodeMiss = useFoodMemory((s) => s.rememberBarcodeMiss);
 
   const [permission, requestPermission] = useCameraPermissions();
   const [phase, setPhase] = useState<ScanPhase>({ kind: 'scanning' });
@@ -203,14 +210,29 @@ export default function ScanScreen() {
         router.replace(portionHref(local.id, meal, date));
         return;
       }
+      // Nothing filed under the barcode itself, but this device remembers the
+      // food the member built for it last time it came up empty. Reuse that
+      // instead of sending them round the create-a-food loop again.
+      const rememberedId = rememberedBarcodeFood(code);
+      if (rememberedId) {
+        const remembered = await repo.getFood(rememberedId);
+        if (remembered) {
+          router.replace(portionHref(remembered.id, meal, date));
+          return;
+        }
+      }
       const remote = await lookupBarcode(code);
       if (remote) {
         await repo.saveFood(remote);
         router.replace(portionHref(remote.id, meal, date));
         return;
       }
+      // Remember the miss so a repeat scan can say so plainly, and so the food
+      // created next gets filed under this barcode.
+      const seenBefore = barcodeMissedBefore(code);
+      rememberBarcodeMiss(code);
       warnHaptic();
-      setPhase({ kind: 'notFound' });
+      setPhase({ kind: 'notFound', barcode: code, seenBefore });
     } catch {
       warnHaptic();
       setPhase({ kind: 'error' });
@@ -341,14 +363,17 @@ export default function ScanScreen() {
                 : 'Couldn’t look up that barcode'}
             </AppText>
             <AppText variant="body" color={colors.textDim} center>
-              {phase.kind === 'notFound'
-                ? 'You can create it once and reuse it forever'
-                : 'Check your connection and try again'}
+              {phase.kind !== 'notFound'
+                ? 'Check your connection and try again'
+                : phase.seenBefore
+                  ? 'This one is still missing from the food databases. Create it once and every scan after this finds it'
+                  : 'Create it once and every scan after this finds it'}
             </AppText>
             {phase.kind === 'notFound' ? (
               <Button
                 label="Create custom food"
-                onPress={() => router.replace(customHref(meal, date))}
+                // The barcode rides along so the new food is filed under it.
+                onPress={() => router.replace(customHref(meal, date, phase.barcode))}
                 style={styles.sheetButton}
               />
             ) : null}

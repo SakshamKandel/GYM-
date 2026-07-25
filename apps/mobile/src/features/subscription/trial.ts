@@ -22,6 +22,8 @@ export function trialErrorLine(code: RewardsErrorCode): string {
       return "You've already used your trial for this membership.";
     case 'not_an_upgrade':
       return 'Your current membership already includes this.';
+    case 'subscription_active':
+      return 'Your membership is already active, so there is no trial to start.';
     case 'invalid':
       return 'Something went wrong. Try again.';
     case 'unauthorized':

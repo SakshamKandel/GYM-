@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
+import { optimizedImageUrl } from '@/lib/video/cloudinaryProvider';
 
 export const runtime = 'nodejs';
 
@@ -13,6 +14,17 @@ export const runtime = 'nodejs';
  * narrowed by goal tag, diet type, and a specific delivery slot's availability.
  * Only ACTIVE, non-deleted meals of an ACTIVE partner are ever returned.
  */
+
+/**
+ * Widest a meal photo is ever painted: the 88dp menu thumbnail (MealThumb on
+ * apps/mobile .../meals/[partnerId].tsx), so ~264px on a 3x screen. Partner
+ * uploads are phone-camera originals, and a twenty-meal menu shipped every one
+ * of them at full resolution into that thumbnail. `optimizedImageUrl` caps the
+ * delivered width and negotiates format/quality on the way out — the stored URL
+ * is untouched, and a signed/foreign/already-transformed URL is passed through
+ * exactly as it is.
+ */
+const MEAL_PHOTO_MAX_WIDTH = 320;
 
 const querySchema = z.object({
   partnerId: z.string().min(1),
@@ -118,7 +130,11 @@ export async function GET(req: Request) {
 
   return json(
     {
-      meals: result.map((m) => ({ ...m, soldOut: soldOutIds.has(m.id) })),
+      meals: result.map((m) => ({
+        ...m,
+        imageUrl: m.imageUrl === null ? null : optimizedImageUrl(m.imageUrl, { maxWidth: MEAL_PHOTO_MAX_WIDTH }),
+        soldOut: soldOutIds.has(m.id),
+      })),
       acceptingOrders: partner.acceptingOrders,
     },
     200,

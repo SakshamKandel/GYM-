@@ -8,8 +8,20 @@ import { getDb } from '@/lib/db';
 import { json, preflight } from '@/lib/http';
 import { notify } from '@/lib/notify';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { optimizedImageUrl } from '@/lib/video/cloudinaryProvider';
 
 export const runtime = 'nodejs';
+
+/**
+ * Widest the assigned coach's portrait is ever painted: the 48dp Home entry
+ * avatar (the chat header is 40dp), so ~144px on a 3x screen. Coaches upload
+ * phone-camera originals, so without this the Home card downloads a multi-
+ * megabyte photo into a thumbnail on every cold start. `optimizedImageUrl` caps
+ * the delivered width and negotiates format/quality on the way out; the stored
+ * URL is untouched, and a signed/foreign/already-transformed URL passes through
+ * exactly as it is.
+ */
+const COACH_AVATAR_MAX_WIDTH = 192;
 
 /**
  * The signed-in member's mentorship state in one call:
@@ -73,12 +85,16 @@ export async function GET(req: Request) {
   ]);
 
   const assignment = assignments[0];
+  const storedAvatarUrl = assignment?.avatarUrl ?? null;
   const coach = assignment
     ? {
         id: assignment.coachId,
         displayName: assignment.displayName || 'Coach',
         headline: assignment.headline ?? '',
-        avatarUrl: assignment.avatarUrl ?? null,
+        avatarUrl:
+          storedAvatarUrl === null
+            ? null
+            : optimizedImageUrl(storedAvatarUrl, { maxWidth: COACH_AVATAR_MAX_WIDTH }),
       }
     : null;
 

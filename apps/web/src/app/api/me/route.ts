@@ -48,12 +48,25 @@ import {
 import { logAudit } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
 const deleteBodySchema = z
   .object({ confirmation: z.string().max(20) })
   .strict();
+
+/**
+ * Erasure is the most expensive read/write in the app: it counts every
+ * commerce relation the account touches and rewrites its audit history. A
+ * member only ever needs a couple of attempts (the image-cleanup failure path
+ * is retry-safe), so this leaves plenty of room for an honest retry while
+ * stopping a loop from replaying that work. Counted in the shared store so the
+ * ceiling holds across serverless instances; with no store configured it falls
+ * back to the in-memory limiter.
+ */
+const DELETE_LIMIT = 10;
+const DELETE_WINDOW_MS = 60 * 60 * 1000;
 
 export function OPTIONS() {
   return preflight();
@@ -89,6 +102,15 @@ export async function DELETE(req: Request) {
   if (!token) return json({ error: 'unauthorized' }, 401);
   const user = await userForToken(token);
   if (!user) return json({ error: 'unauthorized' }, 401);
+
+  const limited = await rateLimitShared({
+    route: 'me/delete',
+    limit: DELETE_LIMIT,
+    windowMs: DELETE_WINDOW_MS,
+    accountId: user.id,
+    ip: clientIp(req),
+  });
+  if (limited) return limited;
 
   const parsedBody = deleteBodySchema.safeParse(await readJson(req));
   if (

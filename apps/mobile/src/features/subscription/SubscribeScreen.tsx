@@ -23,7 +23,7 @@ import {
   enterUp,
 } from '../../components/ui';
 import { PayeeDetailsCard } from '../../components/payments/PayeeDetailsCard';
-import { supportsRail, usePayee, type Payee, type PayeeRail } from '../../lib/api/payee';
+import { supportsRail, type Payee, type PayeeRail } from '../../lib/api/payee';
 import { successHaptic, warnHaptic } from '../../lib/haptics';
 import { syncProfileNow } from '../../lib/profileSync';
 import { tierName, useEffectiveTier } from '../../lib/tier';
@@ -95,6 +95,14 @@ import { StorePurchaseSheet, StoreRestoreCard } from './StorePurchase';
  * that confirmation has not landed yet. The receipt rail below is untouched and
  * keeps working exactly as before, including alongside the stores.
  *
+ * One chosen plan (2026-07-25): the tier a member taps "Choose" on is the tier
+ * the payment form below submits. The form used to keep its own selection,
+ * always starting on Silver, so a member who chose Elite and then paid the
+ * amount the form showed bought the cheapest membership instead. The form's
+ * plan chips stay tappable — the tap upstairs only sets the starting point —
+ * and the plan, the duration and the amount are all named on the total block
+ * directly above the Submit button.
+ *
  * Where the money goes (2026-07-25): the manual rail is offered only for
  * methods the operator has actually published a destination for, and the
  * destination is shown right above the receipt uploader. This screen used to
@@ -131,9 +139,18 @@ export function SubscribeScreen() {
   // really be bought right now, so nothing below turns into a dead button.
   const store = useStoreBilling(catalog);
   const [storeTier, setStoreTier] = useState<Tier | null>(null);
+  // The tier the member picked upstairs, carried into the manual payment form
+  // below so the plan they chose is the plan they pay for. Silver is only the
+  // starting point before any choice is made.
+  const [payTier, setPayTier] = useState<PayableTier>('silver');
   // Where members send the money. Null with `payeeLoading` false means nothing
   // is published, and the manual rail is not offered at all.
-  const { payee, loading: payeeLoading } = usePayee(token, 'membership');
+  //
+  // It rides along on the catalog this screen already waits for (see
+  // `catalogSchema` in lib/api/client), so it is read from there instead of
+  // asking GET /api/subscription/catalog a second time for the same field.
+  const payee = catalog?.payee ?? null;
+  const payeeLoading = status === 'signedIn' && Boolean(token) && catalog === null;
   const methods = payableMethods(catalog?.region ?? null, payee);
 
   const fetchTrials = useCallback(async () => {
@@ -229,6 +246,10 @@ export function SubscribeScreen() {
       return;
     }
 
+    // A paid pick. Whatever rail ends up taking the money, this is the plan the
+    // member asked for, so the payment form below starts on it.
+    setPayTier(tier);
+
     // The stores can sell this. Take the tap there: the payment happens in the
     // App Store or Google Play, and the membership is switched on by the server
     // when the store confirms it (never by this screen).
@@ -250,9 +271,19 @@ export function SubscribeScreen() {
     // instead of optimistically applying then reverting on the rejection. The
     // same message is already on screen above the cards — this is the backstop
     // for a card that was tapped before the catalog changed underneath it.
-    if (purchaseBlock !== null) {
+    // Same function, same inputs, so the two can never disagree; the tap-time
+    // copy just names the plan the member picked.
+    const tapBlock = purchaseBlockMessage(
+      status === 'signedIn' && Boolean(token),
+      catalog,
+      methods,
+      payeeLoading,
+      store,
+      tier,
+    );
+    if (tapBlock !== null) {
       warnHaptic();
-      setPlanError(purchaseBlock);
+      setPlanError(tapBlock);
       return;
     }
 
@@ -569,6 +600,8 @@ export function SubscribeScreen() {
               catalog={catalog}
               payee={payee}
               methods={methods}
+              tier={payTier}
+              onTierChange={setPayTier}
               onSubmitted={fetchPaymentRequests}
             />
           ) : null}
@@ -597,6 +630,8 @@ function purchaseBlockMessage(
   methods: PaymentMethodOption[],
   payeeLoading: boolean,
   store: StoreBilling,
+  /** The tier just tapped, when there is one — only changes the wording. */
+  tier?: Tier,
 ): string | null {
   if (!signedIn) return 'Sign in to view live pricing and choose a membership.';
   // No validated catalog for this account (offline, or nothing published) —
@@ -620,7 +655,7 @@ function purchaseBlockMessage(
   if (methods.length === 0) {
     return 'You can’t buy a membership in the app just yet. Please check back soon.';
   }
-  return `Pay for this membership with ${methodPhrase(methods)} below, then upload your receipt for review.`;
+  return `Pay for ${tier ? tierName(tier) : 'this membership'} with ${methodPhrase(methods)} below, then upload your receipt for review.`;
 }
 
 /** Heading for the manual payment section, named after the live rails. */
@@ -734,6 +769,12 @@ function PromoCodeCard({
 
 const PAYABLE_TIERS: PayableTier[] = ['silver', 'gold', 'elite'];
 const MONTH_OPTIONS: (1 | 3 | 12)[] = [1, 3, 12];
+
+/** "1 month" / "3 months" — one wording for the duration chip and for the
+ * plan line the member confirms above the Submit button. */
+function monthsLabel(months: number): string {
+  return months === 1 ? '1 month' : `${months} months`;
+}
 /** Every method the server accepts, with the label used wherever one is shown
  * (including history rows for a method no longer offered in this region). */
 const PAYMENT_METHOD_OPTIONS: { value: PaymentMethod; label: string }[] = [
@@ -890,6 +931,8 @@ function ManualPaymentSection({
   catalog,
   payee,
   methods,
+  tier,
+  onTierChange,
   onSubmitted,
 }: {
   token: string;
@@ -898,9 +941,12 @@ function ManualPaymentSection({
   payee: Payee;
   /** Non-empty: only rails with a published destination reach this form. */
   methods: PaymentMethodOption[];
+  /** The plan being paid for. Owned by the screen so a "Choose" tap on a tier
+   * card and this form can never point at two different memberships. */
+  tier: PayableTier;
+  onTierChange: (tier: PayableTier) => void;
   onSubmitted: () => void;
 }) {
-  const [tier, setTier] = useState<PayableTier>('silver');
   const [months, setMonths] = useState<1 | 3 | 12>(1);
   const [method, setMethod] = useState<PayeeRail>(() => methods[0]?.value ?? 'bank');
   const [note, setNote] = useState('');
@@ -910,9 +956,18 @@ function ManualPaymentSection({
     null,
   );
 
-  const catalogTier = catalog.tiers.find((t) => t.tier === tier);
+  // Only plans this region actually publishes a price for can be paid for
+  // here: without a catalog entry the total below would read as nothing while
+  // the server charged the real amount. Same derive-don't-store rule as
+  // `activeMethod` below, so a catalog refresh can never strand the form on a
+  // plan it can no longer price.
+  const payableTiers = PAYABLE_TIERS.filter((t) => catalog.tiers.some((c) => c.tier === t));
+  const activeTier: PayableTier = payableTiers.includes(tier) ? tier : (payableTiers[0] ?? tier);
+  const catalogTier = catalog.tiers.find((t) => t.tier === activeTier);
   const unitMinor = catalogTier ? (catalogTier.discountedMinor ?? catalogTier.amountMinor) : 0;
   const totalMinor = unitMinor * months;
+  const totalLabel = formatMoney(totalMinor, catalog.currency);
+  const planLine = `${tierName(activeTier)} · ${monthsLabel(months)}`;
 
   // A catalog refresh can move the account between regions (the server persists
   // the country it resolves), and an operator can retire a wallet at any time.
@@ -958,7 +1013,9 @@ function ManualPaymentSection({
         });
         await submitPaymentRequest(
           {
-            tier,
+            // The plan on screen, always: `activeTier` is what the total, the
+            // payee card and the button above were all computed from.
+            tier: activeTier,
             months,
             method: activeMethod,
             receiptUrl: reservation.uid,
@@ -988,12 +1045,12 @@ function ManualPaymentSection({
     <View style={styles.paymentPanel}>
       <AppText variant="label">Plan</AppText>
       <View style={styles.chipRow}>
-        {PAYABLE_TIERS.map((t) => (
+        {payableTiers.map((t) => (
           <Chip
             key={t}
             label={tierName(t)}
-            selected={tier === t}
-            onPress={() => !submitting && setTier(t)}
+            selected={activeTier === t}
+            onPress={() => !submitting && onTierChange(t)}
           />
         ))}
       </View>
@@ -1003,7 +1060,7 @@ function ManualPaymentSection({
         {MONTH_OPTIONS.map((m) => (
           <Chip
             key={m}
-            label={m === 1 ? '1 month' : `${m} months`}
+            label={monthsLabel(m)}
             selected={months === m}
             onPress={() => !submitting && setMonths(m)}
           />
@@ -1022,20 +1079,23 @@ function ManualPaymentSection({
         ))}
       </View>
 
+      {/* What is being bought and what it costs, in one block, right where the
+          member is about to send money. The plan name used to live only in the
+          chips above, so an amount could be read without ever seeing which
+          membership it belonged to. */}
       <View style={styles.totalRow}>
-        <AppText variant="caption" color={colors.textDim}>
-          Total due
-        </AppText>
-        <AppText variant="title">{formatMoney(totalMinor, catalog.currency)}</AppText>
+        <View style={styles.totalMain}>
+          <AppText variant="caption" color={colors.textDim}>
+            Total due
+          </AppText>
+          <AppText variant="bodyBold">{planLine}</AppText>
+        </View>
+        <AppText variant="title">{totalLabel}</AppText>
       </View>
 
       {/* The destination, directly above the receipt step that asks the member
           to prove they sent it. */}
-      <PayeeDetailsCard
-        payee={payee}
-        rails={[activeMethod]}
-        amountLabel={formatMoney(totalMinor, catalog.currency)}
-      />
+      <PayeeDetailsCard payee={payee} rails={[activeMethod]} amountLabel={totalLabel} />
 
       <AppTextInput
         value={note}
@@ -1091,7 +1151,16 @@ function ManualPaymentSection({
       ) : null}
 
       <Button
-        label={submitting ? 'Submitting…' : 'Submit payment'}
+        label={
+          submitting
+            ? 'Submitting…'
+            : totalMinor > 0
+              ? `Submit payment · ${totalLabel}`
+              : 'Submit payment'
+        }
+        accessibilityLabel={
+          submitting ? 'Submitting your payment' : `Submit payment of ${totalLabel} for ${planLine}`
+        }
         loading={submitting}
         disabled={submitting || !asset}
         onPress={submit}
@@ -1178,11 +1247,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: spacing.md,
     backgroundColor: colors.surfaceRaised,
     borderRadius: radius.md,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
+  totalMain: { flex: 1, gap: 2 },
   fileRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   fileName: { flex: 1 },
   receiptPreview: { gap: spacing.sm },

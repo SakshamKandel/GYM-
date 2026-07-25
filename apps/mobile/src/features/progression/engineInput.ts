@@ -64,12 +64,45 @@ export function progressionInputFromSets(
   };
 }
 
+/**
+ * History read shared by every exercise in ONE open workout.
+ *
+ * The suggestion for a single exercise needs `HISTORY_DAYS` of that exercise's
+ * sets, but the repo can only hand back the whole window, and the logger asks
+ * again every time the member moves to another exercise — so an hour in the
+ * gym re-read tens of thousands of rows to shape a few dozen.
+ *
+ * `getSetsBetween` only ever returns sets from FINISHED workouts, so while a
+ * workout is open its answer cannot change. Keying the window on the open
+ * workout's id (plus the dates it was read for, so a session running past
+ * midnight re-reads) makes every switch after the first one free, with no
+ * chance of serving one member's history to another: workout ids are unique
+ * per account, so a different account simply misses the cache.
+ */
+let historyCache: { key: string; sets: AnalyticsSet[] } | null = null;
+
+/** Drop the cached window. Called on sign-out; also safe to call any time. */
+export function clearProgressionHistoryCache(): void {
+  historyCache = null;
+}
+
 /** Fetch the last HISTORY_DAYS of finished-workout history and build the input. */
 export async function buildProgressionInput(
   exercise: EngineExercise,
 ): Promise<ProgressionInput> {
   const repo = await getRepo();
   const to = todayIso();
-  const sets = await repo.getSetsBetween(addDays(to, -HISTORY_DAYS), to);
-  return progressionInputFromSets(sets, exercise);
+  const from = addDays(to, -HISTORY_DAYS);
+  const activeWorkoutId = (await repo.getActiveWorkout())?.id ?? null;
+  // No workout open (a cold suggestion, the post-sync submitter): nothing
+  // stable to key on, so read fresh and keep nothing.
+  if (activeWorkoutId === null) {
+    historyCache = null;
+    return progressionInputFromSets(await repo.getSetsBetween(from, to), exercise);
+  }
+  const key = `${activeWorkoutId}|${from}|${to}`;
+  if (historyCache === null || historyCache.key !== key) {
+    historyCache = { key, sets: await repo.getSetsBetween(from, to) };
+  }
+  return progressionInputFromSets(historyCache.sets, exercise);
 }

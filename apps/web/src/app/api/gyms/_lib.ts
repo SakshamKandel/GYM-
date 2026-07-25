@@ -88,9 +88,15 @@ export function ratingFor(agg: Map<string, GymRatingAgg>, gymId: string): GymRat
  */
 const GYM_PHOTO_MAX_WIDTH = 1280;
 
-/** Cover photos per gym id, sorted by `sortOrder` (ascending). Delivery URLs
- * are size-capped and format/quality negotiated on the way out
- * (`optimizedImageUrl`); a signed or foreign URL is passed through untouched. */
+/** Cover photos per gym id, sorted by `sortOrder` (ascending), then by upload
+ * time so two photos sharing a sort order come back in a stable order rather
+ * than whatever the scan happened to produce. Delivery URLs are size-capped and
+ * format/quality negotiated on the way out (`optimizedImageUrl`); a signed or
+ * foreign URL is passed through untouched.
+ *
+ * This is the WHOLE gallery — it belongs to the detail screen. A list card only
+ * ever paints the first photo, so list surfaces should call
+ * {@link loadCoverPhotoByGym} instead. */
 export async function loadPhotosByGym(
   gymIds: string[],
   maxWidth: number = GYM_PHOTO_MAX_WIDTH,
@@ -102,11 +108,46 @@ export async function loadPhotosByGym(
     .select({ id: gymPhotos.id, gymId: gymPhotos.gymId, deliveryUrl: gymPhotos.deliveryUrl, sortOrder: gymPhotos.sortOrder })
     .from(gymPhotos)
     .where(inArray(gymPhotos.gymId, gymIds))
-    .orderBy(asc(gymPhotos.sortOrder));
+    .orderBy(asc(gymPhotos.sortOrder), asc(gymPhotos.createdAt));
   for (const p of rows) {
     const list = out.get(p.gymId) ?? [];
     list.push({ id: p.id, deliveryUrl: optimizedImageUrl(p.deliveryUrl, { maxWidth }) });
     out.set(p.gymId, list);
+  }
+  return out;
+}
+
+/**
+ * The ONE photo a list card paints: the lowest `sortOrder` per gym (upload time
+ * breaks a tie, same order the gallery uses, so the card shows exactly what the
+ * detail screen shows first).
+ *
+ * The list used to read the FULL gallery for every gym on the page and hand all
+ * of it to a card that renders `photos[0]` — a page of 50 gyms carried hundreds
+ * of delivery URLs nobody painted. `distinct on` does the picking in Postgres,
+ * so one row per gym is read and one row per gym crosses the wire. The
+ * gym's own detail route still returns the complete gallery.
+ */
+export async function loadCoverPhotoByGym(
+  gymIds: string[],
+  maxWidth: number = GYM_PHOTO_MAX_WIDTH,
+): Promise<Map<string, { id: string; deliveryUrl: string }>> {
+  const out = new Map<string, { id: string; deliveryUrl: string }>();
+  if (gymIds.length === 0) return out;
+
+  const rows = await getDb()
+    .selectDistinctOn([gymPhotos.gymId], {
+      id: gymPhotos.id,
+      gymId: gymPhotos.gymId,
+      deliveryUrl: gymPhotos.deliveryUrl,
+    })
+    .from(gymPhotos)
+    .where(inArray(gymPhotos.gymId, gymIds))
+    // `distinct on` keeps the FIRST row per gym in this order, so the leading
+    // key must be the gym id; the rest is the gallery's own ordering.
+    .orderBy(asc(gymPhotos.gymId), asc(gymPhotos.sortOrder), asc(gymPhotos.createdAt));
+  for (const p of rows) {
+    out.set(p.gymId, { id: p.id, deliveryUrl: optimizedImageUrl(p.deliveryUrl, { maxWidth }) });
   }
   return out;
 }

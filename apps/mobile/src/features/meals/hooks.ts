@@ -236,7 +236,8 @@ export function useMealAddresses(token: string | null): ListState<MealAddress> {
  *  - loading : inputs changed, a fresh quote is in flight (the last good quote
  *              may still be shown, but it's stale — placing must be blocked)
  *  - ready   : `quote` matches the current inputs (safe to place)
- *  - error   : the last fetch failed (blocked — the member retries by editing)
+ *  - error   : the last fetch failed (blocked — the checkout offers `retry`,
+ *              which re-runs the SAME inputs; editing anything re-quotes too)
  *
  * The server re-prices again at create, so a stale quote can never dictate an
  * amount; this is purely the fee-breakdown preview.
@@ -258,11 +259,19 @@ export function useMealQuote(
   /** The failed quote's error body, minus `error` (e.g. `{mealId,mealName}`
    * on `meal_unavailable`). */
   errorDetails: Record<string, unknown> | null;
+  /** Re-run the quote with the inputs unchanged. A failed quote used to leave
+   * the member with a blocked "Place order" and nothing to press — the only
+   * way back was to edit a field they may not have wanted to change. */
+  retry: () => void;
 } {
   const [quote, setQuote] = useState<MealQuote | null>(null);
   const [status, setStatus] = useState<MealQuoteStatus>('idle');
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<Record<string, unknown> | null>(null);
+  // Bumped by `retry` — part of the effect's dependencies, so the same inputs
+  // are fetched again (the `key`/`scope` pair deliberately does not change).
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
   // Stringified inputs — a stable dependency that only changes when the cart,
   // address, or slot actually change (the object identity changes every render).
   const key = token && input ? JSON.stringify(input) : null;
@@ -304,7 +313,7 @@ export function useMealQuote(
     }, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, key, scope]);
+  }, [token, key, scope, attempt]);
 
   if (stateScope !== scope) {
     return {
@@ -312,9 +321,10 @@ export function useMealQuote(
       status: scope === null ? 'idle' : 'loading',
       errorCode: null,
       errorDetails: null,
+      retry,
     };
   }
-  return { quote, status, errorCode, errorDetails };
+  return { quote, status, errorCode, errorDetails, retry };
 }
 
 /**

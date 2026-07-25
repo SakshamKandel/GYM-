@@ -84,11 +84,16 @@ export default function RootLayout() {
     void SplashScreen.hideAsync();
   }, []);
 
-  // Re-validate the server session whenever the app returns to the foreground.
+  // Catch up on anything that moved while the app was away.
+  //
+  // The session re-validation deliberately is NOT here: features/realtime/
+  // pushRefresh.ts installs its own 'active' listener that already calls
+  // useAuth.refresh() (debounced), so doing it here too meant every single
+  // foreground fired two identical GET /api/me + staff probes. One listener
+  // owns that job now; this one keeps the local sync and the icon badge.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
-        void useAuth.getState().refresh();
         void syncMemberData();
         // Notifications may have arrived (and been read elsewhere) while we
         // were backgrounded — keep the app-icon badge honest.

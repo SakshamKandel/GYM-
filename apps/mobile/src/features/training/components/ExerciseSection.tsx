@@ -1,3 +1,4 @@
+import { useCallback, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +12,12 @@ import { SetRow } from './SetRow';
 /**
  * One exercise block in the logger: title + equipment caption + set rows.
  * Tapping the header makes it the current exercise (the editor follows).
+ *
+ * The logger screen re-renders every second (elapsed clock + rest timer), and
+ * the callbacks it hands down are fresh arrows each time. They are funnelled
+ * through latest-value refs here so each `SetRow` receives ONE identity for
+ * the life of the block and its memo actually holds — otherwise every row in
+ * the workout would re-render on every tick.
  */
 
 interface Props {
@@ -69,6 +76,20 @@ export function ExerciseSection({
   onEditSet,
   onSwap,
 }: Props) {
+  // Latest-value refs: both callbacks are plain dispatchers (clear the flash /
+  // open the edit sheet), so calling the freshest one is always correct.
+  const flashDoneRef = useRef(onFlashDone);
+  flashDoneRef.current = onFlashDone;
+  const editSetRef = useRef(onEditSet);
+  editSetRef.current = onEditSet;
+
+  const handleFlashDone = useCallback(() => {
+    flashDoneRef.current();
+  }, []);
+  const handleEditSet = useCallback((set: SetLog) => {
+    editSetRef.current?.(set);
+  }, []);
+
   const loggedCount = exercise.loggedSets.length;
   const rowCount = Math.max(exercise.targetSets, loggedCount + (isCurrent ? 1 : 0));
   const currentSetNo = loggedCount + 1;
@@ -122,9 +143,9 @@ export function ExerciseSection({
                 ghost={ghostTarget(exercise.lastSets, setNo)}
                 isCurrent={isCurrent && logged === null && setNo === currentSetNo}
                 flash={logged !== null && flashSetId === logged.id}
-                onFlashDone={onFlashDone}
+                onFlashDone={handleFlashDone}
                 unitPref={unitPref}
-                onEdit={onEditSet && logged ? () => onEditSet(logged) : null}
+                onEdit={onEditSet ? handleEditSet : null}
               />
             </Animated.View>
           );

@@ -16,17 +16,29 @@ export const metadata: Metadata = { title: 'Exercises & plans' };
 export const dynamic = 'force-dynamic';
 
 /**
- * Admin content — exercise/plan catalog CRUD (gap build P2-16). Mirrors the
- * projections GET /api/admin/catalog/exercises and .../plans return so the
- * initial render needs no client fetch; every mutation (create/edit/delete,
- * and the plan workout/exercise structure editor) goes through the guarded
- * /api/admin/catalog/* routes from the client component.
+ * Admin content — exercise/plan catalog CRUD (gap build P2-16). The table's
+ * own data is rendered here, so the list needs no client fetch; the edit form
+ * asks ./exercise-detail for the long fields of the one row it opens, and
+ * every mutation (create/edit/delete, and the plan workout/exercise structure
+ * editor) goes through the guarded /api/admin/catalog/* routes from the client
+ * component.
  *
  * Distinct from `admin/content` (WP6's plan-VIDEO library) — this page
  * manages the exercises/plans/plan_workouts/plan_exercises tables published
  * to signed-in members through GET /api/me/training-catalog.
  */
 
+/**
+ * The exercise list, in the SAME order the table has always shown (name, A-Z),
+ * but only the columns the table actually renders.
+ *
+ * The long array fields (secondary muscles, instruction text, image urls) used
+ * to travel with every row, which put the whole library's instruction text into
+ * the page payload for a screen that never displays it. The edit form loads
+ * them for the one row being edited instead, through
+ * `./exercise-detail`. Search and sorting are untouched: every row is still
+ * here, so the client-side filter still covers the entire library.
+ */
 async function loadExercises(): Promise<ExerciseRow[]> {
   const db = getDb();
   const rows = await db
@@ -34,12 +46,9 @@ async function loadExercises(): Promise<ExerciseRow[]> {
       id: exercises.id,
       name: exercises.name,
       muscleGroup: exercises.muscleGroup,
-      secondaryMuscles: exercises.secondaryMuscles,
       equipment: exercises.equipment,
       level: exercises.level,
       category: exercises.category,
-      instructions: exercises.instructions,
-      imageUrls: exercises.imageUrls,
     })
     .from(exercises)
     .orderBy(asc(exercises.name));

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   cancelAnimation,
@@ -25,6 +25,14 @@ import { formatWeightNumber } from '../logic';
  * - future → dim target only
  * PR moment: one-time red fill flash (opacity 0→1→0, ~450ms, no loop) and
  * the PR tag scale-settles 1.15→1.0. A stamp, not confetti.
+ *
+ * Memoized on purpose. The logger screen re-renders once or twice a second for
+ * the whole workout (the elapsed clock ticks every second and the rest timer
+ * pushes a new remaining-seconds value on top of it), and every one of those
+ * renders used to walk every set row of every exercise — each row carrying two
+ * shared values and two animated styles. With the props below kept
+ * referentially stable by ExerciseSection, a row now re-renders only when its
+ * own numbers, its current/flash state, or the unit preference change.
  */
 
 interface Props {
@@ -36,8 +44,14 @@ interface Props {
   flash: boolean;
   onFlashDone: () => void;
   unitPref: UnitPref;
-  /** Long-press a DONE row to open its edit/delete sheet. No-op when null/logged is null. */
-  onEdit?: (() => void) | null;
+  /**
+   * Long-press a DONE row to open its edit/delete sheet, called with this
+   * row's logged set. Null (or a null `logged`) makes the row inert.
+   *
+   * It takes the set rather than closing over it so the caller can hand every
+   * row ONE stable callback — a per-row arrow would defeat the memo above.
+   */
+  onEdit?: ((set: SetLog) => void) | null;
 }
 
 const styles = StyleSheet.create({
@@ -115,7 +129,7 @@ function fmtSet(s: SetLog, unitPref: UnitPref): string {
   return `${formatWeightNumber(displayWeight(s.weightKg, unitPref))} × ${s.reps}`;
 }
 
-export function SetRow({
+function SetRowInner({
   setNo,
   repRange,
   logged,
@@ -156,11 +170,14 @@ export function SetRow({
 
   const targetText = repRange ? `${repRange} reps` : isCurrent || logged ? '' : 'open set';
   const editable = logged !== null && onEdit != null;
+  const handleLongPress = (): void => {
+    if (logged !== null && onEdit != null) onEdit(logged);
+  };
 
   return (
     <Pressable
       disabled={!editable}
-      onLongPress={editable ? onEdit ?? undefined : undefined}
+      onLongPress={editable ? handleLongPress : undefined}
       delayLongPress={350}
       accessibilityRole={editable ? 'button' : undefined}
       accessibilityLabel={
@@ -218,3 +235,5 @@ export function SetRow({
     </Pressable>
   );
 }
+
+export const SetRow = memo(SetRowInner);

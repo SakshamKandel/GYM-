@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
 import {
@@ -59,6 +59,9 @@ const GOAL_FILTERS: MealGoalTag[] = ['cutting', 'bulking', 'balanced'];
  * actually showing, so an empty cart doesn't carry the extra whitespace.
  */
 const CART_BAR_SPACE = FLOATING_TAB_SPACE + 96;
+
+/** How often the open menu re-checks the kitchen for price/availability edits. */
+const MENU_POLL_MS = 30_000;
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
@@ -437,7 +440,6 @@ export default function PartnerMenuScreen() {
   // while a member is browsing was invisible until they navigated away and
   // back. A quiet background poll catches it and surfaces a dismissible
   // "menu updated" toast the moment prices/availability actually change.
-  const MENU_POLL_MS = 30_000;
   const prevSignatureRef = useRef<string | null>(null);
   const [menuUpdated, setMenuUpdated] = useState(false);
   // A filter change (window/diet/goal) refetches a DIFFERENT meal set, so the
@@ -459,11 +461,42 @@ export default function PartnerMenuScreen() {
     }
     prevSignatureRef.current = signature;
   }, [meals]);
-  useEffect(() => {
-    if (status !== 'signedIn' || !partnerId) return;
-    const id = setInterval(reload, MENU_POLL_MS);
-    return () => clearInterval(id);
-  }, [status, partnerId, reload]);
+  // The poll only runs while this menu is the screen the member is looking at:
+  // on focus, and only while the app is in the foreground. It used to keep
+  // ticking behind pushed screens and while the app was backgrounded, and every
+  // tick is a forced round trip (an explicit reload deliberately bypasses the
+  // menu's own staleness window). Coming back to the app refreshes once
+  // straight away, so a long absence never leaves a stale price on screen.
+  useFocusEffect(
+    useCallback(() => {
+      if (status !== 'signedIn' || !partnerId) return;
+      let timer: ReturnType<typeof setInterval> | null = null;
+      const startTimer = () => {
+        if (timer === null) timer = setInterval(reload, MENU_POLL_MS);
+      };
+      const stopTimer = () => {
+        if (timer !== null) {
+          clearInterval(timer);
+          timer = null;
+        }
+      };
+
+      startTimer();
+      const sub = AppState.addEventListener('change', (state) => {
+        if (state === 'active') {
+          reload();
+          startTimer();
+        } else {
+          stopTimer();
+        }
+      });
+
+      return () => {
+        stopTimer();
+        sub.remove();
+      };
+    }, [status, partnerId, reload]),
+  );
 
   const count = cartLineCount(lines);
   const subtotal = cartSubtotalMinor(lines);
@@ -667,7 +700,14 @@ export default function PartnerMenuScreen() {
               {count} {count === 1 ? 'item' : 'items'} in cart
             </AppText>
           </View>
-          <Button label="Checkout" variant="onBlock" onPress={() => pushPath('/meals/checkout')} />
+          {/* Carry the window this menu was filtered by, so checkout opens on
+              the slot the member has been reading rather than making them
+              pick a delivery time a second time (and possibly a different one). */}
+          <Button
+            label="Checkout"
+            variant="onBlock"
+            onPress={() => pushPath(`/meals/checkout?window=${encodeURIComponent(windowFilter)}`)}
+          />
         </Animated.View>
       ) : null}
 

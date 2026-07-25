@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Badge,
@@ -16,6 +16,7 @@ import {
 } from '@/components/console';
 import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import type {
+  ExerciseDetail,
   ExerciseRow,
   PlanExerciseDetail,
   PlanGoal,
@@ -45,6 +46,26 @@ async function parseErrorCode(res: Response): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+/**
+ * Read the on-demand detail payload defensively: anything we don't recognise
+ * reads as "not loaded", which keeps the edit form from saving a blank list
+ * over real text.
+ */
+function parseExerciseDetail(data: unknown): ExerciseDetail | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const exercise = (data as { exercise?: unknown }).exercise;
+  if (typeof exercise !== 'object' || exercise === null) return null;
+  const { secondaryMuscles, instructions, imageUrls } = exercise as Record<string, unknown>;
+  if (!isStringArray(secondaryMuscles)) return null;
+  if (!isStringArray(instructions)) return null;
+  if (!isStringArray(imageUrls)) return null;
+  return { secondaryMuscles, instructions, imageUrls };
 }
 
 /**
@@ -136,16 +157,29 @@ const EMPTY_EXERCISE_FORM: ExerciseFormState = {
   imageUrls: '',
 };
 
+/**
+ * Where the edit form's on-demand fields have got to.
+ *  - 'ready'   → nothing left to wait for (always the case when creating).
+ *  - 'loading' → the textareas are still filling in; saving is held back.
+ *  - 'error'   → they never arrived; saving stays held back rather than risk
+ *                writing empty lists over the exercise's real text.
+ */
+type DetailStatus = 'ready' | 'loading' | 'error';
+
 function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
   const router = useRouter();
   const [query, setQuery] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<ExerciseFormState>(EMPTY_EXERCISE_FORM);
+  const [detailStatus, setDetailStatus] = useState<DetailStatus>('ready');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [rowError, setRowError] = useState<{ id: string; msg: string } | null>(null);
+  // Bumped every time the form is opened, so a detail response for a row the
+  // admin has already moved on from is dropped instead of landing in the form.
+  const detailRequest = useRef(0);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -156,13 +190,23 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
   }, [exercises, query]);
 
   function openCreate() {
+    detailRequest.current += 1;
     setEditingId(null);
     setForm(EMPTY_EXERCISE_FORM);
+    setDetailStatus('ready');
     setError(null);
     setModalOpen(true);
   }
 
+  /**
+   * Opens the form straight away on what the table row already holds, then
+   * fills in the three long fields for this exercise. They are not in the row
+   * on purpose (see types.ts) — the list would otherwise carry the whole
+   * library's instruction text.
+   */
   function openEdit(row: ExerciseRow) {
+    const request = detailRequest.current + 1;
+    detailRequest.current = request;
     setEditingId(row.id);
     setForm({
       id: row.id,
@@ -171,17 +215,55 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
       equipment: row.equipment ?? '',
       level: row.level ?? '',
       category: row.category ?? '',
-      secondaryMuscles: arrayToLines(row.secondaryMuscles),
-      instructions: arrayToLines(row.instructions),
-      imageUrls: arrayToLines(row.imageUrls),
+      secondaryMuscles: '',
+      instructions: '',
+      imageUrls: '',
     });
+    setDetailStatus('loading');
     setError(null);
     setModalOpen(true);
+
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/admin/catalog/exercise-detail?id=${encodeURIComponent(row.id)}`,
+          { credentials: 'include' },
+        );
+        if (detailRequest.current !== request) return;
+        const detail = res.ok ? parseExerciseDetail((await res.json()) as unknown) : null;
+        if (detailRequest.current !== request) return;
+        if (!detail) {
+          setDetailStatus('error');
+          return;
+        }
+        setForm((f) => ({
+          ...f,
+          secondaryMuscles: arrayToLines(detail.secondaryMuscles),
+          instructions: arrayToLines(detail.instructions),
+          imageUrls: arrayToLines(detail.imageUrls),
+        }));
+        setDetailStatus('ready');
+      } catch {
+        if (detailRequest.current !== request) return;
+        setDetailStatus('error');
+      }
+    })();
   }
 
   async function save() {
     if (!form.name.trim() || !form.muscleGroup.trim()) {
       setError('Name and muscle group are required.');
+      return;
+    }
+    // Belt and braces with the disabled Save button: the body below always
+    // sends all three long fields, so saving before they arrive would clear
+    // them.
+    if (editingId && detailStatus !== 'ready') {
+      setError(
+        detailStatus === 'loading'
+          ? 'Still opening this exercise. Give it a moment.'
+          : 'We could not open the rest of this exercise, so it is not safe to save. Close this and try again.',
+      );
       return;
     }
     setSaving(true);
@@ -312,6 +394,9 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
     },
   ];
 
+  // Editing waits for the on-demand fields; creating has nothing to wait for.
+  const detailPending = editingId !== null && detailStatus !== 'ready';
+
   return (
     <>
       <Toolbar
@@ -340,7 +425,7 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
             <Button variant="ghost" disabled={saving} onClick={() => setModalOpen(false)}>
               Cancel
             </Button>
-            <Button variant="primary" disabled={saving} onClick={() => void save()}>
+            <Button variant="primary" disabled={saving || detailPending} onClick={() => void save()}>
               {saving ? 'Saving…' : 'Save'}
             </Button>
           </>
@@ -394,21 +479,33 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
             label="Secondary muscles (one per line)"
             value={form.secondaryMuscles}
             onChange={(v) => setForm((f) => ({ ...f, secondaryMuscles: v }))}
-            disabled={saving}
+            disabled={saving || detailPending}
           />
           <LabeledTextarea
             label="Instructions (one step per line)"
             value={form.instructions}
             onChange={(v) => setForm((f) => ({ ...f, instructions: v }))}
-            disabled={saving}
+            disabled={saving || detailPending}
             rows={4}
           />
           <LabeledTextarea
             label="Image URLs (one per line)"
             value={form.imageUrls}
             onChange={(v) => setForm((f) => ({ ...f, imageUrls: v }))}
-            disabled={saving}
+            disabled={saving || detailPending}
           />
+          {detailPending ? (
+            <div
+              style={{
+                color: detailStatus === 'error' ? 'var(--gt-danger)' : 'var(--gt-text-dim)',
+                fontSize: 13,
+              }}
+            >
+              {detailStatus === 'loading'
+                ? 'Loading the rest of this exercise…'
+                : 'We could not load the rest of this exercise. Close this and try again.'}
+            </div>
+          ) : null}
           {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div> : null}
         </div>
       </Modal>

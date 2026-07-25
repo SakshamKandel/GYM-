@@ -50,6 +50,22 @@ export function parseStringParam(value: string | string[] | undefined): string {
   return firstParam(value) ?? '';
 }
 
+/** A grams route param, clamped to the portion stepper's own range. Null when absent/unusable. */
+export function parseGramsParam(value: string | string[] | undefined): number | null {
+  const v = firstParam(value);
+  if (!v) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return clampPortionGrams(n);
+}
+
+/** Portion stepper bounds — shared so params, memory and the stepper agree. */
+export const PORTION_GRAMS = { min: 5, max: 2000 } as const;
+
+export function clampPortionGrams(grams: number): number {
+  return Math.min(PORTION_GRAMS.max, Math.max(PORTION_GRAMS.min, Math.round(grams)));
+}
+
 // ── Day math ──────────────────────────────────────────────────
 
 export interface DayTotals {
@@ -193,6 +209,54 @@ export function impliedKcalMismatch(
   const implied = kcalFromMacros(protein, carbs, fat);
   if (statedKcal <= 0) return implied > 0 ? implied : null;
   return Math.abs(statedKcal - implied) > statedKcal * 0.15 ? implied : null;
+}
+
+// ── Custom food entry ─────────────────────────────────────────
+
+/**
+ * Ceilings the sync contract already enforces on a custom food
+ * (packages/shared schemas/memberDataSync.ts). The form has to respect them:
+ * a value above these would make the local write throw when the row is queued
+ * for sync, which would read to the member as "save just didn't work".
+ */
+export const CUSTOM_FOOD_LIMITS = {
+  kcalPer100: 2000,
+  macroPer100: 100,
+  servingGrams: 10_000,
+  nameChars: 200,
+} as const;
+
+/** Which column of the label the member is copying out. */
+export type NutritionBasis = 'per100' | 'serving';
+
+/**
+ * Read a number the member typed. A blank field counts as zero (an empty
+ * macro row means "none of it"). Accepts a comma as the decimal mark, which
+ * is what most keyboards outside the US produce. Returns null for anything
+ * that isn't a plain non-negative number, so the form can say so.
+ */
+export function parseAmountInput(raw: string): number | null {
+  const trimmed = raw.trim().replace(',', '.');
+  if (trimmed === '') return 0;
+  if (!/^\d*\.?\d*$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 0) return null;
+  return value;
+}
+
+/**
+ * Turn a figure read off a label into the per-100 g number a food is stored
+ * as. Per-serving figures need the serving weight, so this returns null until
+ * the member has given one.
+ */
+export function toPer100(
+  value: number,
+  basis: NutritionBasis,
+  servingGrams: number,
+): number | null {
+  if (basis === 'per100') return Math.round(value * 100) / 100;
+  if (!(servingGrams > 0)) return null;
+  return Math.round((value * 100 * 100) / servingGrams) / 100;
 }
 
 /** Drop remote results already present in the local list (avoid dupes). */

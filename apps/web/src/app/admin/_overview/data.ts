@@ -114,71 +114,88 @@ END`;
  * drifted to different months and a different revenue basis).
  */
 export async function loadOverview(perms: OverviewPerms): Promise<OverviewData> {
-  const db = getDb();
   const now = new Date();
 
-  const membership = perms.members ? await loadMembership(now) : null;
-  const recentActivity = perms.audit ? await loadActivity() : null;
+  // Nothing on this page depends on anything else on it, so every section the
+  // caller is allowed to see goes out at once and the page waits a single time.
+  // These used to be awaited in sequence — membership, then the activity feed,
+  // then each ops group in turn — which stacked six to eight round trips end to
+  // end for reads that share nothing. A section the caller may not see is still
+  // never queried: it resolves to null without touching the database.
+  const [membership, recentActivity, applications, payments, unreadSupport] = await Promise.all([
+    perms.members ? loadMembership(now) : null,
+    perms.audit ? loadActivity() : null,
+    perms.applications ? loadApplicationQueues() : null,
+    perms.payments ? loadPaymentQueues(now) : null,
+    perms.support ? loadUnreadSupport() : null,
+  ]);
 
   const ops: OpsQueue = {
-    pendingApplications: null,
-    pendingTierRequests: null,
-    pendingPayments: null,
-    pendingMealPayments: null,
-    revenueThisMonth: null,
-    unreadSupport: null,
+    pendingApplications: applications?.pendingApplications ?? null,
+    pendingTierRequests: applications?.pendingTierRequests ?? null,
+    pendingPayments: payments?.pendingPayments ?? null,
+    pendingMealPayments: payments?.pendingMealPayments ?? null,
+    revenueThisMonth: payments?.revenueThisMonth ?? null,
+    unreadSupport,
   };
 
-  if (perms.applications) {
-    const [apps, tiers] = await Promise.all([
-      db
-        .select({ n: count() })
-        .from(coachApplications)
-        .where(eq(coachApplications.status, 'pending')),
-      db
-        .select({ n: count() })
-        .from(coachTierRequests)
-        .where(eq(coachTierRequests.status, 'pending')),
-    ]);
-    ops.pendingApplications = Number(apps[0]?.n ?? 0);
-    ops.pendingTierRequests = Number(tiers[0]?.n ?? 0);
-  }
-
-  if (perms.payments) {
-    const [pending, pendingMeals, revenue] = await Promise.all([
-      db
-        .select({ n: count() })
-        .from(paymentRequests)
-        .where(eq(paymentRequests.status, 'pending')),
-      // Meal-order / subscription-cycle eSewa+Khalti receipts awaiting review —
-      // the sibling queue to `paymentRequests`, and previously invisible on this
-      // dashboard even though the API twin already reported it.
-      db
-        .select({ n: count() })
-        .from(mealPaymentRequests)
-        .where(eq(mealPaymentRequests.status, 'pending')),
-      loadMonthlyRevenue(now),
-    ]);
-    ops.pendingPayments = Number(pending[0]?.n ?? 0);
-    ops.pendingMealPayments = Number(pendingMeals[0]?.n ?? 0);
-    ops.revenueThisMonth = revenue;
-  }
-
-  if (perms.support) {
-    const unread = await db
-      .select({ n: countDistinct(coachMessages.accountId) })
-      .from(coachMessages)
-      .where(
-        and(
-          eq(coachMessages.kind, 'support'),
-          eq(coachMessages.sender, 'user'),
-          eq(coachMessages.readByCoach, false),
-        ),
-      );
-    ops.unreadSupport = Number(unread[0]?.n ?? 0);
-  }
-
   return { membership, recentActivity, ops };
+}
+
+/** Coach queues — only invoked for coach.application.review holders (A3). */
+async function loadApplicationQueues(): Promise<{
+  pendingApplications: number;
+  pendingTierRequests: number;
+}> {
+  const db = getDb();
+  const [apps, tiers] = await Promise.all([
+    db.select({ n: count() }).from(coachApplications).where(eq(coachApplications.status, 'pending')),
+    db.select({ n: count() }).from(coachTierRequests).where(eq(coachTierRequests.status, 'pending')),
+  ]);
+  return {
+    pendingApplications: Number(apps[0]?.n ?? 0),
+    pendingTierRequests: Number(tiers[0]?.n ?? 0),
+  };
+}
+
+/** Money queues — only invoked for payments.review holders (A3). */
+async function loadPaymentQueues(now: Date): Promise<{
+  pendingPayments: number;
+  pendingMealPayments: number;
+  revenueThisMonth: RevenueByCurrency[];
+}> {
+  const db = getDb();
+  const [pending, pendingMeals, revenue] = await Promise.all([
+    db.select({ n: count() }).from(paymentRequests).where(eq(paymentRequests.status, 'pending')),
+    // Meal-order / subscription-cycle eSewa+Khalti receipts awaiting review —
+    // the sibling queue to `paymentRequests`, and previously invisible on this
+    // dashboard even though the API twin already reported it.
+    db
+      .select({ n: count() })
+      .from(mealPaymentRequests)
+      .where(eq(mealPaymentRequests.status, 'pending')),
+    loadMonthlyRevenue(now),
+  ]);
+  return {
+    pendingPayments: Number(pending[0]?.n ?? 0),
+    pendingMealPayments: Number(pendingMeals[0]?.n ?? 0),
+    revenueThisMonth: revenue,
+  };
+}
+
+/** Support inbox — only invoked for support.thread.read holders (A3). */
+async function loadUnreadSupport(): Promise<number> {
+  const unread = await getDb()
+    .select({ n: countDistinct(coachMessages.accountId) })
+    .from(coachMessages)
+    .where(
+      and(
+        eq(coachMessages.kind, 'support'),
+        eq(coachMessages.sender, 'user'),
+        eq(coachMessages.readByCoach, false),
+      ),
+    );
+  return Number(unread[0]?.n ?? 0);
 }
 
 /** Membership snapshot — only invoked for members.read holders. */

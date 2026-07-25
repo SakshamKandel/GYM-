@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -24,13 +24,50 @@ import { useAuth } from '../../state/auth';
 import { GymCard } from '../../features/gyms/components/GymCard';
 import { MapPreview } from '../../features/gyms/components/MapPreview';
 import { GymFilterModal, type GymFilterState } from '../../features/gyms/components/GymFilterModal';
-import { useGymDirectory } from '../../features/gyms/hooks';
+import { useGymDirectory, type GymDirectoryState } from '../../features/gyms/hooks';
 import { pushPath } from '../../features/gyms/nav';
 import { useMealAddresses } from '../../features/meals/hooks';
 
 /** Lifts the 40dp List/Map pills to a 48dp target without growing the pill
  * itself; vertical only, so the two adjacent pills never overlap. */
 const SEGMENT_HIT_SLOP = { top: 4, bottom: 4 } as const;
+
+/**
+ * What the tab shows while it is still waiting to know where "near you" is:
+ * exactly the loading state the directory itself reports before its first
+ * answer, so the screen looks the same either way.
+ */
+const PENDING_DIRECTORY: GymDirectoryState = {
+  gyms: null,
+  loading: true,
+  error: false,
+  retry: () => {},
+};
+
+/**
+ * Holds the directory load and renders nothing.
+ *
+ * The listings are fetched with the member's saved address as the starting
+ * point for distances, and that address arrives from its own request. Asking
+ * for the directory before it lands meant one request with no coordinates
+ * (thrown away the moment the address arrived) and a second one with them, on
+ * every cold focus. Mounting the load here, only once the address question has
+ * an answer, makes it one request — and because the screen itself never
+ * unmounts, nothing on it restarts or flickers when that answer comes.
+ */
+function GymDirectoryLoader({
+  coords,
+  onState,
+}: {
+  coords: { lat: number; lng: number } | null;
+  onState: (state: GymDirectoryState) => void;
+}) {
+  const { gyms, loading, error, retry } = useGymDirectory(coords);
+  useEffect(() => {
+    onState({ gyms, loading, error, retry });
+  }, [gyms, loading, error, retry, onState]);
+  return null;
+}
 
 const styles = StyleSheet.create({
   header: { marginBottom: spacing.sm },
@@ -128,14 +165,22 @@ const styles = StyleSheet.create({
 export default function GymsTabScreen() {
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
-  const { data: addresses } = useMealAddresses(status === 'signedIn' ? token : null);
+  const authedToken = status === 'signedIn' ? token : null;
+  const { data: addresses, error: addressesError } = useMealAddresses(authedToken);
   const defaultAddress = addresses?.find((a) => a.isDefault) ?? addresses?.[0] ?? null;
   const coords =
     defaultAddress && defaultAddress.lat !== null && defaultAddress.lng !== null
       ? { lat: defaultAddress.lat, lng: defaultAddress.lng }
       : null;
-
-  const { gyms, loading, error, retry } = useGymDirectory(coords);
+  const [directory, setDirectory] = useState<GymDirectoryState>(PENDING_DIRECTORY);
+  const { gyms, loading, error, retry } = directory;
+  // The saved-address question has an answer: a list came back, the request
+  // failed, or there is no account to have one. Signed out settles instantly,
+  // so nothing waits on a request that is never made. Listings already on
+  // screen settle it too — a sign-in mid-browse must never blank them back to
+  // skeletons while the new account's address is fetched.
+  const homeBaseSettled =
+    authedToken === null || addresses !== null || addressesError || gyms !== null;
   const [query, setQuery] = useState('');
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
@@ -159,6 +204,8 @@ export default function GymsTabScreen() {
 
   return (
     <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
+      {homeBaseSettled ? <GymDirectoryLoader coords={coords} onState={setDirectory} /> : null}
+
       <ScreenHeader
         eyebrow="Train anywhere"
         title="Nearby gyms"

@@ -67,6 +67,32 @@ function clearForSignedOut(): void {
   useTrainingCatalogState.setState({ ...INITIAL_STATE, status: 'authRequired' });
 }
 
+/**
+ * One catalog read.
+ *
+ * When we already hold a snapshot we ask the server about ITS revision, so an
+ * unchanged library costs a small confirmation instead of re-downloading an
+ * exercise library the device already has byte for byte. The server recomputes
+ * the revision from the live tables on every read, so a real edit still lands
+ * on the very next refresh.
+ *
+ * An 'unchanged' answer is only ever accepted against the snapshot whose
+ * revision we sent (the repo already refuses to hand back a cache that doesn't
+ * validate, so a corrupt or partial one arrives here as `null`). With nothing
+ * to stand on we ask for the whole thing rather than trust a partial answer.
+ */
+async function readTrainingCatalog(
+  token: string,
+  held: TrainingCatalog | null,
+): Promise<TrainingCatalog> {
+  const result = await getTrainingCatalog(token, held?.revision ?? null);
+  if (result.kind === 'catalog') return result.catalog;
+  if (held) return held;
+  const full = await getTrainingCatalog(token);
+  if (full.kind === 'catalog') return full.catalog;
+  throw new Error('training catalog unavailable');
+}
+
 /** Hydrate a validated account cache, then refresh it from Neon. */
 export async function loadTrainingCatalog(force = false): Promise<TrainingCatalog | null> {
   const auth = authSnapshot();
@@ -109,7 +135,10 @@ export async function loadTrainingCatalog(force = false): Promise<TrainingCatalo
     }
 
     try {
-      const catalog = await getTrainingCatalog(auth.token);
+      // What the app is already showing: memory first, then the validated disk
+      // cache. Its revision is what makes the read below conditional.
+      const held = sameAccountCatalog ?? cached?.catalog ?? null;
+      const catalog = await readTrainingCatalog(auth.token, held);
       if (!isCurrent(auth.accountId, auth.token, sequence)) return null;
       const fetchedAt = new Date().toISOString();
       await repo.saveTrainingCatalogCache({ catalog, fetchedAt });

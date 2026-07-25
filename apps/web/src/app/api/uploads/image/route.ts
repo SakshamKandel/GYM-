@@ -6,7 +6,7 @@ import { bearerToken, type StaffRole, userForToken } from '@/lib/auth';
 import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
-import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 import { staffTokenFromCookie } from '@/lib/staffSession';
 import { getImageProvider, NotConfiguredError } from '@/lib/video';
 import { PROGRESS_PHOTO_RESERVATION_TTL_MS } from '@/lib/progressPhotoClaims';
@@ -106,7 +106,12 @@ export async function POST(req: Request) {
   const user = await userForToken(token);
   if (!user) return json({ error: 'unauthorized' }, 401);
 
-  const limited = rateLimit({
+  // Counted in the SHARED store: every reservation is storage somebody pays
+  // for, and the per-instance limiter gave each warm serverless instance its
+  // own 20/hour, so the real ceiling grew with concurrency. Same limit, same
+  // 429 body; with no shared store configured this falls back to the
+  // in-memory limiter, so local development behaves exactly as before.
+  const limited = await rateLimitShared({
     route: 'uploads/image',
     limit: 20,
     windowMs: 60 * 60 * 1000,

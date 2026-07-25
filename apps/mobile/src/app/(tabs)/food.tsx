@@ -1,4 +1,11 @@
-import { useState, type ComponentProps } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactElement,
+} from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
@@ -16,6 +23,7 @@ import type { FoodLog, Meal } from '@gym/shared';
 import {
   AnimatedNumber,
   AppText,
+  Button,
   Card,
   ConfirmDialog,
   DayStrip,
@@ -53,7 +61,7 @@ import {
   sumDayTotals,
   sumKcal,
 } from '../../features/nutrition/logic';
-import { searchHref } from '../../features/nutrition/nav';
+import { editLogHref, searchHref } from '../../features/nutrition/nav';
 import { useCoachDiet, type CoachDietSection } from '../../features/nutrition/coachDiet';
 import { FoodLogDetailSheet } from '../../features/nutrition/FoodLogDetailSheet';
 import { pushPath } from '../../features/meals/nav';
@@ -158,6 +166,29 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   addRowPressed: { borderColor: colors.text },
+  // The screen's one primary action, directly under the day's numbers instead
+  // of a scroll away past the teaser cards.
+  primaryAdd: { marginTop: spacing.md },
+  // Undo strip: sits in the meal block the entry was removed from, so it is
+  // right where the member was looking when they removed it.
+  undoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.sm,
+    paddingVertical: spacing.sm,
+    minHeight: 56,
+  },
+  undoInfo: { flex: 1, minWidth: 0 },
+  undoBtn: {
+    minHeight: 48,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.full,
+  },
   // Ghost meal rows for the empty state (EmptyState above brings its own air).
   ghostWrap: { gap: spacing.md },
   ghostRow: {
@@ -184,6 +215,9 @@ const styles = StyleSheet.create({
 
 // Ease for the water tile's add-confirmation pop (a user-driven settle).
 const EASE_OUT = Easing.bezier(0.25, 0.8, 0.4, 1);
+
+/** How long a removed entry stays one tap away from coming back. */
+const UNDO_MS = 10_000;
 
 /** Outlined meta pill (brief §6): Oswald caps or mixed-case caption label. */
 function MetaChip({ label, caps = false }: { label: string; caps?: boolean }) {
@@ -231,15 +265,34 @@ export default function FoodScreen() {
   const [copying, setCopying] = useState(false);
   const reduceMotion = useReducedMotion();
   // Long-press delete goes through the branded ConfirmDialog; a tap opens the
-  // detail sheet whose Remove button deletes directly (the sheet is the review).
+  // detail sheet, where correcting the entry comes first and removing it is
+  // undoable in place.
   const [pendingDelete, setPendingDelete] = useState<FoodLog | null>(null);
   const [detailLog, setDetailLog] = useState<FoodLog | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  /** The entry just removed, still recoverable from its own meal block. */
+  const [undoLog, setUndoLog] = useState<FoodLog | null>(null);
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Entry the member chose to correct. Held until the sheet has finished
+   * closing, then navigated to — same rule the workout preview follows, so a
+   * modal is never left sitting over a screen it just pushed.
+   */
+  const pendingEdit = useRef<FoodLog | null>(null);
   const waterPop = useSharedValue(1);
   const waterPopStyle = useAnimatedStyle(() => ({ transform: [{ scale: waterPop.value }] }));
   const targets = useProfile((s) => s.targets);
-  const { loaded, logs, waterMl, marked, yesterdayLogs, addWater, deleteLog, copyLogs } =
-    useNutritionDay(selected);
+  const {
+    loaded,
+    logs,
+    waterMl,
+    marked,
+    yesterdayLogs,
+    addWater,
+    deleteLog,
+    restoreLog,
+    copyLogs,
+  } = useNutritionDay(selected);
   const coachDietSection = useCoachDiet();
 
   const totals = sumDayTotals(logs);
@@ -253,6 +306,17 @@ export default function FoodScreen() {
     loaded && selected === todayIso() && logs.length === 0 && yesterdayLogs.length > 0;
   const yesterdayKcal = sumKcal(yesterdayLogs);
 
+  const clearUndoTimer = useCallback((): void => {
+    if (undoTimer.current) {
+      clearTimeout(undoTimer.current);
+      undoTimer.current = null;
+    }
+  }, []);
+
+  // The pending undo belongs to this screen; the strip itself checks it also
+  // belongs to the day on show.
+  useEffect(() => clearUndoTimer, [clearUndoTimer]);
+
   function openDetail(log: FoodLog): void {
     tapHaptic();
     setDetailLog(log);
@@ -264,9 +328,41 @@ export default function FoodScreen() {
     setPendingDelete(log);
   }
 
+  function editLog(log: FoodLog): void {
+    router.push(
+      editLogHref({
+        logId: log.id,
+        foodId: log.foodId,
+        meal: log.meal,
+        // The entry's own day, not whatever the strip happens to show.
+        date: log.date,
+        grams: log.grams,
+      }),
+    );
+  }
+
   function removeLog(log: FoodLog): void {
     logHaptic();
     void deleteLog(log.id);
+    // Removing is never final for the next few seconds: the entry's own meal
+    // block offers it straight back, right where the row was.
+    clearUndoTimer();
+    setUndoLog(log);
+    undoTimer.current = setTimeout(() => {
+      undoTimer.current = null;
+      setUndoLog(null);
+    }, UNDO_MS);
+  }
+
+  function undoRemove(): void {
+    const target = undoLog;
+    if (!target || target.date !== selected) return;
+    tapHaptic();
+    clearUndoTimer();
+    setUndoLog(null);
+    // The hook already reports a failed restore; swallow it here so a rejected
+    // write can never surface as an unhandled rejection.
+    void restoreLog(target).catch(() => undefined);
   }
 
   function addWaterTap(): void {
@@ -283,6 +379,38 @@ export default function FoodScreen() {
   function addTo(meal: Meal): void {
     tapHaptic();
     router.push(searchHref(meal, selected));
+  }
+
+  /**
+   * The safety net for a removal, rendered inside the meal block the entry
+   * came out of — the member is still looking at exactly that spot.
+   */
+  function undoStrip(): ReactElement | null {
+    // Only offered on the day the entry came from — flicking the day strip
+    // parks the undo rather than aiming it at somebody else's day.
+    if (!undoLog || undoLog.date !== selected) return null;
+    return (
+      <Animated.View entering={enterUp(0)} layout={layoutSpring} style={styles.undoRow}>
+        <View style={styles.undoInfo}>
+          <AppText variant="body" numberOfLines={1}>
+            Removed {undoLog.foodName}
+          </AppText>
+          <AppText variant="caption" color={colors.textDim}>
+            Changed your mind?
+          </AppText>
+        </View>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel={`Undo removing ${undoLog.foodName}`}
+          onPress={undoRemove}
+          style={styles.undoBtn}
+        >
+          <AppText variant="bodyBold" color={colors.accent}>
+            Undo
+          </AppText>
+        </PressableScale>
+      </Animated.View>
+    );
   }
 
   async function copyYesterday(): Promise<void> {
@@ -399,9 +527,19 @@ export default function FoodScreen() {
         </Card>
       </Animated.View>
 
+      {/* The one thing this screen exists for. It used to be a full screen
+          down, below three cards selling other things — now it sits directly
+          under the day's numbers, in reach without scrolling. */}
+      <Animated.View entering={enterUp(2)} style={styles.primaryAdd}>
+        <Button
+          label="Add food"
+          onPress={() => addTo(defaultMealForHour(new Date().getHours()))}
+        />
+      </Animated.View>
+
       {/* Copy yesterday — a full day of logging in one tap */}
       {showCopyYesterday ? (
-        <Animated.View entering={enterUp(2)} layout={layoutSpring}>
+        <Animated.View entering={enterUp(3)} layout={layoutSpring}>
           <PressableScale
             accessibilityRole="button"
             accessibilityLabel={`Copy yesterday's meals: ${yesterdayLogs.length} items, ${yesterdayKcal} calories`}
@@ -422,57 +560,6 @@ export default function FoodScreen() {
         </Animated.View>
       ) : null}
 
-      {/* GM suggestions (Gold+, today only) */}
-      {loaded ? (
-        <Animated.View entering={enterUp(3)}>
-          <SuggestionsSection remaining={remaining} date={selected} />
-        </Animated.View>
-      ) : null}
-
-      {/* Coach diet plan entry (SCALE-UP-PLAN §4.3) — the card is a light
-          teaser; /coach-diet owns the full locked/no-coach/plans gate. */}
-      {coachDietSection.kind !== 'hidden' ? (
-        <Animated.View entering={enterUp(4)}>
-          <PressableScale
-            accessibilityRole="button"
-            accessibilityLabel="Coach diet plan"
-            onPress={() => router.push('/coach-diet' as Href)}
-            style={styles.copyRow}
-          >
-            <IconChip icon="nutrition-outline" />
-            <View style={styles.copyInfo}>
-              <AppText variant="bodyBold">Coach diet plan</AppText>
-              <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
-                {coachDietCaption(coachDietSection)}
-              </AppText>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
-          </PressableScale>
-        </Animated.View>
-      ) : null}
-
-      {/* Meal delivery teaser (plan §6 P12) — single entry point into the
-          partner meal-delivery flow; /meals owns the full discovery/order/
-          subscription surface. Same copyRow visual language as the coach diet
-          card above it. */}
-      <Animated.View entering={enterUp(5)}>
-        <PressableScale
-          accessibilityRole="button"
-          accessibilityLabel="Order meals for delivery"
-          onPress={() => pushPath('/meals')}
-          style={styles.copyRow}
-        >
-          <IconChip icon="bicycle-outline" />
-          <View style={styles.copyInfo}>
-            <AppText variant="bodyBold">Order meals</AppText>
-            <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
-              Delivery from local partners, one-time or weekly
-            </AppText>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
-        </PressableScale>
-      </Animated.View>
-
       {/* Meals — one charcoal block per meal, log rows as raised tiles */}
       {!loaded ? null : logs.length === 0 ? (
         <Animated.View entering={enterUp(4)}>
@@ -484,6 +571,8 @@ export default function FoodScreen() {
             actionLabel="Log your first meal"
             onAction={() => addTo(defaultMealForHour(new Date().getHours()))}
           />
+          {/* The day emptied out because of that removal — keep the way back. */}
+          {undoStrip()}
           <View style={styles.ghostWrap}>
             {MEALS.map(({ key, label }) => (
               <PressableScale
@@ -557,7 +646,7 @@ export default function FoodScreen() {
                       <Animated.View key={log.id} entering={enterUp(0)} layout={layoutSpring}>
                         <PressableScale
                           accessibilityRole="button"
-                          accessibilityLabel={`${log.foodName}, ${Math.round(log.grams)} grams, ${Math.round(log.kcal)} calories. Tap for details, long press to remove.`}
+                          accessibilityLabel={`${log.foodName}, ${Math.round(log.grams)} grams, ${Math.round(log.kcal)} calories. Tap to change or remove it, long press to remove.`}
                           onPress={() => openDetail(log)}
                           onLongPress={() => requestDelete(log)}
                           style={styles.logRow}
@@ -590,6 +679,8 @@ export default function FoodScreen() {
                     ))}
                   </View>
                 ) : null}
+
+                {undoLog?.meal === key ? undoStrip() : null}
 
                 <Pressable
                   accessibilityRole="button"
@@ -654,6 +745,60 @@ export default function FoodScreen() {
         </AppText>
       </Animated.View>
 
+      {/* Everything below is somewhere else to go, so it sits below everything
+          the member came here to do. */}
+
+      {/* GM suggestions (Gold+, today only) */}
+      {loaded ? (
+        <Animated.View entering={enterUp(9)}>
+          <SuggestionsSection remaining={remaining} date={selected} />
+        </Animated.View>
+      ) : null}
+
+      {/* Coach diet plan entry (SCALE-UP-PLAN §4.3) — the card is a light
+          teaser; /coach-diet owns the full locked/no-coach/plans gate. */}
+      {coachDietSection.kind !== 'hidden' ? (
+        <Animated.View entering={enterUp(10)}>
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Coach diet plan"
+            onPress={() => router.push('/coach-diet' as Href)}
+            style={styles.copyRow}
+          >
+            <IconChip icon="nutrition-outline" />
+            <View style={styles.copyInfo}>
+              <AppText variant="bodyBold">Coach diet plan</AppText>
+              <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+                {coachDietCaption(coachDietSection)}
+              </AppText>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+          </PressableScale>
+        </Animated.View>
+      ) : null}
+
+      {/* Meal delivery teaser (plan §6 P12) — single entry point into the
+          partner meal-delivery flow; /meals owns the full discovery/order/
+          subscription surface. Same copyRow visual language as the coach diet
+          card above it. */}
+      <Animated.View entering={enterUp(11)}>
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Order meals for delivery"
+          onPress={() => pushPath('/meals')}
+          style={styles.copyRow}
+        >
+          <IconChip icon="bicycle-outline" />
+          <View style={styles.copyInfo}>
+            <AppText variant="bodyBold">Order meals</AppText>
+            <AppText variant="caption" color={colors.textDim} numberOfLines={1}>
+              Delivery from local partners, one-time or weekly
+            </AppText>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
+        </PressableScale>
+      </Animated.View>
+
       {/* Branded confirm for the long-press remove shortcut */}
       <ConfirmDialog
         visible={pendingDelete !== null}
@@ -676,12 +821,21 @@ export default function FoodScreen() {
         onClose={() => {
           setDetailOpen(false);
           setDetailLog(null);
+          // Sheet gone, then the correction screen — never one over the other.
+          const target = pendingEdit.current;
+          pendingEdit.current = null;
+          if (target) editLog(target);
         }}
         title={detailLog?.foodName}
       >
         {detailLog ? (
           <FoodLogDetailSheet
             log={detailLog}
+            onEdit={(target) => {
+              tapHaptic();
+              pendingEdit.current = target;
+              setDetailOpen(false);
+            }}
             onRemove={(target) => {
               removeLog(target);
               setDetailOpen(false);

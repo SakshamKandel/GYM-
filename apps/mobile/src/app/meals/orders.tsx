@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshControl, StyleSheet, View } from 'react-native';
+import { AppState, RefreshControl, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import {
@@ -47,6 +47,9 @@ import { pushPath, replacePath } from '../../features/meals/nav';
  * upcoming/history split comes from two GETs against ?scope — the server keeps
  * `upcoming` = not-yet-terminal and `history` = delivered/cancelled/refused.
  */
+
+/** How often an on-screen live order re-checks its status. */
+const LIVE_POLL_MS = 20_000;
 
 const styles = StyleSheet.create({
   backRow: { marginBottom: spacing.lg },
@@ -203,14 +206,43 @@ export default function MyMealOrdersScreen() {
   // Live tracking polling (Pack A): while there's at least one non-terminal
   // order, quietly re-check its status every 20s instead of leaving the
   // member to refresh manually to learn a status just changed.
-  const LIVE_POLL_MS = 20_000;
+  //
+  // Only while this screen is the one on show, and only while the app is in
+  // the foreground: the timer used to keep firing behind pushed screens and
+  // from the background. Returning to the app re-checks once immediately, so
+  // an order that moved while away is up to date before the next tick.
   const hasLiveOrders = (live.data?.length ?? 0) > 0;
-  useEffect(() => {
-    if (!authed || !hasLiveOrders) return;
-    const id = setInterval(() => live.reload(), LIVE_POLL_MS);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, hasLiveOrders]);
+  useFocusEffect(
+    useCallback(() => {
+      if (!authed || !hasLiveOrders) return;
+      let timer: ReturnType<typeof setInterval> | null = null;
+      const startTimer = () => {
+        if (timer === null) timer = setInterval(() => live.reload(), LIVE_POLL_MS);
+      };
+      const stopTimer = () => {
+        if (timer !== null) {
+          clearInterval(timer);
+          timer = null;
+        }
+      };
+
+      startTimer();
+      const sub = AppState.addEventListener('change', (state) => {
+        if (state === 'active') {
+          live.reload();
+          startTimer();
+        } else {
+          stopTimer();
+        }
+      });
+
+      return () => {
+        stopTimer();
+        sub.remove();
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [authed, hasLiveOrders]),
+  );
 
   function goBack(): void {
     if (router.canGoBack()) router.back();

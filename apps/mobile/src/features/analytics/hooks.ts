@@ -11,6 +11,7 @@ import {
   weeklyTonnage,
   weekStartIso,
   type ConsistencyStats,
+  type Exercise,
   type KcalAdherence,
   type MuscleSets,
   type PlateauVerdict,
@@ -19,7 +20,7 @@ import {
   type WeeklyTonnage,
 } from '@gym/shared';
 import { addDays, lastNDays, todayIso } from '../../lib/dates';
-import { getExercise } from '../../lib/exercises';
+import { allExercises } from '../../lib/exercises';
 import { getRepo } from '../../lib/repo';
 import { ensureTrainingCatalog } from '../../lib/trainingCatalog';
 import { useProfile } from '../../state/profile';
@@ -132,8 +133,17 @@ export function useAnalytics(reloadKey = 0): AnalyticsState {
 
           let muscle: MuscleBalanceData | null = null;
           if (muscleUnlocked) {
+            // The catalog is a flat array and the single-exercise lookup walks
+            // it, so tagging a 12-week window used to re-scan all ~873
+            // exercises once per logged set. Index it once per refresh
+            // instead; first entry wins, matching the array-order lookup this
+            // replaces.
+            const exerciseById = new Map<string, Exercise>();
+            for (const item of allExercises()) {
+              if (!exerciseById.has(item.id)) exerciseById.set(item.id, item);
+            }
             const tagged: TaggedSet[] = sets.map((s) => {
-              const ex = getExercise(s.exerciseId);
+              const ex = exerciseById.get(s.exerciseId);
               return {
                 workoutDate: s.workoutDate,
                 primaryMuscle: ex?.muscleGroup ?? '',

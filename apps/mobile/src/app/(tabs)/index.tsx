@@ -595,6 +595,13 @@ export default function HomeScreen() {
     return Number.isFinite(days) ? Math.max(0, Math.min(3650, days)) : null;
   }, [data?.lastSession?.date]);
 
+  // Home's tip payload is assembled from three separate local reads (home
+  // data, weights, weekly streak) that resolve one after another. Each one
+  // landing changes the payload, and every changed payload is a real model
+  // call — so the ask is held until all three have answered and one call
+  // carries the finished numbers. The card shows its loading state either way.
+  const tipInputsSettled = data !== null && weights !== null && weeklyStreak !== null;
+
   // Closed payload: numbers and enums only, never prose. The prompt lives on
   // the server; this screen just hands over what it already has on show.
   const { state: tipState, refresh } = useAiTip(
@@ -632,6 +639,7 @@ export default function HomeScreen() {
       heightCm,
       unitPref,
     ],
+    { ready: tipInputsSettled },
   );
 
   return (

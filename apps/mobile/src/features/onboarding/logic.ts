@@ -9,7 +9,16 @@ import { computeTargets, inputToKg } from '@gym/shared';
 
 /** Pure onboarding/settings logic — no React, no IO. */
 
-export const TOTAL_STEPS = 12;
+/**
+ * Question count. Setup opens on a real question now: the old first screen
+ * introduced Newie, collected nothing, and quoted a setup time that disagreed
+ * with the Welcome poster the member had just tapped through. The
+ * introduction moved into question one, which asks for their name.
+ *
+ * The units question also moved ahead of height and weight, so every
+ * measurement after it is asked in the units the member actually uses.
+ */
+export const TOTAL_STEPS = 11;
 
 /** Everything the wizard collects before it commits to the profile store. */
 export interface OnboardingDraft {
@@ -78,6 +87,33 @@ export const WEIGHT_RANGES: Record<UnitPref, { min: number; max: number }> = {
 export const BIRTH_YEAR = { default: 1995, min: 1930, max: 2015 } as const;
 export const HEIGHT_CM = { default: 172, min: 120, max: 220 } as const;
 export const DAYS_PER_WEEK = { default: 3, min: 2, max: 6 } as const;
+
+/**
+ * The same height range in whole inches — 4'0" to 7'2", both ends comfortably
+ * inside HEIGHT_CM. Somebody who lifts in pounds thinks in feet and inches,
+ * and asking them for centimetres sent them to a converter mid-setup.
+ */
+export const HEIGHT_IN = { min: 48, max: 86 } as const;
+
+/** Centimetres shown as whole inches, clamped to the range the stepper allows. */
+export function cmToInches(cm: number): number {
+  return Math.min(HEIGHT_IN.max, Math.max(HEIGHT_IN.min, Math.round(cm / 2.54)));
+}
+
+/**
+ * Inches back to the stored centimetres. Whole centimetres round-trip cleanly
+ * across the whole 48–86 inch range, so stepping up and down never drifts.
+ */
+export function inchesToCm(inches: number): number {
+  return Math.min(HEIGHT_CM.max, Math.max(HEIGHT_CM.min, Math.round(inches * 2.54)));
+}
+
+/** 68 → 5'8". */
+export function formatFeetInches(totalInches: number): string {
+  const whole = Math.round(totalInches);
+  const feet = Math.floor(whole / 12);
+  return `${feet}'${whole - feet * 12}"`;
+}
 
 /** Coarse age: current year minus birth year (good enough for BMR). */
 export function ageFromBirthYear(

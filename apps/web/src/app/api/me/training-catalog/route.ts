@@ -9,10 +9,23 @@ import { json, preflight } from '@/lib/http';
 
 export const runtime = 'nodejs';
 
+/** A catalog revision as this route mints it: sha256, lowercase hex. */
+const REVISION_PATTERN = /^[a-f0-9]{64}$/;
+
 /**
  * Authenticated member snapshot of the admin-authored Neon training catalog.
  * Locked plans expose metadata only; workout structure remains server-gated
  * through the shared hasEntitlement path.
+ *
+ * OPTIONAL conditional read: a caller that already holds a snapshot may pass
+ * `?revision=<the revision it holds>`. When that still matches the revision
+ * this request just computed, the answer is a tiny
+ * `{ notModified: true, revision }` instead of the whole exercise library the
+ * device already has byte for byte. Everything else is unchanged — a request
+ * without the parameter (every shipped client) gets exactly the body it always
+ * got, and the not-modified answer is only ever produced from the revision
+ * computed by THIS request, so a genuine content change always falls through
+ * to the full body on the very next read.
  */
 export function OPTIONS() {
   return preflight();
@@ -23,6 +36,11 @@ export async function GET(req: Request) {
   if (!token) return json({ error: 'unauthorized' }, 401);
   const user = await userForToken(token);
   if (!user) return json({ error: 'unauthorized' }, 401);
+
+  // Read the caller's revision here, but compare it only once the real content
+  // has been built and validated below (never against a cheaper shortcut that
+  // could drift from what we would actually serve).
+  const knownRevision = new URL(req.url).searchParams.get('revision');
 
   const db = getDb();
   const [planRows, exerciseRows] = await Promise.all([
@@ -149,5 +167,14 @@ export async function GET(req: Request) {
 
   const parsed = trainingCatalogSchema.safeParse(catalog);
   if (!parsed.success) return json({ error: 'invalid_catalog' }, 500);
+
+  if (
+    knownRevision !== null &&
+    REVISION_PATTERN.test(knownRevision) &&
+    knownRevision === parsed.data.revision
+  ) {
+    return json({ notModified: true, revision: parsed.data.revision }, 200);
+  }
+
   return json(parsed.data, 200);
 }

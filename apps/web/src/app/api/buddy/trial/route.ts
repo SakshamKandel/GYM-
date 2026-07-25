@@ -1,5 +1,5 @@
-import { trialUsage } from '@gym/db';
-import { compareTiers } from '@gym/shared';
+import { accounts, trialUsage } from '@gym/db';
+import { compareTiers, effectiveTier } from '@gym/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
@@ -10,6 +10,19 @@ import { setAccountTier } from '@/lib/tier';
 export const runtime = 'nodejs';
 
 const TRIAL_DAYS = 2;
+
+/**
+ * Tier grants somebody PAID for (or that staff issued deliberately). A trial
+ * writes ONE tier plus ONE expiry — the account row cannot hold a paid window
+ * and a trial window at the same time — so a trial must never be applied on
+ * top of one of these while it is still in force. See the guard in POST.
+ */
+const PURCHASED_TIER_SOURCES: ReadonlySet<string> = new Set([
+  'console',
+  'manual_payment',
+  'revenuecat',
+  'coach',
+]);
 
 const bodySchema = z.object({
   tier: z.enum(['silver', 'gold', 'elite']),
@@ -45,7 +58,10 @@ export async function GET(req: Request) {
   return json({ trials, trialDays: TRIAL_DAYS }, 200);
 }
 
-/** POST — start a 2-day trial for a tier (one-time per tier per account). */
+/**
+ * POST — start a 2-day trial for a tier (one-time per tier per account, and
+ * only on an account that is not currently holding a paid or longer window).
+ */
 export async function POST(req: Request) {
   const me = await authedUser(req);
   if (!me) return json({ error: 'unauthorized' }, 401);
@@ -66,6 +82,46 @@ export async function POST(req: Request) {
     return json({ error: 'not_an_upgrade', currentTier: me.tier }, 409);
   }
 
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + TRIAL_DAYS * 86_400_000);
+
+  // MONEY GUARD. A trial does not stack: it OVERWRITES accounts.tier and
+  // accounts.tierExpiresAt with a two-day window. On an account that is paying
+  // for a lower tier (Silver bought until next year, tapping the Gold trial)
+  // that replaced a purchased window with a two-day one and the member lost the
+  // access they had paid for the moment the trial lapsed. So the trial is
+  // refused whenever the account currently holds:
+  //   - a grant somebody paid for or staff issued, still in force, or
+  //   - any non-free window that outlasts the trial (including a permanent one,
+  //     expiry null, which is how the very old free-upgrade rows look).
+  // A free account is the only thing a trial may ever write over, and it can
+  // only ever move it forward. Refusing costs a member one trial offer;
+  // guessing wrong costs them a subscription, so this stays deliberately blunt.
+  const [account] = await db
+    .select({
+      tier: accounts.tier,
+      tierExpiresAt: accounts.tierExpiresAt,
+      tierSource: accounts.tierSource,
+      tierSourceId: accounts.tierSourceId,
+    })
+    .from(accounts)
+    .where(eq(accounts.id, me.id))
+    .limit(1);
+  if (!account) return json({ error: 'unauthorized' }, 401);
+
+  const holdsPaidGrant =
+    account.tier !== 'starter' &&
+    account.tierSource !== null &&
+    PURCHASED_TIER_SOURCES.has(account.tierSource) &&
+    effectiveTier(account.tier, account.tierExpiresAt, now) !== 'starter';
+  const holdsLongerWindow =
+    account.tier !== 'starter' &&
+    (account.tierExpiresAt === null || account.tierExpiresAt.getTime() > expiresAt.getTime());
+
+  if (holdsPaidGrant || holdsLongerWindow) {
+    return json({ error: 'subscription_active', currentTier: me.tier }, 409);
+  }
+
   // Check if trial already used for this tier.
   const existing = await db
     .select({ id: trialUsage.id, expiresAt: trialUsage.expiresAt })
@@ -76,9 +132,6 @@ export async function POST(req: Request) {
   if (existing.length > 0) {
     return json({ error: 'trial_used', expiresAt: existing[0].expiresAt }, 409);
   }
-
-  const now = new Date();
-  const expiresAt = new Date(now.getTime() + TRIAL_DAYS * 86_400_000);
 
   // CONCURRENCY: the pre-check above is check-then-insert (TOCTOU) — two
   // concurrent POSTs would both pass the SELECT and collide on the
@@ -109,14 +162,34 @@ export async function POST(req: Request) {
   // the trial_usage row — effectiveTier() collapses it back to 'starter' at
   // the auth choke point the moment the trial lapses (no cron needed). The old
   // code wrote accounts.tier directly with NO expiry: a permanent free upgrade.
-  await setAccountTier(
+  //
+  // The grant we read for the money guard above is passed back as the expected
+  // current state, so the write only lands if nothing has changed the tier in
+  // the meantime. A purchase or an admin grant that arrives between the read
+  // and this write therefore wins, instead of being overwritten by a trial
+  // that was cleared against stale state.
+  const applied = await setAccountTier(
     me.id,
     tier,
     { id: me.id },
     'buddy_trial',
     { startsAt: now, expiresAt },
     'preview',
+    null,
+    undefined,
+    { source: account.tierSource, sourceId: account.tierSourceId },
   );
+
+  if (!applied) {
+    // The tier moved under us, so no trial was granted. Give the member their
+    // one-time trial back rather than charging them for a race they lost.
+    try {
+      await db.delete(trialUsage).where(eq(trialUsage.id, inserted[0].id));
+    } catch (err) {
+      console.error('[trial] could not release an unapplied trial record', err);
+    }
+    return json({ error: 'subscription_active', currentTier: me.tier }, 409);
+  }
 
   return json({ ok: true, tier, expiresAt }, 201);
 }
