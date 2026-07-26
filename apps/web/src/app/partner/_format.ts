@@ -15,10 +15,76 @@ import type { PartnerOrderView } from './_data';
  * timezone dependency.
  */
 
+/**
+ * ONE money renderer for the whole web app. It lives here rather than in
+ * @/lib/format because that module already imports this one for the meal-delivery
+ * labels below, and a money helper importing back would close a cycle.
+ *
+ * There used to be three: this one, a second in the partner wallet, and a third
+ * in @/lib/format. The first two rendered the same rupee balance as `Rs 250000`
+ * and `Rs 250,000` on the SAME earnings screen. This is the wallet's reading —
+ * grouped thousands — with @/lib/format's exact-integer arithmetic, so nothing
+ * here divides money in floating point: the whole part comes from
+ * `(abs - abs % 100) / 100`, exact for every safe integer, and the remainder is
+ * two literal digits.
+ *
+ * Styles differ only in what is written in front of the amount:
+ *  - 'local' — `Rs 12,300` / `$45.99`, for the partner portal and its printed
+ *    receipts, where a restaurant in Kathmandu reads rupees as rupees.
+ *  - 'code'  — `NPR 12,300` / `$45.99`, for the admin and coach consoles, where
+ *    staff compare two currencies side by side.
+ *  - 'plain' — `250` / `45.99`, bare and ungrouped, for form fields whose own
+ *    label carries the currency.
+ */
+export type MoneyStyle = 'code' | 'local' | 'plain';
+
+/** Currencies displayed without decimals (owner-facing style: whole rupees). */
+const ZERO_DECIMAL_CURRENCIES = new Set(['NPR']);
+
+const MONEY_STYLES: Record<
+  MoneyStyle,
+  { markers: Record<string, string>; fallbackToCode: boolean; group: boolean }
+> = {
+  code: { markers: { USD: '$' }, fallbackToCode: true, group: true },
+  local: { markers: { NPR: 'Rs ', USD: '$' }, fallbackToCode: true, group: true },
+  plain: { markers: {}, fallbackToCode: false, group: false },
+};
+
+/** `1234567` → `1,234,567`. Digits only — never sees a float. */
+function groupThousands(digits: string): string {
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/**
+ * Format an integer minor-unit amount. Negative amounts keep the sign in front
+ * of the whole thing (`-NPR 500`), which is how a wallet ledger reads a debit.
+ * A non-finite amount renders as an em-dash rather than `NaN` — a money cell
+ * that says nothing is safer than one that says something wrong.
+ */
+export function renderMoney(amountMinor: number, currency: string, style: MoneyStyle): string {
+  const code = currency.trim().toUpperCase();
+  if (!Number.isFinite(amountMinor)) return '—';
+  const rounded = Math.round(amountMinor);
+  const abs = Math.abs(rounded);
+  // Exact integer split — no `/ 100` on a value that isn't already a multiple.
+  const cents = abs % 100;
+  const whole = (abs - cents) / 100;
+  const { markers, fallbackToCode, group } = MONEY_STYLES[style];
+  const wholeText = ZERO_DECIMAL_CURRENCIES.has(code)
+    ? String(cents >= 50 ? whole + 1 : whole)
+    : String(whole);
+  const amount = ZERO_DECIMAL_CURRENCIES.has(code)
+    ? group
+      ? groupThousands(wholeText)
+      : wholeText
+    : `${group ? groupThousands(wholeText) : wholeText}.${String(cents).padStart(2, '0')}`;
+  const marker = markers[code] ?? (fallbackToCode ? `${code} ` : '');
+  return `${rounded < 0 ? '-' : ''}${marker}${amount}`;
+}
+
 /** `25000, 'NPR'` → `Rs 250` · `250, 'USD'` → `$2.50`. */
 export function formatMoney(amountMinor: number, currency: string): string {
-  const major = amountMinor / 100;
-  return currency === 'NPR' ? `Rs ${major.toFixed(0)}` : `$${major.toFixed(2)}`;
+  return renderMoney(amountMinor, currency, 'local');
 }
 
 /** `'lunch'` → `Lunch · 11:00–13:00`. */

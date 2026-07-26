@@ -1,13 +1,20 @@
 import { accounts } from '@gym/db';
 import { effectiveTier } from '@gym/shared';
 import { eq } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { canCreateSession } from '@/lib/accountStatus';
 import { createSession } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { verifyPassword } from '@/lib/password';
-import { clientIp, rateLimitShared } from '@/lib/rateLimit';
+import {
+  clearRateLimit,
+  clientIp,
+  emailSubject,
+  rateLimitShared,
+  SIGN_IN_ATTEMPTS,
+} from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -45,6 +52,19 @@ export async function POST(req: Request) {
     if (!parsed.success) return json({ error: 'invalid' }, 400);
 
     const email = parsed.data.email.toLowerCase();
+
+    // The sign-in lockout (see SIGN_IN_ATTEMPTS): ten tries per quarter hour at
+    // this ONE address, from anywhere, where the per-IP budget above only ever
+    // held one hop. Checked BEFORE the lookup and the password comparison, so
+    // once it is spent the guess is not evaluated at all.
+    const accountLimited = await rateLimitShared({
+      route: SIGN_IN_ATTEMPTS.route,
+      limit: SIGN_IN_ATTEMPTS.limit,
+      windowMs: SIGN_IN_ATTEMPTS.windowMs,
+      ip: emailSubject(email),
+    });
+    if (accountLimited) return accountLimited;
+
     const rows = await getDb()
       .select({
         id: accounts.id,
@@ -75,6 +95,19 @@ export async function POST(req: Request) {
     }
 
     const token = await createSession(account.id);
+
+    // The password was right, so whatever attempts led here were this member's
+    // own fumbles or somebody else's guesses; either way they stop counting and
+    // the member never inherits a cooldown a stranger started. After the
+    // response, so a slow store cannot delay a sign-in that already worked.
+    after(async () => {
+      await clearRateLimit({
+        route: SIGN_IN_ATTEMPTS.route,
+        windowMs: SIGN_IN_ATTEMPTS.windowMs,
+        ip: emailSubject(email),
+      });
+    });
+
     return json(
       {
         token,

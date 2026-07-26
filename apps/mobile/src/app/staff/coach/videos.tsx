@@ -34,6 +34,7 @@ import {
   updateVideo,
   type CoachVideoRow,
   type Tier,
+  type VideoCreateResult,
   type VideoStatus,
 } from '../../../features/staff/api';
 import { pushStaff, STAFF_ROUTES } from '../../../features/staff/nav';
@@ -131,6 +132,13 @@ function UploadPanel({
   const [notConfigured, setNotConfigured] = useState(false);
   // Photo access is denied for good — the status line gets a route out.
   const [photoBlocked, setPhotoBlocked] = useState(false);
+  // The {video, upload} reservation from a successful createVideo(), held
+  // across retries: a failed host-upload or confirm step re-tries THAT same
+  // processing row instead of reserving another one. Without this, every retry
+  // after a dropped connection left one more 'processing' row behind. Cleared
+  // on success and whenever the form is reset. Same guard the admin content
+  // screen carries — this screen is its twin and had lost it.
+  const [reservation, setReservation] = useState<VideoCreateResult | null>(null);
 
   const suggestions = useMemo(() => {
     const q = exerciseQuery.trim();
@@ -145,6 +153,7 @@ function UploadPanel({
     setTier('gold');
     setExerciseQuery('');
     setExercise(null);
+    setReservation(null);
   }, []);
 
   const pick = useCallback(async () => {
@@ -179,14 +188,21 @@ function UploadPanel({
     setPhase('uploading');
     setLine(null);
     try {
-      const { video, upload } = await createVideo(
-        {
-          title: trimmed,
-          tierRequired: tier,
-          ...(exercise ? { exerciseId: exercise.id } : {}),
-        },
-        token,
-      );
+      // 1. Reserve the slot + create the row (status='processing'), or reuse the
+      //    reservation a previous attempt already made — calling createVideo
+      //    again would leave the earlier row behind for good.
+      const created =
+        reservation ??
+        (await createVideo(
+          {
+            title: trimmed,
+            tierRequired: tier,
+            ...(exercise ? { exerciseId: exercise.id } : {}),
+          },
+          token,
+        ));
+      if (!reservation) setReservation(created);
+      const { video, upload } = created;
 
       const form = new FormData();
       if (upload.fields) {
@@ -223,7 +239,7 @@ function UploadPanel({
       setPhase('details');
       setLine({ text: uploadErrorLine(staffErr.code), tone: 'error' });
     }
-  }, [token, asset, title, tier, exercise, reset, onUploaded]);
+  }, [token, asset, title, tier, exercise, reservation, reset, onUploaded]);
 
   const uploading = phase === 'uploading';
 

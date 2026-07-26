@@ -1,4 +1,4 @@
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { selectTrainingPlan } from '@gym/shared';
@@ -238,6 +238,21 @@ export default function TrainScreen() {
   // the user tried to start until they decide.
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
 
+  // Pull to refresh: re-download the coach catalog (programs, rotations, the
+  // exercise library). Everything else on this tab is read straight from the
+  // device, so it is already current; the catalog is the one thing that can
+  // sit behind what the coach has published, and there was no way to ask for
+  // it again short of hitting an error state.
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshCatalog = (): void => {
+    if (refreshing) return;
+    setRefreshing(true);
+    void catalogState
+      .refresh()
+      .catch(() => null)
+      .finally(() => setRefreshing(false));
+  };
+
   const guardStart = (run: () => void): void => {
     if (activeWorkout) setPendingAction(() => run);
     else run();
@@ -275,7 +290,20 @@ export default function TrainScreen() {
   const tail = Math.min(2 + workouts.length, 8);
 
   return (
-    <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
+    <Screen
+      scroll
+      bottomInset={FLOATING_TAB_SPACE}
+      refreshControl={
+        // Nothing to re-download without an account, so no spinner to offer.
+        needsAccount ? undefined : (
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={refreshCatalog}
+            tintColor={colors.textDim}
+          />
+        )
+      }
+    >
       {/* Brief §5 header: eyebrow → huge Oswald title → meta chips. The library
           shortcut lives in the action slot (same target as before). */}
       <ScreenHeader
@@ -413,10 +441,20 @@ export default function TrainScreen() {
       {needsAccount ? null : (
         <>
         {/* Native, touchable anatomy map. The selected muscle immediately filters
-            the exercise library below it. */}
-        <Animated.View entering={enterUp(1)}>
-          <MuscleFocusSection key={initialMuscleFocus} initialMuscle={initialMuscleFocus} />
-        </Animated.View>
+            the exercise library below it.
+
+            Held back until the workout has actually loaded. The section carries
+            a key so a genuinely new next-workout can re-aim the body, but on a
+            cold open the workout lands a moment after first paint: the key went
+            from the placeholder muscle to the real one, which tore the loaded
+            3D body down and built it again, once every launch, throwing away
+            whatever the member had rotated it to. Mounting it once the muscle
+            is known means it arrives already aimed and then stays put. */}
+        {loaded ? (
+          <Animated.View entering={enterUp(1)}>
+            <MuscleFocusSection key={initialMuscleFocus} initialMuscle={initialMuscleFocus} />
+          </Animated.View>
+        ) : null}
 
         {/* This program's weekly rotation — charcoal block rows, gaps instead of hairlines */}
         {workouts.length > 0 ? (

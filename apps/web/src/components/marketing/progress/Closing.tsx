@@ -3,6 +3,7 @@
 /**
  * /progress closing run: photo interlude → cross-links → compact photo CTA.
  */
+import Image from 'next/image';
 import Link from 'next/link';
 import { Reveal } from '../motion';
 import { Container, Display, Eyebrow, PhotoBlock, PillLink, Section } from '../ui';
@@ -88,12 +89,13 @@ export function CrossLinks() {
 export function ClosingCta() {
   return (
     <section className="relative overflow-hidden">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
+      <Image
         src="/stock/running-stairs.jpg"
         alt=""
         aria-hidden
-        className="absolute inset-0 size-full object-cover"
+        fill
+        sizes="100vw"
+        className="object-cover"
       />
       <div aria-hidden className="absolute inset-0 bg-black/70" />
       <Container className="relative z-10 py-28 text-center sm:py-32">

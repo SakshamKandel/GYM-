@@ -9,6 +9,7 @@
  * members give us quotes we can name, this is where they go.
  */
 import { motion, useScroll, useTransform } from 'motion/react';
+import Image from 'next/image';
 import { useRef } from 'react';
 import { Magnetic, Reveal, WordStagger } from '../motion';
 import { Container, Eyebrow, PillLink } from '../ui';
@@ -22,11 +23,14 @@ export function CtaBand() {
   return (
     <section ref={ref} className="mkt-noise relative overflow-hidden bg-ink">
       <motion.div style={{ y: photoY }} className="absolute inset-[-10%]">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        {/* Last band on the page, so it stays lazy: the browser fetches it as
+            the reader approaches, not while the hero is still loading. */}
+        <Image
           src="/stock/hero-barbell.jpg"
           alt=""
-          className="size-full object-cover"
+          fill
+          sizes="120vw"
+          className="object-cover"
         />
       </motion.div>
       <div className="absolute inset-0 bg-black/72" />

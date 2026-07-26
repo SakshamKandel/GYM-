@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { CORS_HEADERS } from './http';
 
@@ -19,12 +20,16 @@ import { CORS_HEADERS } from './http';
  * export rather than a change to `rateLimit()` — that one is called from ~50
  * places and must keep its synchronous signature.
  *
- * Wired into every credential path: /api/auth/login, /api/auth/register,
- * /api/auth/google, /api/auth/apple (+ its nonce), /api/auth/forgot-password
- * (both the per-IP and the per-address budget), /api/auth/reset-password,
- * /api/auth/logout-all and /api/staff/login. NOT yet wired into
- * /api/staff/reauth or /api/payments/requests — both still count per instance;
- * they are owned elsewhere and want the same one-line swap.
+ * Wired into every credential path: /api/auth/login (both the per-IP and the
+ * per-account budget), /api/auth/register, /api/auth/google, /api/auth/apple
+ * (+ its nonce), /api/auth/forgot-password (both the per-IP and the per-address
+ * budget), /api/auth/reset-password, /api/auth/logout-all, /api/staff/login and
+ * /api/staff/reauth. NOT wired into /api/payments/requests — that one still
+ * counts per instance; it is owned elsewhere and wants the same one-line swap.
+ *
+ * `clearRateLimit()` drops a budget early. It exists for the sign-in lockout:
+ * a member who proves the password is theirs must not keep serving a cooldown
+ * somebody else's failed guesses started.
  *
  * Both return the SAME 429 body: { error: 'rate_limited', retryAfterSec } with
  * a Retry-After header.
@@ -87,6 +92,16 @@ export interface RateLimitArgs {
 }
 
 /**
+ * Who a budget belongs to. Account id when the caller is known, else the IP (or
+ * whatever opaque identity the route passes in that slot, e.g. a hashed email).
+ * Shared by both limiters and by `clearRateLimit`, so a budget can always be
+ * found again by the route that created it.
+ */
+function subjectOf(args: Pick<RateLimitArgs, 'ip' | 'accountId'>): string {
+  return args.accountId ? `acct:${args.accountId}` : `ip:${args.ip ?? 'unknown'}`;
+}
+
+/**
  * Returns a ready-to-send 429 (with Retry-After) when the caller is over
  * budget, or null to continue. Usage:
  *
@@ -97,8 +112,7 @@ export function rateLimit(args: RateLimitArgs): NextResponse | null {
   const now = Date.now();
   sweep(now);
 
-  const subject = args.accountId ? `acct:${args.accountId}` : `ip:${args.ip ?? 'unknown'}`;
-  const key = `${args.route}|${subject}`;
+  const key = `${args.route}|${subjectOf(args)}`;
   const cutoff = now - args.windowMs;
   const prev = hits.get(key);
   const stamps = (prev?.stamps ?? []).filter((t) => t > cutoff);
@@ -228,9 +242,8 @@ export async function rateLimitShared(args: RateLimitArgs): Promise<NextResponse
   if (!store) return rateLimit(args);
 
   const windowMs = Math.max(1, Math.floor(args.windowMs));
-  const subject = args.accountId ? `acct:${args.accountId}` : `ip:${args.ip ?? 'unknown'}`;
   const windowIndex = Math.floor(Date.now() / windowMs);
-  const key = `rl:${args.route}|${subject}|${windowIndex}`;
+  const key = `rl:${args.route}|${subjectOf(args)}|${windowIndex}`;
   const deadline = Date.now() + STORE_BUDGET_MS;
 
   let count: number;
@@ -272,4 +285,77 @@ export async function rateLimitShared(args: RateLimitArgs): Promise<NextResponse
     return tooManyRequests(Math.max(1, Math.ceil(ttlMs / 1000)));
   }
   return null;
+}
+
+/**
+ * ══ THE SIGN-IN LOCKOUT ═════════════════════════════════════════════════════
+ *
+ * Ten attempts per fifteen minutes at ONE email address, counted no matter how
+ * many IPs they arrive from. The per-IP ceiling on /api/auth/login only slows a
+ * caller down per hop, so guesses spread across a botnet used to reach a single
+ * account unmetered. Configure the shared store (see the top of this file) or
+ * the ten are per warm instance, which is damping rather than a real ceiling.
+ *
+ * It lives here, not in the route, because three moments share it: sign-in
+ * spends it, a sign-in that succeeds clears it, and a completed password reset
+ * clears it. Ten guesses a quarter of an hour is ~960 a day, nowhere near
+ * enough to work through a password, and far more than a member fumbling their
+ * own.
+ *
+ * ANYONE CAN TYPE ANYONE'S ADDRESS HERE, so the lockout is built to be
+ * survivable rather than punishing: it lapses on its own, a member who gets
+ * their password right clears it, and a member who has forgotten it clears it
+ * by resetting (a different budget entirely, so the recovery route stays open
+ * while this one is spent). The residue is that a determined stranger can make
+ * a member wait; they can never make the wait permanent, and they still learn
+ * nothing about whether the address has an account.
+ */
+export const SIGN_IN_ATTEMPTS = {
+  route: 'auth/login/account',
+  limit: 10,
+  windowMs: 15 * 60_000,
+} as const;
+
+/**
+ * Budget identity for one email address. Hashed, so a burst of attempts can't
+ * turn the limiter's key set — in memory or in the shared store — into a list
+ * of plaintext addresses. Counted for EVERY address, whether or not it has an
+ * account, so a 429 says nothing about who exists.
+ */
+export function emailSubject(email: string): string {
+  return createHash('sha256').update(email.trim().toLowerCase()).digest('hex').slice(0, 32);
+}
+
+/**
+ * Forget one budget: the caller has just done the thing the budget was there to
+ * protect (proved a password), so the attempts leading up to it stop counting.
+ *
+ * Same keying as the limiters — pass the SAME route, window and identity. It
+ * clears the shared store's current window when a store is configured, and the
+ * in-memory bucket on this instance either way.
+ *
+ * Never throws and never blocks the caller's answer: a store that cannot be
+ * reached leaves the budget to expire on its own, which is a wait, not a
+ * failure. Call it after the response is decided.
+ */
+export async function clearRateLimit(
+  args: Pick<RateLimitArgs, 'route' | 'windowMs' | 'ip' | 'accountId'>,
+): Promise<void> {
+  const subject = subjectOf(args);
+  hits.delete(`${args.route}|${subject}`);
+
+  const store = sharedStore();
+  if (!store) return;
+
+  const windowMs = Math.max(1, Math.floor(args.windowMs));
+  const windowIndex = Math.floor(Date.now() / windowMs);
+  try {
+    await pipeline(
+      store,
+      [['DEL', `rl:${args.route}|${subject}|${windowIndex}`]],
+      Date.now() + STORE_BUDGET_MS,
+    );
+  } catch (err) {
+    console.error(`[rateLimit] could not clear ${args.route}:`, err);
+  }
 }

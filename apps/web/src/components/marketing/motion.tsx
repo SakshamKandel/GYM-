@@ -104,6 +104,12 @@ const MOTION_TAGS: Record<string, ElementType> = {
 /**
  * Scroll-reveal wrapper. Children rise + fade in with a spring when scrolled
  * into view. `delay` (ms) staggers siblings.
+ *
+ * Below the fold this is free: the visitor cannot see the block yet, so it can
+ * afford to wait for hydration. Above the fold it is the opposite — a reveal
+ * writes `opacity:0` into the prerendered HTML, so the first screen stays blank
+ * until the motion chunk lands, React hydrates and an intersection callback
+ * fires. First-screen blocks pass `immediate` instead.
  */
 export function Reveal({
   as = 'div',
@@ -112,6 +118,7 @@ export function Reveal({
   children,
   style,
   y = 28,
+  immediate = false,
 }: {
   as?: ElementType;
   delay?: number;
@@ -120,7 +127,23 @@ export function Reveal({
   style?: CSSProperties;
   /** Rise distance in px. */
   y?: number;
+  /**
+   * Render plain and fully visible, straight from the server HTML. Use for
+   * anything in the first viewport. `delay` and `y` do not apply.
+   */
+  immediate?: boolean;
 }) {
+  if (immediate) {
+    // Same tag, same classes, same box — just no opacity to animate away, so
+    // the paint does not wait on JavaScript.
+    const Plain: ElementType = as;
+    return (
+      <Plain className={className} style={style}>
+        {children}
+      </Plain>
+    );
+  }
+
   const Tag = MOTION_TAGS[as as string] ?? motion.div;
   return (
     <Tag

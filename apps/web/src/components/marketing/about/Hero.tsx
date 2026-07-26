@@ -44,6 +44,7 @@ export function AboutHero() {
               alt="A runner mid-stride on an outdoor track at dawn"
               caption="Kathmandu · training on our own tracks"
               className="aspect-[4/5] w-full"
+              sizes="(min-width: 1024px) 50vw, 100vw"
             />
           </Reveal>
         </div>

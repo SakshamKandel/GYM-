@@ -1,8 +1,36 @@
-# FITNESS COACHING APP — FULL PROJECT SETUP & BUILD PLAN
+# FITNESS COACHING APP — ORIGINAL BUILD PLAN (HISTORICAL)
 
 Coach-branded fitness platform · iOS + Android + Web · Built with Claude Code
 
 ---
+
+> ## ⚠️ This document is history, not instructions
+>
+> This is the plan as written on **2026-07-03**, before a line of the app
+> existed. It is kept because the reasoning is still worth reading. It is **not
+> the architecture source of truth** and several of its biggest calls were
+> reversed within days of being made.
+>
+> **Do not build from this file.** For anything current, use:
+>
+> | For | Read |
+> |---|---|
+> | Rules an engineer or agent must follow | `CLAUDE.md` (and `AGENTS.md`) |
+> | Bootstrapping, environment, operations | `docs/DEPLOY.md` |
+> | The database | `packages/db/src/schema.ts` |
+> | Domain logic and contracts | `packages/shared` |
+> | What the product actually is today | `README.md` |
+>
+> **What changed since.** Section 2 below now carries an "as built" table
+> alongside the original one. Beyond that: Buddy Sync (section 6.1) was built
+> and then **cut** end to end on 2026-07-17, and must not be rebuilt; the
+> database has **no row-level security** and is not meant to (section 7 and
+> section 8 both say otherwise, see `CLAUDE.md` hard rule 3 for why); the
+> folder structure in section 4 never landed as drawn (there is no
+> `packages/api-client` and no `supabase/` directory); and the product grew
+> three surfaces this plan never imagined, namely meal delivery with a
+> restaurant partner portal, a nearby-gyms directory, and a full coach
+> mentorship and payout economy.
 
 ## 1. WHAT WE ARE BUILDING
 
@@ -19,7 +47,29 @@ A subscription-based fitness coaching app selling branded training methodology:
 
 ---
 
-## 2. TECH STACK (DECIDED)
+## 2. TECH STACK
+
+### 2a. AS BUILT (this is the accurate one)
+
+| Layer | What actually shipped | Changed from the plan? |
+|---|---|---|
+| Mobile app | React Native + Expo SDK 57, expo-router, TypeScript strict | No |
+| Website + consoles | **Next.js 15** App Router, React 19, Node 22. One app carries the marketing site, the member API, and the admin, coach and partner consoles | Version, and it turned into three consoles rather than one dashboard |
+| Backend / DB | **Neon Postgres + Drizzle** (`packages/db`), reached only through `apps/web` API routes | **Yes.** Supabase was dropped on 2026-07-03 |
+| Auth | Own email + password against Neon, plus Google and Apple ID-token verification server side. Sessions are bearer tokens minted by `apps/web` | **Yes.** No Supabase Auth |
+| Access control | API layer only, via `@/lib/authz`: scoped by account, fail-closed, audited on mutation. **No row-level security anywhere** | **Yes.** RLS would be bypassed by the single owning role in `DATABASE_URL` |
+| Local/offline DB | expo-sqlite + a sync queue, through `lib/repo` and `features/sync` | No |
+| State | **Zustand only**, persisted through AES-encrypted MMKV with the key in the OS keychain. No TanStack Query | **Yes.** TanStack Query was never added |
+| Mobile styling | Plain StyleSheet + `@gym/ui-tokens`. **No NativeWind** | **Yes.** NativeWind v4 pins Tailwind v3 and breaks on SDK upgrades |
+| Web styling | Tailwind v4 for the marketing site (scoped under `.mkt`), CSS tokens in `globals.css` for the consoles | Partly |
+| Payments | RevenueCat for the stores (webhook is the only thing that grants a tier), plus a manual eSewa/Khalti receipt rail for Nepal and a coach promo/wallet/payout economy | Extended |
+| Email | Resend, behind one seam at `apps/web/src/lib/email/` | Not in the plan at all |
+| Push notifications | Firebase Cloud Messaging server side via `lib/notify`, expo-notifications on device, with an in-app inbox alongside | Changed |
+| Media | Cloudinary, authenticated delivery for receipts and progress photos | Not in the plan |
+| Analytics / Crash | **Neither PostHog nor Sentry is installed.** Analytics is computed in-product on `/admin`; there is no crash reporter | **Yes.** Still an open gap |
+| Monorepo | Turborepo + pnpm: apps/mobile, apps/web, packages/{shared,ui-tokens,db} | No |
+
+### 2b. As originally decided, 2026-07-03 (superseded, kept for the reasoning)
 
 | Layer | Choice | Why |
 |---|---|---|
@@ -44,6 +94,11 @@ A subscription-based fitness coaching app selling branded training methodology:
 ## 3. ARCHITECTURE
 
 ### 3.1 High level
+
+> **Superseded.** The box below reads SUPABASE. It is Neon Postgres, reached
+> only through `apps/web` API routes. Auth, storage and the scheduled jobs are
+> all our own code; there are no edge functions. Realtime was only ever for
+> Buddy Sync, which was cut.
 
 ```
 ┌─────────────┐   ┌─────────────┐   ┌──────────────────┐
@@ -82,6 +137,12 @@ A subscription-based fitness coaching app selling branded training methodology:
 
 ## 4. MONOREPO FOLDER STRUCTURE
 
+> **Superseded.** Close in spirit, wrong in detail. There is no
+> `packages/api-client` (the mobile client lives in `apps/mobile/src/lib/api`)
+> and no `supabase/` directory (migrations are `packages/db/migrations`). There
+> is a `packages/ui-tokens`, and `apps/mobile` uses `src/app` and
+> `src/features`. `README.md` has the real tree.
+
 ```
 fitness-app/
 ├── apps/
@@ -118,6 +179,14 @@ fitness-app/
 ---
 
 ## 5. DESIGN SYSTEM — "IRON DARK"
+
+> **Superseded in its specifics.** The intent survived; the values did not. Real
+> tokens are `packages/ui-tokens` and the brief is
+> `apps/mobile/DESIGN-BRIEF.md`: charcoal `#131416` rather than black, signal
+> red as the one accent, Poppins for headings and Oswald for numerals rather
+> than Bebas Neue and Inter, and six tabs (Home, Train, Food, Meals, Gyms,
+> Progress) rather than five. The accessibility rules in 5.3 are still binding
+> and are repeated in `CLAUDE.md` hard rule 6.
 
 Black-gradient gym aesthetic, engineered so a 45-year-old can use it one-handed between sets.
 
@@ -184,6 +253,14 @@ Radius: 12   Spacing scale: 4/8/12/16/24/32
 - In-app store, live classes, multi-coach marketplace
 
 ### 6.1 GYM BUDDY SYNC — full spec
+
+> **CUT. Do not rebuild this.** It was built, then deleted end to end on
+> 2026-07-17/18: no buddy tab, no `buddies` or `buddy_events` tables, no
+> presence, no nudges. What survived is referrals, as Settings → "Invite
+> friends" and the `/invite` screen. The public leaderboard, trials and coach
+> challenge moved into non-buddy modules. The spec below is kept only so the
+> decision is legible.
+
 **Goal:** two or more friends train together even when apart; social pressure = retention.
 
 Flows:
@@ -199,6 +276,11 @@ Data: `buddies (user_a, user_b, status)`, `buddy_events (type, actor, target, pa
 ---
 
 ## 7. DATABASE SCHEMA (CORE)
+
+> **Superseded.** The real schema is `packages/db/src/schema.ts`, and it is
+> many times this size. The sketch below is the shape we set out to build.
+> `buddies` and `buddy_events` do not exist: Buddy Sync was cut. And see the
+> RLS line at the end of the block, which is wrong, next paragraph.
 
 ```sql
 profiles        (id, display_name, dob, sex, height_cm, unit_pref,
@@ -220,22 +302,45 @@ buddy_events    (id, type, actor_id, target_id, payload, created_at)
 streaks         (user_id, current, best, last_workout_date)
 subscriptions   (user_id, rc_customer_id, tier, expires_at)  -- mirror of RevenueCat
 ```
-**Every table: RLS ON. Default policy = owner-only. Buddy tables get explicit shared-read policies.**
+~~**Every table: RLS ON. Default policy = owner-only. Buddy tables get explicit shared-read policies.**~~
+
+**NOT TRUE, and do not act on it.** This database has no row-level security.
+It went away with Supabase: Neon is reached through one connection string whose
+role owns the tables, so a policy would be bypassed by the very role running
+every query. Owner-only is still the default; it is enforced one layer up, in
+the API. The rule that replaced this one is hard rule 3 in `CLAUDE.md`.
 
 ---
 
 ## 8. SECURITY & SAFETY CHECKLIST
 
-- [ ] Supabase **Row Level Security on every table** — no exceptions.
-- [ ] Progress photos in a **private storage bucket**, served via short-lived signed URLs.
-- [ ] Tokens in **SecureStore/Keychain**, never AsyncStorage.
-- [ ] All tier checks re-validated **server-side** (edge functions), client checks are UI-only.
-- [ ] RevenueCat webhooks verify signatures; subscription state is server truth.
-- [ ] Account deletion (App Store requirement) + data export in Settings.
-- [ ] Health data disclosures in App Store / Play privacy forms; privacy policy page on website.
-- [ ] Rate limiting on nudges, invites, and auth endpoints.
-- [ ] No secrets in the repo — .env + EAS secrets. Sentry scrubs PII.
-- [ ] Zod validation on every API boundary (shared schemas package).
+Status as of 2026-07-26, against the code.
+
+- [x] ~~Supabase **Row Level Security on every table**~~ → **replaced.** Access
+  control is API-layer only: every route guards through `@/lib/authz`, scopes
+  by account or owning role, fails closed, and audits mutations. Nothing but
+  `apps/web` may touch the database. See `CLAUDE.md` hard rule 3.
+- [x] Progress photos and payment receipts are Cloudinary `authenticated`
+  assets and every read mints a signed URL. Caveat: on the free tier those
+  signed URLs never expire, so a captured one works forever
+  (`docs/DEPLOY.md` §5.2 is the open item).
+- [x] Tokens in the OS keychain, never plain AsyncStorage. On device the
+  persisted store is AES-256 MMKV with the key in SecureStore, and it fails
+  closed to memory if the keychain is unavailable.
+- [x] All tier checks re-validated server-side. `effectiveTier()` runs at the
+  auth choke point and a client can never grant itself a paid tier.
+- [x] RevenueCat webhooks verify the signature and reject on 401; subscription
+  state is server truth.
+- [x] Account deletion + data export in Settings. See
+  `docs/ACCOUNT-DELETION-PRIVACY.md`.
+- [ ] Health data disclosures in App Store / Play privacy forms. Privacy policy
+  page is live at `/privacy`; the store forms are still the owner's to fill in.
+- [x] Rate limiting on the auth endpoints, shared across instances once the
+  Redis variables are set. Nudges and invites went with Buddy Sync.
+- [x] No secrets in the repo: `.env` + EAS secrets, and `.env.example` carries
+  names only. Sentry was never added, so nothing scrubs crash PII, because
+  there are no crash reports at all.
+- [x] Zod validation on every API boundary, schemas in `packages/shared`.
 
 ---
 
@@ -265,6 +370,11 @@ claude
 ```
 
 ### 10.2 Bootstrap prompts (run inside Claude Code, in order)
+
+> **Do not run these. The repo already exists.** They describe scaffolding a
+> greenfield project onto Supabase, NativeWind and RLS, all three of which were
+> reversed. Following prompt 1 or 2 today would tear the app up. To bring up a
+> new environment against the code that exists, use `docs/DEPLOY.md` §0.
 1. "Read CLAUDE.md and PROJECT_PLAN.md. Scaffold the Turborepo exactly as the folder structure in section 4: Expo app with expo-router + NativeWind + TypeScript in apps/mobile, Next.js 14 in apps/web, packages/shared + ui-tokens + api-client. Commit when it builds."
 2. "Set up Supabase: create migrations for the schema in section 7 with RLS owner-only policies on every table. Add the typed api-client package."
 3. "Implement the design tokens from section 5 in packages/ui-tokens and build base components: Button (56dp), Card, Screen, StatRing, BigNumber, TabBar. Follow every accessibility rule in 5.3."
@@ -279,7 +389,7 @@ claude
 ### 10.4 Build & ship from Windows
 ```bash
 # dev
-pnpm dev                     # web
+pnpm dev                     # web + API on http://localhost:3055
 cd apps/mobile && npx expo start   # scan QR w/ Expo Go on your phone
 
 # release
@@ -292,7 +402,14 @@ eas submit -p ios && eas submit -p android
 
 ## 11. WHAT TO DECIDE BEFORE FIRST COMMIT
 
-1. Brand name + one accent color (lime or red).
-2. Tier prices (monthly + annual) for all 4 tiers.
-3. Supabase account + Apple Developer ($99/yr) + Google Play ($25 one-time) + RevenueCat (free tier fine).
-4. Who films exercise videos, and the first 3 plan templates (Fat Loss / Muscle / Strength) — the app is a shell without the coach's actual programming.
+All settled long ago. Kept for the record, with what was chosen.
+
+1. ~~Brand name + one accent color (lime or red).~~ The GM Method, signal red.
+2. ~~Tier prices for all 4 tiers.~~ Starter, silver, gold, elite, priced per
+   region (NPR and USD) from Admin → Pricing.
+3. ~~Supabase account~~ → a Neon project. Apple Developer, Google Play and
+   RevenueCat accounts are still the owner's to open; that is what blocks store
+   billing today (`docs/DEPLOY.md` §2.1).
+4. ~~Who films exercise videos, and the first 3 plan templates.~~ 873 exercises
+   are seeded from free-exercise-db, and the three launch plans ship as
+   `seed:training-catalog`. Coach video upload is built and waits on content.

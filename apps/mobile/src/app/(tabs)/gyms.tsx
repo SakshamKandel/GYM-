@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
 import { Ionicons } from '@expo/vector-icons';
@@ -31,6 +31,13 @@ import { useMealAddresses } from '../../features/meals/hooks';
 /** Lifts the 40dp List/Map pills to a 48dp target without growing the pill
  * itself; vertical only, so the two adjacent pills never overlap. */
 const SEGMENT_HIT_SLOP = { top: 4, bottom: 4 } as const;
+
+/**
+ * Longest the pull-to-refresh spinner may stay up if a reload never reports
+ * back. The directory reloads without handing back anything to wait on, so
+ * this is the belt to their braces — the spinner can slow down, never stick.
+ */
+const REFRESH_CAP_MS = 8000;
 
 /**
  * What the tab shows while it is still waiting to know where "near you" is:
@@ -202,8 +209,34 @@ export default function GymsTabScreen() {
   // promise a filter the list can't honour.
   const hasActiveFilters = filters.radiusKm !== null || filters.category !== null;
 
+  // Pull to refresh. Listings are served from memory for five minutes, so a
+  // member standing outside a gym that has just updated its hours had no way
+  // to ask again. `retry` always goes to the network, cache and all.
+  const [refreshing, setRefreshing] = useState(false);
+  useEffect(() => {
+    setRefreshing(false);
+  }, [gyms, error]);
+  useEffect(() => {
+    if (!refreshing) return;
+    const cap = setTimeout(() => setRefreshing(false), REFRESH_CAP_MS);
+    return () => clearTimeout(cap);
+  }, [refreshing]);
+
   return (
-    <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
+    <Screen
+      scroll
+      bottomInset={FLOATING_TAB_SPACE}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true);
+            retry();
+          }}
+          tintColor={colors.textDim}
+        />
+      }
+    >
       {homeBaseSettled ? <GymDirectoryLoader coords={coords} onState={setDirectory} /> : null}
 
       <ScreenHeader

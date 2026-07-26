@@ -125,6 +125,7 @@ export function GymModeSection() {
                   alt="Chalked hands gripping a loaded barbell, seen from above"
                   caption="Set 3 of 4 · rest starts itself"
                   className="aspect-[16/10]"
+                  sizes="(min-width: 1024px) 50vw, 100vw"
                 />
               </Parallax>
             </Reveal>

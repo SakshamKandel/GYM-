@@ -8,7 +8,7 @@ import { z } from 'zod';
  * when it arrives).
  */
 
-import { BASE_URL } from './client';
+import { BASE_URL, fetchWithTimeout, httpStatusToCode } from './client';
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -29,17 +29,18 @@ export function toGamificationError(err: unknown): GamificationApiError {
   return err instanceof GamificationApiError ? err : new GamificationApiError('network');
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 const errorBodySchema = z.object({ error: z.string() });
+
+/**
+ * The shared status table narrowed to the codes this union carries. A 400 still
+ * only becomes 'invalid' when the body says so, and every other status reads as
+ * a plain failure, exactly as before. Exported so badges.ts and social.ts — which
+ * already throw GamificationApiError — read the same table instead of keeping
+ * their own copies.
+ */
+export function gamificationStatusToCode(status: number): GamificationErrorCode {
+  return httpStatusToCode(status) === 'unauthorized' ? 'unauthorized' : 'network';
+}
 
 interface RequestOptions {
   method: 'GET' | 'PATCH';
@@ -51,15 +52,19 @@ interface RequestOptions {
 async function request(opts: RequestOptions): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetchWithTimeout(`${BASE_URL}${opts.path}`, {
-      method: opts.method,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${opts.token}`,
-        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+    res = await fetchWithTimeout(
+      `${BASE_URL}${opts.path}`,
+      {
+        method: opts.method,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${opts.token}`,
+          ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+        },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
+      REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new GamificationApiError('network', "We couldn't connect. Check your connection and try again");
   }
@@ -72,7 +77,7 @@ async function request(opts: RequestOptions): Promise<unknown> {
     }
   }
 
-  let code: GamificationErrorCode = res.status === 401 ? 'unauthorized' : 'network';
+  let code: GamificationErrorCode = gamificationStatusToCode(res.status);
   try {
     const parsed = errorBodySchema.safeParse(await res.json());
     if (parsed.success && parsed.data.error === 'invalid') code = 'invalid';

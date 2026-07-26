@@ -18,23 +18,17 @@ import { z } from 'zod';
  * used for ordering.
  */
 
-import { BASE_URL } from './client';
-import { GamificationApiError, toGamificationError } from './gamification';
+import { BASE_URL, fetchWithTimeout } from './client';
+import {
+  GamificationApiError,
+  gamificationStatusToCode,
+  toGamificationError,
+} from './gamification';
 
 // Old servers may not send `tier` yet — .catch keeps this schema tolerant.
 const tierSchema = z.enum(['starter', 'silver', 'gold', 'elite']).catch('starter');
 
 const REQUEST_TIMEOUT_MS = 10_000;
-
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 const errorBodySchema = z.object({ error: z.string() });
 
@@ -48,15 +42,19 @@ interface RequestOptions {
 async function request(opts: RequestOptions): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetchWithTimeout(`${BASE_URL}${opts.path}`, {
-      method: opts.method,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${opts.token}`,
-        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+    res = await fetchWithTimeout(
+      `${BASE_URL}${opts.path}`,
+      {
+        method: opts.method,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${opts.token}`,
+          ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+        },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
+      REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new GamificationApiError('network', "We couldn't connect. Check your connection and try again");
   }
@@ -69,7 +67,7 @@ async function request(opts: RequestOptions): Promise<unknown> {
     }
   }
 
-  let code: 'unauthorized' | 'invalid' | 'network' = res.status === 401 ? 'unauthorized' : 'network';
+  let code: 'unauthorized' | 'invalid' | 'network' = gamificationStatusToCode(res.status);
   try {
     const parsed = errorBodySchema.safeParse(await res.json());
     if (parsed.success && parsed.data.error === 'invalid') code = 'invalid';
@@ -125,10 +123,14 @@ export type ChallengeJoinErrorCode = 'unauthorized' | 'wrong_month' | 'forbidden
 export async function joinChallenge(token: string, challengeId: string): Promise<ChallengeJoinErrorCode | null> {
   let res: Response;
   try {
-    res = await fetchWithTimeout(`${BASE_URL}/api/challenges/${challengeId}/join`, {
-      method: 'POST',
-      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
-    });
+    res = await fetchWithTimeout(
+      `${BASE_URL}/api/challenges/${challengeId}/join`,
+      {
+        method: 'POST',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      },
+      REQUEST_TIMEOUT_MS,
+    );
   } catch {
     return 'network';
   }

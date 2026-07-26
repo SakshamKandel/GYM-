@@ -9,6 +9,14 @@ import { ArrowLeft, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 
+/**
+ * Decorative loop hosted off-site. It is never part of the first paint: the
+ * markup ships without a source and we only attach one after mount, so a slow
+ * or unreachable host costs the page nothing. The 404 art is all CSS.
+ */
+const LOOP_VIDEO_SRC =
+  'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260713_234424_b1332b69-2e69-4302-8dbc-40f86846afbd.mp4';
+
 const NAV_LINKS = [
   { label: 'About us', href: '/about' },
   { label: 'Training', href: '/training' },
@@ -32,7 +40,15 @@ function GmMark() {
 export default function NotFound() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [scaleY, setScaleY] = useState(1);
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const textRef = useRef<HTMLDivElement>(null);
+
+  // Attach the loop after the page is up, and leave it off for anyone who
+  // asked for less motion.
+  useEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    setVideoSrc(LOOP_VIDEO_SRC);
+  }, []);
 
   // Stretch the 404 vertically to bleed past the viewport, remeasure on resize.
   useEffect(() => {
@@ -99,14 +115,19 @@ export default function NotFound() {
         style={{ marginTop: 'calc(-6vh - 40px)' }}
       >
         <div className="h-[85vh] w-[120vw] sm:h-[70vh] sm:w-[70vw] md:h-[78vh] md:w-[62vw]">
-          <video
-            autoPlay
-            loop
-            muted
-            playsInline
-            className="pointer-events-none size-full object-contain mix-blend-darken"
-            src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260713_234424_b1332b69-2e69-4302-8dbc-40f86846afbd.mp4"
-          />
+          {videoSrc ? (
+            <video
+              autoPlay
+              loop
+              muted
+              playsInline
+              preload="none"
+              aria-hidden
+              onError={() => setVideoSrc(null)}
+              className="pointer-events-none size-full object-contain mix-blend-darken"
+              src={videoSrc}
+            />
+          ) : null}
         </div>
       </div>
 

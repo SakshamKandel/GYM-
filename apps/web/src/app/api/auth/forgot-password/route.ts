@@ -161,11 +161,10 @@ export async function POST(req: Request) {
     // email works: control of the mailbox is the same trust anchor those
     // providers vouch for, and it is the only way such a member can add a
     // password.
-    const delivery = await deliverPasswordReset(
-      db,
-      { id: account.id, email: account.email },
-      new URL(req.url).origin,
-    );
+    const delivery = await deliverPasswordReset(db, {
+      id: account.id,
+      email: account.email,
+    });
 
     // Audited so an account takeover attempt leaves a trail (and so support can
     // see why every session died). The actor is the account itself — the

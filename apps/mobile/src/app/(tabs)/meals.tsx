@@ -1,4 +1,5 @@
-import { StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { RefreshControl, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, radius, spacing, touch, type } from '@gym/ui-tokens';
@@ -33,6 +34,13 @@ import type { MealPartner } from '../../features/meals/api';
  * black onBlock pills; partner kitchens list below as chunky block cards with
  * a monogram tile, delivery-area line and service badges.
  */
+
+/**
+ * Longest the pull-to-refresh spinner may stay up if a reload never reports
+ * back. The list hooks reload without handing back anything to wait on, so
+ * this is the belt to their braces — the spinner can slow down, never stick.
+ */
+const REFRESH_CAP_MS = 8000;
 
 const styles = StyleSheet.create({
   hero: { gap: spacing.md },
@@ -167,10 +175,44 @@ function PartnerCard({ partner, index }: { partner: MealPartner; index: number }
 export default function MealsTabScreen() {
   const status = useAuth((s) => s.status);
   const token = useAuth((s) => s.token);
-  const { data: partners, loading, error, retry } = useMealPartners(status === 'signedIn' ? token : null);
+  const {
+    data: partners,
+    loading,
+    error,
+    reload,
+    retry,
+  } = useMealPartners(status === 'signedIn' ? token : null);
+
+  // Pull to refresh. Kitchens are served from memory for five minutes, so
+  // without this a member who knew a kitchen had reopened had no way to ask
+  // again. `reload` always goes to the network, cache and all.
+  const [refreshing, setRefreshing] = useState(false);
+  useEffect(() => {
+    setRefreshing(false);
+  }, [partners, error]);
+  useEffect(() => {
+    if (!refreshing) return;
+    const cap = setTimeout(() => setRefreshing(false), REFRESH_CAP_MS);
+    return () => clearTimeout(cap);
+  }, [refreshing]);
 
   return (
-    <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
+    <Screen
+      scroll
+      bottomInset={FLOATING_TAB_SPACE}
+      refreshControl={
+        status === 'signedIn' ? (
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              reload();
+            }}
+            tintColor={colors.textDim}
+          />
+        ) : undefined
+      }
+    >
       <Animated.View entering={enterDown()}>
         <Card variant="red" style={styles.hero}>
           <AppText variant="label" color={colors.onBlock}>

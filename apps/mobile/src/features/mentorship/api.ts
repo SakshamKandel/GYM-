@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BASE_URL } from '../../lib/api/client';
+import { BASE_URL, fetchWithTimeout, httpStatusToCode } from '../../lib/api/client';
 
 /**
  * Mentorship API client — the MEMBER side of the coach-trainee system:
@@ -211,20 +211,10 @@ const milestoneListSchema = z.object({
 const okSchema = z.object({ ok: z.literal(true) });
 const errorBodySchema = z.object({ error: z.string() });
 
-// ── Fetch plumbing (same shape as lib/api/client.ts) ──────────
+// ── Fetch plumbing (shared with lib/api/client.ts) ────────────
 
 /** Every call gives up after this long — a hung connection must not freeze screens. */
 const REQUEST_TIMEOUT_MS = 10_000;
-
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 /** {error:'…'} bodies that carry MORE meaning than their HTTP status. */
 function bodyErrorCode(raw: string): MentorshipErrorCode | null {
@@ -240,11 +230,16 @@ function bodyErrorCode(raw: string): MentorshipErrorCode | null {
     : null;
 }
 
+/**
+ * The shared status table narrowed to this client's union: mentorship screens
+ * have no separate copy for 403/409/429/503, so those keep reading as a plain
+ * failure.
+ */
 function statusToCode(status: number): MentorshipErrorCode {
-  if (status === 401) return 'unauthorized';
-  if (status === 404) return 'not_found';
-  if (status === 400) return 'invalid';
-  return 'network';
+  const code = httpStatusToCode(status);
+  return code === 'unauthorized' || code === 'not_found' || code === 'invalid'
+    ? code
+    : 'network';
 }
 
 interface RequestOptions {
@@ -258,15 +253,19 @@ interface RequestOptions {
 async function mentorshipRequest(opts: RequestOptions): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetchWithTimeout(`${BASE_URL}${opts.path}`, {
-      method: opts.method,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${opts.token}`,
-        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+    res = await fetchWithTimeout(
+      `${BASE_URL}${opts.path}`,
+      {
+        method: opts.method,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${opts.token}`,
+          ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+        },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
+      REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new MentorshipApiError('network', "We couldn't connect. Check your connection and try again");
   }

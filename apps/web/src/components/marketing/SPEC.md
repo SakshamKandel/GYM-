@@ -118,9 +118,14 @@ gyms: gym-interior-bright, gym-dumbbells, gym-empty-bw ·
 meals: food-bowl ·
 about: runner-track, runners-silhouette-blue, yoga ·
 download: dumbbell-rack-grab · (hero-barbell is Home's — don't reuse)
-Brand: /brand/mascot.png (mascot logo), /brand/mascot-alt.png, /brand/newie.png.
+Brand: /logo.png is the 2000 px master (only for art drawn large, through
+`next/image`); /logo-mark.png is the 160 px mark `LogoMark` renders. The old
+/brand/ folder was unreferenced and is gone — pull art from git history if you
+need it. Character art lives with the app in apps/mobile/assets/images.
 Always inside `PhotoBlock` / rounded frames — never full-bleed except closing
-CTA backgrounds with a scrim.
+CTA backgrounds with a scrim. Photos go through `next/image` (`PhotoBlock`
+already does): give the frame the size, pass a `sizes` hint, and leave
+everything below the fold lazy.
 
 ## Verification (every agent, before returning)
 

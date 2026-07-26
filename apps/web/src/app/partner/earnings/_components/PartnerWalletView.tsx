@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { formatMoney } from '../../_format';
 
 /**
  * The partner's balance block, at the top of /partner/earnings (WP-5, Pack I;
@@ -47,13 +48,9 @@ interface Props {
   initialPending: PayoutRequest | null;
 }
 
-/** `100000, 'NPR'` → `Rs 1,000` · `1000, 'USD'` → `$10.00`. */
-function formatMoney(amountMinor: number, currency: string): string {
-  const major = amountMinor / 100;
-  return currency === 'NPR'
-    ? `Rs ${major.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-    : `$${major.toFixed(2)}`;
-}
+// Money reads through the portal's shared formatter (../_format) — this file
+// used to carry its own copy, so the same balance appeared as `Rs 1,000` here
+// and `Rs 1000` in the stat tiles directly above it.
 
 const MIN_PAYOUT_MINOR: Record<string, number> = { NPR: 100_000, USD: 1_000 };
 

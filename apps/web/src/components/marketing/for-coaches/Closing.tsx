@@ -4,17 +4,19 @@
  * Closing CTA — full-bleed coaching photo under a heavy scrim, compact and
  * direct: sign in if you're in, talk to us if you're not sure.
  */
+import Image from 'next/image';
 import { Reveal } from '../motion';
 import { Container, Display, Eyebrow, PillLink } from '../ui';
 
 export function ClosingCta() {
   return (
     <section className="relative overflow-hidden">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
+      <Image
         src="/stock/woman-squat-portrait-bw.jpg"
         alt=""
-        className="absolute inset-0 size-full object-cover object-top"
+        fill
+        sizes="100vw"
+        className="object-cover object-top"
       />
       <div className="absolute inset-0 bg-black/70" />
       <Container className="relative py-32 text-center sm:py-40">

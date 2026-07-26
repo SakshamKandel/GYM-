@@ -655,8 +655,67 @@ async function loadAnonymousOwnerId(db: SQLite.SQLiteDatabase): Promise<string> 
   return ownerId;
 }
 
+/**
+ * Thrown when the on-device database could not be opened, after the retries
+ * below. The message is written for a member, not a log line: this is the one
+ * failure that stops the app saving anything at all, so whatever surfaces it
+ * has something true to say (see components/experience/StorageGate).
+ */
+export class RepoUnavailableError extends Error {
+  /** The underlying failure, kept for the crash log only. */
+  readonly reason: unknown;
+
+  constructor(reason: unknown) {
+    super("We can't open your training data on this phone");
+    this.name = 'RepoUnavailableError';
+    this.reason = reason;
+  }
+}
+
+/**
+ * Waits between retries of the initial open. Opening can fail for reasons that
+ * pass on their own — the file is still locked by the process the OS has just
+ * killed, storage is briefly busy on a cold boot — and the store is built ONCE
+ * per app run, so a single unlucky attempt used to poison every read and every
+ * write until the app was force-quit. Two extra tries cost half a second in the
+ * failure case and nothing at all in the normal one.
+ */
+const INIT_RETRY_BACKOFF_MS = [120, 400] as const;
+
 export async function createSqliteRepo(): Promise<RepoStore> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= INIT_RETRY_BACKOFF_MS.length; attempt += 1) {
+    try {
+      return await openSqliteRepo();
+    } catch (err: unknown) {
+      lastError = err;
+      const waitMs = INIT_RETRY_BACKOFF_MS[attempt];
+      if (waitMs === undefined) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  throw new RepoUnavailableError(lastError);
+}
+
+/**
+ * Open the database and bring it up to the current schema. Kept apart from the
+ * store itself so a failed attempt can hand the handle back before the next one
+ * starts: a half-opened database holds a lock the retry would trip over.
+ */
+async function openAndMigrate(): Promise<{
+  db: SQLite.SQLiteDatabase;
+  anonymousOwnerId: string;
+}> {
   const db = await SQLite.openDatabaseAsync('gym-tracker.db');
+  try {
+    return { db, anonymousOwnerId: await migrateAndLoadOwner(db) };
+  } catch (err: unknown) {
+    await db.closeAsync().catch(() => undefined);
+    throw err;
+  }
+}
+
+async function migrateAndLoadOwner(db: SQLite.SQLiteDatabase): Promise<string> {
   await db.execAsync(SCHEMA);
 
   // Installs that created set_logs before RPE landed lack the column —
@@ -694,7 +753,13 @@ export async function createSqliteRepo(): Promise<RepoStore> {
   }
 
   await migrateOwnerScope(db);
-  let anonymousOwnerId = await loadAnonymousOwnerId(db);
+  return loadAnonymousOwnerId(db);
+}
+
+async function openSqliteRepo(): Promise<RepoStore> {
+  const opened = await openAndMigrate();
+  const db = opened.db;
+  let anonymousOwnerId = opened.anonymousOwnerId;
 
   function createScoped(ownerId: string): Repo {
     assertUsableOwnerId(ownerId);

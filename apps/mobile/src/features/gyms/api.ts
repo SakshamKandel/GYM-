@@ -11,7 +11,7 @@ import {
   type GymPublicDetail,
   type GymWeeklyHours,
 } from '@gym/shared';
-import { BASE_URL } from '../../lib/api/client';
+import { BASE_URL, fetchWithTimeout, httpStatusToCode } from '../../lib/api/client';
 
 /**
  * Nearby-gyms API client — public discovery surface (plan §4/§7 P7). Unlike
@@ -97,30 +97,30 @@ const myReviewEnvelope = z.object({
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 const errorBodySchema = z.object({ error: z.string() });
 
+/**
+ * The shared status table narrowed to this client's union: gym screens have no
+ * separate copy for 403/409/503, so those keep reading as a plain failure.
+ */
 function statusToCode(status: number): GymsErrorCode {
-  if (status === 404) return 'not_found';
-  if (status === 400) return 'invalid';
-  if (status === 401) return 'unauthorized';
-  if (status === 429) return 'rate_limited';
-  return 'network';
+  const code = httpStatusToCode(status);
+  return code === 'not_found' ||
+    code === 'invalid' ||
+    code === 'unauthorized' ||
+    code === 'rate_limited'
+    ? code
+    : 'network';
 }
 
 async function gymsRequest(path: string): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetchWithTimeout(`${BASE_URL}${path}`, { method: 'GET', headers: { Accept: 'application/json' } });
+    res = await fetchWithTimeout(
+      `${BASE_URL}${path}`,
+      { method: 'GET', headers: { Accept: 'application/json' } },
+      REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new GymsApiError('network', "We couldn't connect. Check your connection and try again");
   }
@@ -156,15 +156,19 @@ async function authedGymsRequest(opts: {
 }): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetchWithTimeout(`${BASE_URL}${opts.path}`, {
-      method: opts.method,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${opts.token}`,
-        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+    res = await fetchWithTimeout(
+      `${BASE_URL}${opts.path}`,
+      {
+        method: opts.method,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${opts.token}`,
+          ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+        },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-    });
+      REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new GymsApiError('network', "We couldn't connect. Check your connection and try again");
   }

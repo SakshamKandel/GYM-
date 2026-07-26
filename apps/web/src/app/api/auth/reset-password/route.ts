@@ -1,12 +1,19 @@
 import { createHash } from 'node:crypto';
 import { accounts, passwordResetTokens, sessions } from '@gym/db';
 import { and, eq, gt, isNull } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { logAudit } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { hashPassword } from '@/lib/password';
-import { clientIp, rateLimitShared } from '@/lib/rateLimit';
+import {
+  clearRateLimit,
+  clientIp,
+  emailSubject,
+  rateLimitShared,
+  SIGN_IN_ATTEMPTS,
+} from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -77,10 +84,28 @@ export async function POST(req: Request) {
   const row = consumed[0];
   if (!row) return json({ error: 'invalid_or_expired' }, 400);
 
-  await db
+  const updated = await db
     .update(accounts)
     .set({ passwordHash })
-    .where(eq(accounts.id, row.accountId));
+    .where(eq(accounts.id, row.accountId))
+    .returning({ email: accounts.email });
+
+  // Setting a new password is the way out of the sign-in lockout. Holding a
+  // reset token means holding the member's mailbox, which is a stronger proof
+  // than the password itself, so the attempts that led to the lockout stop
+  // counting — otherwise someone could keep a member waiting by guessing at
+  // their address, and the member would have no move but to sit it out.
+  // After the response, so the store can never delay a reset that worked.
+  const resetEmail = updated[0]?.email;
+  if (resetEmail) {
+    after(async () => {
+      await clearRateLimit({
+        route: SIGN_IN_ATTEMPTS.route,
+        windowMs: SIGN_IN_ATTEMPTS.windowMs,
+        ip: emailSubject(resetEmail),
+      });
+    });
+  }
 
   // Force sign-out everywhere: a password reset must invalidate every existing
   // session (the member re-authenticates with the new password).

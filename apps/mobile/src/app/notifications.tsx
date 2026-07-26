@@ -157,6 +157,8 @@ function NotificationsSession({ token }: { token: string | null }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [markingAllRead, setMarkingAllRead] = useState(false);
+  const [markAllError, setMarkAllError] = useState<string | null>(null);
 
   const [prefs, setPrefs] = useState<NotificationPrefsState | null>(null);
   const [prefsBusy, setPrefsBusy] = useState(false);
@@ -175,6 +177,8 @@ function NotificationsSession({ token }: { token: string | null }) {
     setLoading(true);
     setLoadingMore(false);
     setError(null);
+    // A fresh list answers the question the mark-all message was asking about.
+    setMarkAllError(null);
     try {
       const page = await getNotifications(token, { limit: PAGE_SIZE });
       if (listSeq.current !== seq || useAuth.getState().token !== token) return;
@@ -267,15 +271,32 @@ function NotificationsSession({ token }: { token: string | null }) {
     if (target) router.push(target as never);
   }
 
+  /**
+   * Optimistic, but it puts things back. Marking everything read used to clear
+   * the dots and the badge and then swallow a failure whole, so the count
+   * reappeared out of nowhere on the next load with nothing ever having said
+   * the request did not land. Only the rows this call actually changed are
+   * restored, so a row read in another tab meanwhile is left alone.
+   */
   async function onMarkAllRead(): Promise<void> {
-    if (!token || unreadCount === 0) return;
+    if (!token || unreadCount === 0 || markingAllRead) return;
+    const wasUnread = new Set(rows.filter((r) => r.readAt === null).map((r) => r.id));
+    const previousUnreadCount = unreadCount;
+    setMarkingAllRead(true);
+    setMarkAllError(null);
     setRows((prev) => prev.map((r) => (r.readAt === null ? { ...r, readAt: new Date().toISOString() } : r)));
     setUnreadCount(0);
     syncBadge(0);
     try {
       await markAllNotificationsRead(token);
     } catch {
-      // Best-effort — a retry (or the next load) reconciles.
+      if (useAuth.getState().token !== token) return;
+      setRows((prev) => prev.map((r) => (wasUnread.has(r.id) ? { ...r, readAt: null } : r)));
+      setUnreadCount(previousUnreadCount);
+      syncBadge(previousUnreadCount);
+      setMarkAllError("Couldn't mark them read. Try again.");
+    } finally {
+      if (useAuth.getState().token === token) setMarkingAllRead(false);
     }
   }
 
@@ -357,15 +378,23 @@ function NotificationsSession({ token }: { token: string | null }) {
             <PressableScale
               accessibilityRole="button"
               accessibilityLabel="Mark all as read"
+              accessibilityState={{ disabled: markingAllRead }}
+              disabled={markingAllRead}
               onPress={() => void onMarkAllRead()}
               style={styles.markAllBtn}
             >
-              <AppText variant="caption" color={colors.accent}>
+              <AppText variant="caption" color={markingAllRead ? colors.textDim : colors.accent}>
                 Mark all read
               </AppText>
             </PressableScale>
           ) : null}
         </View>
+
+        {markAllError !== null ? (
+          <AppText variant="caption" color={colors.error} style={styles.markAllErrorText}>
+            {markAllError}
+          </AppText>
+        ) : null}
 
         {loading ? (
           <View style={styles.center}>
@@ -531,6 +560,7 @@ const styles = StyleSheet.create({
   header: { marginBottom: spacing.gutter },
   sectionHeadRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   markAllBtn: { minHeight: touch.min, justifyContent: 'center', paddingHorizontal: spacing.xs },
+  markAllErrorText: { marginBottom: spacing.sm },
   center: { paddingVertical: spacing.xl, alignItems: 'center' },
   retry: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingVertical: spacing.md },
   listCard: { gap: 0, marginBottom: spacing.xl },

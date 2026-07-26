@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
+import { BASE_URL, fetchWithTimeout, httpStatusToCode } from '../../lib/api/client';
 
 /**
  * Staff console — support inbox API client (SCALE-UP-PLAN §4.4 / §5.3).
@@ -112,12 +112,18 @@ interface SupportRequestOptions {
  * screen on "Loading…" forever). */
 const SUPPORT_REQUEST_TIMEOUT_MS = 15_000;
 
+/**
+ * The shared status table narrowed to this client's union: the inbox has no
+ * separate copy for 404/409/503, so those keep reading as a plain failure.
+ */
 function statusToCode(status: number): SupportErrorCode {
-  if (status === 401) return 'unauthorized';
-  if (status === 403) return 'forbidden';
-  if (status === 400) return 'invalid';
-  if (status === 429) return 'rate_limited';
-  return 'network';
+  const code = httpStatusToCode(status);
+  return code === 'unauthorized' ||
+    code === 'forbidden' ||
+    code === 'invalid' ||
+    code === 'rate_limited'
+    ? code
+    : 'network';
 }
 
 async function supportRequest(opts: SupportRequestOptions): Promise<unknown> {

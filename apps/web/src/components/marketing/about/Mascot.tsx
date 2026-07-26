@@ -4,6 +4,7 @@
  * Brand Spotter Card — featuring official brand mark, premium metallic surface,
  * and high-converting copy.
  */
+import Image from 'next/image';
 import { Reveal } from '../motion';
 import { Container, Section } from '../ui';
 
@@ -23,10 +24,14 @@ export function AboutMascot() {
                       'radial-gradient(55% 55% at 50% 50%, rgb(255 59 48 / 0.25), transparent 75%)',
                   }}
                 />
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
+                {/* The master art is 2000 px square; this draws it at 180.
+                    next/image serves a matching file instead of the original. */}
+                <Image
                   src="/logo.png"
                   alt="Official Brand Logo"
+                  width={180}
+                  height={180}
+                  sizes="180px"
                   className="relative h-[180px] w-auto object-contain drop-shadow-[0_20px_35px_rgba(255,59,48,0.3)] transition-transform duration-300 hover:scale-105"
                 />
               </div>

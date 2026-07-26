@@ -81,6 +81,35 @@ export function passwordResetUrl(origin: string, token: string): string {
 }
 
 /**
+ * Same fallback origin as the site metadata (app/layout.tsx, robots.ts,
+ * sitemap.ts) so an unset variable still produces a link that resolves.
+ */
+const FALLBACK_ORIGIN = 'https://gym-xi-tawny.vercel.app';
+
+/**
+ * Where a reset link points: the CONFIGURED public address of the site, never
+ * the host the request arrived on.
+ *
+ * A reset link is a bearer credential, and the incoming Host header is caller
+ * input. Building the link from it means a request with a forged host produces
+ * a link to that host, which is then emailed to the member in our name — one
+ * click and the token is in someone else's hands. Reading configuration instead
+ * makes the destination a fact about this deployment, so it is the same for
+ * every caller no matter what they send.
+ */
+export function passwordResetOrigin(): string {
+  const configured = (process.env.NEXT_PUBLIC_SITE_URL ?? '').trim().replace(/\/+$/, '');
+  if (!configured) return FALLBACK_ORIGIN;
+  try {
+    const parsed = new URL(configured);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return FALLBACK_ORIGIN;
+    return parsed.origin;
+  } catch {
+    return FALLBACK_ORIGIN;
+  }
+}
+
+/**
  * What this server tells an UNAUTHENTICATED caller about email.
  *
  * Exactly two values, and both are pure configuration, so the answer is
@@ -148,7 +177,6 @@ export interface PasswordResetRecipient {
 export async function deliverPasswordReset(
   db: Db,
   account: PasswordResetRecipient,
-  origin: string,
 ): Promise<PasswordResetDelivery> {
   if (!isEmailConfigured()) {
     // Names variables only, never a value, and says what an operator can do
@@ -163,8 +191,9 @@ export async function deliverPasswordReset(
   }
 
   const minted = await mintPasswordResetToken(db, account.id, null);
+  // Configured address, not the request's host — see passwordResetOrigin().
   const body = passwordResetEmail(
-    passwordResetUrl(origin, minted.token),
+    passwordResetUrl(passwordResetOrigin(), minted.token),
     minted.expiresAt,
   );
 

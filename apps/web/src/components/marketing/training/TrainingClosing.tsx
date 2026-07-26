@@ -6,6 +6,7 @@
  * photo with a slow scroll parallax, scrim, and a masked headline.
  */
 import { motion, useScroll, useTransform } from 'motion/react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useRef } from 'react';
 import { Magnetic, Parallax, Reveal, Stagger, StaggerItem, WordStagger } from '../motion';
@@ -103,8 +104,7 @@ export function TrainingCta() {
   return (
     <section ref={ref} className="mkt-noise relative overflow-hidden bg-ink">
       <motion.div style={{ y: photoY }} className="absolute inset-[-10%]">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/stock/pullups-bw.jpg" alt="" className="size-full object-cover" />
+        <Image src="/stock/pullups-bw.jpg" alt="" fill sizes="120vw" className="object-cover" />
       </motion.div>
       <div className="absolute inset-0 bg-black/70" />
       <div

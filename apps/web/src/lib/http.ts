@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server';
 
-/** The Expo web dev server runs on another port, so every response is CORS-open. */
+/**
+ * The Expo web dev server runs on another port, so every response is CORS-open.
+ *
+ * This is layer 2 of the policy written out in full in src/lib/cors.ts: it
+ * covers whatever the middleware allowlist does not stamp. Note that for /api/*
+ * the middleware answers OPTIONS itself, so `preflight()` below only actually
+ * runs for the handful of routes outside that prefix.
+ */
 export const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',

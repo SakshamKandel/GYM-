@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Platform,
   Pressable,
   StyleSheet,
   View,
   type AccessibilityActionEvent,
 } from 'react-native';
+import { AndroidHaptics, performAndroidHapticsAsync } from 'expo-haptics';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { colors, radius, touch, type } from '@gym/ui-tokens';
+import { tapHaptic } from '../../lib/haptics';
 import { AppText } from './AppText';
 
 /**
@@ -28,6 +31,35 @@ interface Props {
 
 /** Pixels of drag needed to move one step — tuned for thumb-friendly swiping. */
 const PX_PER_STEP = 24;
+
+/**
+ * Shortest gap between two ticks. A fast drag can cross several steps in
+ * consecutive frames and the long-press repeat fires every 130ms: one tick per
+ * value change reads as feedback, a continuous buzz reads as a fault.
+ */
+const HAPTIC_MIN_GAP_MS = 45;
+/** Module-level: only one stepper is ever under a thumb at a time. */
+let lastHapticAt = 0;
+
+/**
+ * One tick of feedback for a value change, and silent when the phone says so.
+ *
+ * Android goes through the view's own haptic feedback, which respects the
+ * system touch-feedback setting (the impact API drives the vibrator directly
+ * and would ignore it). iOS feedback generators already fall silent when
+ * System Haptics is off, so the shared tap helper is the right call there. Web
+ * has neither and no-ops.
+ */
+function stepHaptic(): void {
+  const now = Date.now();
+  if (now - lastHapticAt < HAPTIC_MIN_GAP_MS) return;
+  lastHapticAt = now;
+  if (Platform.OS === 'android') {
+    void performAndroidHapticsAsync(AndroidHaptics.Clock_Tick).catch(() => undefined);
+    return;
+  }
+  tapHaptic();
+}
 
 const styles = StyleSheet.create({
   root: { alignItems: 'center' },
@@ -79,6 +111,9 @@ export function Stepper({ value, onChange, step, min = 0, max, format, label, bi
     if (next !== liveValue.current) {
       onChange(next);
       liveValue.current = next;
+      // Only when the number actually moved: sitting on the min or the max
+      // must feel like nothing happening, because nothing did.
+      stepHaptic();
     }
   }
 

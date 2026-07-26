@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { SetLog, WorkoutLog } from '@gym/shared';
 import { z } from 'zod';
-import { BASE_URL } from '../../lib/api/client';
+import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
 import { nowIso } from '../../lib/dates';
 import { getRepoForAccount } from '../../lib/repo';
 import { useAuth } from '../../state/auth';
@@ -308,24 +308,23 @@ const DELETE_REQUEST_TIMEOUT_MS = 10_000;
  * which case the caller keeps them queued.
  */
 async function postWorkoutDeletions(token: string, ids: string[]): Promise<string[] | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DELETE_REQUEST_TIMEOUT_MS);
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}/api/sync/workouts`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+    res = await fetchWithTimeout(
+      `${BASE_URL}/api/sync/workouts`,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ deletedWorkoutIds: ids }),
       },
-      body: JSON.stringify({ deletedWorkoutIds: ids }),
-      signal: controller.signal,
-    });
+      DELETE_REQUEST_TIMEOUT_MS,
+    );
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
   if (!res.ok) return null;
   try {

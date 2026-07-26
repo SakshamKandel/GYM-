@@ -14,7 +14,7 @@ import {
   type Permission,
   type StaffRole,
 } from '@gym/shared';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { bearerToken, userForToken } from './auth';
 import { getDb } from './db';
 import { sendPushToAccount } from './push';
@@ -182,6 +182,46 @@ async function loadPrefs(accountId: string): Promise<NotificationPrefs | null> {
 }
 
 /**
+ * The stored prefs of MANY recipients in one read, for a fan-out.
+ *
+ * Same answer as calling {@link loadPrefs} per recipient, one round trip instead
+ * of one each: the map always carries an entry for every account asked for, and
+ * an account with no row keeps its `null` (= all-on), exactly as the single
+ * read returns. Never throws — a failed read comes back as "not preloaded" and
+ * each recipient falls back to its own read, so the fan-out degrades to today's
+ * behaviour rather than losing the whole dispatch.
+ */
+async function loadPrefsForAccounts(
+  accountIds: readonly string[],
+): Promise<Map<string, NotificationPrefs | null> | undefined> {
+  try {
+    const byAccount = new Map<string, NotificationPrefs | null>(
+      accountIds.map((id) => [id, null]),
+    );
+    const rows = await getDb()
+      .select({
+        accountId: notificationPrefs.accountId,
+        categories: notificationPrefs.categories,
+        quietHoursStart: notificationPrefs.quietHoursStart,
+        quietHoursEnd: notificationPrefs.quietHoursEnd,
+      })
+      .from(notificationPrefs)
+      .where(inArray(notificationPrefs.accountId, [...accountIds]));
+    for (const row of rows) {
+      byAccount.set(row.accountId, {
+        categories: (row.categories ?? {}) as NotificationPrefs['categories'],
+        quietHoursStart: row.quietHoursStart,
+        quietHoursEnd: row.quietHoursEnd,
+      });
+    }
+    return byAccount;
+  } catch (err) {
+    console.error('[notify] batched prefs read failed — falling back per recipient', err);
+    return undefined;
+  }
+}
+
+/**
  * Every staff account whose EFFECTIVE permission set (role preset merged with
  * per-account overrides) holds `perm`. Mirrors `authz.effectivePermissionSet`'s
  * rules exactly: super_admin AND main_admin are safety-floored (they hold every
@@ -277,12 +317,19 @@ async function deliverToAccount(
   event: NotificationEvent,
   payload: NotifyPayload,
   dedupeKey: string | undefined,
+  prefsByAccount?: Map<string, NotificationPrefs | null>,
 ): Promise<void> {
   const db = getDb();
 
   // Steps 2-3 + 6: the prefs/quiet-hours decision (or forced-on when disabled).
+  // `prefsByAccount` is the fan-out's one-shot read of the same rows; without it
+  // (single recipient, or that read failed) this recipient reads its own.
   const delivery = prefsEnforced()
-    ? notificationDelivery(await loadPrefs(accountId), event, ktmMinuteOfDay(new Date()))
+    ? notificationDelivery(
+        prefsByAccount ? (prefsByAccount.get(accountId) ?? null) : await loadPrefs(accountId),
+        event,
+        ktmMinuteOfDay(new Date()),
+      )
     : { writeInbox: true, sendPush: true };
 
   // A preference toggle governs the INTERRUPTION, not the record. Whichever way
@@ -410,6 +457,14 @@ export async function notify(
     const recipients = await resolveRecipients(target, options?.recipients);
     if (recipients.length === 0) return;
 
+    // Fan-out only: read every recipient's prefs once instead of once per
+    // recipient inside the loop. A single-recipient target keeps exactly the
+    // path it had (one read, made by the recipient itself).
+    const prefsByAccount =
+      recipients.length > 1 && prefsEnforced()
+        ? await loadPrefsForAccounts(recipients)
+        : undefined;
+
     for (const accountId of recipients) {
       const key = options?.dedupeKey
         ? namespacePerRecipient
@@ -417,7 +472,7 @@ export async function notify(
           : options.dedupeKey
         : undefined;
       try {
-        await deliverToAccount(accountId, event, payload, key);
+        await deliverToAccount(accountId, event, payload, key, prefsByAccount);
       } catch (err) {
         // One recipient's failure must not block the others or the caller.
         console.error(`[notify] delivery failed event=${event} account=${accountId}`, err);

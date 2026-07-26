@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { BASE_URL, fetchWithTimeout, payeeFieldSchema } from '../../lib/api/client';
+import {
+  BASE_URL,
+  fetchWithTimeout,
+  httpStatusToCode,
+  payeeFieldSchema,
+} from '../../lib/api/client';
 import type { Payee } from '../../lib/api/payeeLogic';
 
 /**
@@ -439,7 +444,12 @@ async function mealsRequest(opts: RequestOptions): Promise<unknown> {
     }
   }
 
-  let code = res.status === 401 ? 'unauthorized' : res.status === 403 ? 'forbidden' : 'network';
+  // Status-derived fallback; a named {error} in the body wins below. This
+  // client only ever spoke about these two statuses on their own, so every
+  // other one keeps reading as a plain failure.
+  const fromStatus = httpStatusToCode(res.status);
+  let code: string =
+    fromStatus === 'unauthorized' || fromStatus === 'forbidden' ? fromStatus : 'network';
   let details: Record<string, unknown> | undefined;
   try {
     const parsed = errorBodySchema.safeParse(await res.json());

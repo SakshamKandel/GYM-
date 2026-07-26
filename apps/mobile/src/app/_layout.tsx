@@ -19,6 +19,8 @@ import { getNotifications } from '../features/notifications/api';
 import { registerPushRefresh } from '../features/realtime/pushRefresh';
 import { AppLock } from '../features/security/AppLock';
 import { AppStartupScreen } from '../components/experience/AppStartupScreen';
+import { ErrorBoundary } from '../components/experience/ErrorBoundary';
+import { StorageGate } from '../components/experience/StorageGate';
 import { syncWorkouts } from '../features/sync/workoutSync';
 import { startMemberDataSync, syncMemberData } from '../features/sync/memberDataSync';
 import {
@@ -166,7 +168,13 @@ export default function RootLayout() {
   }
 
   return (
-    // Required for GestureDetector-based gestures (Stepper drag) app-wide.
+    // Two nested boundaries. The inner one keeps a screen that throws from
+    // taking down the providers and the app lock with it, so "Try again"
+    // remounts just the route stack; the outer one catches anything that
+    // escapes (a provider, the lock itself) instead of leaving a blank app
+    // with no way back.
+    <ErrorBoundary area="root">
+    {/* Required for GestureDetector-based gestures (Stepper drag) app-wide. */}
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bg }}>
       {/* Explicit provider + synchronous initial metrics: without this,
           useSafeAreaInsets can report 0 on Android edge-to-edge devices
@@ -175,12 +183,19 @@ export default function RootLayout() {
       <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <StatusBar style="light" />
       <AppLock>
+      <StorageGate>
+      <ErrorBoundary area="screens">
       <Stack
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: colors.bg },
-          animation: 'fade_from_bottom',
-          animationDuration: 180,
+          // The platform's own push, not a bottom fade. Every screen used to
+          // arrive by fading up from the bottom and then leave sideways under
+          // the iOS swipe-back gesture, so the way in never matched the way
+          // out. 'default' gives iOS its horizontal slide (the motion the
+          // swipe-back interruptibly drives) and Android its system
+          // transition, and the duration comes from the platform too.
+          animation: 'default',
         }}
       >
         <Stack.Screen name="(tabs)" />
@@ -189,8 +204,11 @@ export default function RootLayout() {
         {/* Staff console — a top-level route OUTSIDE the (tabs) onboarding gate. */}
         <Stack.Screen name="staff" />
       </Stack>
+      </ErrorBoundary>
+      </StorageGate>
       </AppLock>
       </SafeAreaProvider>
     </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }

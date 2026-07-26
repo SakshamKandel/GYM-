@@ -29,7 +29,7 @@ import {
   type BadgeProgressStats,
   type Rank,
 } from '@gym/shared';
-import { and, eq, inArray, or } from 'drizzle-orm';
+import { and, eq, gte, inArray, or, sql } from 'drizzle-orm';
 import { getDb } from './db';
 
 /**
@@ -158,35 +158,121 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
   const db = getDb();
   const today = todayIsoUtc();
   const monthKey = monthKeyOf(today);
+  // Coach challenge completion is evaluated for the current AND previous month,
+  // if joined — see the note further down for why a past month is re-checked.
+  const previousMonthKey = monthKeyOf(addDaysIso(`${monthKey}-01`, -1));
 
-  // ── Load account tier (effective) + existing gamification profile row ────
-  const accountRows = await db
-    .select({ tier: accounts.tier, tierExpiresAt: accounts.tierExpiresAt })
-    .from(accounts)
-    .where(eq(accounts.id, accountId))
-    .limit(1);
+  // ── Every read the rules examine, in ONE round trip ──────────────────────
+  // These nine reads have no dependency on each other (the joins and filters
+  // between them are all pure JS below), so they used to cost nine sequential
+  // waits inside a function that already ran on every gamification read, every
+  // sync ingest and every check-in. Batched, the wait is one.
+  const [
+    accountRows,
+    profileRows,
+    allWorkouts,
+    existingShields,
+    checkInRows,
+    rankedSetRows,
+    xpRows,
+    existingBadgeRows,
+    challengeRows,
+  ] = await db.batch([
+    db
+      .select({ tier: accounts.tier, tierExpiresAt: accounts.tierExpiresAt })
+      .from(accounts)
+      .where(eq(accounts.id, accountId))
+      .limit(1),
+    db
+      .select({
+        weeklyTargetDays: gamificationProfiles.weeklyTargetDays,
+        bestStreakWeeks: gamificationProfiles.bestStreakWeeks,
+      })
+      .from(gamificationProfiles)
+      .where(eq(gamificationProfiles.accountId, accountId))
+      .limit(1),
+    // ALL finished workouts (ranked + unranked — streak/day_one/comeback use
+    // all finished sessions per design law 4).
+    db
+      .select({
+        id: syncedWorkouts.id,
+        date: syncedWorkouts.date,
+        ranked: syncedWorkouts.ranked,
+      })
+      .from(syncedWorkouts)
+      .where(eq(syncedWorkouts.accountId, accountId)),
+    db
+      .select({ weekStart: restShieldUses.weekStart, monthKey: restShieldUses.monthKey })
+      .from(restShieldUses)
+      .where(eq(restShieldUses.accountId, accountId)),
+    db
+      .select({ id: checkIns.id, date: checkIns.date })
+      .from(checkIns)
+      .where(eq(checkIns.accountId, accountId)),
+    db
+      .select({
+        id: syncedSets.id,
+        exerciseId: syncedSets.exerciseId,
+        exerciseName: syncedSets.exerciseName,
+        weightKg: syncedSets.weightKg,
+        reps: syncedSets.reps,
+        workoutId: syncedSets.workoutId,
+        loggedAt: syncedSets.loggedAt,
+      })
+      .from(syncedSets)
+      .where(eq(syncedSets.accountId, accountId)),
+    // The whole XP ledger, ONCE. It answers three questions that each used to
+    // cost their own statement: which PR sets have already been paid (the
+    // weekly cap counts against history), which ledger keys exist at all (so a
+    // re-run inserts only what is genuinely new instead of re-offering every
+    // day the member has ever trained), and the running total.
+    db
+      .select({ kind: xpEvents.kind, sourceKey: xpEvents.sourceKey, amount: xpEvents.amount })
+      .from(xpEvents)
+      .where(eq(xpEvents.accountId, accountId)),
+    db
+      .select({ badgeId: awardedBadges.badgeId })
+      .from(awardedBadges)
+      .where(eq(awardedBadges.accountId, accountId)),
+    db
+      .select({
+        id: coachChallenges.id,
+        targetDays: coachChallenges.targetDays,
+        monthKey: coachChallenges.monthKey,
+      })
+      .from(coachChallenges)
+      .innerJoin(challengeMembers, eq(challengeMembers.challengeId, coachChallenges.id))
+      .where(
+        and(
+          eq(challengeMembers.accountId, accountId),
+          or(eq(coachChallenges.monthKey, monthKey), eq(coachChallenges.monthKey, previousMonthKey)),
+        ),
+      ),
+  ]);
+
   const account = accountRows[0];
   if (!account) throw new Error(`account not found: ${accountId}`);
 
   const tier = effectiveTier(account.tier, account.tierExpiresAt, new Date());
 
-  const profileRows = await db
-    .select()
-    .from(gamificationProfiles)
-    .where(eq(gamificationProfiles.accountId, accountId))
-    .limit(1);
   let profile = profileRows[0];
   if (!profile) {
     const inserted = await db
       .insert(gamificationProfiles)
       .values({ accountId })
       .onConflictDoNothing({ target: gamificationProfiles.accountId })
-      .returning();
+      .returning({
+        weeklyTargetDays: gamificationProfiles.weeklyTargetDays,
+        bestStreakWeeks: gamificationProfiles.bestStreakWeeks,
+      });
     profile =
       inserted[0] ??
       (
         await db
-          .select()
+          .select({
+            weeklyTargetDays: gamificationProfiles.weeklyTargetDays,
+            bestStreakWeeks: gamificationProfiles.bestStreakWeeks,
+          })
           .from(gamificationProfiles)
           .where(eq(gamificationProfiles.accountId, accountId))
           .limit(1)
@@ -194,27 +280,11 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
   }
   const weeklyTargetDays = profile?.weeklyTargetDays ?? 3;
 
-  // ── Pull ALL finished workouts (ranked + unranked — streak/day_one/comeback
-  //    use all finished sessions per design law 4) ─────────────────────────
-  const allWorkouts = await db
-    .select({
-      id: syncedWorkouts.id,
-      date: syncedWorkouts.date,
-      ranked: syncedWorkouts.ranked,
-    })
-    .from(syncedWorkouts)
-    .where(eq(syncedWorkouts.accountId, accountId));
-
   const sessionDayIsos = [...new Set(allWorkouts.map((w) => w.date))].sort();
   const rankedWorkoutIds = new Set(allWorkouts.filter((w) => w.ranked).map((w) => w.id));
   const lifetimeSessionDays = sessionDayIsos.length;
 
   // ── Existing Rest Shield uses + plan new ones ────────────────────────────
-  const existingShields = await db
-    .select({ weekStart: restShieldUses.weekStart, monthKey: restShieldUses.monthKey })
-    .from(restShieldUses)
-    .where(eq(restShieldUses.accountId, accountId));
-
   const quota = restShieldQuota(tier);
   const planned = planShieldUse({
     sessionDayIsos,
@@ -230,13 +300,15 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
       .values(planned.map((p) => ({ accountId, weekStart: p.weekStart, monthKey: p.monthKey })))
       .onConflictDoNothing({ target: [restShieldUses.accountId, restShieldUses.weekStart] });
   }
-  // Re-read after insert so shieldedWeekStarts reflects everything on record
-  // (existing + freshly planned) even though the unique index above is on
-  // (accountId, weekStart) not accountId alone — reload explicitly.
-  const shieldRows = await db
-    .select({ weekStart: restShieldUses.weekStart, monthKey: restShieldUses.monthKey })
-    .from(restShieldUses)
-    .where(eq(restShieldUses.accountId, accountId));
+  // Everything on record = what was already there plus what this run just
+  // planned. `planShieldUse` never plans a week that is already used, so the two
+  // lists are disjoint and their concatenation is exactly what the re-read used
+  // to return — one round trip cheaper, and cheapest of all on the overwhelming
+  // majority of runs, where nothing new is planned at all.
+  const shieldRows = [
+    ...existingShields,
+    ...planned.map((p) => ({ weekStart: p.weekStart, monthKey: p.monthKey })),
+  ];
   const shieldedWeekStarts = shieldRows.map((r) => r.weekStart);
   const usedThisMonth = shieldRows.filter((r) => r.monthKey === monthKey).length;
 
@@ -250,8 +322,25 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
   const xpInserts: { kind: 'daily_workout' | 'streak_week' | 'checkin' | 'pr'; sourceKey: string; amount: number }[] =
     [];
 
+  // The ledger keys already on record. The insert below is idempotent either
+  // way (unique on accountId+kind+sourceKey, ON CONFLICT DO NOTHING), so this
+  // changes nothing about what the ledger ends up holding — it just stops the
+  // engine re-offering every day the member has ever trained, every single
+  // read. A long-standing member was shipping thousands of rows per call for
+  // the database to throw away.
+  const existingXpKeys = new Set(xpRows.map((e) => `${e.kind}:${e.sourceKey}`));
+  const existingXpTotal = xpRows.reduce((sum, r) => sum + r.amount, 0);
+  const addXp = (
+    kind: 'daily_workout' | 'streak_week' | 'checkin' | 'pr',
+    sourceKey: string,
+    amount: number,
+  ): void => {
+    if (existingXpKeys.has(`${kind}:${sourceKey}`)) return;
+    xpInserts.push({ kind, sourceKey, amount });
+  };
+
   for (const day of sessionDayIsos) {
-    xpInserts.push({ kind: 'daily_workout', sourceKey: day, amount: XP_AWARDS.daily_workout });
+    addXp('daily_workout', day, XP_AWARDS.daily_workout);
   }
 
   // Completed weeks (EVERY fully-elapsed week that met target or was
@@ -270,14 +359,24 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
     const currentWeekStart = weekStartIso(today);
     let cursor = addDaysIso(currentWeekStart, -7);
     const MAX_WEEKS_BACK = 520;
-    for (let i = 0; i < MAX_WEEKS_BACK; i++) {
+    // Stop at the member's own history rather than always walking ten years
+    // back. A week earlier than both their first session and their first shield
+    // can be neither met nor shielded, so those iterations only ever decided
+    // "no" — the weeks the walk still judges, and the answers it gives for
+    // them, are unchanged.
+    const historyWeeks = [
+      ...(sessionDayIsos.length > 0 ? [weekStartIso(sessionDayIsos[0])] : []),
+      ...shieldedWeekStarts,
+    ].sort();
+    const oldestWeek = historyWeeks.length > 0 ? historyWeeks[0] : null;
+    for (let i = 0; i < MAX_WEEKS_BACK && oldestWeek !== null && cursor >= oldestWeek; i++) {
       let daysInWeek = 0;
       for (let d = 0; d < 7; d++) {
         if (dayCounts.has(addDaysIso(cursor, d))) daysInWeek++;
       }
       const met = daysInWeek >= weeklyTargetDays || shieldSet.has(cursor);
       if (met) {
-        xpInserts.push({ kind: 'streak_week', sourceKey: cursor, amount: XP_AWARDS.streak_week });
+        addXp('streak_week', cursor, XP_AWARDS.streak_week);
       }
       cursor = addDaysIso(cursor, -7);
     }
@@ -289,32 +388,16 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
   // 30 XP per day). sourceKey = the check-in's week start, so the xpEvents
   // unique index (accountId, kind, sourceKey) caps it at one per week
   // regardless of how many check-in rows land in that week.
-  const checkInRows = await db
-    .select({ id: checkIns.id, date: checkIns.date })
-    .from(checkIns)
-    .where(eq(checkIns.accountId, accountId));
   const checkInWeeksAwarded = new Set<string>();
   for (const c of checkInRows.slice().sort((a, b) => (a.date < b.date ? -1 : 1))) {
     const wk = weekStartIso(c.date);
     if (checkInWeeksAwarded.has(wk)) continue;
     checkInWeeksAwarded.add(wk);
-    xpInserts.push({ kind: 'checkin', sourceKey: wk, amount: XP_AWARDS.checkin });
+    addXp('checkin', wk, XP_AWARDS.checkin);
   }
 
   // ── Badges: build BadgeComputeInput from RANKED workouts/sets (except
   //    day_one/comeback which use all finished sessions per contract) ──────
-  const rankedSetRows = await db
-    .select({
-      id: syncedSets.id,
-      exerciseId: syncedSets.exerciseId,
-      exerciseName: syncedSets.exerciseName,
-      weightKg: syncedSets.weightKg,
-      reps: syncedSets.reps,
-      workoutId: syncedSets.workoutId,
-      loggedAt: syncedSets.loggedAt,
-    })
-    .from(syncedSets)
-    .where(eq(syncedSets.accountId, accountId));
   const rankedSets = rankedSetRows.filter((s) => rankedWorkoutIds.has(s.workoutId));
 
   const realPrSets = walkRealPrSets(rankedSets);
@@ -322,12 +405,10 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
   // PRs → XP, capped PR_XP_WEEKLY_CAP per ISO week (sourceKey = setId)
   const prCountByWeek = new Map<string, number>();
   // Already-awarded PR xp events this account has (so the cap counts against
-  // history, not just this run).
-  const existingPrEvents = await db
-    .select({ sourceKey: xpEvents.sourceKey })
-    .from(xpEvents)
-    .where(and(eq(xpEvents.accountId, accountId), eq(xpEvents.kind, 'pr')));
-  const existingPrSetIds = new Set(existingPrEvents.map((e) => e.sourceKey));
+  // history, not just this run) — read with the rest of the ledger above.
+  const existingPrSetIds = new Set(
+    xpRows.filter((e) => e.kind === 'pr').map((e) => e.sourceKey),
+  );
   // Seed week counts from sets that already earned PR xp, keyed by the set's
   // logged week, so a re-run doesn't re-derive the cap from scratch.
   for (const s of realPrSets) {
@@ -341,7 +422,7 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
     const countThisWeek = prCountByWeek.get(wk) ?? 0;
     if (countThisWeek >= PR_XP_WEEKLY_CAP) continue; // cap reached — no XP, but the PR itself still stands
     prCountByWeek.set(wk, countThisWeek + 1);
-    xpInserts.push({ kind: 'pr', sourceKey: s.id, amount: XP_AWARDS.pr });
+    addXp('pr', s.id, XP_AWARDS.pr);
   }
 
   if (xpInserts.length > 0) {
@@ -372,14 +453,15 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
 
   const earnedBadgeIds = computeEarnedBadgeIds(badgeInput);
 
-  const existingBadgeRows = await db
-    .select({ badgeId: awardedBadges.badgeId })
-    .from(awardedBadges)
-    .where(eq(awardedBadges.accountId, accountId));
   const existingBadgeIds = new Set(existingBadgeRows.map((b) => b.badgeId));
   const newBadgeIds = earnedBadgeIds.filter((id) => !existingBadgeIds.has(id));
 
+  /** Badge XP this run adds on top of the ledger it read (fallback total only). */
+  let awardedBadgeXp = 0;
+
   if (newBadgeIds.length > 0) {
+    awardedBadgeXp +=
+      newBadgeIds.filter((id) => !existingXpKeys.has(`badge:${id}`)).length * XP_AWARDS.badge;
     await db
       .insert(awardedBadges)
       .values(newBadgeIds.map((badgeId) => ({ accountId, badgeId, status: 'logged' as const })))
@@ -404,21 +486,6 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
   // sync, or a UTC-negative timezone's local "still this month" being UTC
   // next month) — nothing ever re-evaluates a past month otherwise, so a
   // legitimately-earned challenge badge would be gone for good.
-  const previousMonthKey = monthKeyOf(addDaysIso(`${monthKey}-01`, -1));
-  const challengeRows = await db
-    .select({
-      id: coachChallenges.id,
-      targetDays: coachChallenges.targetDays,
-      monthKey: coachChallenges.monthKey,
-    })
-    .from(coachChallenges)
-    .innerJoin(challengeMembers, eq(challengeMembers.challengeId, coachChallenges.id))
-    .where(
-      and(
-        eq(challengeMembers.accountId, accountId),
-        or(eq(coachChallenges.monthKey, monthKey), eq(coachChallenges.monthKey, previousMonthKey)),
-      ),
-    );
   for (const challenge of challengeRows) {
     const daysInChallengeMonth = new Set(
       allWorkouts
@@ -434,6 +501,7 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
         .returning({ id: awardedBadges.id });
       if (inserted.length > 0) {
         newBadgeIds.push(challengeBadgeId);
+        if (!existingXpKeys.has(`badge:${challengeBadgeId}`)) awardedBadgeXp += XP_AWARDS.badge;
         await db
           .insert(xpEvents)
           .values({ accountId, kind: 'badge', sourceKey: challengeBadgeId, amount: XP_AWARDS.badge })
@@ -442,30 +510,32 @@ async function runAwardEngineInner(accountId: string): Promise<GamificationResul
     }
   }
 
-  // Re-read the badge count AFTER every award path above so `badges.earned`
-  // below is never stale by one on the exact call that awards a badge.
-  const finalBadgeCountRows = await db
-    .select({ badgeId: awardedBadges.badgeId })
-    .from(awardedBadges)
-    .where(eq(awardedBadges.accountId, accountId));
-  const finalBadgeCount = finalBadgeCountRows.filter((b) => !b.badgeId.startsWith('challenge:')).length;
+  // Counted AFTER every award path above so `badges.earned` is never stale by
+  // one on the exact call that awards a badge: what is on record now is what
+  // was on record when this run started, plus whatever it just awarded (both
+  // sets are already in hand, so this no longer costs a re-read).
+  const finalBadgeCount = [...new Set([...existingBadgeIds, ...newBadgeIds])].filter(
+    (badgeId) => !badgeId.startsWith('challenge:'),
+  ).length;
 
   // ── Recompute cached profile row ─────────────────────────────────────────
-  const xpTotalRows = await db
-    .select({ amount: xpEvents.amount })
-    .from(xpEvents)
-    .where(eq(xpEvents.accountId, accountId));
-  const xpTotal = xpTotalRows.reduce((sum, r) => sum + r.amount, 0);
-
-  await db
+  // The total is summed IN the update, so the ledger is never shipped here just
+  // to be added up, and the read and the write can no longer disagree.
+  const updatedProfile = await db
     .update(gamificationProfiles)
     .set({
-      xpTotal,
+      xpTotal: sql<number>`(select coalesce(sum(${xpEvents.amount}), 0) from ${xpEvents} where ${xpEvents.accountId} = ${accountId})`,
       streakWeeks: streak.weeks,
       bestStreakWeeks,
       updatedAt: new Date(),
     })
-    .where(eq(gamificationProfiles.accountId, accountId));
+    .where(eq(gamificationProfiles.accountId, accountId))
+    .returning({ xpTotal: gamificationProfiles.xpTotal });
+  // No profile row to update (only possible if it was deleted mid-run): fall
+  // back to what this run knows — the ledger it read plus what it just awarded.
+  const xpTotal =
+    updatedProfile[0]?.xpTotal ??
+    existingXpTotal + xpInserts.reduce((sum, e) => sum + e.amount, 0) + awardedBadgeXp;
 
   // ── Rank (rolling 90-day consistency + lifetime + check-ins) ─────────────
   const cutoff90 = addDaysIso(today, -90);
@@ -654,15 +724,29 @@ export async function bulkRanks(db: Db, accountIds: string[]): Promise<Map<strin
   const today = todayIsoUtc();
   const cutoff90 = addDaysIso(today, -90);
 
-  const [workoutRows, checkInRows, profileRows] = await Promise.all([
+  // Only two numbers per account come out of the workout history — the distinct
+  // session-days in the trailing 90 days and over the member's lifetime — so
+  // both are counted in Postgres. Pulling the raw rows to count them in Node
+  // meant a leaderboard load shipped the ENTIRE training history of all fifty
+  // leaders (tens of thousands of rows on a busy gym) to produce fifty numbers.
+  const [dayCountRows, checkInRows, profileRows] = await Promise.all([
     db
-      .select({ accountId: syncedWorkouts.accountId, date: syncedWorkouts.date })
+      .select({
+        accountId: syncedWorkouts.accountId,
+        lifetimeDays: sql<number>`count(distinct ${syncedWorkouts.date})`.mapWith(Number),
+        days90: sql<number>`count(distinct ${syncedWorkouts.date}) filter (where ${syncedWorkouts.date} >= ${cutoff90})`.mapWith(
+          Number,
+        ),
+      })
       .from(syncedWorkouts)
-      .where(inArray(syncedWorkouts.accountId, accountIds)),
+      .where(inArray(syncedWorkouts.accountId, accountIds))
+      .groupBy(syncedWorkouts.accountId),
+    // Check-ins older than the cutoff were read and then thrown away; the rank
+    // rule only ever looks at the trailing 90 days.
     db
       .select({ accountId: checkIns.accountId, date: checkIns.date })
       .from(checkIns)
-      .where(inArray(checkIns.accountId, accountIds)),
+      .where(and(inArray(checkIns.accountId, accountIds), gte(checkIns.date, cutoff90))),
     db
       .select({
         accountId: gamificationProfiles.accountId,
@@ -672,24 +756,12 @@ export async function bulkRanks(db: Db, accountIds: string[]): Promise<Map<strin
       .where(inArray(gamificationProfiles.accountId, accountIds)),
   ]);
 
-  const lifetimeDays = new Map<string, Set<string>>();
-  const days90 = new Map<string, Set<string>>();
-  for (const w of workoutRows) {
-    let all = lifetimeDays.get(w.accountId);
-    if (!all) lifetimeDays.set(w.accountId, (all = new Set()));
-    all.add(w.date);
-    if (w.date >= cutoff90) {
-      let recent = days90.get(w.accountId);
-      if (!recent) days90.set(w.accountId, (recent = new Set()));
-      recent.add(w.date);
-    }
-  }
+  const dayCounts = new Map(dayCountRows.map((r) => [r.accountId, r]));
 
   // Check-ins are counted as distinct ISO weeks (mirrors checkIns90 in the
   // engine — bounded per week, not raw row counts).
   const checkInWeeks90 = new Map<string, Set<string>>();
   for (const c of checkInRows) {
-    if (c.date < cutoff90) continue;
     let weeks = checkInWeeks90.get(c.accountId);
     if (!weeks) checkInWeeks90.set(c.accountId, (weeks = new Set()));
     weeks.add(weekStartIso(c.date));
@@ -701,9 +773,9 @@ export async function bulkRanks(db: Db, accountIds: string[]): Promise<Map<strin
     ranks.set(
       id,
       computeRank({
-        sessionDays90: days90.get(id)?.size ?? 0,
+        sessionDays90: dayCounts.get(id)?.days90 ?? 0,
         weeklyTargetDays: targetByAccount.get(id) ?? 3,
-        lifetimeSessionDays: lifetimeDays.get(id)?.size ?? 0,
+        lifetimeSessionDays: dayCounts.get(id)?.lifetimeDays ?? 0,
         checkIns90: checkInWeeks90.get(id)?.size ?? 0,
       }),
     );

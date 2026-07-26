@@ -2,8 +2,13 @@
 
 /**
  * Home hero v3 — dark cinematic opener: ember aurora over near-black,
- * blueprint grid, word-by-word headline reveal, magnetic CTAs, and an
- * interactive mobile phone replica with live tab switching matching the Expo mobile app.
+ * blueprint grid, magnetic CTAs, and an interactive mobile phone replica with
+ * live tab switching matching the Expo mobile app.
+ *
+ * Everything in the first viewport renders plain (`Reveal immediate`), so the
+ * headline, the copy, the tab chips, the buttons and the phone are all in the
+ * prerendered HTML at full opacity and paint before any JavaScript arrives.
+ * Only the stat band, which starts below the fold, keeps a scroll reveal.
  */
 import { motion, useScroll, useSpring, useTransform } from 'motion/react';
 import { useRef, useState } from 'react';
@@ -60,7 +65,7 @@ export function HomeHero() {
               <WordStagger text="One app." className="mkt-text-ember block" />
             </h1>
 
-            <Reveal delay={700}>
+            <Reveal immediate>
               <p className="mt-7 max-w-xl text-[17px] leading-relaxed text-dim">
                 Workouts, food, healthy meal delivery, gym discovery and real human coaching,
                 in one calm, offline-first app. Log workouts instantly with no waiting, even
@@ -69,7 +74,7 @@ export function HomeHero() {
             </Reveal>
 
             {/* Interactive Tab Selector Chips */}
-            <Reveal delay={780} className="mt-7 flex flex-wrap items-center gap-2">
+            <Reveal immediate className="mt-7 flex flex-wrap items-center gap-2">
               <span className="text-[12px] font-semibold uppercase tracking-wider text-dim w-full block mb-1">
                 Explore Mobile App Tabs:
               </span>
@@ -92,7 +97,7 @@ export function HomeHero() {
               })}
             </Reveal>
 
-            <Reveal delay={840} className="mt-9 flex flex-wrap items-center gap-4">
+            <Reveal immediate className="mt-9 flex flex-wrap items-center gap-4">
               <Magnetic>
                 <PillLink href="/download">Get the app</PillLink>
               </Magnetic>
@@ -103,14 +108,14 @@ export function HomeHero() {
               </Magnetic>
             </Reveal>
 
-            <Reveal delay={920}>
+            <Reveal immediate>
               <p className="mt-8 font-sans text-[14.5px] text-faint">
                 iOS · Android · Offline-first · No ads, ever
               </p>
             </Reveal>
           </div>
 
-          <Reveal delay={420} y={40} className="flex justify-center lg:justify-end lg:pr-10">
+          <Reveal immediate className="flex justify-center lg:justify-end lg:pr-10">
             <motion.div style={{ y: phoneY, rotate: phoneRotate }}>
               <motion.div style={{ opacity: glowOpacity }}>
                 <Float amplitude={10} duration={7}>
@@ -130,8 +135,11 @@ export function HomeHero() {
         {/* Stat band */}
         <div className="mkt-divider mt-24" />
         <div className="grid grid-cols-2 gap-x-8 gap-y-12 py-14 md:grid-cols-4">
+          {/* The stat band sits below the fold, so it keeps the scroll reveal.
+              The stagger is tight on purpose: at 90ms a step the last number
+              landed almost a third of a second after the first. */}
           {STATS.map((s, i) => (
-            <Reveal key={s.caption} delay={i * 90}>
+            <Reveal key={s.caption} delay={i * 50}>
               <div className="mkt-text-steel font-display text-5xl font-medium sm:text-6xl">
                 <CountUp to={s.value} prefix={s.prefix} suffix={s.suffix} />
               </div>

@@ -20,6 +20,7 @@ import {
   type MemberDataSyncResponse,
 } from '@gym/shared';
 import { and, asc, eq, inArray, or, sql, type Column } from 'drizzle-orm';
+import type { BatchItem } from 'drizzle-orm/batch';
 import { bearerToken, userForToken } from '@/lib/auth';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
@@ -28,6 +29,26 @@ import { clientIp, rateLimit } from '@/lib/rateLimit';
 export const runtime = 'nodejs';
 
 const PULL_LIMIT_PER_ENTITY = 100;
+
+/**
+ * How many mutations are sent to Neon in one go.
+ *
+ * A push of 100 offline writes used to be 100 sequential round trips, so a
+ * member coming back online after a week abroad waited on the network a hundred
+ * times over before their queue drained. The statements themselves are
+ * UNCHANGED — each is still its own upsert carrying its own deterministic
+ * last-writer-wins guard — they simply travel together and are applied in the
+ * same order, which is the whole correctness story of this design.
+ *
+ * Chunked rather than one giant request so the payload stays a sane size, and
+ * because a chunk is one transaction: a failing statement rolls its chunk back,
+ * which is the same outcome the sequential loop had (no acknowledgements are
+ * returned, so the client safely retries the entire batch).
+ */
+const MUTATION_BATCH_SIZE = 25;
+
+/** One member-data upsert, ready to travel in a batch. */
+type MutationStatement = BatchItem<'pg'>;
 
 type VersionedMutation = Pick<MemberDataMutation, 'mutationId' | 'changedAt' | 'deleted'>;
 
@@ -51,7 +72,7 @@ function incomingWins(
   )}, ${mutation.mutationId})`;
 }
 
-async function applyMutation(accountId: string, mutation: MemberDataMutation): Promise<void> {
+function mutationStatement(accountId: string, mutation: MemberDataMutation): MutationStatement {
   const db = getDb();
   const now = new Date();
   const sync = versionFields(mutation, now);
@@ -60,7 +81,7 @@ async function applyMutation(accountId: string, mutation: MemberDataMutation): P
   switch (record.entity) {
     case 'weight': {
       const value = record.value;
-      await db
+      return db
         .insert(memberWeightLogs)
         .values({ accountId, ...value, ...sync })
         .onConflictDoUpdate({
@@ -72,11 +93,10 @@ async function applyMutation(accountId: string, mutation: MemberDataMutation): P
             mutation,
           ),
         });
-      return;
     }
     case 'measurement': {
       const value = record.value;
-      await db
+      return db
         .insert(memberMeasurements)
         .values({ accountId, ...value, ...sync })
         .onConflictDoUpdate({
@@ -88,11 +108,10 @@ async function applyMutation(accountId: string, mutation: MemberDataMutation): P
             mutation,
           ),
         });
-      return;
     }
     case 'food': {
       const value = record.value;
-      await db
+      return db
         .insert(memberFoods)
         .values({
           accountId,
@@ -117,11 +136,10 @@ async function applyMutation(accountId: string, mutation: MemberDataMutation): P
           },
           setWhere: incomingWins(memberFoods.clientChangedAt, memberFoods.mutationId, mutation),
         });
-      return;
     }
     case 'foodLog': {
       const value = record.value;
-      await db
+      return db
         .insert(memberFoodLogs)
         .values({ accountId, ...value, ...sync })
         .onConflictDoUpdate({
@@ -133,11 +151,10 @@ async function applyMutation(accountId: string, mutation: MemberDataMutation): P
             mutation,
           ),
         });
-      return;
     }
     case 'water': {
       const value = record.value;
-      await db
+      return db
         .insert(memberWaterLogs)
         .values({ accountId, ...value, ...sync })
         .onConflictDoUpdate({
@@ -149,11 +166,10 @@ async function applyMutation(accountId: string, mutation: MemberDataMutation): P
             mutation,
           ),
         });
-      return;
     }
     case 'steps': {
       const value = record.value;
-      await db
+      return db
         .insert(memberStepLogs)
         .values({ accountId, ...value, ...sync })
         .onConflictDoUpdate({
@@ -560,7 +576,16 @@ export async function POST(req: Request) {
 
   // Each row is independently idempotent. If a request fails halfway, the
   // client receives no acknowledgements and safely retries the entire batch.
-  for (const mutation of mutations) await applyMutation(user.id, mutation);
+  // Applied in submission order, in chunks, so the per-mutation conflict rule
+  // (deterministic last-writer-wins, enforced by each statement's own guard)
+  // decides exactly what it decided when these travelled one at a time.
+  const db = getDb();
+  const statements = mutations.map((mutation) => mutationStatement(user.id, mutation));
+  for (let i = 0; i < statements.length; i += MUTATION_BATCH_SIZE) {
+    const [first, ...rest] = statements.slice(i, i + MUTATION_BATCH_SIZE);
+    if (!first) break;
+    await db.batch([first, ...rest]);
+  }
 
   const [weight, measurement, food, foodLog, water, steps, resolved] = await Promise.all([
     pullWeight(user.id, cursor.weight),

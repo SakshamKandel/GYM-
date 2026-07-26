@@ -11,7 +11,7 @@ import { AnimatePresence, motion, useMotionValueEvent, useScroll } from 'motion/
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { LogoMark, Wordmark } from './ui';
+import { LogoMark } from './ui';
 
 const FEATURES = [
   { label: 'Training', href: '/training', blurb: 'Logger, gym mode, 3D anatomy' },
@@ -101,8 +101,7 @@ export function Nav() {
         }`}
       >
         <Link href="/" aria-label="Home" className="flex items-center gap-3 shrink-0">
-          <LogoMark size={40} className="sm:hidden" />
-          <LogoMark size={48} className="hidden sm:block" />
+          <LogoMark size={48} sizeClass="size-10 sm:size-12" />
         </Link>
 
         {/* Desktop nav */}

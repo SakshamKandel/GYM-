@@ -4,6 +4,7 @@
  * Mock: a gym detail page — photo hero, name + area, open status, hours rows,
  * amenity chips (looping emphasis) and the red "Get directions" pill.
  */
+import Image from 'next/image';
 import { useInView, useStepLoop } from '../motion';
 import { AppEyebrow, AppScreen, AppTabBar, AppTitle, BlockCard } from './appkit';
 
@@ -23,11 +24,12 @@ export function GymDetailScreen() {
       <div ref={ref} className="flex flex-1 flex-col gap-3 px-5 pt-1">
         {/* Photo hero */}
         <div className="relative h-[142px] overflow-hidden rounded-[20px]">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
+          <Image
             src="/stock/gym-interior-bright.jpg"
             alt=""
-            className={`size-full object-cover transition-transform duration-[1400ms] ease-out ${
+            fill
+            sizes="300px"
+            className={`object-cover transition-transform duration-[1400ms] ease-out ${
               inView ? 'scale-100' : 'scale-110'
             }`}
           />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -22,7 +22,12 @@ import { isTypingMessage, useCoachThread } from '../useCoachThread';
 import { MessageBubble } from './MessageBubble';
 
 /**
- * Reusable Elite chat thread: a scrollable message list over a pinned input.
+ * Reusable Elite chat thread: an inverted message list over a pinned input, so
+ * the newest message sits against the composer and older ones run up the
+ * screen. Inverted is what makes a message arrive by itself: nothing has to
+ * animate a scroll to the end, so reading two days back is never interrupted
+ * by the coach replying (or by the keyboard opening).
+ *
  * Crash-safe and offline-tolerant — the hook keeps the last-known thread and
  * a failed load shows a quiet retry row, never a blocking error screen.
  * Optimistic send; successHaptic fires only when a message actually posts.
@@ -185,13 +190,19 @@ function CoachThreadSession({
   const listRef = useRef<FlatList<CoachMessage>>(null);
   const inputRef = useRef<TextInput>(null);
 
-  // Keep the newest message in view as the thread grows or the keyboard opens.
-  const scrollToEnd = useCallback(() => {
-    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
+  /**
+   * Newest first, because the list is `inverted`: index 0 sits at the bottom,
+   * against the composer, and the thread grows upwards from there. That is what
+   * makes a new message arrive on its own without anyone scrolling — and, more
+   * importantly, what stops the thread yanking itself to the bottom while the
+   * member is reading something further up.
+   */
+  const ordered = useMemo(() => [...messages].reverse(), [messages]);
+
+  /** The bottom of an inverted list is offset 0. Used only after our own send. */
+  const scrollToNewest = useCallback(() => {
+    requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated: true }));
   }, []);
-  useEffect(() => {
-    if (messages.length > 0) scrollToEnd();
-  }, [messages.length, scrollToEnd]);
 
   const canSend = draft.trim().length > 0 && !sending;
 
@@ -199,12 +210,15 @@ function CoachThreadSession({
     const body = draft.trim();
     if (body.length === 0 || sending) return;
     setDraft('');
+    // Sending is the one moment the member DOES want to be taken to the newest
+    // message — they just wrote it.
+    scrollToNewest();
     void (async () => {
       const ok = await send(body);
       if (ok) successHaptic();
       else setDraft((d) => (d.length === 0 ? body : d)); // restore if input still empty
     })();
-  }, [draft, sending, send]);
+  }, [draft, sending, send, scrollToNewest]);
 
   const applyStarter = useCallback((text: string) => {
     setDraft(text);
@@ -213,8 +227,11 @@ function CoachThreadSession({
 
   const renderItem = useCallback<ListRenderItem<CoachMessage>>(
     ({ item, index }) => {
-      const prev = index > 0 ? messages[index - 1] : undefined;
-      const next = index < messages.length - 1 ? messages[index + 1] : undefined;
+      // `ordered` runs newest → oldest, so the message ABOVE this one on screen
+      // is the next index and the one BELOW is the previous. Grouping and day
+      // dividers still read top-to-bottom; only the lookup direction flips.
+      const prev = index < ordered.length - 1 ? ordered[index + 1] : undefined;
+      const next = index > 0 ? ordered[index - 1] : undefined;
       const newDay = !prev || !sameLocalDay(prev.createdAt, item.createdAt);
       const firstInGroup = newDay || prev === undefined || prev.sender !== item.sender;
       const lastInGroup =
@@ -234,7 +251,7 @@ function CoachThreadSession({
         </Animated.View>
       );
     },
-    [messages, coachName],
+    [ordered, coachName],
   );
 
   const showEmpty = !loading && messages.length === 0;
@@ -278,14 +295,17 @@ function CoachThreadSession({
       ) : (
         <FlatList
           ref={listRef}
-          data={messages}
+          inverted
+          data={ordered}
           keyExtractor={(m) => m.id}
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          onContentSizeChange={scrollToEnd}
-          ListHeaderComponent={
+          // Footer, not header: an inverted list draws its footer at the far
+          // end of the thread, which is where this notice has always sat —
+          // above the oldest message, not wedged against the composer.
+          ListFooterComponent={
             stale ? (
               <PressableScale
                 accessibilityRole="button"
@@ -337,7 +357,6 @@ function CoachThreadSession({
           placeholder={placeholder}
           multiline
           maxLength={MAX_LEN}
-          onFocus={scrollToEnd}
           accessibilityLabel="Message"
         />
         <PressableScale

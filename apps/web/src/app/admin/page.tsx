@@ -426,13 +426,18 @@ export default async function AdminOverviewPage() {
     support: permissions.has('support.thread.read'),
   };
 
-  const data = await loadOverview(perms);
-  const { membership, recentActivity } = data;
-  const revenue = data.ops.revenueThisMonth;
-
+  // Two independent reads: the overview queries and the setup-gap check share
+  // no data, so they run side by side. Awaited one after the other, the front
+  // door paid for both round trips end to end on every load.
+  //
   // Setup gaps are platform-wide, so they follow the same super/main-only gate
   // as the other whole-platform readouts (analytics.read).
-  const configIssues = permissions.has('analytics.read') ? await loadConfigIssues() : [];
+  const [data, configIssues] = await Promise.all([
+    loadOverview(perms),
+    permissions.has('analytics.read') ? loadConfigIssues() : Promise.resolve<string[]>([]),
+  ]);
+  const { membership, recentActivity } = data;
+  const revenue = data.ops.revenueThisMonth;
 
   // Would this page render as a bare title? Every block below is permission-fed,
   // so a role holding none of those permissions (content_admin) landed on an

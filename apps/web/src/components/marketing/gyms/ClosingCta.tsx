@@ -4,18 +4,20 @@
  * Closing CTA — compact photo band (empty gym, black & white) under a dark
  * scrim. The page's send-off: get the app, walk in already sure.
  */
+import Image from 'next/image';
 import { Reveal } from '../motion';
 import { Container, Display, PillLink } from '../ui';
 
 export function GymsClosingCta() {
   return (
     <section className="relative overflow-hidden">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
+      <Image
         src="/stock/gym-empty-bw.jpg"
         alt=""
         aria-hidden
-        className="absolute inset-0 size-full object-cover"
+        fill
+        sizes="100vw"
+        className="object-cover"
       />
       <div aria-hidden className="absolute inset-0 bg-black/70" />
 

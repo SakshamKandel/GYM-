@@ -5,7 +5,7 @@ import { logAudit, requireStaff } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
 import { verifyPassword } from '@/lib/password';
-import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { clientIp, rateLimitShared } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -45,7 +45,13 @@ export async function POST(req: Request) {
   // Damp password guessing: 5 attempts / minute, keyed to the account so the
   // budget follows the caller across IPs (a stolen session can't brute-force a
   // password from many hops). Separate from the login route's IP budget.
-  const limited = rateLimit({
+  //
+  // Counted in the shared store when one is configured, so all five belong to
+  // the account rather than to each warm serverless instance — the deployment
+  // notes have always said this limit holds across instances, and now it does.
+  // With no store configured it falls back to the per-instance counter, so
+  // local development is unchanged.
+  const limited = await rateLimitShared({
     route: 'staff/reauth',
     limit: 5,
     windowMs: 60_000,

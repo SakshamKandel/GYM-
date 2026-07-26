@@ -8,30 +8,28 @@ import type { BadgeProgressStats } from '@gym/shared';
  * plus a local cache — see features/gamification/store.ts).
  */
 
-import { BASE_URL } from './client';
-import { GamificationApiError, toGamificationError } from './gamification';
+import { BASE_URL, fetchWithTimeout } from './client';
+import {
+  GamificationApiError,
+  gamificationStatusToCode,
+  toGamificationError,
+} from './gamification';
 
 const REQUEST_TIMEOUT_MS = 10_000;
-
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 const errorBodySchema = z.object({ error: z.string() });
 
 async function get(path: string, token: string): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetchWithTimeout(`${BASE_URL}${path}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
-    });
+    res = await fetchWithTimeout(
+      `${BASE_URL}${path}`,
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      },
+      REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new GamificationApiError('network', "We couldn't connect. Check your connection and try again");
   }
@@ -44,7 +42,7 @@ async function get(path: string, token: string): Promise<unknown> {
     }
   }
 
-  let code: 'unauthorized' | 'invalid' | 'network' = res.status === 401 ? 'unauthorized' : 'network';
+  let code: 'unauthorized' | 'invalid' | 'network' = gamificationStatusToCode(res.status);
   try {
     const parsed = errorBodySchema.safeParse(await res.json());
     if (parsed.success && parsed.data.error === 'invalid') code = 'invalid';

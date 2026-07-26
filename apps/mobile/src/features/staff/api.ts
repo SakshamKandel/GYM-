@@ -12,7 +12,7 @@ import {
   type Permission,
   type StaffRole,
 } from '@gym/shared';
-import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
+import { BASE_URL, fetchWithTimeout, httpStatusToCode } from '../../lib/api/client';
 
 /**
  * Staff console API client — coach + admin surfaces of the GM Method backend.
@@ -164,15 +164,13 @@ interface StaffRequestOptions {
  * any console screen forever). */
 const STAFF_REQUEST_TIMEOUT_MS = 15_000;
 
+/**
+ * The console speaks every code the shared status table can produce, so this is
+ * a straight pass-through — it stays as a named function only so the narrowing
+ * to StaffErrorCode is checked in one place.
+ */
 function statusToCode(status: number): StaffErrorCode {
-  if (status === 401) return 'unauthorized';
-  if (status === 403) return 'forbidden';
-  if (status === 404) return 'not_found';
-  if (status === 400) return 'invalid';
-  if (status === 409) return 'conflict';
-  if (status === 429) return 'rate_limited';
-  if (status === 503) return 'not_configured';
-  return 'network';
+  return httpStatusToCode(status);
 }
 
 /**

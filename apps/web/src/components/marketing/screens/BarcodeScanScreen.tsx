@@ -5,6 +5,7 @@
  * tightly framing the barcode, a sweeping red scan line, then a staged loop:
  * scan → matched → product card slides up → added to lunch → reset.
  */
+import Image from 'next/image';
 import { useStepLoop } from '../motion';
 import { AppEyebrow, AppScreen, AppTabBar } from './appkit';
 
@@ -33,11 +34,12 @@ export function BarcodeScanScreen() {
 
         {/* Camera viewfinder */}
         <div className="relative mt-3 flex-1 overflow-hidden rounded-[22px]">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
+          <Image
             src="/stock/food-bowl.jpg"
             alt=""
-            className="absolute inset-0 size-full scale-110 object-cover opacity-45 blur-[2px]"
+            fill
+            sizes="300px"
+            className="scale-110 object-cover opacity-45 blur-[2px]"
           />
           <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-black/25 to-black/70" />
 

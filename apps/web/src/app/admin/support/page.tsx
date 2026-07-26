@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { PageHeader, StatTile } from '@/components/console';
+import { Suspense } from 'react';
+import { PageHeader, SkeletonRows, SkeletonTiles, StatTile } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
 import { loadSupportThreads } from '@/lib/supportThreads';
@@ -24,18 +25,40 @@ export const dynamic = 'force-dynamic';
  * true, and the per-row `priority` flag the badge and the tile below read.
  */
 
-export default async function AdminSupportPage() {
-  const principal = await staffFromCookie();
-  if (!principal) redirect('/admin/login');
-  const permissions = await effectivePermissionSet(principal);
-  if (!permissions.has('support.thread.read')) redirect('/admin');
-  // Replying, resolving, reopening and assigning all hit routes guarded by
-  // `support.thread.reply` — a stricter permission than the read grant that
-  // opens this page. Deriving it here and disabling those controls when it is
-  // absent (e.g. stripped by a DENY override) kills the 403-trap where a
-  // read-only support viewer could type a reply that the API rejects (P1-3).
-  const canReply = permissions.has('support.thread.reply');
+/** Tiles + inbox while the (unpaginated) thread read is still in flight. */
+function QueueSkeleton() {
+  return (
+    <>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: 14,
+          marginBottom: 24,
+        }}
+      >
+        <SkeletonTiles count={4} />
+      </div>
+      <SkeletonRows rows={8} cols={4} />
+    </>
+  );
+}
 
+/**
+ * Everything that needs the thread list. Split out so it can sit behind a
+ * Suspense boundary: the read is a full-table scan of every ticket, and until
+ * now the page title and the whole console frame waited on it. The shell paints
+ * first, the queue streams in after.
+ */
+async function SupportQueue({
+  viewerId,
+  canReply,
+  canViewMembers,
+}: {
+  viewerId: string;
+  canReply: boolean;
+  canViewMembers: boolean;
+}) {
   // Full set (both open and resolved) — the inbox's Open/Resolved/Mine tabs
   // filter this client-side (no pagination here, matching the endpoint's
   // long-standing full-table-scan shape), and the stat tiles below need the
@@ -56,12 +79,7 @@ export default async function AdminSupportPage() {
   const priorityWaiting = openThreads.filter((t) => t.priority && t.unread > 0).length;
 
   return (
-    <div style={{ maxWidth: 1080 }}>
-      <PageHeader
-        title="Support"
-        subtitle="The ticket at the top is the one to answer next: waiting longest comes first, and Elite members come before the rest."
-      />
-
+    <>
       {/* Four numbers, in the order an operator asks for them: what is waiting
           on us, who is owed an answer first, how much is still open, how much
           is done. The unread total rides along as a hint rather than taking a
@@ -94,10 +112,40 @@ export default async function AdminSupportPage() {
 
       <SupportInbox
         threads={threads}
-        viewerId={principal.id}
+        viewerId={viewerId}
         canReply={canReply}
-        canViewMembers={permissions.has('members.read')}
+        canViewMembers={canViewMembers}
       />
+    </>
+  );
+}
+
+export default async function AdminSupportPage() {
+  const principal = await staffFromCookie();
+  if (!principal) redirect('/admin/login');
+  const permissions = await effectivePermissionSet(principal);
+  if (!permissions.has('support.thread.read')) redirect('/admin');
+  // Replying, resolving, reopening and assigning all hit routes guarded by
+  // `support.thread.reply` — a stricter permission than the read grant that
+  // opens this page. Deriving it here and disabling those controls when it is
+  // absent (e.g. stripped by a DENY override) kills the 403-trap where a
+  // read-only support viewer could type a reply that the API rejects (P1-3).
+  const canReply = permissions.has('support.thread.reply');
+
+  return (
+    <div style={{ maxWidth: 1080 }}>
+      <PageHeader
+        title="Support"
+        subtitle="The ticket at the top is the one to answer next: waiting longest comes first, and Elite members come before the rest."
+      />
+
+      <Suspense fallback={<QueueSkeleton />}>
+        <SupportQueue
+          viewerId={principal.id}
+          canReply={canReply}
+          canViewMembers={permissions.has('members.read')}
+        />
+      </Suspense>
     </div>
   );
 }

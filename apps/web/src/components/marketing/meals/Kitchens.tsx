@@ -18,6 +18,7 @@ export function Kitchens() {
               alt="A macro-counted meal bowl from a GM Meals partner kitchen"
               caption="Partner kitchen · Kathmandu valley"
               className="aspect-[4/5] w-full max-w-[520px]"
+              sizes="(min-width: 640px) 520px, 100vw"
             />
           </Reveal>
 

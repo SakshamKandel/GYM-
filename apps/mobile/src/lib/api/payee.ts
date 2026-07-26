@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { z } from 'zod';
 import { useSessionScopedResource } from '../useSessionScopedResource';
-import { BASE_URL } from './client';
+import { BASE_URL, fetchWithTimeout } from './client';
 import { supportsRail, type Payee, type PayeeWallet } from './payeeLogic';
 
 export {
@@ -93,7 +93,12 @@ function normalize(raw: z.infer<typeof payeeSchema>): Payee | null {
  * `null` data means "still loading", `[]` means "loaded, no rail configured".
  */
 async function fetchPayee(token: string, path: string): Promise<Payee[]> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  // fetchWithTimeout, not a bare fetch: this was the one money-path request
+  // with no bound on it, and the result is cached for the session, so a single
+  // hung connection left the payment screen spinning with no way to shake it
+  // loose. The abort surfaces as a rejection, which the caller already reads
+  // as "couldn't load".
+  const res = await fetchWithTimeout(`${BASE_URL}${path}`, {
     headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`payee_${res.status}`);

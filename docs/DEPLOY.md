@@ -1,35 +1,153 @@
 # GYM Tracker — Production Deploy Runbook
 
-Verified 2026-07-03: `next build` (web) exit 0 · `expo export` (android bundle) exit 0 ·
-`tsc --noEmit` clean in apps/web, apps/mobile, packages/db · security sweep: no hard blockers.
+Section 0 bootstraps an empty database. Sections 1 to 5 cover the hosted web
+API, the mobile build, staff access, the money surfaces, and what is still
+open.
 
 ---
 
-## 0. Schema migration (dated subscriptions + video views)
+## 0. Bootstrap a fresh deployment
 
-Three additive, nullable/defaulted columns ship with the dated-subscriptions /
-video-views work. `pnpm --filter @gym/db db:push` (drizzle-kit push) generates
-and applies them with no prompts and no data loss — every existing row keeps
-working (null dates = no expiry, views default 0). The exact DDL push emits:
+This is the whole chain, in order. Each step needs the one before it, and a
+step skipped shows up later as an empty screen rather than an error.
 
-```sql
-ALTER TABLE "accounts"     ADD COLUMN "tier_started_at" timestamp with time zone;
-ALTER TABLE "accounts"     ADD COLUMN "tier_expires_at" timestamp with time zone;
-ALTER TABLE "plan_videos"  ADD COLUMN "views" integer DEFAULT 0 NOT NULL;
+### 0.1 Install, and point at a database
+
+```bash
+pnpm install                # repo root
+cp .env.example .env        # then fill in DATABASE_URL
 ```
 
-Semantics: `tier_expires_at` NULL = permanent/free (never lapses). A past
-`tier_expires_at` lapses the paid tier immediately — `effectiveTier()` collapses
-it to `starter` at the auth choke point (`userForToken` / `/api/me` / login), so
-NO cron is required and the stored `tier` is preserved for history/reactivation.
+`DATABASE_URL` is a Neon connection string (Neon console → your project →
+Connect). The repo-root `.env` is the file the database tooling reads:
+`packages/db/drizzle.config.ts` and every seed load `../../.env`. The migration
+scripts also pick up `apps/web/.env.local` if you keep your values there
+instead.
 
-Optional env: `COACH_GREECE_EMAIL` — the coach account that Elite members are
-auto-assigned to. If unset, the auto-coach resolves to the oldest
-`admins.role='coach'` account (Greece, seeded first). See §3.
+### 0.2 Build the schema
+
+```bash
+pnpm --filter @gym/db db:push
+```
+
+`packages/db/src/schema.ts` is the source of truth, so an empty database comes
+out matching exactly what the app expects. There is nothing to prompt about on
+a new database because there is no data to reshape.
+
+Do not try to replay `packages/db/migrations/`. That history starts from a
+baseline introspected out of the live database and cannot recreate itself.
+`packages/db/migrations/meta/_README.md` explains why, and `migrations/legacy/`
+is kept for history only.
+
+Then confirm it landed:
+
+```bash
+pnpm --filter @gym/db check:constraints
+```
+
+Read-only. It prints `PRE-FLIGHT CLEAN` when every partial-unique and
+functional-unique index in the schema can exist.
+
+### 0.3 Seed the exercise library
+
+```bash
+pnpm --filter @gym/db seed:exercises
+```
+
+873 exercises from `packages/db/src/seed/data/exercises.json`, the
+free-exercise-db snapshot kept in the repo as an import fixture. The app ships
+no exercise list of its own, so until this runs the training catalog is empty
+and there is nothing for a member to log. Needs 0.2 first (it writes into the
+`exercises` table) and nothing else.
+
+Idempotent: keyed by id, so re-running refreshes names, muscles and images in
+place. The ids are a contract. Plan videos and PR detection join on them, so
+never regenerate or renumber them.
+
+### 0.4 Seed the training catalog
+
+```bash
+pnpm --filter @gym/db seed:training-catalog
+```
+
+The three launch plans (STRENGTH BASE, MUSCLE BUILDER, LEAN MACHINE) with their
+workouts and exercise slots. Needs 0.3 first: it checks every exercise id it
+references up front and stops with the missing list rather than writing a
+half-built plan. It never overwrites a plan an admin has since edited.
+
+### 0.5 Create the first staff account
+
+```bash
+SEED_STAFF_EMAIL=you@example.com \
+SEED_STAFF_PASSWORD='a long passphrase' \
+  pnpm --filter @gym/db seed:staff
+```
+
+The one account that cannot be made from the console, because making staff
+needs someone already signed in. It creates a single `super_admin`, and every
+other role is granted from Admin → Staff afterwards.
+
+Both variables are required and neither has a default. The password must be at
+least 12 characters. If that email already belongs to an account that is not
+staff, the script stops rather than quietly handing a member full access; add
+`SEED_STAFF_PROMOTE_EXISTING=yes` if the account really is yours. It never
+rewrites a password that already exists, so re-running it is safe.
+
+Sign in at `https://<domain>/admin/login`.
+
+### 0.6 Set prices
+
+Admin → Pricing, once the site is up. The public pricing page shows a region
+only when all four tiers (starter, silver, gold, elite) have an active price in
+one currency for that region, so a half-filled region stays hidden rather than
+showing gaps. The in-app catalog falls back to the compiled defaults in
+`packages/shared/src/logic/pricing.ts`; the marketing site deliberately does
+not.
+
+### 0.7 Demo content (optional, never in production)
+
+```bash
+SEED_DEMO=yes pnpm --filter @gym/db seed:demo-coach   # one verified demo coach
+SEED_DEMO=yes pnpm --filter @gym/db seed:live-demo    # demo meal partner + menu
+```
+
+Both are member-visible, both refuse to run without `SEED_DEMO=yes`, and
+neither runs under `NODE_ENV=production`. Skip them for a real launch.
+
+## 0.8 Changing the schema after launch
+
+`drizzle-kit push` is the right tool for your own database and the wrong one
+for a shared database. It stops on an interactive prompt, and for a unique
+index on a table that already holds rows the prompt it offers is "truncate the
+table?", so it can never be run unattended. Five commands cover that path
+instead, and the first three only read.
+
+| Command | What it does |
+|---|---|
+| `pnpm --filter @gym/db diff:schema` | Lists what `src/schema.ts` has that the live database does not: missing tables, columns, indexes and uniques, plus tables the database still carries that the code no longer declares. Executes nothing |
+| `pnpm --filter @gym/db check:constraints` | Pre-flight. Finds the rows that would make a new unique index fail to create (one member holding two pending coach requests, one account with two default addresses, one email on two legacy profiles) and says how to resolve each. Executes nothing |
+| `pnpm --filter @gym/db preview:normalize` | Names every object the normalisation pass adds, drops or re-points, and says whether it already exists in the live database. Reads catalog metadata only |
+| `pnpm --filter @gym/db db:generate` | Writes the next numbered `.sql` file into `packages/db/migrations/`. Read it before you run it |
+| `pnpm --filter @gym/db apply:migration migrations/0003_your_change.sql` | Applies one reviewed file inside a single transaction. It refuses the whole run if the file contains `DROP TABLE`, `DROP COLUMN`, `DROP SCHEMA`, `DROP DATABASE`, `TRUNCATE` or `DELETE FROM`, and rolls back on the first error, so a failure halfway leaves the database exactly as it started |
+
+**Do not put `--` before the file name.** pnpm 10 does not strip the separator,
+it hands it to the script as an ordinary argument, and the script then tries to
+open a file called `--`. The path is relative to `packages/db`.
+
+## 0.9 How dated tiers behave
+
+`accounts.tier_expires_at` NULL means permanent or free, and never lapses. A
+past `tier_expires_at` lapses the paid tier immediately: `effectiveTier()`
+collapses it to `starter` at the auth choke point (`userForToken`, `/api/me`,
+login), so no cron is required and the stored `tier` is kept for history and
+reactivation.
 
 ## 1. Web + API → Vercel
 
-Project root: `apps/web` (Next 15). DB schema is already pushed to Neon; staff accounts seeded.
+Vercel root directory: the repo root. The repo-root `vercel.json` drives the
+build (`turbo run build --filter=web`, output `apps/web/.next`) and registers
+the cron entry, so pointing the project at `apps/web` instead breaks both.
+Next 15, Node 22.
 
 **Environment variables (Vercel → Settings → Environment Variables):**
 
@@ -63,7 +181,7 @@ copy that file when setting up a new environment, and keep the two in step.
 | `EXPO_PUBLIC_REVENUECAT_IOS_KEY` | ✅ to sell on iPhone | RevenueCat → Project settings → API keys → the **public** app-specific key for the iOS app. Compiled into the app, safe to ship (it can only read offerings and start a purchase the store itself confirms). Unset → the store purchase sheet and the Restore purchases row never appear on iOS, and the paywall keeps the receipt rail. See §2.1 |
 | `EXPO_PUBLIC_REVENUECAT_ANDROID_KEY` | ✅ to sell on Android | Same, for the Google Play app. Unset → exactly as above on Android |
 | `EXPO_PUBLIC_USDA_API_KEY` | optional | Second food source. Unset → food search still works through Open Food Facts, with fewer US branded results |
-| `UPSTASH_REDIS_REST_URL` / `_TOKEN` (or `KV_REST_API_URL` / `_TOKEN`) | recommended | Shared store for the limits on sign-in, registration, password reset and staff re-auth. Unset → those limits count per instance, so the real ceiling is `limit × warm instances`. Either name pair works |
+| `UPSTASH_REDIS_REST_URL` / `_TOKEN` (or `KV_REST_API_URL` / `_TOKEN`) | recommended | Shared store for the limits on sign-in, registration, password reset and staff re-auth. Unset → those limits count per instance, so the real ceiling is `limit × warm instances`. That matters most for the sign-in lockout: 10 tries per 15 minutes at one account is only one budget for everybody once this is set. Either name pair works |
 | `COACH_GREECE_EMAIL` | optional | Coach that Elite members are auto-assigned to (§3). Unset → the oldest coach account is used |
 | `NOTIF_PREFS_ENFORCED` | optional | Per-account notification preferences and quiet hours, default on. Set to `false` ONLY to debug a preferences bug: every member then gets every push regardless of what they turned off |
 | `PRICE_CHANGE_GUARD_ENABLED` | optional | Set to `true` to reject a meal order whose total moved since the cart was priced. Unset → the order goes through at the new price without asking |
@@ -71,15 +189,17 @@ copy that file when setting up a new environment, and keep the two in step.
 | `SEED_DEMO` | never in production | Demo coach seed guard (`packages/db seed:demo-coach`). Must be exactly `yes` or the seed refuses to run, and it never runs under `NODE_ENV=production` |
 
 **Startup self-check:** in production `apps/web/src/instrumentation.ts` logs one
-`[startup]` line per missing capability (billing, images, video, cron) into the
-Vercel logs at boot. Billing gets the sharper wording of the two: setting
-`BILLING_MODE=live` without both RevenueCat webhook variables logs which one is
-missing and says plainly that nobody gets the membership they paid for. Grep the
-first minute of a deploy's logs for `[startup]` before announcing a launch. It
-names variables only, never values, and never throws —
-the marketing site and free tier stay up regardless. The same booleans render as
-a "Configuration" card on `/admin` (super/main admins) and are readable at
-`GET /api/admin/system/config`.
+`[startup]` line per missing capability (billing, images, video, cron secret,
+cron switch, password-reset email) into the Vercel logs at boot. Billing gets
+the sharpest wording: setting `BILLING_MODE=live` without both RevenueCat
+webhook variables logs which one is missing and says plainly that nobody gets
+the membership they paid for. Grep the first minute of a deploy's logs for
+`[startup]` before announcing a launch. It names variables only, never values,
+and never throws, so the marketing site and free tier stay up regardless.
+
+The same checks render as a "Configuration" card on `/admin` for super and main
+admins, server-rendered on the page itself. There is no API endpoint for it,
+and adding one would only give the numbers a second place to drift.
 
 **Cron schedule:** the repo-root `vercel.json` registers ONE entry,
 `/api/cron/tick` (currently daily at 03:00 UTC — Hobby's limit). Every scan
@@ -97,11 +217,12 @@ Then deploy. Post-deploy smoke test (2 min):
 
 ## 2. Mobile → EAS build
 
-- `apps/mobile/eas.json` exists — **replace `https://YOUR-VERCEL-DEPLOYMENT.vercel.app` with the real deployed URL** in the `preview` and `production` profiles (this sets `EXPO_PUBLIC_API_URL`; without it a store build points at localhost).
+- `apps/mobile/eas.json` carries `EXPO_PUBLIC_API_URL` per profile, and all three already point at a real host. **Check it before your first build for a new deployment** and replace the URL in `preview` and `production` with your own domain, otherwise the build talks to somebody else's API.
+- The same file also carries the two `EXPO_PUBLIC_GOOGLE_*_CLIENT_ID` values. The RevenueCat public keys are not in it: set `EXPO_PUBLIC_REVENUECAT_IOS_KEY` and `EXPO_PUBLIC_REVENUECAT_ANDROID_KEY` as EAS project variables, or add them to the profile `env` block, or the build ships without a purchase sheet (§2.1).
 - `google-services.json` is gitignored but referenced by app.json. Either keep the local file when building, or upload it to EAS: `eas env:create --scope project --name GOOGLE_SERVICES_JSON --type file`.
 - Camera + photo-library permission strings are configured via the `expo-camera` / `expo-image-picker` plugins in app.json (required by App Store / Play review).
 - Build: `cd apps/mobile && eas build --profile production --platform android`.
-- For quick device testing without a build: Expo Go + `EXPO_PUBLIC_API_URL=http://<PC-LAN-IP>:3000` (or the Vercel URL).
+- For quick device testing without a build: Expo Go + `EXPO_PUBLIC_API_URL=http://<PC-LAN-IP>:3055` (or the Vercel URL). **3055 is the port**, not 3000: `pnpm dev` runs the web app on 3055 (`next dev -p 3055`). The app's own built-in fallback is still `http://localhost:3000`, which is why leaving `EXPO_PUBLIC_API_URL` unset reaches nothing even with the dev server running.
 
 ## 2.1 In-app purchases (RevenueCat + the stores)
 
@@ -183,12 +304,19 @@ claims a store purchase is possible until one really is.
 
 ## 3. Staff access
 
-| Account | Role | Console |
-|---|---|---|
-| `admin@gym.com` | super_admin | `/admin` (web) or in-app Staff hub |
-| `greecemaharjan@gmail.com` | coach | `/coach` (web) or in-app Staff hub |
+The first `super_admin` comes from `seed:staff` (§0.5). It is the only staff
+account made outside the console. Everyone after it is granted from Admin →
+Staff, with no SQL and no seed script.
 
-**Change both passwords before launch** (current ones were shared in chat). New staff: Admin → Staff → grant role (no SQL needed).
+| Console | Where | Who gets in |
+|---|---|---|
+| Admin | `/admin` (web) or the in-app Staff hub | `super_admin`, `main_admin` and the sub-roles, each seeing only what their role allows |
+| Coach | `/coach` (web) or the in-app Staff hub | `role='coach'` accounts |
+| Partner | `/partner` (web only) | restaurant partner accounts, scoped to their own restaurant |
+
+If you inherited a running deployment rather than bootstrapping one, change
+every staff password you did not choose yourself before launch: Admin → Members
+→ credentials.
 
 **Elite auto-assign (2026-07):** whenever a member's EFFECTIVE tier becomes
 `elite` (admin override via `/api/admin/subscriptions`, or a coach via
@@ -234,13 +362,16 @@ set/extend subscriptions for their OWN active clients only via
   if a row is missing — editing pricing here is live immediately, no deploy
   needed.
 
-## 5. Known post-launch follow-ups (from the security sweep — none are deploy blockers)
+## 5. Security sweep follow-ups
 
-1. **Rate-limit auth endpoints** (`/api/staff/login` first) — 10 attempts / 15 min per IP, via Neon counter or Vercel WAF. Do soon after launch.
+None were deploy blockers. Numbering is kept so older notes still line up; the
+ones since closed say so, and 2, 5 and 6 are the three that are still open.
+
+1. **Rate-limit auth endpoints.** Done. Every credential route counts attempts, sign-in counts them per account as well as per IP, and staff step-up re-auth counts them per account. All of it becomes one shared budget once the Redis variables above are set; until then each warm instance counts on its own, so set them.
 2. **Cloudinary free-tier signed URLs don't expire** — a captured playback URL works forever. Acceptable at launch (assets are `authenticated`; unsigned URLs 401). Fix later via Cloudinary token auth (paid) or periodic `api_secret` rotation (invalidates all old URLs).
-3. **Mobile session token lives in AsyncStorage** — move the auth slice to `expo-secure-store` before onboarding staff on personal devices.
-4. `/api/auth/login` lets a *suspended* user mint a session row (token is unusable — `userForToken` filters `status='active'` — so no bypass; just add the status check for a cleaner UX).
-5. **Nightly off-provider DB backup** (`pg_dump` → R2) — the plan's Phase 0 item, still the highest-priority ops gap.
+3. **Mobile session token at rest** — done. On a phone the persisted store is MMKV encrypted with AES-256, and the key lives in the OS keychain or keystore via `expo-secure-store` (`apps/mobile/src/lib/mmkvStorage.ts`). If secure storage is unavailable it fails closed to process memory, so a bearer token is never written to disk in the clear. The web build still uses `localStorage` through AsyncStorage, which is the platform's own limit.
+4. **Suspended accounts at sign-in** — done. `/api/auth/login` runs `canCreateSession(status)` before minting anything, so a suspended account gets the same `bad_credentials` 401 as a wrong password and no session row is created.
+5. **Nightly off-provider DB backup** (`pg_dump` → R2) — the plan's Phase 0 item, still the highest-priority ops gap. Nothing in the repo does this today.
 6. **Restores rely on a webhook event.** The webhook only acts on the purchase
    lifecycle events it knows (`INITIAL_PURCHASE`, `RENEWAL`, `PRODUCT_CHANGE`,
    `UNCANCELLATION`, `CANCELLATION`, `EXPIRATION`, `SUBSCRIPTION_EXTENDED`). A

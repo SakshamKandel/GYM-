@@ -5,6 +5,7 @@
  * content sections (paper / paper-2) → dark closing band. Server-safe
  * primitives; animation lives in motion.tsx.
  */
+import Image from 'next/image';
 import Link from 'next/link';
 import type { CSSProperties, ReactNode } from 'react';
 
@@ -300,17 +301,34 @@ export function StatBig({
 
 /* ------------------------------------------------------------ branding */
 
-/** GM tile logomark (renders custom logo PNG). */
-export function LogoMark({ size = 34, className = '' }: { size?: number; className?: string }) {
+/**
+ * GM tile logomark.
+ *
+ * Points at /logo-mark.png (160 px square, 11 KB) rather than the 2000 px
+ * master art: the mark is never drawn above ~48 px, so the master was ~1.8 MB
+ * of bandwidth and a 16 MB decode for nothing. Pass `sizeClass` to size it
+ * responsively with CSS (one element, two sizes) instead of rendering a second
+ * copy behind a breakpoint.
+ */
+export function LogoMark({
+  size = 34,
+  sizeClass,
+  className = '',
+}: {
+  size?: number;
+  /** Tailwind sizing (e.g. `size-10 sm:size-12`). Wins over `size` when set. */
+  sizeClass?: string;
+  className?: string;
+}) {
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src="/logo.png"
+      src="/logo-mark.png"
       alt="The GM Method logo"
       width={size}
       height={size}
-      className={`object-contain rounded-xl ${className}`}
-      style={{ width: size, height: size }}
+      className={`object-contain rounded-xl ${sizeClass ?? ''} ${className}`}
+      style={sizeClass ? undefined : { width: size, height: size }}
     />
   );
 }
@@ -350,24 +368,43 @@ export function CheckItem({
   );
 }
 
-/** Photo framed inside a rounded block with an optional scrim caption. */
+/**
+ * Photo framed inside a rounded block with an optional scrim caption.
+ *
+ * The frame carries the size (aspect ratio or a fixed height) and the photo
+ * fills it, so it downloads at the width it is actually drawn at and waits
+ * until it is close to the viewport. Every caller sits below the fold today;
+ * pass `priority` if one ever lands in the first screenful.
+ */
 export function PhotoBlock({
   src,
   alt,
   caption,
   className = '',
   imgClassName = '',
+  sizes = '(min-width: 1320px) 1240px, 100vw',
+  priority = false,
 }: {
   src: string;
   alt: string;
   caption?: string;
   className?: string;
   imgClassName?: string;
+  /** Width the photo is drawn at, so the browser picks the right file. */
+  sizes?: string;
+  /** Load eagerly. Only for a photo in the first screenful. */
+  priority?: boolean;
 }) {
   return (
     <figure className={`relative overflow-hidden rounded-block ${className}`}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt={alt} className={`size-full object-cover ${imgClassName}`} />
+      <Image
+        src={src}
+        alt={alt}
+        fill
+        sizes={sizes}
+        priority={priority}
+        className={`object-cover ${imgClassName}`}
+      />
       {caption ? (
         <figcaption className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-6 pb-5 pt-16 font-mono text-[12px] uppercase tracking-[0.18em] text-snow">
           {caption}

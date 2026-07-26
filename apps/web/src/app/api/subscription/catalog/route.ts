@@ -15,11 +15,22 @@ export const runtime = 'nodejs';
  * GET /api/subscription/catalog?region=XX — regional pricing + this account's
  * best active discount (SCALE-UP-PLAN §4.1).
  *
- * Region resolution: `?region=` hint (raw ISO-3166 alpha-2, e.g. from
- * expo-localization) → stored accounts.country → 'INTL'. resolveRegion()
- * clamps whatever comes out to 'NP' | 'INTL'. When the query param is present
- * and differs from the stored country, accounts.country is updated to the RAW
- * hint (not the clamped bucket) so admin analytics keeps the real country.
+ * Region resolution for DISPLAY: `?region=` hint (raw ISO-3166 alpha-2, e.g.
+ * from expo-localization) → stored accounts.country → 'INTL'. resolveRegion()
+ * clamps whatever comes out to 'NP' | 'INTL'. The hint decides which prices the
+ * paywall SHOWS and nothing else.
+ *
+ * accounts.country is NEVER written from that hint. It is the stored fact the
+ * money paths trust: POST /api/payments/requests only hands out the cheaper NP
+ * catalog when the stored country verifies NP (or the rail is Nepal-specific),
+ * and the admin queue flags a request as self-reported when it does not
+ * (`selfReportedRegion`). While this route wrote the client's own hint into that
+ * column, one call to `?region=NP` verified the member's country for them, so
+ * both the gate and the flag it feeds passed for anybody who asked. The country
+ * now comes only from the platform edge (`x-vercel-ip-country`, or `cf-ipcountry`
+ * behind Cloudflare), which the client cannot set. A member whose real location
+ * is Nepal is still recognised on the first catalog load, so nothing changes for
+ * them; admin analytics keeps a country per account too, now an observed one.
  *
  * Pricing: reads active tier_prices for the resolved region and requires a
  * complete, single-currency four-tier catalog. Missing rows return 503 rather
@@ -41,6 +52,24 @@ const TRIAL_DAYS = 2;
 const querySchema = z.object({
   region: z.string().trim().min(2).max(8).optional(),
 });
+
+/**
+ * The country the platform edge observed for this request, or null when there
+ * is no trustworthy answer (local development, a self-hosted deploy, an edge
+ * that could not place the address).
+ *
+ * These headers are set by the platform in front of the app and are stripped
+ * from anything a client sends, so unlike the `?region=` hint they cannot be
+ * chosen by the caller. Cloudflare's placeholders for "unknown" ('XX') and Tor
+ * ('T1') are treated as no answer rather than stored as a country.
+ */
+function edgeCountry(req: Request): string | null {
+  const raw = req.headers.get('x-vercel-ip-country') ?? req.headers.get('cf-ipcountry');
+  if (!raw) return null;
+  const code = raw.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code) || code === 'XX' || code === 'T1') return null;
+  return code;
+}
 
 export function OPTIONS() {
   return preflight();
@@ -65,8 +94,10 @@ export async function GET(req: Request) {
   const regionParam = parsed.data.region?.toUpperCase();
   const region = resolveRegion(regionParam ?? account?.country ?? null);
 
-  if (regionParam && regionParam !== account?.country) {
-    await db.update(accounts).set({ country: regionParam }).where(eq(accounts.id, me.id));
+  // Server-determined only — see the note above. The hint above never lands here.
+  const observed = edgeCountry(req);
+  if (observed && observed !== account?.country) {
+    await db.update(accounts).set({ country: observed }).where(eq(accounts.id, me.id));
   }
 
   const priceRows = await db

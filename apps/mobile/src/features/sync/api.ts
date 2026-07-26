@@ -5,7 +5,7 @@ import {
   type WorkoutRestoreCursor,
   type WorkoutRestorePage,
 } from '@gym/shared';
-import { BASE_URL } from '../../lib/api/client';
+import { BASE_URL, fetchWithTimeout, httpStatusToCode } from '../../lib/api/client';
 
 /**
  * Workout sync API client — one-way, append-only backup of finished workouts.
@@ -80,6 +80,17 @@ const syncResponseSchema = z.object({
 /** Every call gives up after this long — sync retries on the next trigger. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/**
+ * The shared status table narrowed to this client's union: sync has no separate
+ * copy for 403/404/409/429/503, so those keep reading as a plain failure and
+ * the batch simply goes out again on the next trigger. Exported to the sibling
+ * member-data client, which speaks the same SyncApiError.
+ */
+export function syncStatusToCode(status: number): SyncErrorCode {
+  const code = httpStatusToCode(status);
+  return code === 'unauthorized' || code === 'invalid' ? code : 'network';
+}
+
 /** What a call may carry. Both halves are optional and independent. */
 interface WorkoutSyncBody {
   workouts?: SyncWorkoutPayload[];
@@ -100,31 +111,26 @@ interface WorkoutSyncResult {
  * `{"workouts":[…]}` on the wire, the same bytes as before restore existed.
  */
 async function postWorkoutSync(token: string, body: WorkoutSyncBody): Promise<WorkoutSyncResult> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}/api/sync/workouts`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+    res = await fetchWithTimeout(
+      `${BASE_URL}/api/sync/workouts`,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ workouts: body.workouts, cursor: body.cursor }),
       },
-      body: JSON.stringify({ workouts: body.workouts, cursor: body.cursor }),
-      signal: controller.signal,
-    });
+      REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new SyncApiError('network', "We couldn't connect. Check your connection and try again");
-  } finally {
-    clearTimeout(timer);
   }
 
-  if (!res.ok) {
-    if (res.status === 401) throw new SyncApiError('unauthorized');
-    if (res.status === 400) throw new SyncApiError('invalid');
-    throw new SyncApiError('network');
-  }
+  if (!res.ok) throw new SyncApiError(syncStatusToCode(res.status));
 
   let data: unknown;
   try {

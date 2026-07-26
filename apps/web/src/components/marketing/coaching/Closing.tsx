@@ -4,6 +4,7 @@
  * Page tail — photo interlude, cross-links to sibling pages, and the closing
  * CTA over a scrimmed squat portrait.
  */
+import Image from 'next/image';
 import Link from 'next/link';
 import { Reveal } from '../motion';
 import { Container, Display, Eyebrow, PhotoBlock, PillLink, Section } from '../ui';
@@ -82,11 +83,12 @@ export function CoachingCrossLinks() {
 export function CoachingCta() {
   return (
     <section className="relative overflow-hidden">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
+      <Image
         src="/stock/woman-squat-portrait-bw.jpg"
         alt="Black-and-white portrait of a woman set up for a barbell squat"
-        className="absolute inset-0 size-full object-cover"
+        fill
+        sizes="100vw"
+        className="object-cover"
       />
       <div className="absolute inset-0 bg-black/70" />
       <Container className="relative z-10 py-28 text-center sm:py-36">

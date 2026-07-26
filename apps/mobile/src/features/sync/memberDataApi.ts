@@ -9,8 +9,8 @@ import {
   type MemberDataSyncResponse,
 } from '@gym/shared';
 import { z } from 'zod';
-import { BASE_URL } from '../../lib/api/client';
-import { SyncApiError } from './api';
+import { BASE_URL, fetchWithTimeout } from '../../lib/api/client';
+import { SyncApiError, syncStatusToCode } from './api';
 
 const REQUEST_TIMEOUT_MS = 12_000;
 
@@ -107,31 +107,26 @@ export async function postMemberDataSync(
   request: MemberDataSyncRequest,
 ): Promise<MemberDataSyncResponse> {
   const body = memberDataSyncRequestSchema.parse(request);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let response: Response;
   try {
-    response = await fetch(`${BASE_URL}/api/sync/member-data`, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+    response = await fetchWithTimeout(
+      `${BASE_URL}/api/sync/member-data`,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+      REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new SyncApiError('network', "We couldn't connect. Check your connection and try again");
-  } finally {
-    clearTimeout(timer);
   }
 
-  if (!response.ok) {
-    if (response.status === 401) throw new SyncApiError('unauthorized');
-    if (response.status === 400) throw new SyncApiError('invalid');
-    throw new SyncApiError('network');
-  }
+  if (!response.ok) throw new SyncApiError(syncStatusToCode(response.status));
 
   let payload: unknown;
   try {

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
-import styles from '@/components/customer/marketing.module.css';
+import styles from './reset.module.css';
 
 interface ResetPasswordFormProps {
   token: string | null;
@@ -55,14 +55,14 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
 
   if (!token) {
     return (
-      <div className={styles.resetCard}>
-        <p className={styles.eyebrow}>PASSWORD RESET</p>
+      <div className={styles.card}>
+        <p className={styles.eyebrow}>Password reset</p>
         <h1>Link unavailable.</h1>
-        <p>This reset link is incomplete or has expired.</p>
-        <p className={styles.formError} role="alert">
+        <p className={styles.lede}>This reset link is incomplete or has expired.</p>
+        <p className={styles.error} role="alert">
           This link cannot be used. Request a new reset email.
         </p>
-        <Link className={styles.resetHomeLink} href="/contact">
+        <Link className={styles.homeLink} href="/contact">
           Go to support
         </Link>
       </div>
@@ -71,14 +71,14 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
 
   if (complete) {
     return (
-      <div className={styles.resetCard}>
-        <p className={styles.eyebrow}>PASSWORD RESET</p>
+      <div className={styles.card}>
+        <p className={styles.eyebrow}>Password reset</p>
         <h1>Password changed.</h1>
-        <p className={styles.formSuccess} role="status">
+        <p className={styles.success} role="status">
           Your password is updated and all existing sessions have been signed out. Open the app
           and sign in with the new password.
         </p>
-        <Link className={styles.resetHomeLink} href="/">
+        <Link className={styles.homeLink} href="/">
           Return to the GM Method
         </Link>
       </div>
@@ -86,11 +86,13 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
   }
 
   return (
-    <div className={styles.resetCard}>
-      <p className={styles.eyebrow}>PASSWORD RESET</p>
+    <div className={styles.card}>
+      <p className={styles.eyebrow}>Password reset</p>
       <h1>Choose a new password.</h1>
-      <p>The secure link works once. Updating the password signs the account out everywhere.</p>
-      <form className={styles.resetForm} onSubmit={(event) => void submit(event)}>
+      <p className={styles.lede}>
+        The secure link works once. Updating the password signs the account out everywhere.
+      </p>
+      <form className={styles.form} onSubmit={(event) => void submit(event)}>
         <div className={styles.field}>
           <label htmlFor="new-password">New password</label>
           <input
@@ -121,16 +123,16 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
           />
         </div>
         {error ? (
-          <p className={styles.formError} role="alert">
+          <p className={styles.error} role="alert">
             {error}
           </p>
         ) : null}
         {busy ? (
-          <p className={styles.formStatus} role="status">
+          <p className={styles.status} role="status">
             Securing the account…
           </p>
         ) : null}
-        <button className={styles.formButton} type="submit" disabled={busy}>
+        <button className={styles.button} type="submit" disabled={busy}>
           {busy ? 'Updating password…' : 'Update password'}
         </button>
       </form>

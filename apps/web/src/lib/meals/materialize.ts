@@ -2,6 +2,7 @@ import {
   accounts,
   mealAvailability,
   mealBillingCycles,
+  mealOrderItems,
   mealOrders,
   mealPartners,
   meals,
@@ -544,6 +545,55 @@ export async function materializeDueOrders(
     const plan = buildMaterializationPlan(materializationSubs, horizon, now, cfg);
     const subById = new Map(subs.map((s) => [s.id, s]));
 
+    // What already exists for the slots this plan covers, in ONE read.
+    //
+    // Materialization is a side effect of a READ, and the overwhelmingly common
+    // case is that every slot in the plan was spawned by an earlier pass and has
+    // nothing left to do. That case used to cost three sequential statements per
+    // slot anyway — a conflicting insert, a re-fetch of the row it conflicted
+    // with, then a guarded item insert that inserted nothing — so a member with
+    // a lunch and a dinner plan paid six round trips on every list refresh to
+    // discover there was no work. Knowing up front which slots are already
+    // complete makes that case free.
+    //
+    // Nothing here decides whether an order exists: the unique index still does
+    // (a slot that appears after this read simply loses the insert below and
+    // falls through to the same re-fetch it always did), and the item insert is
+    // still guarded in SQL under the same advisory lock.
+    const slotKey = (subscriptionId: string, deliveryDate: string, window: MealWindow): string =>
+      `${subscriptionId}|${deliveryDate}|${window}`;
+    const plannedSubIds = [...new Set(plan.map((p) => p.subscriptionId))];
+    const plannedDates = [...new Set(plan.map((p) => p.deliveryDate))];
+    const existingSlots = new Map<string, { id: string; itemCount: number }>();
+    if (plannedSubIds.length > 0) {
+      const existingRows = await db
+        .select({
+          id: mealOrders.id,
+          subscriptionId: mealOrders.subscriptionId,
+          deliveryDate: mealOrders.deliveryDate,
+          window: mealOrders.window,
+          itemCount:
+            sql<number>`(select count(*) from ${mealOrderItems} where ${mealOrderItems.orderId} = ${mealOrders.id})`.mapWith(
+              Number,
+            ),
+        })
+        .from(mealOrders)
+        .where(
+          and(
+            eq(mealOrders.source, 'subscription'),
+            inArray(mealOrders.subscriptionId, plannedSubIds),
+            inArray(mealOrders.deliveryDate, plannedDates),
+          ),
+        );
+      for (const row of existingRows) {
+        if (!row.subscriptionId) continue;
+        existingSlots.set(slotKey(row.subscriptionId, row.deliveryDate, row.window), {
+          id: row.id,
+          itemCount: row.itemCount,
+        });
+      }
+    }
+
     for (const planned of plan) {
       const sub = subById.get(planned.subscriptionId);
       if (!sub) continue;
@@ -562,42 +612,55 @@ export async function materializeDueOrders(
         paymentStatus = 'paid';
       }
 
+      // Already spawned AND already carries its line item: there is nothing
+      // this pass can add. Everything below is skipped, statements included.
+      const existingSlot = existingSlots.get(
+        slotKey(planned.subscriptionId, planned.deliveryDate, planned.window),
+      );
+      if (existingSlot && existingSlot.itemCount > 0) continue;
+
       const deliveryName = nameByAccount.get(sub.accountId) || 'Customer';
       const deliveryAddressText = [address.line, address.area].filter((p) => p && p.length > 0).join(', ');
 
-      const inserted = await db
-        .insert(mealOrders)
-        .values({
-          accountId: planned.accountId,
-          partnerId: planned.partnerId,
-          source: 'subscription',
-          subscriptionId: planned.subscriptionId,
-          cycleId,
-          deliveryDate: planned.deliveryDate,
-          window: planned.window,
-          addressId: planned.addressId,
-          deliveryName,
-          deliveryPhone: address.phone,
-          deliveryAddressText,
-          // Freeze the geocoded pin from the address at spawn (null if unpinned).
-          deliveryLat: address.lat,
-          deliveryLng: address.lng,
-          deliveryNotes: '',
-          subtotalMinor: planned.pricePerDayMinor,
-          deliveryFeeMinor: 0,
-          smallOrderFeeMinor: 0,
-          totalMinor: planned.pricePerDayMinor,
-          currency: planned.currency,
-          paymentMethod: sub.paymentMethod,
-          paymentStatus,
-          status: 'pending',
-          statusVersion: 0,
-          cutoffAt: planned.cutoffAt,
-        })
-        .onConflictDoNothing()
-        .returning({ id: mealOrders.id });
+      // The slot exists but has no line item yet (a pass that crashed between
+      // the two inserts): skip straight to the guarded backfill below.
+      let orderId = existingSlot?.id;
 
-      let orderId = inserted[0]?.id;
+      const inserted = orderId
+        ? []
+        : await db
+            .insert(mealOrders)
+            .values({
+              accountId: planned.accountId,
+              partnerId: planned.partnerId,
+              source: 'subscription',
+              subscriptionId: planned.subscriptionId,
+              cycleId,
+              deliveryDate: planned.deliveryDate,
+              window: planned.window,
+              addressId: planned.addressId,
+              deliveryName,
+              deliveryPhone: address.phone,
+              deliveryAddressText,
+              // Freeze the geocoded pin from the address at spawn (null if unpinned).
+              deliveryLat: address.lat,
+              deliveryLng: address.lng,
+              deliveryNotes: '',
+              subtotalMinor: planned.pricePerDayMinor,
+              deliveryFeeMinor: 0,
+              smallOrderFeeMinor: 0,
+              totalMinor: planned.pricePerDayMinor,
+              currency: planned.currency,
+              paymentMethod: sub.paymentMethod,
+              paymentStatus,
+              status: 'pending',
+              statusVersion: 0,
+              cutoffAt: planned.cutoffAt,
+            })
+            .onConflictDoNothing()
+            .returning({ id: mealOrders.id });
+
+      orderId = orderId ?? inserted[0]?.id;
       if (!orderId) {
         // Conflict: the order row already exists. Normally its items were inserted
         // by the pass that created it, but the order+item inserts are NOT atomic

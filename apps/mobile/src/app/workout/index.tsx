@@ -31,6 +31,7 @@ import { formatClock } from '../../features/training/logic';
 import { pushPath, replacePath } from '../../features/training/nav';
 import { useSession } from '../../features/training/session';
 import { nowIso, secondsBetween } from '../../lib/dates';
+import { warnHaptic } from '../../lib/haptics';
 import {
   clearActiveWorkout,
   showActiveWorkout,
@@ -147,6 +148,10 @@ export default function WorkoutScreen() {
   const [logging, setLogging] = useState(false);
   /** Branded finish confirmation: 'finish' saves, 'discard' throws away an empty session. */
   const [finishPrompt, setFinishPrompt] = useState<null | 'finish' | 'discard'>(null);
+  /** An ending that came back empty-handed, so the member can see it and retry. */
+  const [endFailed, setEndFailed] = useState<null | 'finish' | 'discard'>(null);
+  /** True while a finish or discard is in flight — keeps FINISH single-press. */
+  const [ending, setEnding] = useState(false);
   /** A logged set opened via long-press — drives the edit/delete sheet. */
   const [editingSet, setEditingSet] = useState<SetLog | null>(null);
   const [savingSet, setSavingSet] = useState(false);
@@ -274,16 +279,43 @@ export default function WorkoutScreen() {
 
   const totalSets = session.exercises.reduce((n, e) => n + e.loggedSets.length, 0);
 
+  /**
+   * Ending a session dismisses the ongoing notification FIRST, so a failure
+   * after that point used to leave the member on the logger with the notice
+   * gone and nothing said: as far as they could tell, they had finished. Put
+   * the notice back, say so, and offer the retry.
+   */
   const doFinish = async (): Promise<void> => {
+    if (ending) return;
+    setEnding(true);
     void clearActiveWorkout();
-    const id = await useSession.getState().finish();
-    if (id) replacePath(`/workout/complete?id=${id}`);
+    try {
+      const id = await useSession.getState().finish();
+      if (id === null) throw new Error('nothing_to_finish');
+      replacePath(`/workout/complete?id=${id}`);
+    } catch {
+      void showActiveWorkout({ workoutName, elapsedLabel: formatClock(elapsed) });
+      warnHaptic();
+      setEndFailed('finish');
+    } finally {
+      setEnding(false);
+    }
   };
 
   const doDiscard = async (): Promise<void> => {
+    if (ending) return;
+    setEnding(true);
     void clearActiveWorkout();
-    await useSession.getState().discard();
-    replacePath('/(tabs)/train');
+    try {
+      await useSession.getState().discard();
+      replacePath('/(tabs)/train');
+    } catch {
+      void showActiveWorkout({ workoutName, elapsedLabel: formatClock(elapsed) });
+      warnHaptic();
+      setEndFailed('discard');
+    } finally {
+      setEnding(false);
+    }
   };
 
   const handleFinish = (): void => {
@@ -345,7 +377,13 @@ export default function WorkoutScreen() {
             {formatClock(elapsed)}
           </AppText>
         </View>
-        <Button label="FINISH" variant="secondary" onPress={handleFinish} accessibilityLabel="Finish workout" />
+        <Button
+          label="FINISH"
+          variant="secondary"
+          onPress={handleFinish}
+          loading={ending}
+          accessibilityLabel="Finish workout"
+        />
       </Animated.View>
 
       <ScrollView
@@ -489,6 +527,29 @@ export default function WorkoutScreen() {
           void doDiscard();
         }}
         onCancel={() => setFinishPrompt(null)}
+      />
+
+      {/* The ending did not go through. Never silent: the workout is still
+          running and the member has to know that before they walk away. */}
+      <ConfirmDialog
+        visible={endFailed !== null}
+        title={
+          endFailed === 'discard' ? "Couldn't discard this session" : "Couldn't save this session"
+        }
+        message={
+          endFailed === 'discard'
+            ? 'The session is still running. Try again, or carry on training.'
+            : 'Everything you logged is safe and the session is still running. Try again, or carry on training.'
+        }
+        confirmLabel="Try again"
+        cancelLabel="Keep training"
+        onConfirm={() => {
+          const retry = endFailed;
+          setEndFailed(null);
+          if (retry === 'discard') void doDiscard();
+          else void doFinish();
+        }}
+        onCancel={() => setEndFailed(null)}
       />
 
       {celebrateId ? (

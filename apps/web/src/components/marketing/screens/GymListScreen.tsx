@@ -5,6 +5,7 @@
  * and verified gym cards (photo strip, area, open/distance chips).
  * Matches mobile app (tabs)/gyms.tsx.
  */
+import Image from 'next/image';
 import { useInView } from '../motion';
 import { AppEyebrow, AppHeader, AppScreen, AppTabBar, AppTitle, type TabName } from './appkit';
 
@@ -86,8 +87,8 @@ export function GymListScreen({ onTabChange }: { onTabChange?: (tab: TabName) =>
             >
               {/* Photo strip */}
               <div className="h-[58px] overflow-hidden relative">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={gym.photo} alt={gym.name} className="size-full object-cover" />
+                {/* A 300 px strip inside the phone mock, not a full-bleed photo. */}
+                <Image src={gym.photo} alt={gym.name} fill sizes="300px" className="object-cover" />
                 <div className="absolute inset-0 bg-gradient-to-t from-charcoal to-transparent opacity-80" />
               </div>
               <div className="px-3 pb-2.5 pt-1.5">

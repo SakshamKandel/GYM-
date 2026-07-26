@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useCallback, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { useCallback, useRef, useState, type ComponentProps, type RefObject } from 'react';
+import { Platform, StyleSheet, View, type TextInput } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { z } from 'zod';
 import { colors, radius, spacing, touch } from '@gym/ui-tokens';
@@ -65,6 +65,17 @@ const COPY: Record<Mode, Copy> = {
     switchPath: '/auth/sign-in',
   },
 };
+
+/**
+ * AuthField is a plain function component that spreads everything it doesn't
+ * use straight onto its TextInput, and React hands `ref` to function
+ * components as an ordinary prop — so a ref put on it lands on the input
+ * itself. This alias only tells TypeScript that, which is what lets the return
+ * key move the cursor to the next box instead of shutting the keyboard.
+ */
+const Field: (
+  props: ComponentProps<typeof AuthField> & { ref?: RefObject<TextInput | null> },
+) => ReturnType<typeof AuthField> = AuthField;
 
 interface FieldErrors {
   name: string | null;
@@ -178,6 +189,10 @@ export function AuthScreen({ mode }: { mode: Mode }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // Return-key targets: name → email → password → submit. Only the boxes that
+  // something else jumps INTO need a handle.
+  const emailRef = useRef<TextInput>(null);
+  const passwordRef = useRef<TextInput>(null);
   const [errors, setErrors] = useState<FieldErrors>(NO_ERRORS);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -331,8 +346,11 @@ export function AuthScreen({ mode }: { mode: Mode }) {
       </Animated.View>
 
       <Animated.View entering={enterUp(2)} style={styles.form}>
+        {/* Return moves DOWN the form, it does not close the keyboard.
+            submitBehavior="submit" is what keeps the keyboard up while the
+            cursor jumps, so the member types straight through the form. */}
         {mode === 'signUp' ? (
-          <AuthField
+          <Field
             label="Name"
             error={errors.name}
             value={name}
@@ -343,10 +361,13 @@ export function AuthScreen({ mode }: { mode: Mode }) {
             autoCapitalize="words"
             maxLength={24}
             returnKeyType="next"
+            submitBehavior="submit"
+            onSubmitEditing={() => emailRef.current?.focus()}
             accessibilityLabel="Your name"
           />
         ) : null}
-        <AuthField
+        <Field
+          ref={emailRef}
           label="Email"
           error={errors.email}
           value={email}
@@ -358,9 +379,12 @@ export function AuthScreen({ mode }: { mode: Mode }) {
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="next"
+          submitBehavior="submit"
+          onSubmitEditing={() => passwordRef.current?.focus()}
           accessibilityLabel="Email"
         />
-        <AuthField
+        <Field
+          ref={passwordRef}
           label="Password"
           error={errors.password}
           secure
@@ -371,6 +395,8 @@ export function AuthScreen({ mode }: { mode: Mode }) {
           textContentType={mode === 'signUp' ? 'newPassword' : 'password'}
           autoCapitalize="none"
           autoCorrect={false}
+          // Last box: the return key IS the submit button, so it signs in and
+          // lets the keyboard go.
           returnKeyType="go"
           onSubmitEditing={() => void submit()}
           accessibilityLabel="Password"

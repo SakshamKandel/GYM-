@@ -328,6 +328,44 @@ function serverErrorCode(raw: string): ApiErrorCode | null {
 const REQUEST_TIMEOUT_MS = 10_000;
 
 /**
+ * The full vocabulary {@link httpStatusToCode} can produce. Deliberately wider
+ * than any single client's own union: each client narrows it to the codes it
+ * actually has copy for.
+ */
+export type HttpStatusCode =
+  | 'unauthorized'
+  | 'forbidden'
+  | 'not_found'
+  | 'invalid'
+  | 'conflict'
+  | 'rate_limited'
+  | 'not_configured'
+  | 'network';
+
+/**
+ * ONE HTTP status → error code table for every API client in the app.
+ *
+ * There used to be six of these, one per feature client, and they had drifted:
+ * some knew 429, some didn't, so the same "slow down" from the server read as
+ * a wait on one screen and as "check your connection" on another — advice that
+ * invites an immediate retry and pushes the wait out further.
+ *
+ * Callers narrow the answer to their own union; anything a client has no copy
+ * for folds to 'network', which is exactly what it did before. Widening a
+ * client is then a copy decision in one place, not an archaeology exercise.
+ */
+export function httpStatusToCode(status: number): HttpStatusCode {
+  if (status === 400) return 'invalid';
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 404) return 'not_found';
+  if (status === 409) return 'conflict';
+  if (status === 429) return 'rate_limited';
+  if (status === 503) return 'not_configured';
+  return 'network';
+}
+
+/**
  * What a member is told when the build has no address for the account
  * service. It names the one thing that can actually help (a newer build) and
  * doesn't blame their connection for something that was never sent.
@@ -401,9 +439,12 @@ async function request(opts: RequestOptions): Promise<unknown> {
   // Non-2xx: prefer the contract's {error} code, fall back on the status. A 429
   // is recognised from the status alone as well as from the body, because every
   // limiter answers `{error:'rate_limited', retryAfterSec}` but a proxy in front
-  // of us may not.
+  // of us may not. These are the only two statuses this client has ever spoken
+  // about on their own — every other status keeps reading as a plain failure
+  // unless the body names a code.
+  const fromStatus = httpStatusToCode(res.status);
   let code: ApiErrorCode =
-    res.status === 401 ? 'unauthorized' : res.status === 429 ? 'rate_limited' : 'network';
+    fromStatus === 'unauthorized' || fromStatus === 'rate_limited' ? fromStatus : 'network';
   let deletionImpact: AccountDeletionImpact | null = null;
   try {
     const parsed = errorBodySchema.safeParse(await res.json());

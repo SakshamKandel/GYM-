@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import Animated from 'react-native-reanimated';
 import { hasEntitlement, minTierFor } from '@gym/shared';
@@ -55,6 +55,13 @@ const SECTIONS: readonly { key: Section; label: string }[] = [
   { key: 'weight', label: 'Weight' },
   { key: 'nutrition', label: 'Nutrition' },
 ];
+
+/**
+ * Longest the pull-to-refresh spinner may stay up if the dashboard never
+ * reports back. The load runs off a key rather than a promise, so this is the
+ * belt to its braces — the spinner can slow down, never stick.
+ */
+const REFRESH_CAP_MS = 8000;
 
 const styles = StyleSheet.create({
   metaChip: {
@@ -142,8 +149,34 @@ export default function ProgressScreen() {
   // Display-only pace target: the profile's days/week over a four-week month.
   const monthlyTarget = Math.max(1, daysPerWeek * 4);
 
+  // Pull to refresh: the same recount the "Try again" button does, on the
+  // gesture people already reach for. Released by the next result the
+  // dashboard reports, capped so a load that never lands can't leave it up.
+  const [refreshing, setRefreshing] = useState(false);
+  useEffect(() => {
+    setRefreshing(false);
+  }, [analytics]);
+  useEffect(() => {
+    if (!refreshing) return;
+    const cap = setTimeout(() => setRefreshing(false), REFRESH_CAP_MS);
+    return () => clearTimeout(cap);
+  }, [refreshing]);
+
   return (
-    <Screen scroll bottomInset={FLOATING_TAB_SPACE}>
+    <Screen
+      scroll
+      bottomInset={FLOATING_TAB_SPACE}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true);
+            setRetryKey((n) => n + 1);
+          }}
+          tintColor={colors.textDim}
+        />
+      }
+    >
       <ScreenHeader
         eyebrow="Progress center"
         title="Progress"

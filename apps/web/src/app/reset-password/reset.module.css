@@ -1,0 +1,164 @@
+/**
+ * Reset password — a plain, self-contained page.
+ *
+ * A member lands here from a link in an email with one job to do, so there is
+ * no site nav, no footer and nothing to browse: just the wordmark, the card and
+ * the form. It was rendering inside the full marketing shell, which is the wrong
+ * chrome for a one-task page and dragged the whole site bundle along with it.
+ *
+ * Colours come from the --gm-* tokens in globals.css (the app's dark customer
+ * palette), so this file owns layout and nothing else.
+ */
+
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 48px 20px;
+  background: var(--gm-bg);
+  color: var(--gm-text);
+  font-size: 16px;
+}
+
+.page a:focus-visible,
+.page button:focus-visible,
+.page input:focus-visible {
+  outline: 2px solid var(--gm-accent);
+  outline-offset: 3px;
+}
+
+.inner {
+  width: min(100%, 480px);
+}
+
+.brand {
+  margin: 0 0 22px;
+  font-family: var(--font-numeric);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--gm-text-dim);
+}
+
+.card {
+  padding: 30px 26px;
+  border: 1px solid var(--gm-border);
+  border-radius: 20px;
+  background: var(--gm-surface);
+}
+
+/* Capitals are a look, not the text: the label reads "Password reset" in the
+ * markup so a screen reader says it instead of spelling it. */
+.eyebrow {
+  margin: 0 0 10px;
+  font-family: var(--font-numeric);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gm-text-dim);
+}
+
+.card h1 {
+  margin: 0 0 10px;
+  font-family: var(--font-heading);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+/* The one-line explainer under the heading. A `.card > p` descendant rule was
+ * tempting, but it outranks the message classes below by specificity and was
+ * repainting the success banner in the quiet grey. */
+.lede {
+  margin: 0 0 24px;
+  color: var(--gm-text-dim);
+  line-height: 1.6;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field label {
+  font-weight: 600;
+}
+
+.field input {
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 14px;
+  border: 1px solid var(--gm-border);
+  border-radius: 12px;
+  background: var(--gm-surface-raised);
+  color: var(--gm-text);
+  font: inherit;
+}
+
+.field input:focus-visible {
+  border-color: var(--gm-accent);
+}
+
+.passwordHint {
+  color: var(--gm-text-dim);
+  font-size: 14px;
+}
+
+.button {
+  min-height: 54px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--gm-accent);
+  color: var(--gm-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.error,
+.success,
+.status {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  line-height: 1.55;
+}
+
+.error {
+  background: var(--gm-error-surface);
+  color: var(--gm-error-text);
+}
+
+.success {
+  background: var(--gm-success-surface);
+  color: var(--gm-success-text);
+}
+
+.status {
+  background: var(--gm-surface-raised);
+  color: var(--gm-text-dim);
+}
+
+.homeLink {
+  min-height: 48px;
+  display: inline-flex;
+  align-items: center;
+  margin-top: 18px;
+  color: var(--gm-text);
+  font-weight: 600;
+}

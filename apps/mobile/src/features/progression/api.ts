@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ProgressionAction } from '@gym/shared';
-import { BASE_URL } from '../../lib/api/client';
+import { BASE_URL, fetchWithTimeout, httpStatusToCode } from '../../lib/api/client';
 
 /**
  * Progression suggestions API client — client-computed targets flowing up for
@@ -91,36 +91,41 @@ const okSchema = z.object({ ok: z.literal(true) });
 /** Every call gives up after this long — suggestions never block logging. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/**
+ * The shared status table narrowed to this client's union: suggestions have no
+ * separate copy for 403/404/409/429/503, so those keep reading as a plain
+ * failure.
+ */
+function statusToCode(status: number): ProgressionErrorCode {
+  const code = httpStatusToCode(status);
+  return code === 'unauthorized' || code === 'invalid' ? code : 'network';
+}
+
 async function request(opts: {
   method: 'GET' | 'POST';
   token: string;
   body?: Record<string, unknown>;
 }): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}/api/progression/suggestions`, {
-      method: opts.method,
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${opts.token}`,
-        ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+    res = await fetchWithTimeout(
+      `${BASE_URL}/api/progression/suggestions`,
+      {
+        method: opts.method,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${opts.token}`,
+          ...(opts.body !== undefined ? { 'Content-Type': 'application/json' } : null),
+        },
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       },
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-      signal: controller.signal,
-    });
+      REQUEST_TIMEOUT_MS,
+    );
   } catch {
     throw new ProgressionApiError('network', "We couldn't connect. Check your connection and try again");
-  } finally {
-    clearTimeout(timer);
   }
 
-  if (!res.ok) {
-    if (res.status === 401) throw new ProgressionApiError('unauthorized');
-    if (res.status === 400) throw new ProgressionApiError('invalid');
-    throw new ProgressionApiError('network');
-  }
+  if (!res.ok) throw new ProgressionApiError(statusToCode(res.status));
 
   try {
     return (await res.json()) as unknown;

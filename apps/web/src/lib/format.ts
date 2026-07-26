@@ -6,6 +6,7 @@ import {
   PAYMENT_LABEL,
   PAYMENT_STATUS_LABEL,
   formatDateLabel,
+  renderMoney,
   windowLabel,
   windowShort,
   type BadgeTone,
@@ -20,70 +21,37 @@ import {
  * `Jul 20, 2026, 2:30 PM` depending on which page you happened to be on.
  *
  * Money rule (CLAUDE.md / SCALE-UP-PLAN §6 rule 5): amounts are ALWAYS integer
- * minor units (paisa / cents) plus a currency code. Nothing here divides by 100
- * in floating point — the whole part is derived with `(abs - abs % 100) / 100`,
- * which is exact for every safe integer, and the remainder is rendered as two
- * literal digits. `parseMoneyInput` is the inverse for the few admin forms that
- * take major units from a human.
+ * minor units (paisa / cents) plus a currency code. The arithmetic lives in ONE
+ * place, `renderMoney` in @/app/partner/_format — see the note there for why it
+ * sits on that side of the import. Nothing divides by 100 in floating point.
+ * `parseMoneyInput` is the inverse for the few admin forms that take major units
+ * from a human.
  *
  * Pure + client-safe: no 'server-only' marker, no I/O, no React. Importable
  * from server components and 'use client' modules alike.
  */
 
-/** Currencies displayed without decimals (owner-facing style: whole rupees). */
-const ZERO_DECIMAL_CURRENCIES = new Set(['NPR']);
-
-/** Symbol-prefixed (no space) currencies; everything else gets "CODE amount". */
-const SYMBOL_PREFIX: Record<string, string> = { USD: '$' };
-
-/** `1234567` → `1,234,567`. Digits only — never sees a float. */
-function groupThousands(digits: string): string {
-  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-}
-
 /**
- * Format an integer minor-unit amount: `formatMoney(1230000, 'NPR')` →
- * `NPR 12,300`, `formatMoney(4599, 'USD')` → `$45.99`, unknown codes →
- * `EUR 45.99`. Negative amounts keep the sign in front of the whole thing
- * (`-NPR 500`), which is how the wallet ledger reads a debit.
- *
- * A non-finite amount renders as an em-dash rather than `NaN` — a money cell
- * that says nothing is safer than one that says something wrong.
+ * Format an integer minor-unit amount for the consoles: `formatMoney(1230000,
+ * 'NPR')` → `NPR 12,300`, `formatMoney(4599, 'USD')` → `$45.99`, unknown codes
+ * → `EUR 45.99`. Negative amounts keep the sign in front of the whole thing
+ * (`-NPR 500`), which is how the wallet ledger reads a debit. A non-finite
+ * amount renders as an em-dash rather than `NaN`.
  */
 export function formatMoney(amountMinor: number, currency: string): string {
-  const code = currency.trim().toUpperCase();
-  if (!Number.isFinite(amountMinor)) return '—';
-  const rounded = Math.round(amountMinor);
-  const negative = rounded < 0;
-  const abs = Math.abs(rounded);
-  // Exact integer split — no `/ 100` on a value that isn't already a multiple.
-  const cents = abs % 100;
-  const whole = (abs - cents) / 100;
-  const symbol = SYMBOL_PREFIX[code];
-  const amount = ZERO_DECIMAL_CURRENCIES.has(code)
-    ? groupThousands(String(cents >= 50 ? whole + 1 : whole))
-    : `${groupThousands(String(whole))}.${String(cents).padStart(2, '0')}`;
-  const body = symbol ? `${symbol}${amount}` : `${code} ${amount}`;
-  return negative ? `-${body}` : body;
+  return renderMoney(amountMinor, currency, 'code');
 }
 
 /**
  * Major units for a form field, e.g. `25000, 'NPR'` → `250`, `4599, 'USD'` →
- * `45.99`. Bare number, no code or symbol — the field's own label carries the
- * currency. Same integer-exact split as {@link formatMoney}.
+ * `45.99`. Bare number, no code, symbol or thousands separator — the field's own
+ * label carries the currency and the value has to survive a round trip through
+ * {@link parseMoneyInput}. An unusable amount clears the field instead of
+ * writing an em-dash into it.
  */
 export function formatMoneyInput(amountMinor: number, currency: string): string {
-  const code = currency.trim().toUpperCase();
   if (!Number.isFinite(amountMinor)) return '';
-  const rounded = Math.round(amountMinor);
-  const negative = rounded < 0;
-  const abs = Math.abs(rounded);
-  const cents = abs % 100;
-  const whole = (abs - cents) / 100;
-  const body = ZERO_DECIMAL_CURRENCIES.has(code)
-    ? String(cents >= 50 ? whole + 1 : whole)
-    : `${whole}.${String(cents).padStart(2, '0')}`;
-  return negative ? `-${body}` : body;
+  return renderMoney(amountMinor, currency, 'plain');
 }
 
 /**

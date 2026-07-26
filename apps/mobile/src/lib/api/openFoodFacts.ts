@@ -245,12 +245,31 @@ export async function searchFoods(query: string, signal?: AbortSignal): Promise<
   throw providerError instanceof Error ? providerError : new Error('Food search unavailable');
 }
 
+/**
+ * Barcode lookup gives up after this long. The scanner has no way to cancel it:
+ * the screen sits on "Looking it up…" with the camera already stopped, so an
+ * unbounded request left the member staring at a frozen scanner. Matches the
+ * bound the rest of the API client uses.
+ */
+const BARCODE_TIMEOUT_MS = 10_000;
+
 export async function lookupBarcode(barcode: string): Promise<FoodItem | null> {
   const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json?fields=${FIELDS}`;
-  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Barcode lookup failed (${res.status})`);
-  const parsed = productResponseSchema.parse(await res.json());
-  if (!parsed.product) return null;
-  return toFoodItem({ ...parsed.product, code: parsed.product.code ?? barcode });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BARCODE_TIMEOUT_MS);
+  try {
+    // The timer is cleared only after the body has been read too — a response
+    // whose stream never finishes hangs exactly the same way.
+    const res = await fetch(url, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: controller.signal,
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Barcode lookup failed (${res.status})`);
+    const parsed = productResponseSchema.parse(await res.json());
+    if (!parsed.product) return null;
+    return toFoodItem({ ...parsed.product, code: parsed.product.code ?? barcode });
+  } finally {
+    clearTimeout(timer);
+  }
 }

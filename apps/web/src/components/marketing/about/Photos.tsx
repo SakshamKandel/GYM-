@@ -26,6 +26,7 @@ export function AboutPhotos() {
               alt="Silhouettes of runners against a deep blue evening sky"
               caption="Endurance, tracked the same way"
               className="aspect-[4/3] w-full"
+              sizes="(min-width: 768px) 50vw, 100vw"
             />
           </Reveal>
           <Reveal delay={180}>
@@ -34,6 +35,7 @@ export function AboutPhotos() {
               alt="A person holding a controlled yoga pose on a mat"
               caption="Mobility counts as training"
               className="aspect-[4/3] w-full"
+              sizes="(min-width: 768px) 50vw, 100vw"
             />
           </Reveal>
         </div>

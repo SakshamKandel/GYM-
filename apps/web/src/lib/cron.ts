@@ -6,6 +6,7 @@ import {
   asc,
   eq,
   gt,
+  gte,
   inArray,
   isNull,
   lt,
@@ -91,6 +92,21 @@ const PENDING_ESCALATION_MS = 2 * HOUR_MS;
  * unambiguous — nothing is going to be delivered for yesterday.
  */
 const CONFIRMED_ABANDON_GRACE_MS = 6 * HOUR_MS;
+
+/**
+ * How far back the abandoned-order pass looks.
+ *
+ * Without a lower bound the pass asks for "every confirmed order whose delivery
+ * day has passed, oldest first", which walks the delivery-date index from the
+ * very first order the product ever took — almost all of them long since
+ * delivered — on every single tick, forever, and gets slower every day the
+ * platform trades. The candidates it is actually hunting are hours old: the
+ * sweep runs daily and cancels an abandoned order the morning after its
+ * delivery day, so a month of history is a wide margin, not a limit anyone
+ * reaches. It goes away entirely once `meal_orders` carries a partial index on
+ * `status = 'confirmed'` (see the note on the pass below).
+ */
+const CONFIRMED_ABANDON_LOOKBACK_DAYS = 30;
 
 /**
  * The dedupe key the staff escalation notice is stored under, minus the
@@ -493,8 +509,11 @@ export async function runDay2Reengage(now: Date = new Date()): Promise<CronResul
  * partial indexes — pending orders are a sliver of the table, and each pass's
  * sort key is that index's key, so neither pass ever scans or sorts order
  * history. Pass 1b sorts on `deliveryDate` (the `meal_orders_delivery_date`
- * index) and is capped at BATCH; it wants a `where status = 'confirmed'` partial
- * index of its own to stop walking dead history once the backlog is drained.
+ * index), capped at BATCH and bounded to the last
+ * {@link CONFIRMED_ABANDON_LOOKBACK_DAYS} days so it reads a slice of that index
+ * rather than every order ever placed; it still wants a
+ * `where status = 'confirmed'` partial index of its own, after which the
+ * lookback bound can go.
  */
 export async function runStaleOrders(now: Date = new Date()): Promise<CronResult> {
   const startedAt = Date.now();
@@ -532,6 +551,9 @@ export async function runStaleOrders(now: Date = new Date()): Promise<CronResult
   // is a KTM calendar date, so the candidate test is a date compare against the
   // KTM day of (now − grace): every order whose delivery day is fully behind us.
   const abandonedBefore = ktmDateString(new Date(now.getTime() - CONFIRMED_ABANDON_GRACE_MS));
+  const abandonedAfter = ktmDateString(
+    new Date(now.getTime() - CONFIRMED_ABANDON_GRACE_MS - CONFIRMED_ABANDON_LOOKBACK_DAYS * DAY_MS),
+  );
   const abandoned = await db
     .select({
       id: mealOrders.id,
@@ -543,6 +565,9 @@ export async function runStaleOrders(now: Date = new Date()): Promise<CronResult
       and(
         eq(mealOrders.status, 'confirmed'),
         lt(mealOrders.deliveryDate, abandonedBefore),
+        // Turns the delivery-date index scan into a range instead of a walk
+        // from the beginning of the order book (see the constant).
+        gte(mealOrders.deliveryDate, abandonedAfter),
         // Captured money is support's call here exactly as in pass 1 — the
         // destructive-transition guard would refuse these anyway.
         inArray(mealOrders.paymentStatus, ['unpaid', 'refunded']),

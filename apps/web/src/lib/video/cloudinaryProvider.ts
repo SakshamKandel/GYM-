@@ -66,6 +66,29 @@ const PLAYBACK_TTL_SECONDS = 2 * 60 * 60;
  */
 const ALLOWED_VIDEO_FORMATS = 'mp4,mov,m4v,webm,mkv,avi,3gp,hevc';
 
+/**
+ * Formats a signed IMAGE upload slot is allowed to accept — the same signed
+ * `allowed_formats` guard the video path has always had, which this path was
+ * missing.
+ *
+ * Cloudinary's `image` resource type is much wider than "a photo": PDF, SVG,
+ * PostScript, PSD and friends all upload as images. A reserved slot with no
+ * list therefore accepted a scripted SVG that we then serve from our own
+ * delivery host, or a multi-page document parked in an avatar folder. Every
+ * surface that reserves a slot is a camera roll or an `image/*` file picker,
+ * so this list covers what they can actually produce and nothing else.
+ *
+ * Cloudinary matches the file's REAL format, not its name, and rejects the
+ * upload when it isn't listed. Signed, so a client cannot drop it.
+ *
+ * Note on size: Cloudinary has no upload-call parameter for a byte ceiling
+ * (`max_file_size` is an upload-PRESET setting), so the cap in force is the
+ * one on the Cloudinary plan itself. Reservations are already limited to
+ * 20/hour per account. Tightening it further means creating a signed upload
+ * preset in the Cloudinary console and referencing it here.
+ */
+const ALLOWED_IMAGE_FORMATS = 'jpg,jpeg,png,webp,heic,heif,avif,gif,bmp,tif,tiff';
+
 interface CloudinaryConfig {
   cloudName: string;
   apiKey: string;
@@ -339,7 +362,10 @@ export class CloudinaryProvider implements VideoProvider {
     const type = opts.access === 'authenticated' ? 'authenticated' : 'upload';
 
     // Params that MUST be signed (order-independent; signParams sorts them).
+    // `allowed_formats` is signed so the browser can't drop it — Cloudinary
+    // rejects the upload when the file's real format isn't in the list.
     const signed: Record<string, string | number> = {
+      allowed_formats: ALLOWED_IMAGE_FORMATS,
       folder,
       public_id: publicId,
       timestamp,
@@ -349,12 +375,15 @@ export class CloudinaryProvider implements VideoProvider {
 
     // Full set of form fields the browser attaches (besides the `file` blob).
     // api_secret is deliberately absent — only the derived signature ships.
+    // Every signed param above (except the derived signature) must be echoed
+    // back verbatim or the signature won't match.
     const fields: Record<string, string> = {
       api_key: cfg.apiKey,
       timestamp: String(timestamp),
       public_id: publicId,
       folder,
       type,
+      allowed_formats: ALLOWED_IMAGE_FORMATS,
       signature,
     };
 

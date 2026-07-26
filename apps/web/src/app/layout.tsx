@@ -22,12 +22,14 @@ export const metadata: Metadata = {
     title: 'The GM Method',
     description: 'Training, food, progress, and real coaching in one fitness app.',
   },
+  // No /logo.png here: it is the 2000 px master art (~1.8 MB) and browsers
+  // fetch every declared icon. The .ico / .png / .svg set already covers
+  // every tab, bookmark and home-screen size.
   icons: {
     icon: [
       { url: '/favicon.ico', sizes: 'any' },
       { url: '/favicon.png', type: 'image/png' },
       { url: '/icon.svg', type: 'image/svg+xml' },
-      { url: '/logo.png', type: 'image/png' },
     ],
     apple: [{ url: '/apple-touch-icon.png', type: 'image/png' }],
   },
