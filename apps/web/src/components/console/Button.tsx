@@ -28,23 +28,43 @@ type Size = 'sm' | 'md';
 export function Button({
   variant = 'ghost',
   size = 'md',
+  loading = false,
+  iconOnly = false,
   children,
   style,
   className,
+  disabled,
   ...rest
 }: {
   variant?: Variant;
   size?: Size;
+  /**
+   * The action is in flight. Shows a spinner beside the label, disables the
+   * button and announces itself with aria-busy — a save that looks identical
+   * before and during is a save people press twice. The label stays put, so
+   * nothing reflows underneath the pointer.
+   */
+  loading?: boolean;
+  /**
+   * A glyph with no label. Squares the button so a row of them keeps its
+   * rhythm, and still clears the touch minimum. Pass an aria-label too.
+   */
+  iconOnly?: boolean;
   children: ReactNode;
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
       {...rest}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
       data-variant={variant}
       data-size={size}
+      data-busy={loading ? 'true' : undefined}
+      data-icon-only={iconOnly ? 'true' : undefined}
       className={className ? `gt-btn ${className}` : 'gt-btn'}
       style={style}
     >
+      {loading ? <span className="gt-btn-spinner" aria-hidden /> : null}
       {children}
     </button>
   );

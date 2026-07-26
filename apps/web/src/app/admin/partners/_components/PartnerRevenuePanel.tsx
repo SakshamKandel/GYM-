@@ -102,7 +102,7 @@ export function PartnerRevenuePanel({ partnerId }: { partnerId: string }) {
               gap: 8,
               padding: '10px 12px',
               border: '1px solid var(--gt-border)',
-              borderRadius: 10,
+              borderRadius: 'var(--gt-radius-sm)',
               background: 'var(--gt-surface-sunken)',
             }}
           >
@@ -132,7 +132,7 @@ function BucketCard({ title, bucket, currency }: { title: string; bucket: Revenu
     <div
       style={{
         border: '1px solid var(--gt-border)',
-        borderRadius: 10,
+        borderRadius: 'var(--gt-radius-sm)',
         padding: 12,
         background: 'var(--gt-surface-sunken)',
         display: 'flex',

@@ -12,10 +12,15 @@ import {
   EmptyState,
   SearchField,
   StatusChip,
+  Toolbar,
 } from '@/components/console';
 import { formatDate } from '@/lib/format';
 import { tierLabel } from '@/app/admin/_lib/tierLabel';
+import { ActionFeedback, useActionFeedback } from '../../_components/ActionFeedback';
+import { KeyboardRows } from '../../_components/KeyboardRows';
 import { MemberLink } from '../../_components/MemberLink';
+import { QueueTabs } from '../../_components/QueueTabs';
+import { useUrlSearch, useUrlState } from '../../_components/useUrlState';
 
 export type ApplicationStatus = 'pending' | 'approved' | 'rejected';
 export type CoachTier = 'silver' | 'gold' | 'elite';
@@ -44,6 +49,13 @@ const TABS: readonly { key: 'all' | ApplicationStatus; label: string }[] = [
   { key: 'pending', label: 'Pending' },
   { key: 'approved', label: 'Approved' },
   { key: 'rejected', label: 'Rejected' },
+];
+
+const TAB_KEYS: readonly (typeof TABS)[number]['key'][] = [
+  'all',
+  'pending',
+  'approved',
+  'rejected',
 ];
 
 const COACH_TIERS: readonly CoachTier[] = ['silver', 'gold', 'elite'];
@@ -80,14 +92,18 @@ export function ApplicationsManager({
   canViewMembers: boolean;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<(typeof TABS)[number]['key']>('pending');
-  const [query, setQuery] = useState('');
+  // The tab and the search sit in the URL, so opening an applicant's member
+  // record and coming back returns to the same shortlist rather than to
+  // "Pending, unfiltered" — which is where the reviewer started an hour ago.
+  const [tab, setTab] = useUrlState<(typeof TABS)[number]['key']>('tab', 'pending', TAB_KEYS);
+  const [query, setQuery] = useUrlSearch('q');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<'approve' | 'reject' | null>(null);
   const [coachTier, setCoachTier] = useState<CoachTier>('silver');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const decided = useActionFeedback();
 
   const filtered = useMemo(() => {
     const inTab = tab === 'all' ? applications : applications.filter((a) => a.status === tab);
@@ -168,6 +184,14 @@ export function ApplicationsManager({
         return;
       }
       setBusy(false);
+      // Say what happened on the page the reviewer is thrown back to. The
+      // drawer closing was the only signal a decision had landed, and a drawer
+      // also closes when you press Escape or miss the panel with a click.
+      decided.succeed(
+        action === 'approve'
+          ? `${selected.displayName} is now a ${tierLabel(coachTier)} coach`
+          : `${selected.displayName}'s application was turned down`,
+      );
       setSelectedId(null);
       setMode(null);
       router.refresh();
@@ -177,12 +201,17 @@ export function ApplicationsManager({
     }
   }
 
+  // The row carries the case, not just the name: the pitch, what they coach and
+  // how long they have done it. A reviewer should be able to shortlist from the
+  // table and open the drawer only to confirm, rather than opening every row to
+  // find out what it is about.
   const columns: Column<ApplicationRow>[] = [
     {
       key: 'applicant',
       header: 'Applicant',
+      primary: true,
       render: (a) => (
-        <div style={{ minWidth: 0 }}>
+        <div style={{ minWidth: 0, maxWidth: 230 }}>
           <MemberLink
             id={a.accountId}
             name={a.displayName || a.accountDisplayName}
@@ -191,7 +220,9 @@ export function ApplicationsManager({
           />
           <div
             style={{
-              fontSize: 12,
+              marginTop: 2,
+              fontSize: 13,
+              fontWeight: 400,
               color: 'var(--gt-text-dim)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -205,38 +236,68 @@ export function ApplicationsManager({
     },
     {
       key: 'headline',
-      header: 'Headline',
+      header: 'What they say they do',
       render: (a) => (
-        <span
-          style={{
-            fontSize: 13,
-            color: 'var(--gt-text-dim)',
-            display: 'inline-block',
-            maxWidth: 260,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {a.headline || '—'}
-        </span>
+        <div style={{ minWidth: 0, maxWidth: 320 }}>
+          <div
+            title={a.headline || undefined}
+            style={{
+              fontSize: 14,
+              color: a.headline ? 'var(--gt-text)' : 'var(--gt-text-faint)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {a.headline || 'No headline written'}
+          </div>
+          {a.specialties.length > 0 ? (
+            <div
+              style={{
+                marginTop: 5,
+                display: 'flex',
+                gap: 4,
+                flexWrap: 'nowrap',
+                overflow: 'hidden',
+              }}
+            >
+              {a.specialties.slice(0, 2).map((s) => (
+                <Badge key={s} tone="neutral">
+                  {s}
+                </Badge>
+              ))}
+              {a.specialties.length > 2 ? (
+                <Badge tone="neutral">{`+${a.specialties.length - 2}`}</Badge>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       ),
     },
     {
-      key: 'years',
-      header: 'Years',
-      width: 80,
-      align: 'right',
+      key: 'experience',
+      header: 'Experience',
+      numeric: true,
+      width: 130,
       render: (a) => (
-        <span className="gt-numeric" style={{ fontSize: 13 }}>
-          {a.yearsExperience}
-        </span>
+        <div style={{ lineHeight: 1.35 }}>
+          <div style={{ fontSize: 14, color: 'var(--gt-text)' }}>
+            {a.yearsExperience} {a.yearsExperience === 1 ? 'year' : 'years'}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+            {a.certifications.length === 0
+              ? 'No certificates'
+              : `${a.certifications.length} ${
+                  a.certifications.length === 1 ? 'certificate' : 'certificates'
+                }`}
+          </div>
+        </div>
       ),
     },
     {
       key: 'status',
       header: 'Status',
-      width: 110,
+      width: 116,
       render: (a) => (
         <StatusChip
           status={STATUS_CHIP[a.status].status}
@@ -247,13 +308,10 @@ export function ApplicationsManager({
     {
       key: 'submitted',
       header: 'Submitted',
-      width: 110,
-      align: 'right',
+      numeric: true,
+      width: 120,
       render: (a) => (
-        <span
-          className="gt-numeric"
-          style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}
-        >
+        <span style={{ fontSize: 13, color: 'var(--gt-text-dim)', whiteSpace: 'nowrap' }}>
           {formatDate(a.createdAt)}
         </span>
       ),
@@ -262,70 +320,224 @@ export function ApplicationsManager({
 
   return (
     <>
-      <div style={{ marginBottom: 16, maxWidth: 340 }}>
-        <SearchField
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search name, email or specialty"
-          aria-label="Search coach applications"
-        />
-      </div>
+      <Toolbar
+        left={
+          <QueueTabs
+            label="Filter coach applications"
+            tabs={TABS.map((t) => ({
+              key: t.key,
+              label: t.label,
+              count:
+                t.key === 'all'
+                  ? applications.length
+                  : applications.filter((a) => a.status === t.key).length,
+            }))}
+            value={tab}
+            onChange={setTab}
+          />
+        }
+        right={
+          <div style={{ width: 280, maxWidth: '100%' }}>
+            <SearchField
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search name, email or specialty"
+              aria-label="Search coach applications"
+            />
+          </div>
+        }
+      />
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {TABS.map((t) => {
-          const active = tab === t.key;
-          const count =
-            t.key === 'all'
-              ? applications.length
-              : applications.filter((a) => a.status === t.key).length;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              style={{
-                padding: '7px 14px',
-                borderRadius: 10,
-                cursor: 'pointer',
-                fontFamily: 'var(--font-heading)',
-                fontSize: 13,
-                fontWeight: 600,
-                background: active ? 'var(--gt-red)' : 'transparent',
-                color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
-                border: active
-                  ? '1px solid var(--gt-red)'
-                  : '1px solid var(--gt-border)',
-              }}
-            >
-              {t.label} · {count}
-            </button>
-          );
-        })}
+      {/* Reserves its line so a decision landing here can't nudge the table. */}
+      <div style={{ marginBottom: 8 }}>
+        <ActionFeedback feedback={decided.feedback} reserveSpace />
       </div>
 
       {applications.length === 0 ? (
         <EmptyState
           title="No applications yet"
-          description="Coach applications submitted from the app appear here for review."
+          description="Coach applications sent from the app arrive here for review."
         />
       ) : (
-        <DataTable
-          columns={columns}
-          rows={filtered}
-          rowKey={(a) => a.id}
-          onRowClick={openRow}
-          empty={query.trim() ? 'No applications match that search.' : 'No applications in this status.'}
-        />
+        <KeyboardRows>
+          <DataTable
+            columns={columns}
+            rows={filtered}
+            rowKey={(a) => a.id}
+            caption="Coach applications"
+            selectedKey={selectedId}
+            onRowClick={openRow}
+            rowAriaLabel={(a) => `Review the application from ${a.displayName}`}
+            emptyTitle={
+              query.trim() ? 'Nothing matches that search' : 'Nothing in this list'
+            }
+            emptyDescription={
+              query.trim()
+                ? 'Try part of a name, an email, or a specialty.'
+                : 'Switch tabs to see applications in another state.'
+            }
+            emptyAction={
+              query.trim() ? (
+                <Button variant="ghost" size="sm" onClick={() => setQuery('')}>
+                  Clear search
+                </Button>
+              ) : undefined
+            }
+          />
+        </KeyboardRows>
       )}
 
+      {/* The decision lives in the pinned footer, not at the bottom of the
+          portfolio. A reviewer can read as much of the evidence as they need
+          and act without scrolling back, and the two buttons are in the same
+          place on every application. */}
       <Drawer
         open={selected != null}
         onClose={closeDrawer}
         title={selected?.displayName || 'Application'}
-        width={480}
+        width={520}
+        footer={
+          selected ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
+              {error ? (
+                <div
+                  role="alert"
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 'var(--gt-radius-sm)',
+                    border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+                    background: 'var(--gt-danger-weak)',
+                    color: 'var(--gt-danger)',
+                    fontSize: 13,
+                  }}
+                >
+                  {error}
+                </div>
+              ) : null}
+
+              {selected.status !== 'pending' ? (
+                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                  {selected.status === 'approved' ? 'Approved' : 'Turned down'}
+                  {selected.decidedAt ? ` on ${formatDate(selected.decidedAt)}` : ''}. There
+                  is nothing left to decide here.
+                </div>
+              ) : !canReview ? (
+                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                  You can read applications but not decide them.
+                </div>
+              ) : mode === null ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span
+                    style={{ fontSize: 12, color: 'var(--gt-text-faint)', maxWidth: '34ch' }}
+                  >
+                    Approving grants the coach role and publishes their profile.
+                  </span>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        setMode('reject');
+                        setError(null);
+                      }}
+                    >
+                      Turn down
+                    </Button>
+                    <Button
+                      variant="primary"
+                      onClick={() => {
+                        setMode('approve');
+                        setError(null);
+                      }}
+                    >
+                      Approve
+                    </Button>
+                  </div>
+                </div>
+              ) : mode === 'approve' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                      Starting coach level
+                    </span>
+                    <select
+                      className="gt-input"
+                      value={coachTier}
+                      onChange={(e) => setCoachTier(e.target.value as CoachTier)}
+                      disabled={busy}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      {COACH_TIERS.map((t) => (
+                        <option key={t} value={t}>
+                          {tierLabel(t)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <textarea
+                    className="gt-input"
+                    placeholder="Add a note for the record (optional)"
+                    aria-label="Note for the record"
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    rows={2}
+                    maxLength={500}
+                    disabled={busy}
+                    style={{ resize: 'vertical', minHeight: 64, fontFamily: 'inherit' }}
+                  />
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                    <Button variant="ghost" disabled={busy} onClick={() => setMode(null)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="primary"
+                      disabled={busy}
+                      onClick={() => void decide('approve')}
+                    >
+                      {busy ? 'Approving…' : `Approve as ${tierLabel(coachTier)}`}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <textarea
+                    className="gt-input"
+                    placeholder="Tell them why, in a sentence"
+                    aria-label="Reason for turning this application down"
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    rows={2}
+                    maxLength={500}
+                    disabled={busy}
+                    style={{ resize: 'vertical', minHeight: 64, fontFamily: 'inherit' }}
+                  />
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                    <Button variant="ghost" disabled={busy} onClick={() => setMode(null)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="danger"
+                      disabled={busy}
+                      onClick={() => void decide('reject')}
+                    >
+                      {busy ? 'Turning down…' : 'Turn down'}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null
+        }
       >
         {selected ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
               {selected.avatarUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -335,7 +547,7 @@ export function ApplicationsManager({
                   style={{
                     width: 64,
                     height: 64,
-                    borderRadius: '50%',
+                    borderRadius: 'var(--gt-radius-pill)',
                     objectFit: 'cover',
                     border: '1px solid var(--gt-border)',
                     flexShrink: 0,
@@ -343,30 +555,46 @@ export function ApplicationsManager({
                 />
               ) : (
                 <div
+                  aria-hidden
                   style={{
                     width: 64,
                     height: 64,
-                    borderRadius: '50%',
-                    background: 'var(--gt-bg)',
+                    borderRadius: 'var(--gt-radius-pill)',
+                    background: 'var(--gt-surface-sunken)',
                     border: '1px solid var(--gt-border)',
                     flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontFamily: 'var(--font-heading)',
+                    fontWeight: 600,
+                    fontSize: 22,
+                    color: 'var(--gt-text-faint)',
                   }}
-                />
+                >
+                  {(selected.displayName || selected.accountEmail).charAt(0).toUpperCase()}
+                </div>
               )}
               <div style={{ minWidth: 0 }}>
                 <div
                   style={{
                     fontFamily: 'var(--font-heading)',
                     fontWeight: 600,
-                    fontSize: 16,
+                    fontSize: 17,
                   }}
                 >
                   {selected.displayName}
                 </div>
-                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: 'var(--gt-text-dim)',
+                    overflowWrap: 'anywhere',
+                  }}
+                >
                   {selected.accountEmail}
                 </div>
-                <div style={{ marginTop: 6 }}>
+                <div style={{ marginTop: 8 }}>
                   <StatusChip
                     status={STATUS_CHIP[selected.status].status}
                     label={STATUS_CHIP[selected.status].label}
@@ -375,11 +603,46 @@ export function ApplicationsManager({
               </div>
             </div>
 
-            <Field label="Headline">{selected.headline || '—'}</Field>
-            <Field label="Bio">{selected.bio || '—'}</Field>
-            <Field label="Years of experience">{selected.yearsExperience}</Field>
+            {/* The pitch, in their own words, at the size it deserves. */}
+            <p
+              style={{
+                margin: 0,
+                fontFamily: 'var(--font-heading)',
+                fontSize: 16,
+                lineHeight: 1.45,
+                color: selected.headline ? 'var(--gt-text)' : 'var(--gt-text-faint)',
+              }}
+            >
+              {selected.headline || 'No headline written.'}
+            </p>
 
-            <Field label="Specialties">
+            <dl
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'auto minmax(0, 1fr)',
+                gap: '8px 16px',
+                margin: 0,
+                fontSize: 14,
+              }}
+            >
+              <Fact
+                label="Experience"
+                value={`${selected.yearsExperience} ${
+                  selected.yearsExperience === 1 ? 'year' : 'years'
+                }`}
+                numeric
+              />
+              <Fact label="Applied" value={formatDate(selected.createdAt)} numeric />
+              {selected.decidedAt ? (
+                <Fact label="Decided" value={formatDate(selected.decidedAt)} numeric />
+              ) : null}
+            </dl>
+
+            <Field label="About them">
+              {selected.bio || <Muted>Nothing written.</Muted>}
+            </Field>
+
+            <Field label="What they coach">
               {selected.specialties.length > 0 ? (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {selected.specialties.map((s) => (
@@ -393,14 +656,21 @@ export function ApplicationsManager({
               )}
             </Field>
 
-            <Field label="Certifications">
+            <Field label="Certificates">
               {selected.certifications.length > 0 ? (
-                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14, lineHeight: 1.6 }}>
                   {selected.certifications.map((c, i) => (
                     <li key={`${c.title}-${i}`}>
                       {c.title}
-                      {c.issuer ? ` · ${c.issuer}` : ''}
-                      {c.year ? ` (${c.year})` : ''}
+                      {c.issuer ? (
+                        <span style={{ color: 'var(--gt-text-dim)' }}> · {c.issuer}</span>
+                      ) : null}
+                      {c.year ? (
+                        <span className="gt-numeric" style={{ color: 'var(--gt-text-dim)' }}>
+                          {' '}
+                          ({c.year})
+                        </span>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -411,7 +681,7 @@ export function ApplicationsManager({
 
             <Field label="Achievements">
               {selected.achievements.length > 0 ? (
-                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14, lineHeight: 1.6 }}>
                   {selected.achievements.map((a, i) => (
                     <li key={i}>{a}</li>
                   ))}
@@ -421,127 +691,8 @@ export function ApplicationsManager({
               )}
             </Field>
 
-            <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-              Submitted {formatDate(selected.createdAt)}
-              {selected.decidedAt
-                ? ` · Decided ${formatDate(selected.decidedAt)}`
-                : ''}
-            </div>
-
             {selected.reviewNote ? (
-              <Field label="Review note">{selected.reviewNote}</Field>
-            ) : null}
-
-            {canReview && selected.status === 'pending' ? (
-              <div
-                style={{
-                  paddingTop: 16,
-                  borderTop: '1px solid var(--gt-border)',
-                }}
-              >
-                {mode === null ? (
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setMode('reject');
-                        setError(null);
-                      }}
-                    >
-                      Reject
-                    </Button>
-                    <Button
-                      variant="primary"
-                      onClick={() => {
-                        setMode('approve');
-                        setError(null);
-                      }}
-                    >
-                      Approve
-                    </Button>
-                  </div>
-                ) : mode === 'approve' ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                        Starting coach tier
-                      </span>
-                      <select
-                        className="gt-input"
-                        value={coachTier}
-                        onChange={(e) => setCoachTier(e.target.value as CoachTier)}
-                        disabled={busy}
-                        style={{ cursor: 'pointer' }}
-                      >
-                        {COACH_TIERS.map((t) => (
-                          <option key={t} value={t}>
-                            {tierLabel(t)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <textarea
-                      className="gt-input"
-                      placeholder="Note (optional)"
-                      value={note}
-                      onChange={(e) => setNote(e.target.value)}
-                      rows={2}
-                      maxLength={500}
-                      disabled={busy}
-                      style={{ resize: 'vertical', fontFamily: 'inherit' }}
-                    />
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <Button
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() => setMode(null)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="primary"
-                        disabled={busy}
-                        onClick={() => void decide('approve')}
-                      >
-                        {busy ? 'Approving…' : `Approve as ${tierLabel(coachTier)}`}
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <textarea
-                      className="gt-input"
-                      placeholder="Reason for rejection"
-                      value={note}
-                      onChange={(e) => setNote(e.target.value)}
-                      rows={2}
-                      maxLength={500}
-                      disabled={busy}
-                      style={{ resize: 'vertical', fontFamily: 'inherit' }}
-                    />
-                    <div style={{ display: 'flex', gap: 10 }}>
-                      <Button
-                        variant="ghost"
-                        disabled={busy}
-                        onClick={() => setMode(null)}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="danger"
-                        disabled={busy}
-                        onClick={() => void decide('reject')}
-                      >
-                        {busy ? 'Rejecting…' : 'Confirm reject'}
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : null}
-
-            {error ? (
-              <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div>
+              <Field label="Reviewer note">{selected.reviewNote}</Field>
             ) : null}
           </div>
         ) : null}
@@ -562,22 +713,48 @@ function Field({
       <div
         style={{
           fontSize: 12,
-          letterSpacing: '0.03em',
+          letterSpacing: '0.04em',
           textTransform: 'uppercase',
-          color: 'var(--gt-text-dim)',
+          fontWeight: 600,
+          color: 'var(--gt-text-faint)',
           fontFamily: 'var(--font-heading)',
           marginBottom: 6,
         }}
       >
         {label}
       </div>
-      <div style={{ fontSize: 14, whiteSpace: 'pre-wrap' }}>{children}</div>
+      <div style={{ fontSize: 14, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** One term/value pair in the applicant's fact list. */
+function Fact({
+  label,
+  value,
+  numeric,
+}: {
+  label: string;
+  value: string;
+  numeric?: boolean;
+}) {
+  return (
+    <div style={{ display: 'contents' }}>
+      <dt style={{ color: 'var(--gt-text-dim)', whiteSpace: 'nowrap' }}>{label}</dt>
+      <dd
+        className={numeric ? 'gt-numeric' : undefined}
+        style={{ margin: 0, textAlign: 'right', color: 'var(--gt-text)' }}
+      >
+        {value}
+      </dd>
     </div>
   );
 }
 
 function Muted({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>{children}</div>
+    <span style={{ fontSize: 13, color: 'var(--gt-text-faint)' }}>{children}</span>
   );
 }

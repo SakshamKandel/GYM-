@@ -10,7 +10,7 @@ import { PartnersValue } from '@/components/marketing/partners/ValueBand';
 import { VerifySection } from '@/components/marketing/partners/VerifySection';
 
 export const metadata: Metadata = {
-  title: 'Partner kitchens | The GM Method',
+  title: 'Partner kitchens',
   description:
     'Sell macro-counted meals to GM members. A live order board, aggregated prep queue, menu manager, wallet payouts and a privacy-first partner portal, with onboarding run by the GM team.',
 };

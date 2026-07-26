@@ -13,7 +13,10 @@ import {
   TierChip,
 } from '@/components/console';
 import { formatDate, formatDateTime } from '@/lib/format';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import { MemberLink } from '../../_components/MemberLink';
+import { QueueTabs } from '../../_components/QueueTabs';
+import { useUrlSearch } from '../../_components/useUrlState';
 
 export type Tier = 'starter' | 'silver' | 'gold' | 'elite';
 
@@ -106,7 +109,10 @@ export function SubscriptionsManager({
   canViewMembers: boolean;
 }) {
   const router = useRouter();
-  const [filter, setFilter] = useState('');
+  // In the URL, so a trip to a member's record and back keeps the search that
+  // found them. The effect below runs on every value of it, including the one
+  // restored from the address bar, so the results come back with it.
+  const [filter, setFilter] = useUrlSearch('q');
   // null = show the SSR roster; an array = live search results.
   const [remoteRows, setRemoteRows] = useState<MemberRow[] | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -385,36 +391,21 @@ export function SubscriptionsManager({
 
             <div>
               <FieldLabel>New tier</FieldLabel>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {TIERS.map((t) => {
-                  const selected = nextTier === t;
-                  return (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setNextTier(t)}
-                      style={{
-                        padding: '8px 14px',
-                        borderRadius: 10,
-                        cursor: 'pointer',
-                        fontFamily: 'var(--font-numeric)',
-                        fontSize: 13,
-                        letterSpacing: '0.04em',
-                        textTransform: 'uppercase',
-                        background: selected ? 'var(--gt-accent)' : 'transparent',
-                        color: selected ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
-                        border: selected
-                          ? '1px solid var(--gt-accent)'
-                          : '1px solid var(--gt-border)',
-                        transition: 'background 120ms, border-color 120ms',
-                      }}
-                    >
-                      {t}
-                      {t === editing.tier ? ' (current)' : ''}
-                    </button>
-                  );
-                })}
-              </div>
+              {/* Hand-rolled, this row printed the stored word ('silver') on a
+                  34px target filled with the lighter accent, which does not
+                  clear contrast against its own white label — on the control
+                  that decides what someone has paid for. The shared pill
+                  carries the passing accent, a 44px target, and hover, pressed
+                  and focus states it never had. */}
+              <QueueTabs
+                label="New tier"
+                tabs={TIERS.map((t) => ({
+                  key: t,
+                  label: t === editing.tier ? `${tierLabel(t)} (now)` : tierLabel(t),
+                }))}
+                value={nextTier}
+                onChange={setNextTier}
+              />
             </div>
 
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>

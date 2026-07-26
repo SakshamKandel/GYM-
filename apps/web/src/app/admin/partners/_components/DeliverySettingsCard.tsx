@@ -309,14 +309,20 @@ export function DeliverySettingsCard({
             {error}
           </div>
         ) : null}
-        {saved && !dirty ? (
-          <div style={{ color: 'var(--gt-text-dim)', fontSize: 13 }}>Delivery settings saved.</div>
-        ) : null}
-
-        <div>
-          <Button variant="primary" disabled={!dirty || saving} onClick={() => void save()}>
+        {/* A dark fill, not the accent: this card rides along on a page whose one
+            accent already belongs to its main action. Still the high-emphasis
+            control of its own section. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <Button variant="dark" disabled={!dirty || saving} onClick={() => void save()}>
             {saving ? 'Saving…' : 'Save delivery settings'}
           </Button>
+          <span
+            role="status"
+            aria-live="polite"
+            style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}
+          >
+            {saving ? '' : dirty ? 'Not saved yet.' : saved ? 'Saved.' : ''}
+          </span>
         </div>
       </div>
     </Card>

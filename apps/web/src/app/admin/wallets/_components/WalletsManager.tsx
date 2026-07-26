@@ -9,11 +9,16 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  FilterPill,
+  FilterPills,
+  SkeletonBar,
   TextField,
   TierChip,
 } from '@/components/console';
 import { formatDate, formatMoney } from '@/lib/format';
 import { MemberLink } from '../../_components/MemberLink';
+import { QueueTabs } from '../../_components/QueueTabs';
+import { useUrlState } from '../../_components/useUrlState';
 import { PartnerWallets, type PartnerWalletRow } from './PartnerWallets';
 import { PayoutsQueue } from './PayoutsQueue';
 
@@ -107,7 +112,15 @@ export function WalletsManager({
   // Top-level view: coach balances, restaurant balances (both with a
   // record-entry drawer), or the payout request queue (plan §3 P1-12). Default
   // to the first tab this operator is actually allowed to open.
-  const [tab, setTab] = useState<WalletsTab>(canManageWallets ? 'balances' : 'payouts');
+  // In the URL, so opening a coach's member record from the ledger and coming
+  // back returns to the same view. Guarded by what this operator may see: a
+  // hand-edited `?view=balances` cannot show a payouts-only reviewer the
+  // balances tables, it just falls back to their own first tab.
+  const [tab, setTab] = useUrlState<WalletsTab>(
+    'view',
+    canManageWallets ? 'balances' : 'payouts',
+    availableTabs,
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<WalletDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -289,15 +302,21 @@ export function WalletsManager({
     },
     {
       key: 'balances',
-      header: 'Balance',
+      header: 'We owe',
       align: 'right',
       render: (w) =>
         w.balances.length === 0 ? (
-          <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>—</span>
+          <span className="gt-numeric" style={{ fontSize: 15, color: 'var(--gt-text-faint)' }}>
+            —
+          </span>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end' }}>
             {w.balances.map((b) => (
-              <span key={b.currency} className="gt-numeric" style={{ fontSize: 13 }}>
+              <span
+                key={b.currency}
+                className="gt-numeric"
+                style={{ fontSize: 15, color: 'var(--gt-text)' }}
+              >
                 {formatMoney(b.amountMinor, b.currency)}
               </span>
             ))}
@@ -307,10 +326,15 @@ export function WalletsManager({
     {
       key: 'actions',
       header: '',
-      width: 100,
+      width: 108,
       align: 'right',
       render: (w) => (
-        <Button variant="ghost" size="sm" onClick={() => openRow(w)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => openRow(w)}
+          aria-label={`Open the ledger for ${w.displayName || w.email}`}
+        >
           Ledger
         </Button>
       ),
@@ -323,32 +347,13 @@ export function WalletsManager({
   return (
     <>
       {availableTabs.length > 1 ? (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
-          {availableTabs.map((t) => {
-            const active = tab === t;
-            return (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTab(t)}
-                style={{
-                  padding: '7px 14px',
-                  borderRadius: 10,
-                  cursor: 'pointer',
-                  fontFamily: 'var(--font-heading)',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  background: active ? 'var(--gt-accent-strong)' : 'transparent',
-                  color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
-                  border: active
-                    ? '1px solid var(--gt-accent-strong)'
-                    : '1px solid var(--gt-border)',
-                }}
-              >
-                {TAB_LABEL[t]}
-              </button>
-            );
-          })}
+        <div style={{ marginBottom: 18 }}>
+          <QueueTabs
+            label="Choose what to look at"
+            tabs={availableTabs.map((t) => ({ key: t, label: TAB_LABEL[t] }))}
+            value={tab}
+            onChange={setTab}
+          />
         </div>
       ) : null}
 
@@ -378,22 +383,39 @@ export function WalletsManager({
               {selected.revoked ? ' · no longer a coach, but we still owe this balance' : ''}
             </div>
 
+            {/* What we owe leads the panel: it is the figure every entry below
+                is about, and the one a payout is checked against. */}
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               {drawerBalances.length === 0 ? (
                 <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-                  No balance yet.
+                  Nothing owed yet.
                 </span>
               ) : (
                 drawerBalances.map((b) => (
                   <div
                     key={b.currency}
                     className="gt-card"
-                    style={{ padding: '10px 14px' }}
+                    style={{ padding: '12px 16px', minWidth: 140 }}
                   >
-                    <div style={{ fontSize: 11, color: 'var(--gt-text-dim)' }}>
-                      {b.currency}
+                    <div
+                      style={{
+                        fontSize: 'var(--gt-fs-micro)',
+                        letterSpacing: '0.04em',
+                        textTransform: 'uppercase',
+                        color: 'var(--gt-text-dim)',
+                        fontFamily: 'var(--font-heading)',
+                      }}
+                    >
+                      We owe
                     </div>
-                    <div className="gt-numeric" style={{ fontSize: 18 }}>
+                    <div
+                      className="gt-numeric"
+                      style={{
+                        fontSize: 'var(--gt-fs-h1)',
+                        lineHeight: 1.2,
+                        color: 'var(--gt-text)',
+                      }}
+                    >
                       {formatMoney(b.amountMinor, b.currency)}
                     </div>
                   </div>
@@ -433,69 +455,47 @@ export function WalletsManager({
                   You can record a final payout here to settle and zero it out.
                 </div>
               ) : null}
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                {(['adjustment', 'payout'] as const).map((t) => {
-                  const active = type === t;
-                  return (
-                    <button
+              {/* Neither of these is the panel's primary action, so neither
+                  spends the accent: the kind of entry is a plain choice, and
+                  the direction is coloured by what it MEANS — money on or money
+                  off — the same way the permission editor's grant/deny does. */}
+              <div style={{ marginBottom: 10 }}>
+                <FilterPills label="Kind of entry">
+                  {(['adjustment', 'payout'] as const).map((t) => (
+                    <FilterPill
                       key={t}
-                      type="button"
+                      tone="neutral"
+                      selected={type === t}
                       onClick={() => {
                         setType(t);
                         resetEntryKey();
                       }}
-                      style={{
-                        flex: 1,
-                        padding: '7px 10px',
-                        borderRadius: 10,
-                        cursor: 'pointer',
-                        fontFamily: 'var(--font-heading)',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        background: active ? 'var(--gt-accent-strong)' : 'transparent',
-                        color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
-                        border: active
-                          ? '1px solid var(--gt-accent-strong)'
-                          : '1px solid var(--gt-border)',
-                      }}
+                      style={{ flex: 1 }}
                     >
                       {TYPE_LABEL[t]}
-                    </button>
-                  );
-                })}
+                    </FilterPill>
+                  ))}
+                </FilterPills>
               </div>
 
               {type === 'adjustment' ? (
-                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                  {(['credit', 'debit'] as const).map((d) => {
-                    const active = direction === d;
-                    return (
-                      <button
+                <div style={{ marginBottom: 10 }}>
+                  <FilterPills label="Which way the money goes">
+                    {(['credit', 'debit'] as const).map((d) => (
+                      <FilterPill
                         key={d}
-                        type="button"
+                        tone={d === 'credit' ? 'positive' : 'critical'}
+                        selected={direction === d}
                         onClick={() => {
                           setDirection(d);
                           resetEntryKey();
                         }}
-                        style={{
-                          flex: 1,
-                          padding: '6px 10px',
-                          borderRadius: 10,
-                          cursor: 'pointer',
-                          fontFamily: 'var(--font-heading)',
-                          fontSize: 12,
-                          fontWeight: 600,
-                          background: active ? 'var(--gt-card)' : 'transparent',
-                          color: 'var(--gt-text)',
-                          border: active
-                            ? '1px solid var(--gt-text-dim)'
-                            : '1px solid var(--gt-border)',
-                        }}
+                        style={{ flex: 1 }}
                       >
-                        {d === 'credit' ? 'Credit (+)' : 'Debit (−)'}
-                      </button>
-                    );
-                  })}
+                        {d === 'credit' ? 'Add to balance' : 'Take off balance'}
+                      </FilterPill>
+                    ))}
+                  </FilterPills>
                 </div>
               ) : null}
 
@@ -538,6 +538,7 @@ export function WalletsManager({
 
               <textarea
                 className="gt-input"
+                aria-label="Note about this entry, optional"
                 placeholder="Note (optional)"
                 value={note}
                 onChange={(e) => {
@@ -559,19 +560,31 @@ export function WalletsManager({
               </div>
 
               {error ? (
-                <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 8 }}>
+                <div
+                  role="alert"
+                  style={{
+                    marginTop: 10,
+                    border: '1px solid color-mix(in srgb, var(--gt-danger) 38%, transparent)',
+                    background: 'var(--gt-danger-weak)',
+                    borderRadius: 'var(--gt-radius-sm)',
+                    padding: '10px 12px',
+                    color: 'var(--gt-text)',
+                    fontSize: 13,
+                    lineHeight: 1.45,
+                  }}
+                >
                   {error}
                 </div>
               ) : null}
 
-              <div style={{ marginTop: 12 }}>
+              <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
                 <Button
                   variant="primary"
                   size="sm"
                   disabled={saving}
                   onClick={() => void recordEntry()}
                 >
-                  {saving ? 'Saving…' : `Record ${type}`}
+                  {saving ? 'Saving…' : `Record ${TYPE_LABEL[type].toLowerCase()}`}
                 </Button>
               </div>
             </div>
@@ -590,29 +603,47 @@ export function WalletsManager({
                 Ledger
               </div>
               {detailLoading ? (
-                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>Loading…</div>
+                <div
+                  role="status"
+                  aria-label="Loading this coach's entries"
+                  style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+                >
+                  <SkeletonBar w="60%" />
+                  <SkeletonBar w="80%" />
+                  <SkeletonBar w="45%" />
+                </div>
               ) : detailError ? (
-                <div style={{ fontSize: 13, color: 'var(--gt-danger)' }}>{detailError}</div>
+                <div role="alert" style={{ fontSize: 13, color: 'var(--gt-danger)' }}>
+                  {detailError}
+                </div>
               ) : drawerEntries.length === 0 ? (
                 <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-                  No entries yet.
+                  Nothing has moved on this wallet yet.
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {drawerEntries.map((entry) => (
+                // One framed list with hairline rows rather than a stack of
+                // separate boxes: money on and money off then read as one column
+                // you can run your eye down.
+                <div className="gt-card" style={{ padding: 0 }}>
+                  {drawerEntries.map((entry, i) => (
                     <div
                       key={entry.id}
                       style={{
                         display: 'flex',
                         justifyContent: 'space-between',
-                        gap: 10,
-                        padding: '8px 10px',
-                        borderRadius: 8,
-                        border: '1px solid var(--gt-border)',
+                        alignItems: 'center',
+                        gap: 12,
+                        padding: '10px 14px',
+                        borderBottom:
+                          i === drawerEntries.length - 1
+                            ? 'none'
+                            : '1px solid var(--gt-border)',
                       }}
                     >
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 13 }}>{TYPE_LABEL[entry.type]}</div>
+                        <div style={{ fontSize: 13, color: 'var(--gt-text)' }}>
+                          {TYPE_LABEL[entry.type]}
+                        </div>
                         {entry.note ? (
                           <div
                             style={{
@@ -627,14 +658,14 @@ export function WalletsManager({
                             {entry.note}
                           </div>
                         ) : null}
-                        <div style={{ fontSize: 11, color: 'var(--gt-text-dim)' }}>
+                        <div style={{ fontSize: 12, color: 'var(--gt-text-faint)' }}>
                           {formatDate(entry.createdAt)}
                         </div>
                       </div>
                       <span
                         className="gt-numeric"
                         style={{
-                          fontSize: 13,
+                          fontSize: 'var(--gt-fs-meta)',
                           color: entry.amountMinor < 0 ? 'var(--gt-danger)' : 'var(--gt-success)',
                           whiteSpace: 'nowrap',
                         }}

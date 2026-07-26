@@ -8,29 +8,22 @@
  * plumbing needed, so this stays a server component like the rest of the
  * page shells that place it.
  *
- * Styled to match `Button`'s ghost/sm variant without importing a 'use
- * client' component into these otherwise-server page files.
+ * It wears the shared button classes rather than a copy of them. Hand-copied,
+ * it was 30px tall against the console's 44px minimum, had no hover and no
+ * pressed state, and had a hard-coded 10px corner that would survive any change
+ * to the radius token. `.gt-btn` carries all of that, and borrowing the class
+ * costs nothing here: the styling is in globals.css, so this stays a server
+ * component like the page shells that place it.
  */
 export function DownloadCsv({ href, label = 'Download CSV' }: { href: string; label?: string }) {
   return (
     <a
       href={href}
       download
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '6px 12px',
-        fontSize: 13,
-        fontFamily: 'var(--font-heading)',
-        fontWeight: 600,
-        borderRadius: 10,
-        lineHeight: 1.2,
-        textDecoration: 'none',
-        color: 'var(--gt-text)',
-        border: '1px solid var(--gt-border)',
-        background: 'transparent',
-      }}
+      className="gt-btn"
+      data-variant="ghost"
+      data-size="sm"
+      style={{ textDecoration: 'none' }}
     >
       {label}
     </a>

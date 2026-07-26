@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Button, SearchField, TierChip } from '@/components/console';
+import { Button, SearchField, SkeletonBar, TierChip } from '@/components/console';
 
 interface MemberHit {
   id: string;
@@ -162,29 +162,29 @@ export function AssignClient({
         htmlFor="assign-search"
         style={{
           fontSize: 12,
-          letterSpacing: '0.03em',
+          letterSpacing: '0.04em',
           textTransform: 'uppercase',
-          color: 'var(--gt-text-dim)',
+          fontWeight: 600,
+          color: 'var(--gt-text-faint)',
           fontFamily: 'var(--font-heading)',
           display: 'block',
           marginBottom: 6,
         }}
       >
-        Assign a client
+        Add a client
       </label>
 
       <SearchField
         id="assign-search"
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        placeholder="Search members by email…"
+        placeholder="Search members by name or email"
         autoComplete="off"
       />
 
       {notAccepting ? (
-        <div style={{ fontSize: 12, color: 'var(--gt-warning)', marginTop: 6 }}>
-          This coach is marked as not accepting new clients. Assign only if
-          intentional.
+        <div style={{ fontSize: 13, color: 'var(--gt-warning)', marginTop: 8 }}>
+          This coach is marked as not taking new clients. Only add someone if you mean to.
         </div>
       ) : null}
 
@@ -210,31 +210,36 @@ export function AssignClient({
           style={{
             marginTop: 8,
             border: '1px solid var(--gt-border)',
-            borderRadius: 10,
+            borderRadius: 'var(--gt-radius-sm)',
             overflow: 'hidden',
           }}
         >
           {searching ? (
             <div
               style={{
-                padding: '12px 14px',
-                fontSize: 13,
-                color: 'var(--gt-text-dim)',
+                padding: '14px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
               }}
             >
-              Searching…
+              <span className="gt-sr-only" role="status">
+                Searching
+              </span>
+              <SkeletonBar w="55%" />
+              <SkeletonBar w="38%" h={10} />
             </div>
           ) : visible.length === 0 ? (
             <div
               style={{
-                padding: '12px 14px',
+                padding: '14px',
                 fontSize: 13,
                 color: 'var(--gt-text-dim)',
               }}
             >
               {results.length > 0
-                ? 'No assignable members match. Matches are staff or already assigned.'
-                : 'No members match.'}
+                ? 'Everyone who matches is either staff or already with this coach.'
+                : 'Nobody matches that search.'}
             </div>
           ) : (
             visible.map((m, i) => {
@@ -242,6 +247,7 @@ export function AssignClient({
               return (
                 <div
                   key={m.id}
+                  className="gt-inbox-row"
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -263,7 +269,7 @@ export function AssignClient({
                         style={{
                           fontFamily: 'var(--font-heading)',
                           fontWeight: 600,
-                          fontSize: 14,
+                          fontSize: 15,
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',
@@ -275,7 +281,7 @@ export function AssignClient({
                     </div>
                     <div
                       style={{
-                        fontSize: 12,
+                        fontSize: 13,
                         color: 'var(--gt-text-dim)',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -286,13 +292,16 @@ export function AssignClient({
                     </div>
                   </div>
                   <div style={{ flexShrink: 0 }}>
+                    {/* Dark, not accent: a list of results would otherwise put
+                        five accent buttons on one screen, and none of them
+                        would mean anything. */}
                     <Button
-                      variant="primary"
+                      variant="dark"
                       size="sm"
                       onClick={() => assign(m.id)}
                       disabled={busy}
                     >
-                      {busy ? 'Assigning…' : 'Assign'}
+                      {busy ? 'Adding…' : 'Add'}
                     </Button>
                   </div>
                 </div>

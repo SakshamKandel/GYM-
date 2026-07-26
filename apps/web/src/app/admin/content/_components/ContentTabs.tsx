@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Button,
   Card,
   ConfirmButton,
   type Column,
   DataTable,
   SkeletonRows,
 } from '@/components/console';
+import { formatDate } from '@/lib/format';
+import { QueueTabs } from '../../_components/QueueTabs';
+import { useUrlState } from '../../_components/useUrlState';
 import { MilestonesModeration } from './MilestonesModeration';
 import { ProgressPhotosModeration } from './ProgressPhotosModeration';
 import type { VideoListItem } from './types';
@@ -38,8 +40,6 @@ export function ContentTabs({
   /** Viewer holds `members.read`, so member names can link to the record. */
   canViewMembers: boolean;
 }) {
-  const [tab, setTab] = useState<Tab>(canManageContent ? 'videos' : 'milestones');
-
   const tabs: Array<{ key: Tab; label: string }> = [
     ...(canManageContent ? [{ key: 'videos' as const, label: 'Videos' }] : []),
     ...(canModerate
@@ -50,6 +50,16 @@ export function ContentTabs({
         ]
       : []),
   ];
+
+  // In the URL, so a moderator who opens a member record from the photo queue
+  // and comes back is still on the photo queue. Only tabs this operator can
+  // actually see are accepted, so a shared link can never land someone on a
+  // section they hold no permission for.
+  const [tab, setTab] = useUrlState<Tab>(
+    'tab',
+    canManageContent ? 'videos' : 'milestones',
+    tabs.map((t) => t.key),
+  );
 
   // Nothing to show a tab bar for — single-permission caller, one tab only.
   if (tabs.length <= 1) {
@@ -66,24 +76,19 @@ export function ContentTabs({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div
-        role="tablist"
-        aria-label="Content sections"
-        style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}
-      >
-        {tabs.map((t) => (
-          <Button
-            key={t.key}
-            variant={tab === t.key ? 'primary' : 'ghost'}
-            size="sm"
-            role="tab"
-            aria-selected={tab === t.key}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </Button>
-        ))}
-      </div>
+      {/* Was a row of buttons wearing `role="tab"` without any of the keyboard
+          behaviour that role promises, and the chosen one took the accent that
+          belongs to the page's primary action. The shared control is a plain
+          pressed-toggle group: honest semantics, arrow keys, one accent. */}
+      <QueueTabs
+        label="Content sections"
+        tabs={tabs}
+        value={tab}
+        onChange={setTab}
+        /* Neutral: on this page the accent belongs to Add video, not to the
+           choice of which section you are looking at. */
+        tone="neutral"
+      />
 
       {tab === 'videos' && canManageContent ? (
         <VideoLibrary initialVideos={videos} videoConfigured={videoConfigured} />
@@ -211,9 +216,13 @@ function CustomFoodsModeration() {
       key: 'createdAt',
       header: 'Added',
       width: 110,
+      align: 'right',
+      // Was the first ten characters of the stored timestamp. "2026-07-12" is
+      // a database value; the console has one date formatter and every other
+      // column already uses it.
       render: (f) => (
-        <span className="gt-numeric" style={{ fontSize: 13 }}>
-          {f.createdAt.slice(0, 10)}
+        <span className="gt-numeric" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
+          {formatDate(f.createdAt)}
         </span>
       ),
     },

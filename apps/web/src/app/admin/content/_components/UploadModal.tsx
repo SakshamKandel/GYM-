@@ -120,7 +120,7 @@ function ExercisePicker({
             alignItems: 'center',
             gap: 10,
             border: '1px solid var(--gt-border)',
-            borderRadius: 10,
+            borderRadius: 'var(--gt-radius-sm)',
             padding: '8px 10px',
             background: 'var(--gt-surface-sunken)',
           }}
@@ -161,7 +161,7 @@ function ExercisePicker({
                 margin: 0,
                 padding: 4,
                 border: '1px solid var(--gt-border)',
-                borderRadius: 10,
+                borderRadius: 'var(--gt-radius-sm)',
                 background: 'var(--gt-surface)',
                 maxHeight: 220,
                 overflowY: 'auto',
@@ -178,16 +178,23 @@ function ExercisePicker({
                     aria-selected={false}
                     onClick={() => pick(ex)}
                     disabled={disabled}
+                    /* The results were the one control in this modal you could
+                       not tell you were pointing at: inline styles cannot carry
+                       a hover, so they had none. The shared row-hover class is
+                       exactly this treatment, from the token layer. */
+                    className="gt-inbox-row"
                     style={{
                       display: 'flex',
                       flexDirection: 'column',
+                      justifyContent: 'center',
                       alignItems: 'flex-start',
                       gap: 2,
                       width: '100%',
+                      minHeight: 44,
                       textAlign: 'left',
                       padding: '8px 10px',
-                      border: 'none',
-                      borderRadius: 8,
+                      border: '1px solid transparent',
+                      borderRadius: 'var(--gt-radius-sm)',
                       background: 'transparent',
                       cursor: disabled ? 'default' : 'pointer',
                       color: 'var(--gt-text)',

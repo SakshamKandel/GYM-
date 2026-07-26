@@ -1,7 +1,9 @@
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 import { Card, CardHeader, TierChip } from '@/components/console';
 import type { ChartPoint } from '@/components/console/ChartCard';
 import type { HeatRow } from '@/components/console/HeatGrid';
+import { formatMoney } from '@/lib/format';
 import type { OpsQueue, SignupDayCount, Tier } from './data';
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -67,12 +69,54 @@ export function relativeTime(date: Date): string {
   return `${Math.floor(mo / 12)}y ago`;
 }
 
-/** Formats minor-unit sums per currency into a compact "NPR 12,300 · USD 45" line. */
-function formatRevenue(rows: { currency: string; amountMinor: number }[]): string {
-  if (rows.length === 0) return '—';
-  return rows
-    .map((r) => `${r.currency} ${Math.round(r.amountMinor / 100).toLocaleString()}`)
-    .join(' · ');
+/**
+ * The one band heading on this page. Every block used to hand-roll its own h2
+ * at a slightly different size, so the page read as a pile of cards rather than
+ * three ranked answers: what needs doing, what is moving, what the platform
+ * looks like. `hint` carries the one-line answer for the band, so an operator
+ * can stop reading at the heading when nothing is wrong.
+ */
+export function SectionTitle({
+  title,
+  hint,
+  action,
+}: {
+  title: string;
+  hint?: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'baseline',
+        justifyContent: 'space-between',
+        gap: 12,
+        flexWrap: 'wrap',
+        marginBottom: 12,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+        <h2
+          style={{
+            fontFamily: 'var(--font-heading)',
+            fontWeight: 600,
+            fontSize: 'var(--gt-fs-h2)',
+            letterSpacing: '0.01em',
+            color: 'var(--gt-text)',
+          }}
+        >
+          {title}
+        </h2>
+        {hint ? (
+          <span style={{ fontSize: 'var(--gt-fs-meta)', color: 'var(--gt-text-dim)' }}>
+            {hint}
+          </span>
+        ) : null}
+      </div>
+      {action ?? null}
+    </div>
+  );
 }
 
 /**
@@ -81,19 +125,22 @@ function formatRevenue(rows: { currency: string; amountMinor: number }[]): strin
  * the loader never even queries a section the caller can't see, A3). Returns
  * null when the caller has no ops permissions at all.
  *
- * A tile with outstanding work stands out by ink, not by accent: full-strength
- * number against a dimmed one, over a firmer border. It used to ring every such
- * tile in the accent, so five queues with work meant five accent frames on a
- * page that also spends the accent on its charts — and nothing read as primary.
+ * Queues with work sort to the front and keep full-strength ink, a firmer
+ * border and a status dot; a queue at zero drops to the faint ink and says so.
+ * Before this every tile looked identical whether it held nine receipts or
+ * none, so the one question this page exists to answer — is anything waiting —
+ * took a read of five numbers instead of a glance. The accent is deliberately
+ * NOT spent here: it belongs to the single most important thing on screen, and
+ * five outlined tiles would mean five of those.
  */
 export function OpsTiles({ ops }: { ops: OpsQueue }) {
-  const tiles: { href: string; label: string; value: number; hint?: string }[] = [];
+  const tiles: { href: string; label: string; value: number; hint: string }[] = [];
   if (ops.pendingApplications != null) {
     tiles.push({
       href: '/admin/applications',
       label: 'Coach applications',
       value: ops.pendingApplications,
-      hint: 'pending review',
+      hint: 'waiting to be reviewed',
     });
   }
   if (ops.pendingTierRequests != null) {
@@ -101,15 +148,15 @@ export function OpsTiles({ ops }: { ops: OpsQueue }) {
       href: '/admin/coaches',
       label: 'Tier requests',
       value: ops.pendingTierRequests,
-      hint: 'pending review',
+      hint: 'waiting to be reviewed',
     });
   }
   if (ops.pendingPayments != null) {
     tiles.push({
       href: '/admin/payments',
-      label: 'Payment requests',
+      label: 'Membership payments',
       value: ops.pendingPayments,
-      hint: 'awaiting approval',
+      hint: 'receipts to approve',
     });
   }
   if (ops.pendingMealPayments != null) {
@@ -117,7 +164,7 @@ export function OpsTiles({ ops }: { ops: OpsQueue }) {
       href: '/admin/meal-payments',
       label: 'Meal payments',
       value: ops.pendingMealPayments,
-      hint: 'receipts to check',
+      hint: 'receipts to approve',
     });
   }
   if (ops.unreadSupport != null) {
@@ -129,23 +176,25 @@ export function OpsTiles({ ops }: { ops: OpsQueue }) {
     });
   }
 
-  const showRevenue = ops.revenueThisMonth != null;
-  if (tiles.length === 0 && !showRevenue) return null;
+  if (tiles.length === 0) return null;
+
+  // Work first, quiet queues after. Array#sort is stable, so tiles keep their
+  // declared order inside each group.
+  const ordered = [...tiles].sort((a, b) => Number(b.value > 0) - Number(a.value > 0));
+  const waiting = tiles.filter((t) => t.value > 0).length;
 
   return (
     <section style={{ marginBottom: 24 }}>
-      <h2
-        style={{
-          fontFamily: 'var(--font-heading)',
-          fontWeight: 600,
-          fontSize: 15,
-          letterSpacing: '0.02em',
-          color: 'var(--gt-text)',
-          marginBottom: 12,
-        }}
-      >
-        Needs attention
-      </h2>
+      <SectionTitle
+        title="Needs attention"
+        hint={
+          waiting === 0
+            ? 'Nothing is waiting right now'
+            : waiting === 1
+              ? '1 queue has work waiting'
+              : `${waiting} queues have work waiting`
+        }
+      />
       <div
         style={{
           display: 'grid',
@@ -153,13 +202,13 @@ export function OpsTiles({ ops }: { ops: OpsQueue }) {
           gap: 12,
         }}
       >
-        {tiles.map((t) => {
+        {ordered.map((t) => {
           const active = t.value > 0;
           return (
             <Link
               key={t.href + t.label}
               href={t.href}
-              className="gt-card"
+              className="gt-card gt-inbox-row"
               style={{
                 padding: 18,
                 display: 'flex',
@@ -167,65 +216,107 @@ export function OpsTiles({ ops }: { ops: OpsQueue }) {
                 gap: 8,
                 textDecoration: 'none',
                 color: 'inherit',
-                border: active ? '1px solid var(--gt-border-strong)' : undefined,
+                borderColor: active ? 'var(--gt-border-strong)' : undefined,
               }}
             >
               <span
                 style={{
-                  fontSize: 12,
+                  fontSize: 'var(--gt-fs-micro)',
                   letterSpacing: '0.04em',
                   textTransform: 'uppercase',
-                  color: 'var(--gt-text-dim)',
+                  color: active ? 'var(--gt-text-dim)' : 'var(--gt-text-faint)',
                   fontFamily: 'var(--font-heading)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
                 }}
               >
+                {/* Always rendered, transparent when the queue is clear, so the
+                    labels across the row stay on one line. */}
+                <span
+                  aria-hidden
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 'var(--gt-radius-pill)',
+                    background: active ? 'var(--gt-warning)' : 'transparent',
+                    flexShrink: 0,
+                  }}
+                />
                 {t.label}
               </span>
               <span
                 className="gt-numeric"
                 style={{
-                  fontSize: 34,
+                  fontSize: 'var(--gt-fs-display)',
                   lineHeight: 1,
-                  color: active ? 'var(--gt-text)' : 'var(--gt-text-dim)',
+                  color: active ? 'var(--gt-text)' : 'var(--gt-text-faint)',
                 }}
               >
                 {t.value.toLocaleString()}
               </span>
-              <span style={{ fontSize: 12, color: 'var(--gt-text-dim)', minHeight: 16 }}>
-                {t.hint}
+              <span
+                style={{
+                  fontSize: 'var(--gt-fs-micro)',
+                  color: active ? 'var(--gt-text-dim)' : 'var(--gt-text-faint)',
+                  minHeight: 16,
+                }}
+              >
+                {active ? t.hint : 'Nothing waiting'}
               </span>
             </Link>
           );
         })}
-        {showRevenue ? (
-          <div
-            className="gt-card"
-            style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 8 }}
-          >
-            <span
-              style={{
-                fontSize: 12,
-                letterSpacing: '0.04em',
-                textTransform: 'uppercase',
-                color: 'var(--gt-text-dim)',
-                fontFamily: 'var(--font-heading)',
-              }}
-            >
-              Revenue this month
-            </span>
-            <span
-              className="gt-numeric"
-              style={{ fontSize: 22, lineHeight: 1.2, color: 'var(--gt-text)' }}
-            >
-              {formatRevenue(ops.revenueThisMonth ?? [])}
-            </span>
-            <span style={{ fontSize: 12, color: 'var(--gt-text-dim)', minHeight: 16 }}>
-              settled payments, less refunds
-            </span>
-          </div>
-        ) : null}
       </div>
     </section>
+  );
+}
+
+/**
+ * Money taken this month, one line per currency.
+ *
+ * It used to sit in the "needs attention" grid dressed as a queue tile, so a
+ * figure nobody can act on competed with five that need clearing. It also
+ * rounded every currency to whole units by hand, which quietly dropped the
+ * cents off every dollar amount. Same numbers, now through the console's one
+ * money formatter, so each line carries its own currency.
+ */
+export function RevenueCard({
+  rows,
+}: {
+  rows: { currency: string; amountMinor: number }[];
+}) {
+  return (
+    <Card padded={false}>
+      <CardHeader title="Money this month" />
+      <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {rows.length === 0 ? (
+          <span style={{ fontSize: 'var(--gt-fs-meta)', color: 'var(--gt-text-dim)' }}>
+            Nothing has been taken yet this month.
+          </span>
+        ) : (
+          // One line per currency, each carrying its own code or symbol —
+          // never a single mixed total, which would be meaningless the day a
+          // dollar payment lands beside a rupee one.
+          rows.map((r) => (
+            <div
+              key={r.currency}
+              className="gt-numeric"
+              style={{
+                fontSize: 'var(--gt-fs-h1)',
+                lineHeight: 1.2,
+                color: 'var(--gt-text)',
+              }}
+            >
+              {formatMoney(r.amountMinor, r.currency)}
+            </div>
+          ))
+        )}
+        <span style={{ fontSize: 'var(--gt-fs-micro)', color: 'var(--gt-text-faint)' }}>
+          Payments that went through, less refunds.
+        </span>
+      </div>
+    </Card>
   );
 }
 
@@ -270,7 +361,7 @@ export function TierBreakdown({
                 style={{
                   flex: 1,
                   height: 8,
-                  borderRadius: 999,
+                  borderRadius: 'var(--gt-radius-pill)',
                   background: 'var(--gt-border)',
                   overflow: 'hidden',
                 }}
@@ -280,23 +371,27 @@ export function TierBreakdown({
                     width: `${pct}%`,
                     height: '100%',
                     background: TIER_BAR[r.tier],
-                    borderRadius: 999,
+                    borderRadius: 'var(--gt-radius-pill)',
                   }}
                 />
               </div>
               <div
                 className="gt-numeric"
                 style={{
-                  width: 56,
+                  width: 72,
                   textAlign: 'right',
                   flexShrink: 0,
-                  fontSize: 14,
+                  fontSize: 'var(--gt-fs-meta)',
                   color: 'var(--gt-text)',
                 }}
               >
-                {r.count}
+                {r.count.toLocaleString()}
                 <span
-                  style={{ color: 'var(--gt-text-dim)', fontSize: 12, marginLeft: 6 }}
+                  style={{
+                    color: 'var(--gt-text-faint)',
+                    fontSize: 'var(--gt-fs-micro)',
+                    marginLeft: 6,
+                  }}
                 >
                   {pct}%
                 </span>

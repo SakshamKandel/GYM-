@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "GYM Tracker",
+    "name": "The GM Method",
     "slug": "gym-tracker",
     "version": "0.1.0",
     "orientation": "portrait",
@@ -65,7 +65,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "GYM Tracker uses the camera to scan food barcodes and take progress photos.",
+          "cameraPermission": "The GM Method uses the camera to scan food barcodes and take progress photos.",
           "microphonePermission": false,
           "recordAudioAndroid": false
         }
@@ -73,20 +73,20 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "GYM Tracker needs photo library access so you can add a profile photo, save private progress photos, and attach payment receipts.",
+          "photosPermission": "The GM Method needs photo library access so you can add a profile photo, save private progress photos, and attach payment receipts.",
           "microphonePermission": false
         }
       ],
       [
         "expo-local-authentication",
         {
-          "faceIDPermission": "GYM Tracker uses Face ID to unlock the app when app lock is turned on."
+          "faceIDPermission": "The GM Method uses Face ID to unlock the app when app lock is turned on."
         }
       ],
       [
         "expo-sensors",
         {
-          "motionPermission": "GYM Tracker counts your daily steps to show activity and calories burned."
+          "motionPermission": "The GM Method counts your daily steps to show activity and calories burned."
         }
       ],
       "expo-health-connect"

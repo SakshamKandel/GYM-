@@ -21,6 +21,12 @@
       "autoPort": true
     },
     {
+      "name": "mobile-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "mobile", "exec", "expo", "start", "--web", "--port", "8082"],
+      "port": 8082
+    },
+    {
       "name": "kurlybrains-web",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--dir", "E:\\Kurlybrains Web", "run", "dev", "--port", "4331"],

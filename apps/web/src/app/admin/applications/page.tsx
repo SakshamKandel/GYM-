@@ -108,21 +108,27 @@ export default async function AdminApplicationsPage() {
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Coach applications"
-        subtitle="Review self-serve coach applications. Approving grants the coach role, publishes a profile, and generates the coach's promo code."
+        subtitle="Approving someone grants the coach role, publishes their profile, and creates their promo code."
       />
 
+      {/* Waiting first: it is the only number that asks anything of the person
+          reading it. The rest are there for context. */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
           gap: 14,
           marginBottom: 24,
         }}
       >
-        <StatTile label="Total" value={applications.length} />
-        <StatTile label="Pending" value={pending} />
+        <StatTile
+          label="Waiting on you"
+          value={pending}
+          hint={pending === 0 ? 'All caught up' : undefined}
+        />
         <StatTile label="Approved" value={approved} />
-        <StatTile label="Rejected" value={rejected} />
+        <StatTile label="Turned down" value={rejected} />
+        <StatTile label="Applications in all" value={applications.length} />
       </div>
 
       <ApplicationsManager

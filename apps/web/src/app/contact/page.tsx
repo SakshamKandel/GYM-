@@ -14,7 +14,7 @@ import {
 } from '@/components/marketing/ui';
 
 export const metadata: Metadata = {
-  title: 'Support | The GM Method',
+  title: 'Support',
   description:
     'How to reach the GM Method team. Members write to support from inside the app. Coaches and partners sign in to their own console.',
 };

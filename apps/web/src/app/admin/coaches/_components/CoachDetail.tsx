@@ -10,6 +10,7 @@ import {
   TierChip,
 } from '@/components/console';
 import { formatDate } from '@/lib/format';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import { AssignClient } from './AssignClient';
 import type {
   ClientAssignment,
@@ -96,6 +97,8 @@ export function CoachDetail({
   const coachLabel = coach.coachName || coach.displayName || coach.email;
   const notAccepting = coach.acceptingClients === false;
   const inactive = coach.isActive === false;
+  const fillRatio = coach.capacity > 0 ? clients.length / coach.capacity : 0;
+  const full = coach.capacity > 0 && clients.length >= coach.capacity;
 
   const editDirty =
     isActive !== (coach.isActive !== false) ||
@@ -212,11 +215,11 @@ export function CoachDetail({
       <CardHeader
         title="Coach"
         action={
-          <span
-            className="gt-numeric"
-            style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}
-          >
-            {clients.length} active {clients.length === 1 ? 'client' : 'clients'}
+          <span style={{ fontSize: 13, color: full ? 'var(--gt-warning)' : 'var(--gt-text-dim)' }}>
+            <span className="gt-numeric" style={{ color: 'var(--gt-text)' }}>
+              {clients.length}
+            </span>
+            <span className="gt-numeric">{` of ${coach.capacity}`}</span> places filled
           </span>
         }
       />
@@ -226,7 +229,7 @@ export function CoachDetail({
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 10,
+            gap: 8,
             flexWrap: 'wrap',
             marginBottom: 4,
           }}
@@ -234,7 +237,7 @@ export function CoachDetail({
           <h2
             style={{
               fontFamily: 'var(--font-heading)',
-              fontSize: 18,
+              fontSize: 19,
               fontWeight: 600,
               margin: 0,
             }}
@@ -242,15 +245,41 @@ export function CoachDetail({
             {coachLabel}
           </h2>
           <TierChip tier={coach.coachTier} />
-          {inactive ? <Badge tone="neutral">inactive</Badge> : null}
-          {notAccepting ? (
-            <Badge tone="warning">not accepting</Badge>
-          ) : coach.acceptingClients === true ? (
-            <Badge tone="positive">accepting</Badge>
-          ) : null}
+          {/* Badges only where something is off. "Accepting and active" is the
+              normal state and does not need saying on every coach. */}
+          {inactive ? <Badge tone="neutral">Inactive</Badge> : null}
+          {notAccepting ? <Badge tone="warning">Not taking clients</Badge> : null}
         </div>
         <div style={{ fontSize: 13, color: 'var(--gt-text-dim)', marginBottom: 18 }}>
           {coach.email}
+        </div>
+
+        {/* How full they are, at a glance. Semantic tones, never the accent:
+            this is a reading, not the page's one action. */}
+        <div style={{ marginBottom: 20 }}>
+          <div
+            aria-hidden
+            style={{
+              height: 6,
+              borderRadius: 'var(--gt-radius-pill)',
+              background: 'var(--gt-surface-hover)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                width: `${Math.min(100, Math.round(fillRatio * 100))}%`,
+                height: '100%',
+                borderRadius: 'var(--gt-radius-pill)',
+                background: full ? 'var(--gt-warning)' : 'var(--gt-success)',
+              }}
+            />
+          </div>
+          <div style={{ marginTop: 6, fontSize: 12, color: 'var(--gt-text-dim)' }}>
+            {full
+              ? 'At their limit. New clients need an override.'
+              : `Room for ${coach.capacity - clients.length} more.`}
+          </div>
         </div>
 
         {canReview ? (
@@ -258,21 +287,23 @@ export function CoachDetail({
             style={{
               marginBottom: 20,
               padding: 14,
-              borderRadius: 10,
+              borderRadius: 'var(--gt-radius-sm)',
               border: '1px solid var(--gt-border)',
+              background: 'var(--gt-surface-sunken)',
             }}
           >
             <div
               style={{
                 fontSize: 12,
-                letterSpacing: '0.03em',
+                letterSpacing: '0.04em',
                 textTransform: 'uppercase',
-                color: 'var(--gt-text-dim)',
+                fontWeight: 600,
+                color: 'var(--gt-text-faint)',
                 fontFamily: 'var(--font-heading)',
                 marginBottom: 10,
               }}
             >
-              Edit coach
+              Coach settings
             </div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               <label
@@ -280,22 +311,20 @@ export function CoachDetail({
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 6,
-                  flex: '1 1 140px',
+                  flex: '1 1 150px',
                 }}
               >
-                <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                  Coach tier
-                </span>
+                <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>Level</span>
                 <select
                   className="gt-input"
                   value={coachTier}
                   onChange={(e) => setCoachTier(e.target.value as CoachTier)}
                   disabled={savingEdit}
-                  style={{ textTransform: 'capitalize', cursor: 'pointer' }}
+                  style={{ cursor: 'pointer' }}
                 >
                   {COACH_TIERS.map((t) => (
                     <option key={t} value={t}>
-                      {t}
+                      {tierLabel(t)}
                     </option>
                   ))}
                 </select>
@@ -306,11 +335,11 @@ export function CoachDetail({
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 6,
-                  flex: '1 1 100px',
+                  flex: '1 1 120px',
                 }}
               >
-                <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                  Capacity
+                <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                  Client limit
                 </span>
                 <input
                   type="number"
@@ -329,7 +358,7 @@ export function CoachDetail({
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 6,
-                  flex: '1 1 100px',
+                  flex: '1 1 120px',
                   justifyContent: 'flex-end',
                 }}
               >
@@ -338,9 +367,9 @@ export function CoachDetail({
                     display: 'flex',
                     alignItems: 'center',
                     gap: 8,
-                    fontSize: 13,
+                    minHeight: 48,
+                    fontSize: 14,
                     cursor: savingEdit ? 'default' : 'pointer',
-                    padding: '9px 0',
                   }}
                 >
                   <input
@@ -348,9 +377,14 @@ export function CoachDetail({
                     checked={isActive}
                     disabled={savingEdit}
                     onChange={(e) => setIsActive(e.target.checked)}
-                    style={{ accentColor: 'var(--gt-red)', cursor: 'inherit' }}
+                    style={{
+                      accentColor: 'var(--gt-accent-strong)',
+                      cursor: 'inherit',
+                      width: 18,
+                      height: 18,
+                    }}
                   />
-                  Active
+                  Taking clients
                 </span>
               </label>
             </div>
@@ -362,40 +396,59 @@ export function CoachDetail({
             ) : null}
 
             {editDirty ? (
-              <div style={{ marginTop: 12 }}>
+              <div
+                style={{
+                  marginTop: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                }}
+              >
+                {/* Dark, not accent: on this pane the accent belongs to the
+                    tier request that somebody is waiting on. */}
                 <Button
-                  variant="primary"
+                  variant="dark"
                   size="sm"
                   disabled={savingEdit}
                   onClick={() => void saveEdit()}
                 >
                   {savingEdit ? 'Saving…' : 'Save changes'}
                 </Button>
+                <span style={{ fontSize: 12, color: 'var(--gt-text-faint)' }}>
+                  You have unsaved changes.
+                </span>
               </div>
             ) : null}
           </div>
         ) : null}
 
+        {/* A waiting decision is the loudest thing in this pane, because it is
+            the only thing here that somebody is waiting on. */}
         {tierRequests.length > 0 ? (
           <div
             style={{
               marginBottom: 20,
               padding: 14,
-              borderRadius: 10,
-              border: '1px solid var(--gt-border)',
+              borderRadius: 'var(--gt-radius-sm)',
+              border: '1px solid color-mix(in srgb, var(--gt-warning) 32%, transparent)',
+              background: 'var(--gt-warning-weak)',
             }}
           >
             <div
               style={{
                 fontSize: 12,
-                letterSpacing: '0.03em',
+                letterSpacing: '0.04em',
                 textTransform: 'uppercase',
-                color: 'var(--gt-text-dim)',
+                fontWeight: 600,
+                color: 'var(--gt-warning)',
                 fontFamily: 'var(--font-heading)',
                 marginBottom: 10,
               }}
             >
-              Pending tier requests
+              {tierRequests.length === 1
+                ? 'Waiting on your decision'
+                : `${tierRequests.length} decisions waiting on you`}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {tierRequests.map((r) => {
@@ -408,25 +461,27 @@ export function CoachDetail({
                       alignItems: 'center',
                       gap: 12,
                       flexWrap: 'wrap',
-                      padding: '10px 12px',
-                      borderRadius: 10,
+                      padding: '12px 14px',
+                      borderRadius: 'var(--gt-radius-sm)',
                       border: '1px solid var(--gt-border)',
+                      background: 'var(--gt-card)',
                       opacity: busy ? 0.6 : 1,
                     }}
                   >
                     <div style={{ flex: 1, minWidth: 160 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-                          Requesting
+                        <span style={{ fontSize: 14, color: 'var(--gt-text)' }}>
+                          Asking to move up to
                         </span>
                         <TierChip tier={r.requestedTier} />
                       </div>
                       {r.note ? (
                         <div
                           style={{
-                            fontSize: 13,
-                            marginTop: 4,
+                            fontSize: 14,
+                            marginTop: 6,
                             color: 'var(--gt-text)',
+                            lineHeight: 1.5,
                           }}
                         >
                           &ldquo;{r.note}&rdquo;
@@ -436,10 +491,10 @@ export function CoachDetail({
                         style={{
                           fontSize: 12,
                           color: 'var(--gt-text-dim)',
-                          marginTop: 4,
+                          marginTop: 6,
                         }}
                       >
-                        {formatDate(r.createdAt)}
+                        Asked <span className="gt-numeric">{formatDate(r.createdAt)}</span>
                       </div>
                     </div>
                     {canReview ? (
@@ -450,7 +505,7 @@ export function CoachDetail({
                           disabled={busy}
                           onClick={() => void decideTierRequest(r.id, 'reject')}
                         >
-                          Reject
+                          Turn down
                         </Button>
                         <Button
                           variant="primary"
@@ -492,29 +547,49 @@ export function CoachDetail({
         <div style={{ marginTop: 20 }}>
           <div
             style={{
-              fontSize: 12,
-              letterSpacing: '0.03em',
-              textTransform: 'uppercase',
-              color: 'var(--gt-text-dim)',
-              fontFamily: 'var(--font-heading)',
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 12,
               marginBottom: 10,
             }}
           >
-            Active clients
+            <div
+              style={{
+                fontSize: 12,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
+                fontWeight: 600,
+                color: 'var(--gt-text-faint)',
+                fontFamily: 'var(--font-heading)',
+              }}
+            >
+              Their clients
+            </div>
+            {clients.length > 0 ? (
+              <span className="gt-numeric" style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                {clients.length}
+              </span>
+            ) : null}
           </div>
 
           {clients.length === 0 ? (
             <div
               style={{
-                fontSize: 14,
-                color: 'var(--gt-text-dim)',
-                padding: '20px 0',
+                padding: '28px 20px',
                 textAlign: 'center',
-                border: '1px dashed var(--gt-border)',
-                borderRadius: 10,
+                border: '1px dashed var(--gt-border-strong)',
+                borderRadius: 'var(--gt-radius-sm)',
               }}
             >
-              No active clients yet. Assign one above.
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--gt-text)' }}>
+                No clients yet
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--gt-text-dim)', marginTop: 4 }}>
+                {canAssign
+                  ? 'Search above to give this coach their first client.'
+                  : 'Members assigned to this coach will show up here.'}
+              </div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -524,12 +599,13 @@ export function CoachDetail({
                 return (
                   <div
                     key={c.assignmentId}
+                    className="gt-inbox-row"
                     style={{
                       display: 'flex',
                       alignItems: 'center',
                       gap: 12,
                       padding: '10px 12px',
-                      borderRadius: 10,
+                      borderRadius: 'var(--gt-radius-sm)',
                       border: '1px solid var(--gt-border)',
                       opacity: busy ? 0.6 : 1,
                     }}
@@ -547,7 +623,7 @@ export function CoachDetail({
                           style={{
                             fontFamily: 'var(--font-heading)',
                             fontWeight: 600,
-                            fontSize: 14,
+                            fontSize: 15,
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
@@ -559,7 +635,7 @@ export function CoachDetail({
                       </div>
                       <div
                         style={{
-                          fontSize: 12,
+                          fontSize: 13,
                           color: 'var(--gt-text-dim)',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
@@ -567,7 +643,12 @@ export function CoachDetail({
                         }}
                       >
                         {c.email}
-                        {assigned ? ` · assigned ${assigned}` : ''}
+                        {assigned ? (
+                          <>
+                            {' · since '}
+                            <span className="gt-numeric">{assigned}</span>
+                          </>
+                        ) : null}
                       </div>
                     </div>
                     <div style={{ flexShrink: 0 }}>

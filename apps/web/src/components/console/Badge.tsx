@@ -4,10 +4,16 @@ import type { ReactNode } from 'react';
  * Pill chip for tiers and statuses. Two families:
  *  - TIER: starter | silver | gold | elite — a subtle metallic tint per tier.
  *  - STATUS: active | suspended | ended | live | pending — semantic color.
- * The --gt-red accent is deliberately NOT used here; a red chip would fight the
- * one-red rule, so 'suspended' uses a warm orange-red tint rather than the
- * signal red. Pass `tone` directly for anything outside these, or `children`
- * for custom text with a preset variant.
+ * The --gt-accent is deliberately NOT used here; an accent chip would fight the
+ * one-accent rule, so nothing in this file reaches for it. Pass `tone` directly
+ * for anything outside these, or `children` for custom text with a preset
+ * variant.
+ *
+ * Chips are sentence case, not upper. Statuses are getting longer as the
+ * console grows ("Out for delivery", "Receipt submitted") and a shouted phrase
+ * is slower to read than a written one; the tint and the border already say
+ * "this is a state", so the capitals were doing nothing but adding noise. Every
+ * chip is a fixed 20px tall so a column of them keeps one baseline.
  */
 
 type Tier = 'starter' | 'silver' | 'gold' | 'elite';
@@ -26,22 +32,22 @@ const TONE_STYLES: Record<Tone, { fg: string; bg: string; border: string }> = {
   positive: {
     fg: 'var(--gt-success)',
     bg: 'var(--gt-success-weak)',
-    border: 'color-mix(in srgb, var(--gt-success) 32%, transparent)',
+    border: 'color-mix(in srgb, var(--gt-success) 28%, transparent)',
   },
   warning: {
     fg: 'var(--gt-warning)',
     bg: 'var(--gt-warning-weak)',
-    border: 'color-mix(in srgb, var(--gt-warning) 32%, transparent)',
+    border: 'color-mix(in srgb, var(--gt-warning) 28%, transparent)',
   },
   critical: {
     fg: 'var(--gt-danger)',
     bg: 'var(--gt-danger-weak)',
-    border: 'color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+    border: 'color-mix(in srgb, var(--gt-danger) 28%, transparent)',
   },
   info: {
     fg: 'var(--gt-info)',
     bg: 'var(--gt-info-weak)',
-    border: 'color-mix(in srgb, var(--gt-info) 32%, transparent)',
+    border: 'color-mix(in srgb, var(--gt-info) 28%, transparent)',
   },
 };
 
@@ -63,6 +69,22 @@ const STATUS_TONE: Record<Status, Tone> = {
   pending: 'warning',
 };
 
+/** Human labels, so a chip never prints the database's word for something. */
+const TIER_LABEL: Record<Tier, string> = {
+  starter: 'Starter',
+  silver: 'Silver',
+  gold: 'Gold',
+  elite: 'Elite',
+};
+
+const STATUS_LABEL: Record<Status, string> = {
+  active: 'Active',
+  suspended: 'Suspended',
+  ended: 'Ended',
+  live: 'Live',
+  pending: 'Pending',
+};
+
 function Pill({
   fg,
   bg,
@@ -77,18 +99,22 @@ function Pill({
   return (
     <span
       style={{
-        display: 'inline-block',
-        padding: '2px 10px',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: 20,
+        padding: '0 8px',
         borderRadius: 'var(--gt-radius-pill)',
         border: `1px solid ${border}`,
         background: bg,
         color: fg,
-        fontFamily: 'var(--font-numeric)',
-        fontSize: 12,
-        letterSpacing: '0.04em',
-        textTransform: 'uppercase',
-        lineHeight: 1.6,
+        fontFamily: 'var(--font-heading)',
+        fontWeight: 600,
+        fontSize: 'var(--gt-fs-micro)',
+        fontVariantNumeric: 'tabular-nums',
+        lineHeight: 1,
         whiteSpace: 'nowrap',
+        verticalAlign: 'middle',
       }}
     >
       {children}
@@ -110,7 +136,7 @@ export function Badge({
 /** Membership tier chip with a per-tier metallic tint. */
 export function TierChip({ tier }: { tier: Tier }) {
   const s = TIER_STYLES[tier];
-  return <Pill {...s}>{tier}</Pill>;
+  return <Pill {...s}>{TIER_LABEL[tier] ?? tier}</Pill>;
 }
 
 /** Account / assignment / content status chip mapped to a semantic tone. */
@@ -122,5 +148,5 @@ export function StatusChip({
   label?: string;
 }) {
   const s = TONE_STYLES[STATUS_TONE[status]];
-  return <Pill {...s}>{label ?? status}</Pill>;
+  return <Pill {...s}>{label ?? STATUS_LABEL[status] ?? status}</Pill>;
 }

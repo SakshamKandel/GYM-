@@ -9,7 +9,7 @@ import { ProofBand } from '@/components/marketing/progress/ProofBand';
 import { TrendExplainer } from '@/components/marketing/progress/TrendExplainer';
 
 export const metadata: Metadata = {
-  title: 'Progress tracking | The GM Method',
+  title: 'Progress tracking',
   description:
     'Daily weight smoothed into a trend you can trust, tape measurements with deltas, auto-detected PRs, workout streaks and private progress photos. Proof, not vibes.',
 };

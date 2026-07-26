@@ -25,7 +25,7 @@ import { verifyPin } from './pin';
  * immediately on background either way); the grace window only decides
  * whether returning to `active` re-prompts or auto-clears it.
  *
- * Lock screen: minimal and branded — mascot, GYM TRACKER wordmark over the
+ * Lock screen: minimal and branded — mascot, THE GM METHOD wordmark over the
  * "Locked" heading, one red unlock pill with a fingerprint glyph (or a PIN
  * pad). Content fades in place (no entrance movement).
  */

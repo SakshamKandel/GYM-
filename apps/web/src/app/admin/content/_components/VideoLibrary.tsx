@@ -12,7 +12,9 @@ import {
   StatusChip,
   Toolbar,
 } from '@/components/console';
+import { formatDate } from '@/lib/format';
 import { tierLabel } from '@/app/admin/_lib/tierLabel';
+import { useUrlSearch } from '../../_components/useUrlState';
 import { UploadModal } from './UploadModal';
 import {
   type Tier,
@@ -65,7 +67,8 @@ export function VideoLibrary({
 }) {
   const [videos, setVideos] = useState<VideoListItem[]>(initialVideos);
   const [configured, setConfigured] = useState(videoConfigured);
-  const [query, setQuery] = useState('');
+  // In the URL, so the search survives a trip away from the library.
+  const [query, setQuery] = useUrlSearch('q');
   const [uploadOpen, setUploadOpen] = useState(false);
   // Per-row transient state: which row is mid-mutation, and any row-level error.
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -162,13 +165,14 @@ export function VideoLibrary({
           style={{
             width: 92,
             height: 52,
-            borderRadius: 8,
+            borderRadius: 'var(--gt-radius-sm)',
             overflow: 'hidden',
-            background: 'var(--gt-bg)',
+            background: 'var(--gt-surface-sunken)',
             border: '1px solid var(--gt-border)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
+            textAlign: 'center',
           }}
         >
           {v.thumbnailUrl ? (
@@ -179,8 +183,11 @@ export function VideoLibrary({
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
           ) : (
-            <span style={{ fontSize: 11, color: 'var(--gt-text-dim)' }}>
-              No thumb
+            // "No thumb" was developer shorthand for two different situations.
+            // A video still being processed has no frame yet; one that is ready
+            // and still has none never got a picture at all.
+            <span style={{ fontSize: 11, color: 'var(--gt-text-faint)', padding: 4 }}>
+              {v.status === 'processing' ? 'Still processing' : 'No preview'}
             </span>
           )}
         </div>
@@ -257,6 +264,19 @@ export function VideoLibrary({
       render: (v) => (
         <span className="gt-numeric" style={{ color: 'var(--gt-text-dim)' }}>
           {formatDuration(v.durationSec)}
+        </span>
+      ),
+    },
+    // The library is newest-first, so the date is what tells an operator where
+    // in it they are. It travelled with every row and was rendered nowhere.
+    {
+      key: 'added',
+      header: 'Added',
+      width: 130,
+      align: 'right',
+      render: (v) => (
+        <span className="gt-numeric" style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+          {formatDate(v.createdAt)}
         </span>
       ),
     },

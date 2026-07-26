@@ -100,9 +100,9 @@ export default async function AdminDisputesPage() {
           marginBottom: 24,
         }}
       >
-        <StatTile label="Open" value={openCount} />
-        <StatTile label="Reviewing" value={reviewingCount} />
-        <StatTile label="Live total" value={disputes.length} />
+        <StatTile label="Not started" value={openCount} hint="nobody has picked these up" />
+        <StatTile label="Being reviewed" value={reviewingCount} />
+        <StatTile label="Waiting in total" value={disputes.length} />
       </div>
 
       <DisputesQueue

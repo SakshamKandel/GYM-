@@ -192,37 +192,43 @@ export default async function AdminCoachesPage({
     coaches.find((c) => c.id === requestedCoachId) ?? coaches[0] ?? null;
   const selectedClients = selectedCoach ? await loadActiveClientsFor(selectedCoach.id) : [];
 
-  // Console-wide summary numbers for the stat row.
+  // Console-wide summary numbers for the stat row. The one that leads is the
+  // one that asks something of the person reading it: coaches waiting on a
+  // decision about their level.
   const totalCoaches = coaches.length;
   const accepting = coaches.filter((c) => c.acceptingClients === true).length;
   const assignedClients = coaches.reduce((n, c) => n + c.activeClients, 0);
+  const pendingTierRequests = Object.values(tierRequestsByCoach).reduce(
+    (n, rows) => n + rows.length,
+    0,
+  );
 
   return (
     <div style={{ maxWidth: 1100 }}>
       <PageHeader
         title="Coaches"
-        subtitle="Assign members to coaches and manage each coach's active client roster."
+        subtitle="Pick a coach to see who they work with, change what they can take on, and answer anything they have asked for."
       />
 
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
           gap: 14,
           marginBottom: 24,
         }}
       >
-        <StatTile label="Coaches" value={totalCoaches} />
         <StatTile
-          label="Accepting clients"
-          value={accepting}
-          hint={
-            totalCoaches > 0
-              ? `of ${totalCoaches}`
-              : undefined
-          }
+          label="Waiting on you"
+          value={pendingTierRequests}
+          hint={pendingTierRequests === 0 ? 'Nothing to review' : 'Coach level requests'}
         />
-        <StatTile label="Assigned clients" value={assignedClients} />
+        <StatTile
+          label="Taking clients"
+          value={accepting}
+          hint={totalCoaches > 0 ? `of ${totalCoaches} coaches` : undefined}
+        />
+        <StatTile label="Members with a coach" value={assignedClients} />
       </div>
 
       <CoachRoster

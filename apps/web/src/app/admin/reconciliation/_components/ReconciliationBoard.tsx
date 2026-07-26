@@ -12,7 +12,7 @@ import {
   TextField,
   Toolbar,
 } from '@/components/console';
-import { formatMoney } from '@/lib/format';
+import { formatDateLabel, formatMoney } from '@/lib/format';
 import { DownloadCsv } from '../../_components/DownloadCsv';
 
 /**
@@ -87,10 +87,43 @@ function totalsByCurrency(rows: readonly ReconRow[]): CurrencyTotals[] {
   return [...byCurrency.values()].sort((a, b) => a.currency.localeCompare(b.currency));
 }
 
+/**
+ * Per-restaurant detail. The name is the primary column and carries the heading
+ * weight; every figure beside it is tabular and right-aligned so a column of
+ * amounts lines up digit for digit. Cash and digital belong to the chosen day;
+ * "owed in total" is the running balance, which is why it says so.
+ */
 const COLUMNS: Column<ReconRow>[] = [
-  { key: 'name', header: 'Partner', render: (r) => r.name },
-  { key: 'delivered', header: 'Delivered', align: 'right', render: (r) => r.delivered },
-  { key: 'refused', header: 'Refused', align: 'right', render: (r) => r.refused },
+  {
+    key: 'name',
+    header: 'Restaurant',
+    render: (r) => (
+      <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 14 }}>
+        {r.name}
+      </span>
+    ),
+  },
+  {
+    key: 'delivered',
+    header: 'Delivered',
+    align: 'right',
+    width: 110,
+    render: (r) => <span className="gt-numeric">{r.delivered.toLocaleString()}</span>,
+  },
+  {
+    key: 'refused',
+    header: 'Refused',
+    align: 'right',
+    width: 100,
+    render: (r) => (
+      <span
+        className="gt-numeric"
+        style={{ color: r.refused > 0 ? 'var(--gt-text)' : 'var(--gt-text-faint)' }}
+      >
+        {r.refused.toLocaleString()}
+      </span>
+    ),
+  },
   {
     key: 'cod',
     header: 'Cash collected',
@@ -109,7 +142,7 @@ const COLUMNS: Column<ReconRow>[] = [
   },
   {
     key: 'owed',
-    header: 'Owed (lifetime)',
+    header: 'Owed in total',
     align: 'right',
     render: (r) => <span className="gt-numeric">{formatMoney(r.owedMinor, r.currency)}</span>,
   },
@@ -126,6 +159,17 @@ type BoardState =
   | { kind: 'failed'; message: string };
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * '2026-07-25' → 'Fri, Jul 25, 2026'. Built from the date parts rather than a
+ * parsed timestamp: `new Date('2026-07-25')` is midnight UTC, and formatting
+ * that in a browser west of UTC would print the day before on the one screen
+ * where naming the wrong day costs money.
+ */
+function dayLabel(date: string): string {
+  const label = formatDateLabel(date);
+  return label === date ? date : `${label}, ${date.slice(0, 4)}`;
+}
 
 export function ReconciliationBoard({ initialDate }: { initialDate: string }) {
   const [date, setDate] = useState(initialDate);
@@ -207,53 +251,114 @@ export function ReconciliationBoard({ initialDate }: { initialDate: string }) {
 
       {board.kind === 'ready' ? (
         <>
+          {/* The day the figures belong to, spelled out. It used to live only
+              inside the date picker, so a screenshot or a second glance could
+              not tell you which day you were settling. */}
+          <div>
+            <h2
+              style={{
+                fontFamily: 'var(--font-heading)',
+                fontWeight: 600,
+                fontSize: 'var(--gt-fs-h1)',
+                color: 'var(--gt-text)',
+              }}
+            >
+              {dayLabel(board.data.date)}
+            </h2>
+            <p
+              style={{
+                margin: '4px 0 0',
+                fontSize: 'var(--gt-fs-meta)',
+                color: 'var(--gt-text-dim)',
+              }}
+            >
+              One Kathmandu delivery day, every restaurant.
+            </p>
+          </div>
+
+          {/* Capped tracks rather than 1fr: two counts stretched across a
+              1280px row read as banners, not as figures. */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 230px))',
               gap: 14,
             }}
           >
-            <StatTile label="Delivered" value={board.data.totals.delivered} />
-            <StatTile label="Refused" value={board.data.totals.refused} />
-            {currencyTotals.map((t) => (
-              <StatTile
-                key={`cod-${t.currency}`}
-                label={`Cash collected (${t.currency})`}
-                value={formatMoney(t.codCollectedMinor, t.currency)}
-              />
-            ))}
-            {currencyTotals.map((t) => (
-              <StatTile
-                key={`digital-${t.currency}`}
-                label={`Digital held (${t.currency})`}
-                value={formatMoney(t.digitalHeldMinor, t.currency)}
-              />
-            ))}
-            {currencyTotals.map((t) => (
-              <StatTile
-                key={`owed-${t.currency}`}
-                label={`Owed to partners (${t.currency})`}
-                value={formatMoney(t.owedMinor, t.currency)}
-              />
-            ))}
+            <StatTile
+              label="Delivered"
+              value={board.data.totals.delivered.toLocaleString()}
+              hint="meals"
+            />
+            <StatTile
+              label="Refused"
+              value={board.data.totals.refused.toLocaleString()}
+              hint="meals"
+            />
           </div>
+
+          {/* Money is grouped by currency, never mixed. Each group states its
+              own currency once at the top and again on every figure, because
+              the cost of guessing wrong on this screen is a wrong payment. */}
+          {currencyTotals.map((t) => (
+            <div key={t.currency}>
+              <div
+                style={{
+                  fontSize: 'var(--gt-fs-micro)',
+                  letterSpacing: '0.03em',
+                  textTransform: 'uppercase',
+                  color: 'var(--gt-text-dim)',
+                  fontFamily: 'var(--font-heading)',
+                  marginBottom: 10,
+                }}
+              >
+                Money in {t.currency}
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 280px))',
+                  gap: 14,
+                }}
+              >
+                <StatTile
+                  label="Cash collected"
+                  value={formatMoney(t.codCollectedMinor, t.currency)}
+                  hint="already theirs"
+                />
+                <StatTile
+                  label="Digital held"
+                  value={formatMoney(t.digitalHeldMinor, t.currency)}
+                  hint="taken on this day"
+                />
+                <StatTile
+                  label="Owed in total"
+                  value={formatMoney(t.owedMinor, t.currency)}
+                  hint="running balance, not just this day"
+                />
+              </div>
+            </div>
+          ))}
 
           <DataTable
             columns={COLUMNS}
             rows={board.data.partners}
             rowKey={(r) => r.partnerId}
-            empty="No partner activity on this day."
+            empty="No restaurant took an order on this day."
           />
         </>
       ) : null}
 
-      {board.kind === 'loading' ? <SkeletonRows rows={4} cols={6} /> : null}
+      {board.kind === 'loading' ? (
+        <div role="status" aria-label="Loading the totals for this day">
+          <SkeletonRows rows={4} cols={6} />
+        </div>
+      ) : null}
 
       {board.kind === 'needs_date' ? (
         <EmptyState
-          title="Pick a delivery date"
-          description="Choose the day you want to settle and the partner totals will load."
+          title="Pick a delivery day"
+          description="Choose the day you want to settle and every restaurant's totals will load."
         />
       ) : null}
 

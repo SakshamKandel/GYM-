@@ -4,10 +4,14 @@ import Link from 'next/link';
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 
 /**
- * Sticky console top bar (64px). Names the section the operator is in, then an
- * optional actions slot on the right, a notifications bell (links to a provided
- * href, with an unread dot), and an avatar cluster showing the signed-in
- * initials.
+ * Sticky console top bar (64px). It answers one question — where am I — and
+ * then gets out of the way.
+ *
+ * The left side reads as a trail: the console name in quiet ink, a hairline
+ * separator, then the current section in full strength. Two levels is the whole
+ * hierarchy; anything deeper belongs in the page's own header, not in the
+ * chrome. The right side carries only what an operator needs from every route:
+ * the page's actions, the notifications bell, and who they are signed in as.
  *
  * The search box is rendered ONLY when a console wires `onSearch` (focus with
  * ⌘K / Ctrl-K, clear with Esc). It used to render unconditionally, so every
@@ -23,6 +27,7 @@ import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 export function TopBar({
   email,
   title,
+  context,
   searchPlaceholder = 'Search…',
   onSearch,
   actions,
@@ -33,6 +38,12 @@ export function TopBar({
   email: string;
   /** The section the current route belongs to, e.g. "Meal orders". */
   title?: string;
+  /**
+   * The console this section sits in, e.g. "Admin". Rendered before the title
+   * as a quiet parent crumb; dropped on narrow widths where the section name
+   * alone is worth more than its context.
+   */
+  context?: string;
   searchPlaceholder?: string;
   onSearch?: (q: string) => void;
   actions?: ReactNode;
@@ -42,6 +53,7 @@ export function TopBar({
   onToggleSidebar?: () => void;
 }) {
   const [q, setQ] = useState('');
+  const [isApple, setIsApple] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const searchId = useId();
   const searchable = onSearch != null;
@@ -58,7 +70,14 @@ export function TopBar({
     return () => window.removeEventListener('keydown', onKey);
   }, [searchable]);
 
-  const initials = email.slice(0, 2).toUpperCase();
+  // The hint told every operator to press ⌘K, including the ones on Windows
+  // where the shortcut is Ctrl-K. Read after mount so the server and the first
+  // client render still agree.
+  useEffect(() => {
+    setIsApple(/Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent));
+  }, []);
+
+  const initials = initialsOf(email);
 
   return (
     <header
@@ -66,12 +85,12 @@ export function TopBar({
         position: 'sticky',
         top: 0,
         zIndex: 20,
-        height: 64,
+        height: 'var(--gt-topbar-h)',
         flexShrink: 0,
         display: 'flex',
         alignItems: 'center',
         gap: 12,
-        padding: onToggleSidebar ? '0 12px' : '0 24px',
+        padding: onToggleSidebar ? '0 12px' : '0 20px',
         background: 'color-mix(in srgb, var(--gt-surface) 88%, transparent)',
         backdropFilter: 'saturate(1.4) blur(8px)',
         borderBottom: '1px solid var(--gt-border)',
@@ -81,8 +100,9 @@ export function TopBar({
         <button
           type="button"
           onClick={onToggleSidebar}
-          aria-label="Toggle sidebar"
-          style={iconControl}
+          aria-label="Show menu"
+          className="gt-icon-btn"
+          data-bare="true"
         >
           <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden fill="none">
             <path
@@ -97,7 +117,7 @@ export function TopBar({
 
       {searchable ? (
         <div style={{ position: 'relative', flex: '1 1 220px', maxWidth: 440, minWidth: 0 }}>
-          <label htmlFor={searchId} className="gt-sr-only" style={srOnly}>
+          <label htmlFor={searchId} className="gt-sr-only">
             Search
           </label>
           <span
@@ -109,6 +129,7 @@ export function TopBar({
               transform: 'translateY(-50%)',
               color: 'var(--gt-text-faint)',
               display: 'inline-flex',
+              pointerEvents: 'none',
             }}
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -120,6 +141,7 @@ export function TopBar({
             id={searchId}
             ref={inputRef}
             type="search"
+            className="gt-search-input"
             value={q}
             placeholder={searchPlaceholder}
             onChange={(e) => {
@@ -133,63 +155,68 @@ export function TopBar({
                 e.currentTarget.blur();
               }
             }}
-            style={{
-              width: '100%',
-              height: 44,
-              padding: '0 12px 0 34px',
-              borderRadius: 'var(--gt-radius-sm)',
-              border: '1px solid var(--gt-border)',
-              background: 'var(--gt-surface-sunken)',
-              color: 'var(--gt-text)',
-              fontSize: 14,
-              fontFamily: 'var(--font-heading)',
-            }}
           />
-          <kbd
-            aria-hidden
-            className="hidden sm:inline-block"
-            style={{
-              position: 'absolute',
-              right: 10,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              fontSize: 11,
-              fontFamily: 'var(--font-numeric)',
-              color: 'var(--gt-text-faint)',
-              border: '1px solid var(--gt-border-strong)',
-              borderRadius: 6,
-              padding: '1px 6px',
-              background: 'var(--gt-surface)',
-            }}
-          >
-            ⌘K
-          </kbd>
+          {q === '' ? (
+            <kbd aria-hidden className="gt-kbd" style={kbdPosition}>
+              {isApple ? '⌘K' : 'Ctrl K'}
+            </kbd>
+          ) : null}
         </div>
       ) : title ? (
-        <span
+        <nav
+          aria-label="Breadcrumb"
           style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 8,
             minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
             fontFamily: 'var(--font-heading)',
-            fontWeight: 600,
             fontSize: 15,
             letterSpacing: '-0.01em',
-            color: 'var(--gt-text)',
           }}
         >
-          {title}
-        </span>
+          {context && context !== title ? (
+            <>
+              <span
+                style={{
+                  color: 'var(--gt-text-faint)',
+                  whiteSpace: 'nowrap',
+                  fontWeight: 500,
+                }}
+              >
+                {context}
+              </span>
+              <span aria-hidden style={{ color: 'var(--gt-border-strong)' }}>
+                /
+              </span>
+            </>
+          ) : null}
+          <span
+            aria-current="page"
+            style={{
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontWeight: 600,
+              color: 'var(--gt-text)',
+            }}
+          >
+            {title}
+          </span>
+        </nav>
       ) : null}
 
-      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
         {actions}
         {notificationsHref ? (
           <Link
             href={notificationsHref}
-            aria-label={hasNotifications ? 'Notifications, unread' : 'Notifications'}
-            style={{ ...iconControl, position: 'relative', textDecoration: 'none' }}
+            aria-label={hasNotifications ? 'Notifications, some unread' : 'Notifications'}
+            title="Notifications"
+            className="gt-icon-btn"
+            data-bare="true"
+            style={{ position: 'relative' }}
           >
             <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden>
               <path
@@ -203,37 +230,40 @@ export function TopBar({
             {hasNotifications ? (
               <span
                 aria-hidden
+                className="gt-status-dot"
+                data-tone="accent"
                 style={{
                   position: 'absolute',
                   top: 9,
                   right: 10,
-                  width: 8,
-                  height: 8,
-                  borderRadius: 'var(--gt-radius-pill)',
-                  background: 'var(--gt-accent)',
                   border: '1.5px solid var(--gt-surface)',
+                  width: 9,
+                  height: 9,
                 }}
               />
             ) : null}
           </Link>
         ) : null}
         <span
-          aria-hidden
+          role="img"
+          aria-label={`Signed in as ${email}`}
+          title={email}
           style={{
-            width: 34,
-            height: 34,
+            width: 32,
+            height: 32,
             borderRadius: 'var(--gt-radius-pill)',
-            background: 'var(--gt-accent-weak)',
-            color: 'var(--gt-accent-strong)',
+            background: 'var(--gt-surface-hover)',
+            border: '1px solid var(--gt-border-strong)',
+            color: 'var(--gt-text-dim)',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
             fontFamily: 'var(--font-heading)',
             fontWeight: 600,
-            fontSize: 13,
+            fontSize: 12,
+            letterSpacing: '0.02em',
             flexShrink: 0,
           }}
-          title={email}
         >
           {initials}
         </span>
@@ -242,30 +272,23 @@ export function TopBar({
   );
 }
 
-// 44px square: the top-bar icon controls are the smallest tap targets in the
-// console shell, and it ships a mobile layout.
-const iconControl: React.CSSProperties = {
-  width: 44,
-  height: 44,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: 'var(--gt-radius-sm)',
-  border: '1px solid var(--gt-border)',
-  background: 'var(--gt-surface)',
-  color: 'var(--gt-text-dim)',
-  cursor: 'pointer',
-  flexShrink: 0,
-};
+/**
+ * Two letters from the address rather than its first two characters, so
+ * `a.sharma@…` reads AS instead of A. — the old slice turned every dotted
+ * address into a letter and a full stop.
+ */
+function initialsOf(email: string): string {
+  const local = email.split('@')[0] ?? email;
+  const parts = local.split(/[._\-+]+/).filter(Boolean);
+  if (parts.length === 0) return email.slice(0, 2).toUpperCase() || '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+}
 
-const srOnly: React.CSSProperties = {
+const kbdPosition: React.CSSProperties = {
   position: 'absolute',
-  width: 1,
-  height: 1,
-  padding: 0,
-  margin: -1,
-  overflow: 'hidden',
-  clip: 'rect(0 0 0 0)',
-  whiteSpace: 'nowrap',
-  border: 0,
+  right: 10,
+  top: '50%',
+  transform: 'translateY(-50%)',
+  pointerEvents: 'none',
 };

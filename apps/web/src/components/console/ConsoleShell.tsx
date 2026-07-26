@@ -126,13 +126,8 @@ export function ConsoleShell({
           <div
             onClick={() => setMobileOpen(false)}
             aria-hidden
-            style={{
-              position: 'fixed',
-              inset: 0,
-              background: 'rgba(16, 17, 18, 0.48)',
-              backdropFilter: 'blur(4px)',
-              zIndex: 40,
-            }}
+            className="gt-scrim"
+            style={{ position: 'fixed', zIndex: 40 }}
           />
           <div
             style={{
@@ -153,6 +148,7 @@ export function ConsoleShell({
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <TopBar
           email={email}
+          context={brand}
           title={sectionTitle(groups, pathname, brand)}
           notificationsHref={notificationsHref}
           hasNotifications={hasNotifications}

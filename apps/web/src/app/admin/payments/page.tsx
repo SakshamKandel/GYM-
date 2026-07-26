@@ -143,28 +143,25 @@ export default async function AdminPaymentsPage() {
   if (!permissions.has('payments.review')) redirect('/admin');
 
   const { requests, counts } = await loadPaymentRequests();
-  const total = counts.pending + counts.approved + counts.rejected + counts.refunded;
 
   return (
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Membership payments"
-        subtitle="Manual eSewa, Khalti, and bank-transfer payments awaiting review. Approving grants the tier for the paid window."
+        subtitle="Receipts members sent for eSewa, Khalti and bank transfers. Approving one gives them the membership they paid for."
         action={<DownloadCsv href="/api/admin/exports/payment-requests" />}
       />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-          gap: 14,
-          marginBottom: 24,
-        }}
-      >
-        <StatTile label="Total" value={total} />
-        <StatTile label="Pending" value={counts.pending} />
-        <StatTile label="Approved" value={counts.approved} />
-        <StatTile label="Refunded" value={counts.refunded} />
+      {/* One headline number, not four. The approved / rejected / refunded
+          totals now ride on the filter buttons below, right next to the thing
+          that switches to them, so the top of the page can answer the only
+          question that needs answering on arrival: how much is waiting. */}
+      <div style={{ maxWidth: 260, marginBottom: 24 }}>
+        <StatTile
+          label="Waiting for review"
+          value={counts.pending.toLocaleString()}
+          hint={counts.pending === 0 ? 'nothing waiting' : 'receipts to approve'}
+        />
       </div>
 
       <PaymentsQueue

@@ -10,19 +10,51 @@ import {
   DataTable,
   PageHeader,
   SearchField,
+  SkeletonRows,
   StatusChip,
   TierChip,
   Toolbar,
 } from '@/components/console';
 import { formatDate } from '@/lib/format';
 import { staffRoleLabel } from '@/app/admin/_lib/staffRoleLabel';
+import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import type { StaffRole } from '@/lib/auth';
 import { DownloadCsv } from '../../_components/DownloadCsv';
+import { KeyboardRows } from '../../_components/KeyboardRows';
+import { useUrlSearch, useUrlState } from '../../_components/useUrlState';
 import { MemberDrawer } from './MemberDrawer';
 import type { CoachOption, MemberRow, Tier } from './types';
 
-const TIER_OPTIONS: (Tier | 'all')[] = ['all', 'starter', 'silver', 'gold', 'elite'];
 const STATUS_OPTIONS = ['all', 'active', 'suspended'] as const;
+type StatusOption = (typeof STATUS_OPTIONS)[number];
+
+/**
+ * Filter choices carry the words an operator reads, never the stored value.
+ * Tier names come from the one tier-label map so the directory, the drawer and
+ * the app all spell a membership the same way.
+ */
+const TIER_CHOICES: { value: Tier | 'all'; label: string }[] = [
+  { value: 'all', label: 'All tiers' },
+  { value: 'starter', label: tierLabel('starter') },
+  { value: 'silver', label: tierLabel('silver') },
+  { value: 'gold', label: tierLabel('gold') },
+  { value: 'elite', label: tierLabel('elite') },
+];
+
+const STATUS_CHOICES: { value: StatusOption; label: string }[] = [
+  { value: 'all', label: 'Any status' },
+  { value: 'active', label: 'Active' },
+  { value: 'suspended', label: 'Suspended' },
+];
+
+/** Accepted `?tier=` values. Anything else in the URL falls back to all tiers. */
+const TIER_FILTER_KEYS: readonly (Tier | 'all')[] = [
+  'all',
+  'starter',
+  'silver',
+  'gold',
+  'elite',
+];
 
 interface ApiResponse {
   members: MemberRow[];
@@ -39,6 +71,11 @@ interface ApiResponse {
  * passed by id. On any mutation inside the drawer we router.refresh() so the
  * server-rendered page 1 picks up the new tier/status/coach; the client list
  * also gets a fresh page 1 fetch so an active filter reflects the change too.
+ *
+ * Reading order: the person comes first. The primary column is the member's
+ * name with their email sitting under it as the quiet identifier, so a row is
+ * scanned as "who" rather than as a string of login credentials. Everything
+ * after it — membership, status, join date — supports that one answer.
  */
 export function MembersDirectory({
   initialMembers,
@@ -58,9 +95,14 @@ export function MembersDirectory({
   const router = useRouter();
   const [members, setMembers] = useState<MemberRow[]>(initialMembers);
   const [cursor, setCursor] = useState<string | null>(initialCursor);
-  const [q, setQ] = useState('');
-  const [tier, setTier] = useState<Tier | 'all'>('all');
-  const [status, setStatus] = useState<(typeof STATUS_OPTIONS)[number]>('all');
+  // Search and both filters live in the address bar. Opening a member record
+  // is a real navigation, so without this every trip back through the browser
+  // dropped the operator at the top of an unfiltered directory — and a
+  // directory is the one page nobody wants to search twice. It also makes a
+  // narrowed list something you can send to a colleague.
+  const [q, setQ] = useUrlSearch('q');
+  const [tier, setTier] = useUrlState<Tier | 'all'>('tier', 'all', TIER_FILTER_KEYS);
+  const [status, setStatus] = useUrlState<StatusOption>('status', 'all', STATUS_OPTIONS);
   const [openId, setOpenId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -81,7 +123,7 @@ export function MembersDirectory({
     async (opts: {
       q: string;
       tier: Tier | 'all';
-      status: (typeof STATUS_OPTIONS)[number];
+      status: StatusOption;
       cursor: string | null;
       append: boolean;
     }) => {
@@ -140,39 +182,79 @@ export function MembersDirectory({
     void fetchPage({ q, tier, status, cursor, append: true });
   }, [q, tier, status, cursor, fetchPage]);
 
+  const filtered = q !== '' || tier !== 'all' || status !== 'all';
+
+  function clearFilters() {
+    setQ('');
+    setTier('all');
+    setStatus('all');
+  }
+
   const columns: Column<MemberRow>[] = [
     {
-      key: 'email',
-      header: 'Email',
+      key: 'member',
+      header: 'Member',
+      primary: true,
       render: (r) => (
-        <span style={{ fontWeight: 500 }}>{r.email}</span>
-      ),
-    },
-    {
-      key: 'name',
-      header: 'Name',
-      render: (r) => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          {r.displayName?.trim() ? (
-            r.displayName
-          ) : (
-            <span style={{ color: 'var(--gt-text-dim)' }}>—</span>
-          )}
-          {r.staffRole != null ? (
-            <Badge tone="info">{staffRoleLabel(r.staffRole)}</Badge>
-          ) : null}
-        </span>
+        <div style={{ minWidth: 0, maxWidth: 320 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              minWidth: 0,
+            }}
+          >
+            <span
+              style={{
+                fontFamily: 'var(--font-heading)',
+                fontWeight: 600,
+                fontSize: 15,
+                color: 'var(--gt-text)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {r.displayName?.trim() || 'No name yet'}
+            </span>
+            {/* Staff inside the member list is the exception worth marking. */}
+            {r.staffRole != null ? (
+              <Badge tone="info">{staffRoleLabel(r.staffRole)}</Badge>
+            ) : null}
+          </div>
+          <div
+            style={{
+              marginTop: 2,
+              fontSize: 13,
+              color: 'var(--gt-text-dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {r.email}
+          </div>
+        </div>
       ),
     },
     {
       key: 'tier',
-      header: 'Tier',
+      header: 'Membership',
+      width: 190,
       render: (r) => {
         const lapsed =
           r.tier !== 'starter' &&
           effectiveTier(r.tier, r.tierExpiresAt, new Date()) === 'starter';
         return (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              flexWrap: 'wrap',
+            }}
+          >
             <TierChip tier={r.tier} />
             {lapsed ? <Badge tone="warning">Lapsed</Badge> : null}
           </span>
@@ -182,15 +264,33 @@ export function MembersDirectory({
     {
       key: 'status',
       header: 'Status',
+      width: 120,
       render: (r) => <StatusChip status={r.status} />,
     },
     {
       key: 'joined',
       header: 'Joined',
-      align: 'right',
+      numeric: true,
+      width: 140,
       render: (r) => (
-        <span style={{ color: 'var(--gt-text-dim)', whiteSpace: 'nowrap' }}>
+        <span style={{ color: 'var(--gt-text-dim)', whiteSpace: 'nowrap', fontSize: 13 }}>
           {formatDate(r.createdAt)}
+        </span>
+      ),
+    },
+    {
+      // The same quiet affordance on every row, so "this opens" is learned once.
+      key: 'open',
+      header: 'Open',
+      headerHidden: true,
+      width: 24,
+      align: 'right',
+      render: () => (
+        <span
+          aria-hidden
+          style={{ color: 'var(--gt-text-faint)', fontSize: 17, lineHeight: 1 }}
+        >
+          ›
         </span>
       ),
     },
@@ -206,20 +306,24 @@ export function MembersDirectory({
   }
 
   const selected = openId ? members.find((m) => m.id === openId) ?? null : null;
+  // First paint of a filter change with nothing on screen yet: show the shape
+  // of the table rather than an empty frame that reads as "no results".
+  const showSkeleton = loading && members.length === 0;
 
   return (
     <>
       <PageHeader
         title="Members"
-        subtitle="Search and filter members, then open a member to change their tier, suspend or reactivate the account, or assign a coach."
+        subtitle="Find a member, then open them to change their membership, suspend or reactivate the account, or assign a coach."
         action={<DownloadCsv href="/api/admin/exports/members" />}
       />
 
       <Toolbar
         left={
-          <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+          <div style={{ flex: '1 1 260px', minWidth: 0 }}>
             <SearchField
-              placeholder="Search by email…"
+              placeholder="Search by name or email"
+              aria-label="Search members"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
@@ -228,18 +332,18 @@ export function MembersDirectory({
         right={
           <>
             <FilterSelect
+              id="members-filter-tier"
               label="Tier"
               value={tier}
-              options={TIER_OPTIONS}
+              choices={TIER_CHOICES}
               onChange={(v) => setTier(v as Tier | 'all')}
             />
             <FilterSelect
+              id="members-filter-status"
               label="Status"
               value={status}
-              options={STATUS_OPTIONS as unknown as string[]}
-              onChange={(v) =>
-                setStatus(v as (typeof STATUS_OPTIONS)[number])
-              }
+              choices={STATUS_CHOICES}
+              onChange={(v) => setStatus(v as StatusOption)}
             />
           </>
         }
@@ -250,44 +354,96 @@ export function MembersDirectory({
           role="alert"
           style={{
             marginBottom: 12,
-            padding: '10px 14px',
-            borderRadius: 10,
+            padding: '12px 14px',
+            borderRadius: 'var(--gt-radius-sm)',
             border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
             background: 'var(--gt-danger-weak)',
             color: 'var(--gt-danger)',
-            fontSize: 13,
+            fontSize: 14,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            flexWrap: 'wrap',
           }}
         >
-          {error}
+          <span>{error}</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void fetchPage({ q, tier, status, cursor: null, append: false })}
+          >
+            Try again
+          </Button>
         </div>
       ) : null}
 
       <div
         style={{
-          color: 'var(--gt-text-dim)',
-          fontSize: 13,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
           margin: '0 0 10px',
         }}
       >
-        {members.length} member{members.length === 1 ? '' : 's'} shown
+        <span style={{ color: 'var(--gt-text-dim)', fontSize: 13 }}>
+          {loading ? (
+            'Updating the list…'
+          ) : (
+            <>
+              Showing{' '}
+              <span className="gt-numeric" style={{ color: 'var(--gt-text)' }}>
+                {members.length}
+              </span>{' '}
+              {members.length === 1 ? 'member' : 'members'}
+              {filtered ? ' that match your filters' : ''}
+            </>
+          )}
+        </span>
+        {filtered ? (
+          <Button variant="ghost" size="sm" onClick={clearFilters}>
+            Clear filters
+          </Button>
+        ) : null}
       </div>
 
-      <div style={{ opacity: loading ? 0.55 : 1, transition: 'opacity 120ms' }}>
-        <DataTable
-          columns={columns}
-          rows={members}
-          rowKey={(r) => r.id}
-          onRowClick={(r) => setOpenId(r.id)}
-          rowAriaLabel={(r) =>
-            `Open details for ${r.displayName?.trim() || r.email}`
-          }
-          empty={
-            q || tier !== 'all' || status !== 'all'
-              ? 'No members match these filters.'
-              : 'No members yet.'
-          }
-        />
-      </div>
+      {showSkeleton ? (
+        <SkeletonRows rows={6} cols={4} />
+      ) : (
+        <KeyboardRows>
+          <div
+            aria-busy={loading}
+            style={{ opacity: loading ? 0.55 : 1, transition: 'opacity 120ms' }}
+          >
+            <DataTable
+              columns={columns}
+              rows={members}
+              rowKey={(r) => r.id}
+              caption="Members"
+              selectedKey={openId}
+              onRowClick={(r) => setOpenId(r.id)}
+              rowAriaLabel={(r) =>
+                `Open details for ${r.displayName?.trim() || r.email}`
+              }
+              emptyTitle={filtered ? 'No members match your filters' : 'No members yet'}
+              emptyDescription={
+                filtered
+                  ? 'Try a shorter search, or widen the tier and status.'
+                  : 'New sign-ups appear here straight away.'
+              }
+              emptyAction={
+                filtered ? (
+                  <Button variant="ghost" size="sm" onClick={clearFilters}>
+                    Clear filters
+                  </Button>
+                ) : undefined
+              }
+            />
+          </div>
+        </KeyboardRows>
+      )}
 
       <div
         style={{
@@ -300,11 +456,11 @@ export function MembersDirectory({
       >
         {cursor ? (
           <Button variant="ghost" onClick={loadMore} disabled={loadingMore}>
-            {loadingMore ? 'Loading…' : 'Load more'}
+            {loadingMore ? 'Loading…' : 'Load more members'}
           </Button>
         ) : members.length > 0 ? (
-          <span style={{ color: 'var(--gt-text-dim)', fontSize: 13 }}>
-            End of list · {members.length} member{members.length === 1 ? '' : 's'} shown.
+          <span style={{ color: 'var(--gt-text-faint)', fontSize: 13 }}>
+            That is everyone.
           </span>
         ) : null}
       </div>
@@ -322,53 +478,57 @@ export function MembersDirectory({
   );
 }
 
-/** Small labeled <select> matching the .gt-input look for the filter row. */
+/**
+ * Small labelled <select> for the filter row. The caption is tied to the
+ * control with htmlFor/id (not by wrapping) so the label reads as a caption and
+ * the control keeps the shared .gt-input focus, hover and 48px sizing.
+ */
 function FilterSelect({
+  id,
   label,
   value,
-  options,
+  choices,
   onChange,
 }: {
+  id: string;
   label: string;
   value: string;
-  options: readonly string[];
+  choices: readonly { value: string; label: string }[];
   onChange: (v: string) => void;
 }) {
   return (
-    <label
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 8,
-      }}
-    >
-      <span
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <label
+        htmlFor={id}
         style={{
           fontSize: 12,
           letterSpacing: '0.03em',
           textTransform: 'uppercase',
-          color: 'var(--gt-text-dim)',
+          color: 'var(--gt-text-faint)',
           fontFamily: 'var(--font-heading)',
+          fontWeight: 600,
         }}
       >
         {label}
-      </span>
+      </label>
       <select
+        id={id}
         className="gt-input"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         style={{
+          width: 'auto',
           padding: '8px 10px',
-          textTransform: 'capitalize',
+          fontSize: 14,
           cursor: 'pointer',
         }}
       >
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o === 'all' ? 'All' : o}
+        {choices.map((c) => (
+          <option key={c.value} value={c.value}>
+            {c.label}
           </option>
         ))}
       </select>
-    </label>
+    </div>
   );
 }

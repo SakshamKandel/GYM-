@@ -35,7 +35,7 @@ export default async function AdminReconciliationPage() {
     <div style={{ maxWidth: 1280 }}>
       <PageHeader
         title="Daily partner totals"
-        subtitle="What each kitchen took in on one delivery day. Cash they collected at the door is already theirs. Digital payments we are holding are what we still owe them. Pick a day, then download it for the books."
+        subtitle="What each kitchen took in on one delivery day. Cash collected at the door is already theirs; what was paid online is what we still owe them."
       />
 
       <ReconciliationBoard initialDate={today} />

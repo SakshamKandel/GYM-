@@ -9,6 +9,9 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  FilterPill,
+  FilterPills,
+  SkeletonBar,
   TextField,
 } from '@/components/console';
 import { formatDate, formatMoney, parseMoneyInput } from '@/lib/format';
@@ -239,17 +242,13 @@ export function PartnerWallets({ wallets }: { wallets: PartnerWalletRow[] }) {
       ),
     },
     {
-      key: 'currency',
-      header: 'Currency',
-      width: 90,
-      render: (w) => w.currency,
-    },
-    {
+      // No separate currency column: every amount below already carries its
+      // own code, and a column that repeats it only widened the row.
       key: 'held',
       header: 'We hold',
       align: 'right',
       render: (w) => (
-        <span className="gt-numeric" style={{ fontSize: 13 }}>
+        <span className="gt-numeric" style={{ fontSize: 15, color: 'var(--gt-text)' }}>
           {formatMoney(w.heldMinor, w.currency)}
         </span>
       ),
@@ -257,10 +256,15 @@ export function PartnerWallets({ wallets }: { wallets: PartnerWalletRow[] }) {
     {
       key: 'actions',
       header: '',
-      width: 100,
+      width: 108,
       align: 'right',
       render: (w) => (
-        <Button variant="ghost" size="sm" onClick={() => openRow(w)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => openRow(w)}
+          aria-label={`Open the ledger for ${w.name}`}
+        >
           Ledger
         </Button>
       ),
@@ -334,36 +338,26 @@ export function PartnerWallets({ wallets }: { wallets: PartnerWalletRow[] }) {
                 Record a correction
               </div>
 
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                {(['credit', 'debit'] as const).map((d) => {
-                  const active = direction === d;
-                  return (
-                    <button
+              {/* Coloured by what it means — money on or money off — rather
+                  than by the accent, which belongs to the one action that
+                  actually writes the entry. */}
+              <div style={{ marginBottom: 10 }}>
+                <FilterPills label="Which way the money goes">
+                  {(['credit', 'debit'] as const).map((d) => (
+                    <FilterPill
                       key={d}
-                      type="button"
+                      tone={d === 'credit' ? 'positive' : 'critical'}
+                      selected={direction === d}
                       onClick={() => {
                         setDirection(d);
                         resetEntryKey();
                       }}
-                      style={{
-                        flex: 1,
-                        padding: '6px 10px',
-                        borderRadius: 10,
-                        cursor: 'pointer',
-                        fontFamily: 'var(--font-heading)',
-                        fontSize: 12,
-                        fontWeight: 600,
-                        background: active ? 'var(--gt-card)' : 'transparent',
-                        color: 'var(--gt-text)',
-                        border: active
-                          ? '1px solid var(--gt-text-dim)'
-                          : '1px solid var(--gt-border)',
-                      }}
+                      style={{ flex: 1 }}
                     >
-                      {d === 'credit' ? 'Credit (+)' : 'Debit (−)'}
-                    </button>
-                  );
-                })}
+                      {d === 'credit' ? 'Add to balance' : 'Take off balance'}
+                    </FilterPill>
+                  ))}
+                </FilterPills>
               </div>
 
               <TextField
@@ -381,6 +375,7 @@ export function PartnerWallets({ wallets }: { wallets: PartnerWalletRow[] }) {
 
               <textarea
                 className="gt-input"
+                aria-label="Note about this correction, optional"
                 placeholder="Note (optional)"
                 value={note}
                 onChange={(e) => {
@@ -402,10 +397,24 @@ export function PartnerWallets({ wallets }: { wallets: PartnerWalletRow[] }) {
               </div>
 
               {error ? (
-                <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 8 }}>{error}</div>
+                <div
+                  role="alert"
+                  style={{
+                    marginTop: 10,
+                    border: '1px solid color-mix(in srgb, var(--gt-danger) 38%, transparent)',
+                    background: 'var(--gt-danger-weak)',
+                    borderRadius: 'var(--gt-radius-sm)',
+                    padding: '10px 12px',
+                    color: 'var(--gt-text)',
+                    fontSize: 13,
+                    lineHeight: 1.45,
+                  }}
+                >
+                  {error}
+                </div>
               ) : null}
 
-              <div style={{ marginTop: 12 }}>
+              <div style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>
                 <Button
                   variant="primary"
                   size="sm"
@@ -431,14 +440,28 @@ export function PartnerWallets({ wallets }: { wallets: PartnerWalletRow[] }) {
                 Ledger
               </div>
               {detailLoading ? (
-                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>Loading…</div>
+                <div
+                  aria-label="Loading this restaurant's entries"
+                  role="status"
+                  style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+                >
+                  <SkeletonBar w="60%" />
+                  <SkeletonBar w="80%" />
+                  <SkeletonBar w="45%" />
+                </div>
               ) : detailError ? (
-                <div style={{ fontSize: 13, color: 'var(--gt-danger)' }}>{detailError}</div>
+                <div role="alert" style={{ fontSize: 13, color: 'var(--gt-danger)' }}>
+                  {detailError}
+                </div>
               ) : (detail?.entries.length ?? 0) === 0 ? (
-                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>No entries yet.</div>
+                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                  Nothing has moved on this wallet yet.
+                </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {detail?.entries.map((entry) => {
+                // One framed list with hairline rows rather than a stack of
+                // separate boxes, so money on and money off read as one column.
+                <div className="gt-card" style={{ padding: 0 }}>
+                  {detail?.entries.map((entry, i) => {
                     const effect = balanceEffect(entry);
                     return (
                       <div
@@ -446,14 +469,19 @@ export function PartnerWallets({ wallets }: { wallets: PartnerWalletRow[] }) {
                         style={{
                           display: 'flex',
                           justifyContent: 'space-between',
-                          gap: 10,
-                          padding: '8px 10px',
-                          borderRadius: 8,
-                          border: '1px solid var(--gt-border)',
+                          alignItems: 'center',
+                          gap: 12,
+                          padding: '10px 14px',
+                          borderBottom:
+                            i === (detail?.entries.length ?? 0) - 1
+                              ? 'none'
+                              : '1px solid var(--gt-border)',
                         }}
                       >
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 13 }}>{TYPE_LABEL[entry.type]}</div>
+                          <div style={{ fontSize: 13, color: 'var(--gt-text)' }}>
+                            {TYPE_LABEL[entry.type]}
+                          </div>
                           {entry.note ? (
                             <div
                               style={{
@@ -468,14 +496,14 @@ export function PartnerWallets({ wallets }: { wallets: PartnerWalletRow[] }) {
                               {entry.note}
                             </div>
                           ) : null}
-                          <div style={{ fontSize: 11, color: 'var(--gt-text-dim)' }}>
+                          <div style={{ fontSize: 12, color: 'var(--gt-text-faint)' }}>
                             {formatDate(entry.createdAt)}
                           </div>
                         </div>
                         <span
                           className="gt-numeric"
                           style={{
-                            fontSize: 13,
+                            fontSize: 'var(--gt-fs-meta)',
                             color: effect < 0 ? 'var(--gt-danger)' : 'var(--gt-success)',
                             whiteSpace: 'nowrap',
                           }}
@@ -496,7 +524,11 @@ export function PartnerWallets({ wallets }: { wallets: PartnerWalletRow[] }) {
   );
 }
 
-/** One money figure in the drawer header. */
+/**
+ * One money figure in the drawer header. The `strong` tile is the balance
+ * everything else adds up to, so it keeps the firmer edge and the larger
+ * figure; the three that explain it stay deliberately quiet.
+ */
 function MoneyTile({
   label,
   amountMinor,
@@ -509,9 +541,34 @@ function MoneyTile({
   strong?: boolean;
 }) {
   return (
-    <div className="gt-card" style={{ padding: '10px 14px' }}>
-      <div style={{ fontSize: 11, color: 'var(--gt-text-dim)' }}>{label}</div>
-      <div className="gt-numeric" style={{ fontSize: strong ? 18 : 15 }}>
+    <div
+      className="gt-card"
+      style={{
+        padding: '12px 16px',
+        minWidth: 130,
+        borderColor: strong ? 'var(--gt-border-strong)' : undefined,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 'var(--gt-fs-micro)',
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: 'var(--gt-text-dim)',
+          fontFamily: 'var(--font-heading)',
+        }}
+      >
+        {label}
+      </div>
+      <div
+        className="gt-numeric"
+        style={{
+          marginTop: 4,
+          fontSize: strong ? 'var(--gt-fs-h1)' : 'var(--gt-fs-h2)',
+          lineHeight: 1.2,
+          color: strong ? 'var(--gt-text)' : 'var(--gt-text-dim)',
+        }}
+      >
         {formatMoney(amountMinor, currency)}
       </div>
     </div>

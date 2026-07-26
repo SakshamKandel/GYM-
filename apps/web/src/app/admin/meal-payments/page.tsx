@@ -159,28 +159,24 @@ export default async function AdminMealPaymentsPage({
   const focusOrderId = typeof rawOrderId === 'string' && rawOrderId.trim() ? rawOrderId : null;
 
   const { requests, counts } = await loadMealPaymentRequests();
-  const total = counts.pending + counts.approved + counts.rejected + counts.refunded;
 
   return (
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Meal payments"
-        subtitle="Manual eSewa/Khalti payments for one-time meal orders and weekly subscription cycles. Approving marks the target paid; fulfillment is unaffected."
+        subtitle="Receipts members sent by eSewa or Khalti for a single order or a weekly plan. Approving one marks it paid. Nothing about the cooking or delivery changes."
         action={<DownloadCsv href="/api/admin/exports/meal-payment-requests" />}
       />
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-          gap: 14,
-          marginBottom: 24,
-        }}
-      >
-        <StatTile label="Total" value={total} />
-        <StatTile label="Pending" value={counts.pending} />
-        <StatTile label="Approved" value={counts.approved} />
-        <StatTile label="Refunded" value={counts.refunded} />
+      {/* One headline number, not four. The approved / rejected / refunded
+          totals ride on the filter buttons below, next to the control that
+          switches to them. */}
+      <div style={{ maxWidth: 260, marginBottom: 24 }}>
+        <StatTile
+          label="Waiting for review"
+          value={counts.pending.toLocaleString()}
+          hint={counts.pending === 0 ? 'nothing waiting' : 'receipts to approve'}
+        />
       </div>
 
       <MealPaymentsQueue

@@ -2,9 +2,17 @@
 
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, Button, EmptyState, TextField, TierChip } from '@/components/console';
-import { formatDate, formatMoney } from '@/lib/format';
+import {
+  Badge,
+  Button,
+  EmptyState,
+  SkeletonRows,
+  TextField,
+  TierChip,
+} from '@/components/console';
+import { formatAge, formatDate, formatMoney } from '@/lib/format';
 import { ConfirmDialog } from '../../_components/ConfirmDialog';
+import { QueueTabs } from '../../_components/QueueTabs';
 
 export type CoachTier = 'silver' | 'gold' | 'elite';
 export type PayoutStatus = 'pending' | 'approved' | 'rejected' | 'paid';
@@ -82,6 +90,46 @@ const STATUS_LABEL: Record<PayoutStatus, string> = {
   paid: 'Paid',
   rejected: 'Rejected',
 };
+
+/**
+ * "Asked 3d ago · Jul 22, 2026" — how long someone has been waiting for their
+ * money, then the day they asked. `formatAge` returns a bare unit for anything
+ * under a month and an absolute date beyond it, so the two forms are worded
+ * separately rather than gluing "ago" onto a date.
+ */
+function askedLabel(requestedAt: string): string {
+  const age = formatAge(requestedAt);
+  const day = formatDate(requestedAt);
+  if (age === day) return `Asked ${day}`;
+  if (age === 'now') return `Asked just now · ${day}`;
+  return `Asked ${age} ago · ${day}`;
+}
+
+/** The quiet uppercase label that opens a block inside this queue. */
+function SectionLabel({ label, count }: { label: string; count?: number }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 12,
+        fontSize: 'var(--gt-fs-micro)',
+        letterSpacing: '0.03em',
+        textTransform: 'uppercase',
+        color: 'var(--gt-text-dim)',
+        fontFamily: 'var(--font-heading)',
+      }}
+    >
+      {label}
+      {count != null ? (
+        <span className="gt-numeric" style={{ color: 'var(--gt-text)' }}>
+          {count}
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * Admin payout-request queue (plan §3 P1-12). Loads GET /api/admin/payouts on
@@ -242,53 +290,38 @@ export function PayoutsQueue() {
   // The rail toggle stays mounted through loading and error states — otherwise
   // a failing partner queue would strand the admin with no way back to coaches.
   const scopeTabs = (
-    <div style={{ display: 'flex', gap: 8 }} role="group" aria-label="Payout earner type">
-      {SCOPES.map((s) => {
-        const active = scope === s.key;
-        return (
-          <button
-            key={s.key}
-            type="button"
-            aria-pressed={active}
-            onClick={() => switchScope(s.key)}
-            style={{
-              padding: '7px 14px',
-              borderRadius: 10,
-              cursor: 'pointer',
-              fontFamily: 'var(--font-heading)',
-              fontSize: 13,
-              fontWeight: 600,
-              background: active ? 'var(--gt-accent-strong)' : 'transparent',
-              color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
-              border: active
-                ? '1px solid var(--gt-accent-strong)'
-                : '1px solid var(--gt-border)',
-            }}
-          >
-            {s.label}
-          </button>
-        );
-      })}
-    </div>
+    <QueueTabs
+      label="Who is being paid"
+      tabs={SCOPES.map((s) => ({ key: s.key, label: s.label, disabled: busyId !== null }))}
+      value={scope}
+      onChange={switchScope}
+    />
   );
 
   if (loading && !data) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {scopeTabs}
-        <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>Loading…</div>
+        {/* Table-shaped placeholder rather than the word "Loading", so the page
+            keeps its height and the swap to real rows doesn't jump. */}
+        <SkeletonRows rows={3} cols={3} />
       </div>
     );
   }
   if (loadError) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {scopeTabs}
-        <div style={{ fontSize: 13, color: 'var(--gt-danger)' }}>{loadError}</div>
-        <div>
-          <Button variant="ghost" size="sm" onClick={() => void load()}>
-            Try again
-          </Button>
+        <div role="alert">
+          <EmptyState
+            title={loadError}
+            description="Nothing is shown here rather than a list that might be out of date."
+            action={
+              <Button variant="ghost" onClick={() => void load()}>
+                Try again
+              </Button>
+            }
+          />
         </div>
       </div>
     );
@@ -301,25 +334,17 @@ export function PayoutsQueue() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       {scopeTabs}
       <div>
-        <div
-          style={{
-            fontSize: 12,
-            letterSpacing: '0.03em',
-            textTransform: 'uppercase',
-            color: 'var(--gt-text-dim)',
-            fontFamily: 'var(--font-heading)',
-            marginBottom: 12,
-          }}
-        >
-          Pending ({pending.length})
-        </div>
+        <SectionLabel
+          label="Waiting to be paid"
+          count={pending.length > 0 ? pending.length : undefined}
+        />
         {pending.length === 0 ? (
           <EmptyState
-            title="No pending payouts"
+            title="Nobody is waiting to be paid"
             description={
               scope === 'partner'
-                ? 'When a restaurant asks to be paid, the request shows up here.'
-                : 'When a coach asks to be paid, the request shows up here.'
+                ? 'When a restaurant asks for its money, the request shows up here.'
+                : 'When a coach asks for their money, the request shows up here.'
             }
           />
         ) : (
@@ -330,13 +355,15 @@ export function PayoutsQueue() {
               return (
                 <div
                   key={row.id}
-                  style={{ padding: 14, borderRadius: 10, border: '1px solid var(--gt-border)' }}
+                  className="gt-card"
+                  style={{ padding: 16 }}
                 >
                   <div
                     style={{
                       display: 'flex',
                       justifyContent: 'space-between',
-                      gap: 12,
+                      alignItems: 'flex-start',
+                      gap: 16,
                       flexWrap: 'wrap',
                     }}
                   >
@@ -345,44 +372,72 @@ export function PayoutsQueue() {
                         style={{
                           fontFamily: 'var(--font-heading)',
                           fontWeight: 600,
-                          fontSize: 14,
+                          fontSize: 'var(--gt-fs-h2)',
                           display: 'flex',
                           alignItems: 'center',
                           gap: 8,
+                          flexWrap: 'wrap',
                         }}
                       >
                         {row.earner.label}
                         {row.earner.coachTier ? <TierChip tier={row.earner.coachTier} /> : null}
                       </div>
-                      <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                        Requested {formatDate(row.requestedAt)}
+                      {/* How long they have been waiting comes first; the exact
+                          day follows it, because "9d" is what decides the order
+                          you work through these in. */}
+                      <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 4 }}>
+                        {askedLabel(row.requestedAt)}
                       </div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <div className="gt-numeric" style={{ fontSize: 18 }}>
+                    <div
+                      style={{
+                        textAlign: 'right',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'flex-end',
+                        gap: 4,
+                      }}
+                    >
+                      <div
+                        className="gt-numeric"
+                        style={{
+                          fontSize: 'var(--gt-fs-h1)',
+                          lineHeight: 1.2,
+                          color: 'var(--gt-text)',
+                        }}
+                      >
                         {formatMoney(row.amountMinor, row.currency)}
                       </div>
                       <div
                         style={{
                           fontSize: 12,
-                          color: covered ? 'var(--gt-text-dim)' : 'var(--gt-danger)',
+                          color: 'var(--gt-text-dim)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
                         }}
                       >
-                        Balance:{' '}
-                        {row.balanceMinor == null
-                          ? '—'
-                          : formatMoney(row.balanceMinor, row.currency)}
-                        {covered ? '' : ' (short)'}
+                        <span>
+                          Balance{' '}
+                          <span className="gt-numeric">
+                            {row.balanceMinor == null
+                              ? '—'
+                              : formatMoney(row.balanceMinor, row.currency)}
+                          </span>
+                        </span>
+                        {covered ? null : <Badge tone="critical">Not enough</Badge>}
                       </div>
                     </div>
                   </div>
 
+                  {/* Same control order on every row: reference, then the quiet
+                      turn-down, then the action that moves the money. */}
                   <div
                     style={{
                       display: 'flex',
                       gap: 10,
                       alignItems: 'flex-end',
-                      marginTop: 12,
+                      marginTop: 14,
                       flexWrap: 'wrap',
                     }}
                   >
@@ -398,14 +453,6 @@ export function PayoutsQueue() {
                       style={{ flex: 1, minWidth: 200 }}
                     />
                     <Button
-                      variant="primary"
-                      size="sm"
-                      disabled={busy}
-                      onClick={() => requestDecision(row, 'approve')}
-                    >
-                      {busy ? 'Working…' : 'Mark as paid'}
-                    </Button>
-                    <Button
                       variant="ghost"
                       size="sm"
                       disabled={busy}
@@ -413,10 +460,33 @@ export function PayoutsQueue() {
                     >
                       Reject
                     </Button>
+                    {/* Dark, not accent: a queue of ten rows would otherwise put
+                        ten accent buttons on one screen and the accent would
+                        stop meaning "the important one". */}
+                    <Button
+                      variant="dark"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => requestDecision(row, 'approve')}
+                    >
+                      {busy ? 'Working…' : 'Mark as paid'}
+                    </Button>
                   </div>
 
                   {rowError[row.id] ? (
-                    <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginTop: 8 }}>
+                    <div
+                      role="alert"
+                      style={{
+                        marginTop: 10,
+                        border: '1px solid color-mix(in srgb, var(--gt-danger) 38%, transparent)',
+                        background: 'var(--gt-danger-weak)',
+                        borderRadius: 'var(--gt-radius-sm)',
+                        padding: '10px 12px',
+                        color: 'var(--gt-text)',
+                        fontSize: 13,
+                        lineHeight: 1.45,
+                      }}
+                    >
                       {rowError[row.id]}
                     </div>
                   ) : null}
@@ -428,51 +498,55 @@ export function PayoutsQueue() {
       </div>
 
       <div>
-        <div
-          style={{
-            fontSize: 12,
-            letterSpacing: '0.03em',
-            textTransform: 'uppercase',
-            color: 'var(--gt-text-dim)',
-            fontFamily: 'var(--font-heading)',
-            marginBottom: 12,
-          }}
-        >
-          History
-        </div>
+        <SectionLabel label="Already decided" />
         {history.length === 0 ? (
-          <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>No decided payouts yet.</div>
+          <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+            Nothing has been decided yet.
+          </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {history.map((row) => (
+          // Settled history is reference material, so it stays quiet: hairline
+          // rows, dim ink, and the amount tabular on the right where it lines up
+          // with the row above it.
+          <div className="gt-card" style={{ padding: 0 }}>
+            {history.map((row, i) => (
               <div
                 key={row.id}
                 style={{
                   display: 'flex',
                   justifyContent: 'space-between',
-                  gap: 10,
-                  padding: '8px 12px',
-                  borderRadius: 8,
-                  border: '1px solid var(--gt-border)',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '12px 16px',
+                  borderBottom:
+                    i === history.length - 1 ? 'none' : '1px solid var(--gt-border)',
                 }}
               >
                 <div style={{ minWidth: 0 }}>
                   <div
-                    style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
+                    style={{
+                      fontSize: 13,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                    }}
                   >
                     {row.earner.label}
                     <Badge tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status]}</Badge>
                   </div>
-                  {row.disbursementRef ? (
-                    <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                      Reference {row.disbursementRef}
-                    </div>
-                  ) : null}
-                  <div style={{ fontSize: 11, color: 'var(--gt-text-dim)' }}>
-                    {row.decidedAt ? formatDate(row.decidedAt) : '—'}
+                  <div style={{ fontSize: 12, color: 'var(--gt-text-faint)', marginTop: 2 }}>
+                    {row.decidedAt ? formatDate(row.decidedAt) : 'No date on record'}
+                    {row.disbursementRef ? ` · reference ${row.disbursementRef}` : ''}
                   </div>
                 </div>
-                <span className="gt-numeric" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
+                <span
+                  className="gt-numeric"
+                  style={{
+                    fontSize: 'var(--gt-fs-meta)',
+                    whiteSpace: 'nowrap',
+                    color: 'var(--gt-text)',
+                  }}
+                >
                   {formatMoney(row.amountMinor, row.currency)}
                 </span>
               </div>

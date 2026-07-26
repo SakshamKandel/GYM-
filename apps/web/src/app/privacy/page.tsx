@@ -5,7 +5,7 @@ import { Reveal } from '@/components/marketing/motion';
 import { ArrowLink, Container, Display, Lead, Section } from '@/components/marketing/ui';
 
 export const metadata: Metadata = {
-  title: 'Privacy policy | The GM Method',
+  title: 'Privacy policy',
   description:
     'How the GM Method fitness app handles account, health, coaching, and payment data, in plain language.',
 };

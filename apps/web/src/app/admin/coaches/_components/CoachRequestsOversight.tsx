@@ -91,65 +91,117 @@ export function CoachRequestsOversight() {
     {
       key: 'member',
       header: 'Member',
+      primary: true,
       render: (r) => (
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>
+        <div style={{ minWidth: 0, maxWidth: 220 }}>
+          <div
+            style={{
+              fontFamily: 'var(--font-heading)',
+              fontSize: 15,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
             {r.member.displayName || r.member.email}
           </div>
-          <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{r.member.email}</div>
+          <div
+            style={{
+              marginTop: 2,
+              fontSize: 13,
+              fontWeight: 400,
+              color: 'var(--gt-text-dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {r.member.email}
+          </div>
         </div>
       ),
     },
     {
       key: 'coach',
-      header: 'Coach',
+      header: 'Asked',
+      width: 220,
       render: (r) => (
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>
+          <div
+            style={{
+              fontSize: 14,
+              color: 'var(--gt-text)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
             {r.coach.displayName || r.coach.email}
           </div>
-          <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{r.coach.email}</div>
+          <div
+            style={{
+              marginTop: 2,
+              fontSize: 13,
+              color: 'var(--gt-text-dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {r.coach.email}
+          </div>
         </div>
       ),
     },
     {
       key: 'message',
-      header: 'Message',
+      header: 'What they said',
       render: (r) => (
         <span
           style={{
             display: 'block',
-            maxWidth: 260,
+            maxWidth: 280,
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            color: r.message ? 'var(--gt-text)' : 'var(--gt-text-dim)',
-            fontSize: 13,
+            color: r.message ? 'var(--gt-text)' : 'var(--gt-text-faint)',
+            fontSize: 14,
           }}
           title={r.message || undefined}
         >
-          {r.message || '—'}
+          {r.message || 'Nothing written'}
         </span>
       ),
     },
     {
       key: 'age',
-      header: 'Age',
-      width: 130,
+      header: 'Waiting',
+      width: 150,
+      numeric: true,
       render: (r) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span className="gt-numeric" style={{ fontSize: 13 }}>
-            {r.ageDays === 0 ? 'Today' : `${r.ageDays}d`}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: 8,
+          }}
+        >
+          {r.ageDays >= 10 ? <Badge tone="warning">Expires soon</Badge> : null}
+          <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
+            {r.ageDays === 0
+              ? 'Today'
+              : `${r.ageDays} ${r.ageDays === 1 ? 'day' : 'days'}`}
           </span>
-          {r.ageDays >= 10 ? <Badge tone="warning">stale soon</Badge> : null}
         </div>
       ),
     },
     {
       key: 'actions',
-      header: '',
-      width: 110,
-      align: 'right',
+      header: 'Actions',
+      headerHidden: true,
+      actions: true,
+      width: 120,
       render: (r) => (
         <ConfirmButton
           label="Cancel"
@@ -170,30 +222,40 @@ export function CoachRequestsOversight() {
           style={{
             fontFamily: 'var(--font-heading)',
             fontWeight: 600,
-            fontSize: 16,
+            fontSize: 17,
             marginBottom: 4,
           }}
         >
-          Pending coach requests
+          Members waiting on a coach
         </h2>
-        <p style={{ margin: 0, color: 'var(--gt-text-dim)', fontSize: 13, maxWidth: '60ch' }}>
-          Member-initiated requests awaiting a coach&apos;s decision. Requests older than
-          14 days auto-expire the next time this list loads.
+        <p style={{ margin: 0, color: 'var(--gt-text-dim)', fontSize: 14, maxWidth: '62ch' }}>
+          Members who asked a coach to take them on and have not heard back. Anything
+          older than 14 days expires by itself the next time this list loads.
         </p>
       </div>
       {error ? (
-        <Card style={{ marginBottom: 12, borderColor: 'color-mix(in srgb, var(--gt-danger) 35%, transparent)' }}>
-          <span style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</span>
+        <Card
+          style={{
+            marginBottom: 12,
+            borderColor: 'color-mix(in srgb, var(--gt-danger) 35%, transparent)',
+            background: 'var(--gt-danger-weak)',
+          }}
+        >
+          <span role="alert" style={{ color: 'var(--gt-danger)', fontSize: 14 }}>
+            {error}
+          </span>
         </Card>
       ) : null}
       {requests === null ? (
-        <SkeletonRows rows={3} cols={4} />
+        <SkeletonRows rows={3} cols={5} />
       ) : (
         <DataTable
           columns={columns}
           rows={requests}
           rowKey={(r) => r.id}
-          empty="No pending coach requests."
+          caption="Members waiting on a coach"
+          emptyTitle="Nobody is waiting"
+          emptyDescription="Every request a member has sent has been answered."
         />
       )}
     </div>

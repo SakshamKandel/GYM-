@@ -9,7 +9,7 @@ import { PricingHero } from '@/components/marketing/pricing/Tiers';
 import { loadPublicCatalog } from '@/lib/publicCatalog';
 
 export const metadata: Metadata = {
-  title: 'Pricing | The GM Method',
+  title: 'Pricing',
   description:
     'Live regional pricing in NPR and USD. Start free with the full self-tracking app; add coach-assigned workouts, a personal diet plan or full mentorship. Pay via eSewa or Khalti in Nepal. Verified coach codes take 30% off.',
 };

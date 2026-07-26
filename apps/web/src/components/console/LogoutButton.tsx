@@ -44,37 +44,43 @@ export function LogoutButton({
     window.location.replace(loginHref);
   }
 
+  // Sign out is the last thing anyone came here to do, so it reads as one more
+  // quiet nav row rather than a bordered button competing with the destinations
+  // above it. It picks up .gt-nav-item's hover, pressed and focus states.
+  const glyph = (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden focusable="false">
+      <path
+        d="M7 2.5H4A1.5 1.5 0 0 0 2.5 4v10A1.5 1.5 0 0 0 4 15.5h3M11.5 12l3.5-3-3.5-3M15 9H7"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+
   if (compact) {
     return (
       <button
         type="button"
         onClick={() => void signOut()}
         disabled={busy}
-        aria-label="Log out"
+        aria-label={busy ? 'Signing out' : 'Log out'}
+        aria-busy={busy || undefined}
         title="Log out"
         className="gt-nav-item"
         style={{
-          width: 40,
-          height: 40,
+          width: 48,
           margin: '0 auto',
-          display: 'inline-flex',
-          alignItems: 'center',
           justifyContent: 'center',
-          background: 'var(--gt-surface)',
-          border: '1px solid var(--gt-border)',
+          padding: '9px 0',
+          background: 'transparent',
+          border: 'none',
           cursor: busy ? 'default' : 'pointer',
           opacity: busy ? 0.6 : 1,
         }}
       >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
-          <path
-            d="M6 2H3v12h3M10 11l3-3-3-3M13 8H6"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        {glyph}
       </button>
     );
   }
@@ -84,18 +90,20 @@ export function LogoutButton({
       type="button"
       onClick={() => void signOut()}
       disabled={busy}
+      aria-busy={busy || undefined}
       className="gt-nav-item"
       style={{
         width: '100%',
         textAlign: 'left',
-        background: 'var(--gt-surface)',
-        border: '1px solid var(--gt-border)',
+        background: 'transparent',
+        border: 'none',
         cursor: busy ? 'default' : 'pointer',
         opacity: busy ? 0.6 : 1,
         fontFamily: 'var(--font-heading)',
       }}
     >
-      {busy ? 'Signing out…' : 'Log out'}
+      {glyph}
+      <span>{busy ? 'Signing out…' : 'Log out'}</span>
     </button>
   );
 }

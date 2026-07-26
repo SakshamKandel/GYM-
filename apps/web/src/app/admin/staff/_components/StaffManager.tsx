@@ -24,6 +24,7 @@ import {
   StatusChip,
   TextField,
 } from '@/components/console';
+import { formatMoney } from '@/lib/format';
 import { staffRoleLabel } from '@/app/admin/_lib/staffRoleLabel';
 import type { StaffRole } from '@/lib/auth';
 
@@ -84,13 +85,20 @@ function PartnersLink({ align = 'left' }: { align?: 'left' | 'right' }) {
   );
 }
 
+/**
+ * The role picker in a row, and the one in the grant dialog. Sized to the same
+ * 44px floor as a small button (it used to be a ~30px control an operator had
+ * to aim at), and squared to the token radius so it sits in the same family as
+ * every other control on the page.
+ */
 const selectStyle: React.CSSProperties = {
   background: 'var(--gt-surface)',
   color: 'var(--gt-text)',
-  border: '1px solid var(--gt-border)',
-  borderRadius: 8,
+  border: '1px solid var(--gt-border-input)',
+  borderRadius: 'var(--gt-radius-sm)',
+  minHeight: 44,
   padding: '6px 10px',
-  fontSize: 13,
+  fontSize: 14,
   fontFamily: 'var(--font-heading)',
   cursor: 'pointer',
 };
@@ -376,14 +384,15 @@ export function StaffManager({
   const columns: Column<StaffMember>[] = [
     {
       key: 'account',
-      header: 'Account',
+      header: 'Person',
+      primary: true,
       render: (row) => (
-        <div style={{ minWidth: 0 }}>
+        <div style={{ minWidth: 0, maxWidth: 280 }}>
           <div
             style={{
               fontFamily: 'var(--font-heading)',
               fontWeight: 600,
-              fontSize: 14,
+              fontSize: 15,
               display: 'flex',
               alignItems: 'center',
               gap: 8,
@@ -394,7 +403,6 @@ export function StaffManager({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
-                maxWidth: 220,
               }}
             >
               {row.coachName || row.displayName || row.email}
@@ -405,13 +413,13 @@ export function StaffManager({
           </div>
           <div
             style={{
-              fontSize: 12,
+              fontSize: 13,
+              fontWeight: 400,
               color: 'var(--gt-text-dim)',
               marginTop: 2,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-              maxWidth: 260,
             }}
           >
             {row.email}
@@ -422,6 +430,7 @@ export function StaffManager({
     {
       key: 'status',
       header: 'Status',
+      width: 120,
       render: (row) => (
         <StatusChip status={row.status === 'suspended' ? 'suspended' : 'active'} />
       ),
@@ -429,7 +438,7 @@ export function StaffManager({
     {
       key: 'role',
       header: 'Role',
-      width: 200,
+      width: 210,
       render: (row) => {
         const isSelf = row.accountId === currentAccountId;
         // A partner is rank-0, so the rank rule alone would call it manageable.
@@ -447,7 +456,7 @@ export function StaffManager({
             <span
               title={isSelf ? 'You cannot change your own role.' : undefined}
               style={{
-                fontSize: 13,
+                fontSize: 14,
                 fontFamily: 'var(--font-heading)',
                 color: 'var(--gt-text-dim)',
               }}
@@ -496,8 +505,9 @@ export function StaffManager({
     },
     {
       key: 'actions',
-      header: '',
-      align: 'right',
+      header: 'Actions',
+      headerHidden: true,
+      actions: true,
       render: (row) => {
         const isSelf = row.accountId === currentAccountId;
         const isPartner = row.role === 'partner';
@@ -508,11 +518,25 @@ export function StaffManager({
           <div
             style={{
               display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-end',
-              gap: 4,
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              flexWrap: 'wrap',
+              gap: 8,
             }}
           >
+            {err ? (
+              <span
+                style={{
+                  fontSize: 12,
+                  color: 'var(--gt-danger)',
+                  maxWidth: 220,
+                  whiteSpace: 'normal',
+                  textAlign: 'right',
+                }}
+              >
+                {err}
+              </span>
+            ) : null}
             {canOverridePermissions && !isSelf && manageable && row.role !== 'super_admin' ? (
               <Button
                 variant="ghost"
@@ -524,12 +548,14 @@ export function StaffManager({
               </Button>
             ) : null}
             {isSelf ? (
-              <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>You</span>
+              <span style={{ fontSize: 13, color: 'var(--gt-text-faint)' }}>
+                This is you
+              </span>
             ) : isPartner ? (
               <PartnersLink align="right" />
             ) : !manageable ? (
-              <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                Managed by super admin
+              <span style={{ fontSize: 13, color: 'var(--gt-text-faint)' }}>
+                Managed by a super admin
               </span>
             ) : row.role === 'coach' ? (
               // Revoking a coach ends assignments/plans — go through the
@@ -552,11 +578,6 @@ export function StaffManager({
                 onConfirm={() => revoke(row.accountId)}
               />
             )}
-            {err ? (
-              <span style={{ fontSize: 12, color: 'var(--gt-danger)', maxWidth: 220 }}>
-                {err}
-              </span>
-            ) : null}
           </div>
         );
       },
@@ -566,11 +587,11 @@ export function StaffManager({
   return (
     <div style={{ maxWidth: 980 }}>
       <PageHeader
-        title="Staff & roles"
-        subtitle="Grant, change, or revoke staff access. Revoking a role also ends every live session for that account immediately."
+        title="Staff and roles"
+        subtitle="Give someone access, change what they do, or take it away. Taking a role away also signs that account out everywhere, straight away."
         action={
           <Button variant="primary" onClick={() => setGrantOpen(true)}>
-            Grant role
+            Grant a role
           </Button>
         }
       />
@@ -579,7 +600,14 @@ export function StaffManager({
         columns={columns}
         rows={staff}
         rowKey={(r) => r.accountId}
-        empty="No staff yet. Grant a role to an existing account to get started."
+        caption="Staff and roles"
+        emptyTitle="No staff yet"
+        emptyDescription="Give an existing account a role to get started."
+        emptyAction={
+          <Button variant="ghost" size="sm" onClick={() => setGrantOpen(true)}>
+            Grant a role
+          </Button>
+        }
       />
 
       <GrantRoleModal
@@ -721,30 +749,88 @@ function PermissionsModal({
 
   const overrideCount =
     payload?.permissions.filter((p) => p.override != null).length ?? 0;
+  // Thirty-odd lines is a list you read, not a list you scan. Showing only the
+  // hand-set ones is how an operator answers "what is different about this
+  // person" without reading all of it. Off unless there is something to see.
+  const [changedOnly, setChangedOnly] = useState(false);
+  useEffect(() => {
+    if (!open) setChangedOnly(false);
+  }, [open]);
+
+  const visible = (payload?.permissions ?? []).filter(
+    (p) => !changedOnly || p.override != null,
+  );
+  const groups = groupPermissions(visible);
 
   return (
     <Modal
       open={open}
       onClose={onClose}
       title="Permissions"
-      width={560}
+      width={580}
       footer={
         <Button variant="ghost" onClick={onClose}>
           Done
         </Button>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div>
-          <p style={{ fontSize: 14, color: 'var(--gt-text)', margin: 0 }}>
+          <p
+            style={{
+              fontFamily: 'var(--font-heading)',
+              fontWeight: 600,
+              fontSize: 15,
+              color: 'var(--gt-text)',
+              margin: 0,
+            }}
+          >
             {target?.coachName || target?.displayName || target?.email}
           </p>
-          <p style={{ fontSize: 12, color: 'var(--gt-text-dim)', margin: '4px 0 0' }}>
-            {target ? staffRoleLabel(target.role) : ''} · effective ={' '}
-            <strong style={{ color: 'var(--gt-text)' }}>preset</strong> + grants − denials
-            {overrideCount > 0 ? ` · ${overrideCount} override${overrideCount === 1 ? '' : 's'}` : ''}
+          <p style={{ fontSize: 13, color: 'var(--gt-text-dim)', margin: '4px 0 0' }}>
+            {target ? staffRoleLabel(target.role) : ''}. Their role decides this list;
+            anything you change here sits on top of it.
           </p>
         </div>
+
+        {/* The exception, stated up front. A screen of identical rows never
+            told anyone that two of them had been set by hand. */}
+        {!loading && payload && !payload.locked ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              flexWrap: 'wrap',
+              padding: '10px 12px',
+              borderRadius: 'var(--gt-radius-sm)',
+              border:
+                overrideCount > 0
+                  ? '1px solid color-mix(in srgb, var(--gt-warning) 32%, transparent)'
+                  : '1px solid var(--gt-border)',
+              background:
+                overrideCount > 0 ? 'var(--gt-warning-weak)' : 'var(--gt-surface-sunken)',
+            }}
+          >
+            <span style={{ fontSize: 13, color: 'var(--gt-text)' }}>
+              {overrideCount === 0
+                ? 'Nothing changed by hand. This person has exactly what their role gives them.'
+                : `${overrideCount} ${
+                    overrideCount === 1 ? 'permission is' : 'permissions are'
+                  } set by hand, not by their role.`}
+            </span>
+            {overrideCount > 0 ? (
+              <FilterPill
+                tone="neutral"
+                selected={changedOnly}
+                onClick={() => setChangedOnly((v) => !v)}
+              >
+                Only these
+              </FilterPill>
+            ) : null}
+          </div>
+        ) : null}
 
         {loading ? (
           // Shaped like the list it is about to become, so the panel doesn't
@@ -762,7 +848,7 @@ function PermissionsModal({
                   alignItems: 'center',
                   gap: 10,
                   padding: '14px 10px',
-                  borderRadius: 8,
+                  borderRadius: 'var(--gt-radius-sm)',
                   border: '1px solid var(--gt-border)',
                 }}
               >
@@ -775,28 +861,40 @@ function PermissionsModal({
             ))}
           </div>
         ) : payload ? (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 6,
-              maxHeight: 420,
-              overflowY: 'auto',
-            }}
-          >
+          <div style={{ maxHeight: 440, overflowY: 'auto', margin: '0 -4px', padding: '0 4px' }}>
             {payload.locked ? (
-              <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                A super admin holds every permission and cannot be overridden.
+              <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                A super admin already holds everything, so there is nothing to change here.
               </div>
             ) : null}
-            {payload.permissions.map((row) => (
-              <PermissionControl
-                key={row.key}
-                row={row}
-                busy={busyKey === row.key}
-                disabled={payload.locked || (busyKey != null && busyKey !== row.key)}
-                onChange={(allow) => void setOverride(row.key, allow)}
-              />
+            {groups.map((group) => (
+              <section key={group.title} style={{ marginBottom: 18 }}>
+                <h4
+                  style={{
+                    fontFamily: 'var(--font-heading)',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: 'var(--gt-text-faint)',
+                    margin: '0 0 6px',
+                  }}
+                >
+                  {group.title}
+                </h4>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  {group.rows.map((row, i) => (
+                    <PermissionControl
+                      key={row.key}
+                      row={row}
+                      first={i === 0}
+                      busy={busyKey === row.key}
+                      disabled={payload.locked || (busyKey != null && busyKey !== row.key)}
+                      onChange={(allow) => void setOverride(row.key, allow)}
+                    />
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         ) : null}
@@ -808,27 +906,110 @@ function PermissionsModal({
 }
 
 /**
+ * The permission list, in the order an operator thinks about the job rather
+ * than the order the keys happen to be declared in. Anything not named here
+ * still appears, under "Everything else", so a newly added permission can never
+ * silently vanish from the editor.
+ */
+const PERMISSION_GROUPS: readonly { title: string; keys: readonly Permission[] }[] = [
+  {
+    title: 'Members',
+    keys: [
+      'members.read',
+      'members.suspend',
+      'members.manage_credentials',
+      'subscription.override',
+    ],
+  },
+  {
+    title: 'Coaching',
+    keys: [
+      'coach.assign',
+      'coach.application.review',
+      'coach.user.read',
+      'coach.message.user',
+      'coach.wallet.read',
+      'client.tier_grant',
+      'content.video.own',
+    ],
+  },
+  {
+    title: 'Support',
+    keys: ['support.thread.read', 'support.thread.reply', 'broadcast.send'],
+  },
+  {
+    title: 'Money',
+    keys: [
+      'payments.review',
+      'payouts.review',
+      'promo.manage',
+      'pricing.manage',
+      'wallet.manage',
+    ],
+  },
+  {
+    title: 'Content',
+    keys: ['content.manage', 'catalog.manage', 'moderation.manage', 'gamification.manage'],
+  },
+  {
+    title: 'Meals and gyms',
+    keys: ['meals.own', 'orders.fulfill', 'orders.review', 'partners.manage', 'gyms.manage'],
+  },
+  {
+    title: 'Access and insight',
+    keys: ['roles.grant', 'permissions.override', 'audit.read', 'analytics.read'],
+  },
+];
+
+/** Buckets the payload rows into {@link PERMISSION_GROUPS}, dropping nothing. */
+function groupPermissions(
+  rows: readonly PermissionRow[],
+): { title: string; rows: PermissionRow[] }[] {
+  const byKey = new Map(rows.map((r) => [r.key, r]));
+  const taken = new Set<Permission>();
+  const out: { title: string; rows: PermissionRow[] }[] = [];
+
+  for (const group of PERMISSION_GROUPS) {
+    const picked: PermissionRow[] = [];
+    for (const key of group.keys) {
+      const row = byKey.get(key);
+      if (!row) continue;
+      picked.push(row);
+      taken.add(key);
+    }
+    if (picked.length > 0) out.push({ title: group.title, rows: picked });
+  }
+
+  const rest = rows.filter((r) => !taken.has(r.key));
+  if (rest.length > 0) out.push({ title: 'Everything else', rows: rest });
+  return out;
+}
+
+/**
  * One permission line: label + description, the effective state, and a three-way
  * Default / Grant / Deny selector. "Default" clears the override (revert to
  * preset); Grant/Deny write an explicit allow/deny. The currently selected mode
  * is derived from `row.override` (null → Default).
  *
- * A badge here marks the ONE thing worth finding in a list of thirty: a row
- * whose access was set by hand instead of by the role. Every row used to wear an
- * On/Off badge, which is the state the selector beside it already spells out —
- * thirty badges shouting equally, so the two that had actually been changed
- * disappeared into them. On/Off is now quiet text, and "Overridden" is the badge.
+ * Thirty rows that all look the same is a list where nothing is findable. The
+ * ordinary row is therefore as plain as a row can be — a line of text and a
+ * hairline — and the rare row whose access was set by hand carries the only
+ * decoration in the list: a wash, an edge and a badge. That is the whole point
+ * of the panel, so it is the only thing allowed to draw the eye.
  *
  * The selector is the shared FilterPill, so its look, its 44px target and its
  * pressed state come from the same place as every other segmented control.
  */
 function PermissionControl({
   row,
+  first,
   busy,
   disabled,
   onChange,
 }: {
   row: PermissionRow;
+  /** Suppresses the separator on the first row of a group. */
+  first: boolean;
   busy: boolean;
   disabled: boolean;
   onChange: (allow: boolean | null) => void;
@@ -836,6 +1017,7 @@ function PermissionControl({
   const meta = PERMISSION_META[row.key];
   const mode: 'default' | 'allow' | 'deny' =
     row.override === 'allow' ? 'allow' : row.override === 'deny' ? 'deny' : 'default';
+  const overridden = row.override != null;
 
   return (
     <div
@@ -843,10 +1025,16 @@ function PermissionControl({
         display: 'flex',
         alignItems: 'center',
         gap: 10,
-        padding: '8px 10px',
-        borderRadius: 8,
-        border: '1px solid var(--gt-border)',
-        background: row.override != null ? 'var(--gt-surface-sunken)' : 'transparent',
+        padding: overridden ? '10px 12px' : '10px 2px',
+        // Ordinary rows are just lines of text separated by a hairline. Only a
+        // hand-set one gets a box, a wash and a badge, so the two that were
+        // changed stand out from the thirty that were not.
+        borderTop: first ? 'none' : '1px solid var(--gt-border)',
+        borderRadius: overridden ? 'var(--gt-radius-sm)' : 0,
+        boxShadow: overridden
+          ? 'inset 2px 0 0 0 var(--gt-warning)'
+          : undefined,
+        background: overridden ? 'var(--gt-warning-weak)' : 'transparent',
       }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -855,7 +1043,7 @@ function PermissionControl({
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            fontSize: 13,
+            fontSize: 14,
             fontFamily: 'var(--font-heading)',
             fontWeight: 600,
           }}
@@ -876,15 +1064,15 @@ function PermissionControl({
               letterSpacing: '0.04em',
               textTransform: 'uppercase',
               flexShrink: 0,
-              color: row.effective ? 'var(--gt-success)' : 'var(--gt-text-dim)',
+              color: row.effective ? 'var(--gt-success)' : 'var(--gt-text-faint)',
             }}
           >
             {row.effective ? 'On' : 'Off'}
           </span>
-          {row.override != null ? <Badge tone="warning">Overridden</Badge> : null}
+          {overridden ? <Badge tone="warning">Set by hand</Badge> : null}
         </div>
-        <div style={{ fontSize: 11, color: 'var(--gt-text-dim)', marginTop: 2 }}>
-          {meta?.desc ?? row.key} · preset {row.preset ? 'grants' : 'denies'} this
+        <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 3, lineHeight: 1.45 }}>
+          {meta?.desc ?? row.key}
         </div>
       </div>
       <div
@@ -931,11 +1119,13 @@ interface OffboardCounts {
   walletBalances: { currency: string; amountMinor: number }[];
 }
 
-/** Formats a minor-unit balance line ("NPR 12,300 · USD 45"). */
+/**
+ * Formats a minor-unit balance line ("NPR 12,300 · $45"). Goes through the
+ * console's one money formatter so an amount here is spelled exactly as the
+ * same amount is spelled in the wallet it came from.
+ */
 function formatBalances(rows: { currency: string; amountMinor: number }[]): string {
-  return rows
-    .map((r) => `${r.currency} ${Math.round(r.amountMinor / 100).toLocaleString()}`)
-    .join(' · ');
+  return rows.map((r) => formatMoney(r.amountMinor, r.currency)).join(' · ');
 }
 
 /**
@@ -1088,38 +1278,38 @@ function OffboardModal({
               flexDirection: 'column',
               gap: 8,
               padding: '12px 14px',
-              borderRadius: 10,
+              borderRadius: 'var(--gt-radius-sm)',
               border: '1px solid var(--gt-border)',
-              fontSize: 13,
+              background: 'var(--gt-surface-sunken)',
+              fontSize: 14,
             }}
           >
             <div style={{ color: 'var(--gt-text-dim)' }}>
-              Offboarding this coach will:
+              Taking this coach off will:
             </div>
-            <CountLine n={counts.activeClients} label="active client assignment" verb="end" />
-            <CountLine
-              n={counts.pendingRequests}
-              label="pending client request"
-              verb="decline"
-            />
+            <CountLine n={counts.activeClients} label="client" verb="End work with" />
+            <CountLine n={counts.pendingRequests} label="waiting request" verb="Turn down" />
             <CountLine
               n={counts.pendingTierRequests}
-              label="pending tier-up request"
-              verb="reject"
+              label="request to move up a level"
+              verb="Turn down"
             />
-            <CountLine
-              n={counts.activeWorkoutPlans}
-              label="assigned workout plan"
-              verb="archive"
-            />
-            <CountLine n={counts.activeDietPlans} label="assigned diet plan" verb="archive" />
-            <div style={{ color: 'var(--gt-text-dim)' }}>
-              deactivate any promo codes this coach owns
-            </div>
+            <CountLine n={counts.activeWorkoutPlans} label="workout plan" verb="Put away" />
+            <CountLine n={counts.activeDietPlans} label="diet plan" verb="Put away" />
+            <div style={{ color: 'var(--gt-text)' }}>Switch off their promo codes</div>
             {counts.walletBalances.length > 0 ? (
-              <div style={{ color: 'var(--gt-warning)', marginTop: 4 }}>
-                ⚠ Outstanding wallet balance: {formatBalances(counts.walletBalances)}. Settle
-                payouts before revoking (the ledger is preserved either way).
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: '10px 12px',
+                  borderRadius: 'var(--gt-radius-sm)',
+                  border: '1px solid color-mix(in srgb, var(--gt-warning) 32%, transparent)',
+                  background: 'var(--gt-warning-weak)',
+                  color: 'var(--gt-text)',
+                }}
+              >
+                They are still owed {formatBalances(counts.walletBalances)}. Pay that out
+                first if you can. The record is kept either way.
               </div>
             ) : null}
           </div>
@@ -1146,12 +1336,16 @@ function OffboardModal({
   );
 }
 
-/** One "will end 3 active client assignments" line; renders nothing when n=0. */
+/** One "End work with 3 clients" line; renders nothing when n=0. */
 function CountLine({ n, label, verb }: { n: number; label: string; verb: string }) {
   if (n <= 0) return null;
   return (
     <div style={{ color: 'var(--gt-text)' }}>
-      {verb} <strong>{n}</strong> {label}
+      {verb}{' '}
+      <strong className="gt-numeric" style={{ fontWeight: 600 }}>
+        {n}
+      </strong>{' '}
+      {label}
       {n === 1 ? '' : 's'}
     </div>
   );
@@ -1376,7 +1570,7 @@ function GrantRoleModal({
               flexDirection: 'column',
               gap: 6,
               padding: '10px 12px',
-              borderRadius: 10,
+              borderRadius: 'var(--gt-radius-sm)',
               border: '1px solid var(--gt-border-strong)',
               background: 'var(--gt-surface-sunken)',
             }}
@@ -1410,20 +1604,9 @@ function GrantRoleModal({
                     : ''}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setPicked(null)}
-                className="gt-nav-item"
-                style={{
-                  fontSize: 13,
-                  padding: '4px 10px',
-                  background: 'none',
-                  border: '1px solid var(--gt-border)',
-                  cursor: 'pointer',
-                }}
-              >
+              <Button variant="ghost" size="sm" onClick={() => setPicked(null)}>
                 Change
-              </button>
+              </Button>
             </div>
             {pickedIsSelf ? (
               <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
@@ -1515,11 +1698,13 @@ function GrantRoleModal({
                 );
                 const rowStyle: React.CSSProperties = {
                   textAlign: 'left',
-                  padding: '9px 12px',
+                  padding: '10px 12px',
+                  minHeight: 48,
                   display: 'flex',
                   alignItems: 'center',
                   gap: 10,
                   color: 'inherit',
+                  width: '100%',
                 };
                 if (isPartner) {
                   return (
@@ -1533,7 +1718,9 @@ function GrantRoleModal({
                     key={m.id}
                     type="button"
                     onClick={() => setPicked(m)}
-                    className="gt-card"
+                    // gt-inbox-row gives the hover this list never had, from the
+                    // same rule every other pickable row in the console uses.
+                    className="gt-card gt-inbox-row"
                     style={{ ...rowStyle, cursor: 'pointer' }}
                   >
                     {body}

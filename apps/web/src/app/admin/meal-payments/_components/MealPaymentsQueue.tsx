@@ -11,10 +11,21 @@ import {
   EmptyState,
   SearchField,
   StatusChip,
+  Toolbar,
 } from '@/components/console';
-import { formatDateLabel, formatDateTime, formatMoney } from '@/lib/format';
+import {
+  formatAge,
+  formatDateLabel,
+  formatDateTime,
+  formatMoney,
+  formatShortDateTime,
+} from '@/lib/format';
+import { ActionFeedback, useActionFeedback } from '../../_components/ActionFeedback';
 import { ConfirmDialog } from '../../_components/ConfirmDialog';
+import { KeyboardRows } from '../../_components/KeyboardRows';
 import { MemberLink } from '../../_components/MemberLink';
+import { QueueTabs } from '../../_components/QueueTabs';
+import { useUrlSearch, useUrlState } from '../../_components/useUrlState';
 
 export type MealPaymentStatus = 'pending' | 'approved' | 'rejected' | 'refunded';
 
@@ -65,6 +76,14 @@ const TABS: readonly { key: 'all' | MealPaymentStatus; label: string }[] = [
   { key: 'rejected', label: 'Rejected' },
   { key: 'refunded', label: 'Refunded' },
   { key: 'all', label: 'All' },
+];
+
+const TAB_KEYS: readonly (typeof TABS)[number]['key'][] = [
+  'pending',
+  'approved',
+  'rejected',
+  'refunded',
+  'all',
 ];
 
 const METHOD_LABEL: Record<MealPaymentRequestRow['method'], string> = {
@@ -137,13 +156,19 @@ export function MealPaymentsQueue({
   focusOrderId: string | null;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<(typeof TABS)[number]['key']>('pending');
-  const [query, setQuery] = useState('');
+  // Both live in the URL, so returning from a member record or a dispute lands
+  // on the same shortlist the operator built rather than on Pending, unfiltered.
+  const [tab, setTab] = useUrlState<(typeof TABS)[number]['key']>('tab', 'pending', TAB_KEYS);
+  const [query, setQuery] = useUrlSearch('q');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [refundReason, setRefundReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Outcomes that arrive after the drawer has closed. The drawer's own error
+  // line cannot carry those, and money moving in silence is how a refund gets
+  // sent twice.
+  const decided = useActionFeedback();
   // Which irreversible action is waiting on a confirm ('refund' moves money
   // back, 'reject' turns down a receipt the member says they paid).
   const [pendingAction, setPendingAction] = useState<'refund' | 'reject' | null>(null);
@@ -226,16 +251,18 @@ export function MealPaymentsQueue({
         body: JSON.stringify({ action, note: note.trim() || undefined }),
       });
       if (res.status === 409) {
-        setError('Another admin already decided this. Refreshing…');
+        // Said on the PAGE, not in the drawer: the drawer closes on the next
+        // line, so a message inside it would never be read.
         setBusy(false);
         setSelectedId(null);
+        decided.fail('Someone else decided this receipt first. The queue is up to date.');
         router.refresh();
         return;
       }
       if (res.status === 404) {
-        setError('This request no longer exists. Refreshing…');
         setBusy(false);
         setSelectedId(null);
+        decided.fail('That receipt is no longer here. The queue is up to date.');
         router.refresh();
         return;
       }
@@ -249,6 +276,13 @@ export function MealPaymentsQueue({
         return;
       }
       setBusy(false);
+      const who = selected.account.displayName || selected.account.email;
+      const amount = formatMoney(selected.amountMinor, selected.currency);
+      decided.succeed(
+        action === 'approve'
+          ? `${amount} approved for ${who}.`
+          : `${amount} from ${who} turned down.`,
+      );
       setSelectedId(null);
       router.refresh();
     } catch {
@@ -273,13 +307,18 @@ export function MealPaymentsQueue({
       );
       if (res.status === 409) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
-        setError(
-          data?.error === 'non_refundable'
-            ? 'Non-refundable. The order is in production or past cutoff, or the cycle week has begun.'
-            : 'This payment was already refunded or is no longer approved. Refreshing…',
-        );
         setBusy(false);
+        if (data?.error === 'non_refundable') {
+          // A refusal the operator has to understand and act on, so it stays
+          // in front of the receipt it is about. Closing the drawer here threw
+          // away both the explanation and everything they were looking at.
+          setError(
+            'This one cannot be refunded. The kitchen has started it, the cutoff has passed, or the plan week has already begun.',
+          );
+          return;
+        }
         setSelectedId(null);
+        decided.fail('That receipt was already refunded. Nothing was sent twice.');
         router.refresh();
         return;
       }
@@ -293,6 +332,11 @@ export function MealPaymentsQueue({
         return;
       }
       setBusy(false);
+      decided.succeed(
+        `${formatMoney(selected.amountMinor, selected.currency)} refunded to ${
+          selected.account.displayName || selected.account.email
+        }.`,
+      );
       setSelectedId(null);
       router.refresh();
     } catch {
@@ -340,30 +384,31 @@ export function MealPaymentsQueue({
     },
     {
       key: 'target',
-      header: 'Target',
+      header: 'Paying for',
       render: (r) => <span style={{ fontSize: 13 }}>{targetLabel(r.target)}</span>,
     },
     {
       key: 'amount',
       header: 'Amount',
-      width: 110,
+      width: 130,
       align: 'right',
       render: (r) => (
-        <span className="gt-numeric" style={{ fontSize: 13 }}>
-          {formatMoney(r.amountMinor, r.currency)}
-        </span>
+        <div
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}
+        >
+          <span className="gt-numeric" style={{ fontSize: 15, color: 'var(--gt-text)' }}>
+            {formatMoney(r.amountMinor, r.currency)}
+          </span>
+          <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+            {METHOD_LABEL[r.method]}
+          </span>
+        </div>
       ),
-    },
-    {
-      key: 'method',
-      header: 'Method',
-      width: 100,
-      render: (r) => <span style={{ fontSize: 13 }}>{METHOD_LABEL[r.method]}</span>,
     },
     {
       key: 'status',
       header: 'Status',
-      width: 100,
+      width: 110,
       render: (r) => (
         <StatusChip status={STATUS_CHIP[r.status].status} label={STATUS_CHIP[r.status].label} />
       ),
@@ -371,12 +416,37 @@ export function MealPaymentsQueue({
     {
       key: 'submitted',
       header: 'Submitted',
-      width: 130,
+      width: 120,
       align: 'right',
       render: (r) => (
-        <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {formatDateTime(r.createdAt)}
-        </span>
+        <div
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}
+          title={formatDateTime(r.createdAt)}
+        >
+          <span
+            className="gt-numeric"
+            style={{
+              fontSize: 13,
+              color: r.status === 'pending' ? 'var(--gt-text)' : 'var(--gt-text-dim)',
+            }}
+          >
+            {formatAge(r.createdAt)}
+          </span>
+          <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-faint)' }}>
+            {formatShortDateTime(r.createdAt)}
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: 'open',
+      header: '',
+      width: 104,
+      align: 'right',
+      render: (r) => (
+        <Button variant="ghost" size="sm" onClick={() => openRow(r)}>
+          {r.status === 'pending' ? 'Review' : 'Open'}
+        </Button>
       ),
     },
   ];
@@ -401,59 +471,51 @@ export function MealPaymentsQueue({
         </div>
       ) : null}
 
-      <div style={{ marginBottom: 16, maxWidth: 340 }}>
-        <SearchField
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search member, email or order"
-          aria-label="Search meal payments"
-        />
-      </div>
+      <Toolbar
+        left={
+          <QueueTabs
+            label="Filter meal payments by status"
+            tabs={TABS.map((t) => ({ key: t.key, label: t.label, count: tabCount(t.key) }))}
+            value={tab}
+            onChange={setTab}
+          />
+        }
+        right={
+          <div style={{ width: 300, maxWidth: '100%' }}>
+            <SearchField
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search member, email or order"
+              aria-label="Search meal payments"
+            />
+          </div>
+        }
+      />
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {TABS.map((t) => {
-          const active = tab === t.key;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              style={{
-                padding: '7px 14px',
-                borderRadius: 10,
-                cursor: 'pointer',
-                fontFamily: 'var(--font-heading)',
-                fontSize: 13,
-                fontWeight: 600,
-                background: active ? 'var(--gt-red)' : 'transparent',
-                color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
-                border: active ? '1px solid var(--gt-red)' : '1px solid var(--gt-border)',
-              }}
-            >
-              {t.label} · {tabCount(t.key)}
-            </button>
-          );
-        })}
+      <div style={{ marginBottom: 8 }}>
+        <ActionFeedback feedback={decided.feedback} reserveSpace />
       </div>
 
       {requests.length === 0 ? (
         <EmptyState
-          title="No meal payment requests yet"
-          description="Manual eSewa/Khalti receipts for meal orders and weekly subscription cycles appear here for review."
+          title="No meal payments to review"
+          description="When someone pays for an order or a weekly plan by eSewa or Khalti and uploads their receipt, it lands here."
         />
       ) : (
-        <DataTable
-          columns={columns}
-          rows={filtered}
-          rowKey={(r) => r.id}
-          onRowClick={openRow}
-          rowAriaLabel={(r) =>
-            `Review ${r.account.displayName || r.account.email}'s ${formatMoney(r.amountMinor, r.currency)} receipt`
-          }
-          empty={
-            query.trim() ? 'No receipts match that search.' : 'No requests in this status.'
-          }
-        />
+        <KeyboardRows>
+          <DataTable
+            columns={columns}
+            rows={filtered}
+            rowKey={(r) => r.id}
+            onRowClick={openRow}
+            rowAriaLabel={(r) =>
+              `Review ${r.account.displayName || r.account.email}'s ${formatMoney(r.amountMinor, r.currency)} receipt`
+            }
+            empty={
+              query.trim() ? 'No receipts match that search.' : 'Nothing in this status.'
+            }
+          />
+        </KeyboardRows>
       )}
 
       <Drawer
@@ -466,20 +528,36 @@ export function MealPaymentsQueue({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>{selected.account.email}</div>
 
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <StatusChip
-                status={STATUS_CHIP[selected.status].status}
-                label={STATUS_CHIP[selected.status].label}
-              />
-              <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-                {targetLabel(selected.target)}
+            {/* The amount is the whole decision, so it leads the panel rather
+                than sitting as one of four equal-weight facts. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <span
+                className="gt-numeric"
+                style={{
+                  fontSize: 'var(--gt-fs-display)',
+                  lineHeight: 1,
+                  color: 'var(--gt-text)',
+                }}
+              >
+                {formatMoney(selected.amountMinor, selected.currency)}
               </span>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <StatusChip
+                  status={STATUS_CHIP[selected.status].status}
+                  label={STATUS_CHIP[selected.status].label}
+                />
+                <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                  Paid by {METHOD_LABEL[selected.method]}
+                </span>
+              </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 14 }}>
-              <Row label="Amount">{formatMoney(selected.amountMinor, selected.currency)}</Row>
-              <Row label="Method">{METHOD_LABEL[selected.method]}</Row>
+              <Row label="Paying for">{targetLabel(selected.target)}</Row>
               <Row label="Submitted">{formatDateTime(selected.createdAt)}</Row>
+              {selected.status === 'pending' ? (
+                <Row label="Waiting">{formatAge(selected.createdAt)}</Row>
+              ) : null}
               {selected.decidedAt ? (
                 <Row label="Decided">{formatDateTime(selected.decidedAt)}</Row>
               ) : null}
@@ -535,6 +613,7 @@ export function MealPaymentsQueue({
               >
                 <textarea
                   className="gt-input"
+                  aria-label="Note to the member, optional"
                   placeholder="Note (optional, shown to the member)"
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
@@ -544,13 +623,34 @@ export function MealPaymentsQueue({
                   style={{ resize: 'vertical', fontFamily: 'inherit' }}
                 />
                 {receiptBad ? (
-                  <div style={{ fontSize: 12, color: 'var(--gt-warning)' }}>
-                    Approve is disabled until the receipt loads. Reload the queue and try again.
+                  <div
+                    style={{
+                      border: '1px solid color-mix(in srgb, var(--gt-warning) 40%, transparent)',
+                      background: 'var(--gt-warning-weak)',
+                      borderRadius: 'var(--gt-radius-sm)',
+                      padding: '10px 12px',
+                      fontSize: 13,
+                      lineHeight: 1.45,
+                      color: 'var(--gt-text)',
+                    }}
+                  >
+                    You cannot approve until the receipt loads. Reload the queue and try
+                    again.
                   </div>
                 ) : null}
-                <div style={{ display: 'flex', gap: 10 }}>
+                {/* Approve is the primary and sits on the right; reject stays
+                    outlined until hovered so it never reads as the expected
+                    answer. */}
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 10,
+                    justifyContent: 'flex-end',
+                    flexWrap: 'wrap',
+                  }}
+                >
                   <Button variant="danger" disabled={busy} onClick={() => setPendingAction('reject')}>
-                    {busy ? 'Saving…' : 'Reject'}
+                    Reject
                   </Button>
                   <Button
                     variant="primary"
@@ -579,7 +679,8 @@ export function MealPaymentsQueue({
                 </div>
                 <textarea
                   className="gt-input"
-                  placeholder="Refund reason (optional, audited)"
+                  aria-label="Reason for the refund, optional"
+                  placeholder="Refund reason (optional, kept on the record)"
                   value={refundReason}
                   onChange={(e) => setRefundReason(e.target.value)}
                   rows={2}
@@ -587,7 +688,7 @@ export function MealPaymentsQueue({
                   disabled={busy}
                   style={{ resize: 'vertical', fontFamily: 'inherit' }}
                 />
-                <div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   {/* Money leaving the business never fires on one click — the
                       confirm names the member and the exact amount (FIX 5). */}
                   <Button variant="danger" disabled={busy} onClick={() => setPendingAction('refund')}>
@@ -597,7 +698,22 @@ export function MealPaymentsQueue({
               </div>
             ) : null}
 
-            {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div> : null}
+            {error ? (
+              <div
+                role="alert"
+                style={{
+                  border: '1px solid color-mix(in srgb, var(--gt-danger) 38%, transparent)',
+                  background: 'var(--gt-danger-weak)',
+                  borderRadius: 'var(--gt-radius-sm)',
+                  padding: '10px 12px',
+                  color: 'var(--gt-text)',
+                  fontSize: 13,
+                  lineHeight: 1.45,
+                }}
+              >
+                {error}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </Drawer>

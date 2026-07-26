@@ -110,16 +110,21 @@ export async function loadSupportThreads(
   filter: SupportThreadListFilter = {},
 ): Promise<SupportThreadRow[]> {
   const db = getDb();
-  const cm2 = alias(coachMessages, 'cm2');
   const assignee = alias(accounts, 'support_thread_assignee');
 
+  // The self-join alias is written out by hand rather than through drizzle's
+  // `alias()`: inside a raw `sql` template an aliased table renders as its
+  // ALIAS ONLY, so `from ${alias(coachMessages, 'cm2')}` emitted `from "cm2"`,
+  // a relation that does not exist, and every load of this page failed with a
+  // query error. Naming the table and its alias explicitly is the whole fix.
+  // The outer reference stays a real column so the correlation is type-checked.
   const unread = sql<number>`(
     select count(*)::int
-    from ${cm2}
-    where ${cm2.accountId} = ${coachMessages.accountId}
-      and ${cm2.kind} = 'support'
-      and ${cm2.sender} = 'user'
-      and ${cm2.readByCoach} = false
+    from ${coachMessages} "cm2"
+    where "cm2"."account_id" = ${coachMessages.accountId}
+      and "cm2"."kind" = 'support'
+      and "cm2"."sender" = 'user'
+      and "cm2"."read_by_coach" = false
   )`;
 
   const rows = await db

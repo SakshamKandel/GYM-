@@ -12,16 +12,22 @@ import {
   Drawer,
   EmptyState,
   SearchField,
+  SkeletonRows,
+  Toolbar,
 } from '@/components/console';
 import {
   formatAge,
   formatDateLabel,
+  formatDateTime,
   formatMoney,
   ORDER_STATUS_LABEL,
   PAYMENT_STATUS_LABEL,
 } from '@/lib/format';
 import { ConfirmDialog } from '../../_components/ConfirmDialog';
+import { KeyboardRows } from '../../_components/KeyboardRows';
 import { MemberLink } from '../../_components/MemberLink';
+import { QueueTabs } from '../../_components/QueueTabs';
+import { useUrlSearch, useUrlState } from '../../_components/useUrlState';
 
 /**
  * Admin dispute queue (Pack E non-delivery rail / WP-8). Master/detail —
@@ -63,12 +69,13 @@ export interface DisputeRow {
 }
 
 const TABS = [
-  { key: 'live', label: 'Open + reviewing' },
-  { key: 'resolved', label: 'Resolved' },
-  { key: 'rejected', label: 'Rejected' },
-  { key: 'all', label: 'All' },
+  { key: 'live', label: 'Needs a decision' },
+  { key: 'resolved', label: 'Upheld' },
+  { key: 'rejected', label: 'Not upheld' },
+  { key: 'all', label: 'Everything' },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
+const TAB_KEYS: readonly TabKey[] = ['live', 'resolved', 'rejected', 'all'];
 
 const REASON_LABEL: Record<string, string> = {
   not_delivered: 'Not delivered',
@@ -84,6 +91,32 @@ const STATUS_TONE: Record<DisputeRow['status'], 'warning' | 'info' | 'positive' 
   resolved: 'positive',
   rejected: 'critical',
 };
+
+/**
+ * The words an operator would use, not the words the column stores. `rejected`
+ * in particular was being title-cased straight out of the database onto a
+ * screen where the rest of the copy already says "not upheld" — the same
+ * outcome under two names, one of them harsher than the decision it records.
+ */
+const STATUS_LABEL: Record<DisputeRow['status'], string> = {
+  open: 'Open',
+  reviewing: 'Reviewing',
+  resolved: 'Upheld',
+  rejected: 'Not upheld',
+};
+
+/** A claim nobody has touched for this long is the thing to look at first. */
+const STALE_MS = 2 * 24 * 60 * 60 * 1000;
+
+function isWaiting(row: DisputeRow): boolean {
+  return row.status === 'open' || row.status === 'reviewing';
+}
+
+function isStale(row: DisputeRow): boolean {
+  if (!isWaiting(row)) return false;
+  const started = new Date(row.createdAt).getTime();
+  return Number.isFinite(started) && Date.now() - started > STALE_MS;
+}
 
 /** 'lunch' / 'dinner' → the words a person uses. Unknown/absent → ''. */
 function windowText(w: string): string {
@@ -117,16 +150,23 @@ export function DisputesQueue({
   canRefund: boolean;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<TabKey>('live');
+  // Kept in the URL. Deciding a dispute usually means a detour to the order or
+  // to Meal Payments to send the money back, and coming back to "Needs a
+  // decision, unfiltered" every time is how the second half of a queue gets
+  // worked twice.
+  const [tab, setTab] = useUrlState<TabKey>('tab', 'live', TAB_KEYS);
   const [rows, setRows] = useState<DisputeRow[]>(initialDisputes);
   const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useUrlSearch('q');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [resolution, setResolution] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Rejecting closes a member's complaint for good, so it takes a confirm.
   const [confirmingReject, setConfirmingReject] = useState(false);
+  // Which decision is actually in flight, so one button says "Working…" and
+  // the others just wait their turn.
+  const [busyAction, setBusyAction] = useState<'reviewing' | 'resolved' | 'rejected' | null>(null);
 
   /** Loads the given tab's rows — the server-passed prop for 'live', an
    * on-demand fetch for decided tabs (dispute volume is small: one light
@@ -194,6 +234,7 @@ export function DisputesQueue({
   async function decide(toStatus: 'reviewing' | 'resolved' | 'rejected') {
     if (!selected) return;
     setBusy(true);
+    setBusyAction(toStatus);
     setError(null);
     try {
       const res = await fetch(`/api/admin/disputes/${encodeURIComponent(selected.id)}`, {
@@ -211,6 +252,7 @@ export function DisputesQueue({
               : 'Could not save that decision. Try again.',
         );
         setBusy(false);
+        setBusyAction(null);
         setConfirmingReject(false);
         if (res.status === 409) {
           setSelectedId(null);
@@ -220,6 +262,7 @@ export function DisputesQueue({
         return;
       }
       setBusy(false);
+      setBusyAction(null);
       setConfirmingReject(false);
       setSelectedId(null);
       // Refresh the server-loaded 'live' queue (stat tiles included) AND the
@@ -230,16 +273,45 @@ export function DisputesQueue({
     } catch {
       setError('Could not reach us just now. Try again.');
       setBusy(false);
+      setBusyAction(null);
       setConfirmingReject(false);
     }
   }
 
   const columns: Column<DisputeRow>[] = [
+    // The claim is identified by the order it is about, so that leads the row
+    // at full weight with the restaurant beneath it — it used to be the
+    // smallest, dimmest thing on the line.
     {
       key: 'order',
       header: 'Order',
-      width: 110,
-      render: (r) => <span className="gt-numeric" style={{ fontSize: 13 }}>{r.orderNumber}</span>,
+      width: 150,
+      render: (r) => (
+        <div style={{ minWidth: 0 }}>
+          <div
+            className="gt-numeric"
+            style={{
+              fontSize: 15,
+              fontWeight: 600,
+              letterSpacing: '0.04em',
+              color: 'var(--gt-text)',
+            }}
+          >
+            {r.orderNumber}
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: 'var(--gt-text-dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {r.partnerName}
+          </div>
+        </div>
+      ),
     },
     {
       key: 'member',
@@ -252,7 +324,17 @@ export function DisputesQueue({
             email={r.account.email}
             canView={canViewMembers}
           />
-          <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{r.partnerName}</div>
+          <div
+            style={{
+              fontSize: 12,
+              color: 'var(--gt-text-dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {r.account.email}
+          </div>
         </div>
       ),
     },
@@ -261,12 +343,23 @@ export function DisputesQueue({
       header: 'Reason',
       render: (r) => <span style={{ fontSize: 13 }}>{REASON_LABEL[r.reason] ?? r.reason}</span>,
     },
+    // How long a member has been waiting on an answer. Past two days that stops
+    // being neutral information, so it stops looking neutral.
     {
       key: 'age',
-      header: 'Age',
-      width: 70,
+      header: 'Waiting',
+      width: 90,
+      align: 'right',
       render: (r) => (
-        <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+        <span
+          className="gt-numeric"
+          style={{
+            fontSize: 13,
+            fontWeight: isStale(r) ? 600 : undefined,
+            color: isStale(r) ? 'var(--gt-danger)' : 'var(--gt-text-dim)',
+          }}
+          title={`Reported ${formatDateTime(r.createdAt)}`}
+        >
           {formatAge(r.createdAt)}
         </span>
       ),
@@ -274,10 +367,8 @@ export function DisputesQueue({
     {
       key: 'status',
       header: 'Status',
-      width: 110,
-      render: (r) => (
-        <Badge tone={STATUS_TONE[r.status]}>{r.status[0].toUpperCase() + r.status.slice(1)}</Badge>
-      ),
+      width: 120,
+      render: (r) => <Badge tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge>,
     },
     // The row's own way into the refund, for the common case where the claim is
     // obviously good: it lands on this order's receipt in Meal Payments, which
@@ -296,15 +387,12 @@ export function DisputesQueue({
                 <Link
                   href={`/admin/meal-payments?orderId=${encodeURIComponent(r.orderId)}`}
                   title={`Refund order ${r.orderNumber}`}
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 600,
-                    fontFamily: 'var(--font-heading)',
-                    color: 'var(--gt-accent-strong)',
-                    whiteSpace: 'nowrap',
-                  }}
+                  className="gt-btn"
+                  data-variant="ghost"
+                  data-size="sm"
+                  style={{ textDecoration: 'none', whiteSpace: 'nowrap' }}
                 >
-                  Refund →
+                  Refund
                 </Link>
               ) : null,
           },
@@ -314,63 +402,75 @@ export function DisputesQueue({
 
   return (
     <>
-      <div style={{ marginBottom: 16, maxWidth: 340 }}>
-        <SearchField
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search member, order or restaurant"
-          aria-label="Search disputes"
-        />
-      </div>
+      {/* The queue's own state is the primary filter, so it reads as a
+          segmented control rather than four look-alike buttons that had no
+          hover, no pressed state and a 30px target. */}
+      <Toolbar
+        left={
+          <QueueTabs
+            label="Which claims to show"
+            tabs={TABS}
+            value={tab}
+            onChange={setTab}
+          />
+        }
+        right={
+          <div style={{ width: 280, maxWidth: '100%' }}>
+            <SearchField
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Member, order or restaurant"
+              aria-label="Search claims"
+            />
+          </div>
+        }
+      />
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {TABS.map((t) => {
-          const active = tab === t.key;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              style={{
-                padding: '7px 14px',
-                borderRadius: 10,
-                cursor: 'pointer',
-                fontFamily: 'var(--font-heading)',
-                fontSize: 13,
-                fontWeight: 600,
-                background: active ? 'var(--gt-red)' : 'transparent',
-                color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
-                border: active ? '1px solid var(--gt-red)' : '1px solid var(--gt-border)',
-              }}
-            >
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {tab === 'live' && rows.length === 0 && !loading && !query.trim() ? (
+      {loading && rows.length === 0 ? (
+        <SkeletonRows rows={5} cols={columns.length} />
+      ) : tab === 'live' && rows.length === 0 && !query.trim() ? (
         <EmptyState
-          title="No disputes yet"
+          title="Nothing to decide"
           description="When a member reports a problem with a delivered order, it lands here for review."
         />
       ) : (
-        <DataTable
-          columns={columns}
-          rows={filtered}
-          rowKey={(r) => r.id}
-          onRowClick={openRow}
-          rowAriaLabel={(r) =>
-            `Open dispute on order ${r.orderNumber} from ${r.account.displayName || r.account.email}`
-          }
-          empty={
-            loading
-              ? 'Loading…'
-              : query.trim()
-                ? 'No disputes match that search.'
-                : 'No disputes match this view.'
-          }
-        />
+        /* Switching tabs used to replace the table with five skeleton rows,
+           so a twenty-row queue collapsed and sprang back and everything under
+           it moved twice. The rows that are already here stay put and simply
+           go quiet until the new ones arrive. No transition, so there is
+           nothing for reduced-motion to suppress. */
+        <KeyboardRows>
+          <div aria-busy={loading} style={{ opacity: loading ? 0.55 : 1 }}>
+            <DataTable
+              columns={columns}
+              rows={filtered}
+              rowKey={(r) => r.id}
+              onRowClick={openRow}
+              rowAriaLabel={(r) =>
+                `Open claim on order ${r.orderNumber} from ${r.account.displayName || r.account.email}`
+              }
+              empty={
+                query.trim() ? (
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span>No claims match “{query.trim()}”.</span>
+                    <Button variant="ghost" size="sm" onClick={() => setQuery('')}>
+                      Clear search
+                    </Button>
+                  </div>
+                ) : (
+                  'No claims in this view.'
+                )
+              }
+            />
+          </div>
+        </KeyboardRows>
       )}
 
       <Drawer
@@ -382,10 +482,17 @@ export function DisputesQueue({
         {selected ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Badge tone={STATUS_TONE[selected.status]}>
-                {selected.status[0].toUpperCase() + selected.status.slice(1)}
-              </Badge>
+              <Badge tone={STATUS_TONE[selected.status]}>{STATUS_LABEL[selected.status]}</Badge>
               <Badge tone="neutral">{REASON_LABEL[selected.reason] ?? selected.reason}</Badge>
+            </div>
+
+            <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+              Reported {formatDateTime(selected.createdAt)}
+              {isWaiting(selected)
+                ? ` · waiting ${formatAge(selected.createdAt)}`
+                : selected.decidedAt
+                  ? ` · decided ${formatDateTime(selected.decidedAt)}`
+                  : ''}
             </div>
 
             <Row label="Member">
@@ -444,7 +551,7 @@ export function DisputesQueue({
                 <div
                   style={{
                     padding: 12,
-                    borderRadius: 10,
+                    borderRadius: 'var(--gt-radius-sm)',
                     border: '1px solid var(--gt-border)',
                     background: 'var(--gt-surface-sunken)',
                     fontSize: 12,
@@ -457,11 +564,11 @@ export function DisputesQueue({
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {selected.status === 'open' ? (
                     <Button variant="ghost" size="sm" disabled={busy} onClick={() => void decide('reviewing')}>
-                      Start review
+                      {busy && busyAction === 'reviewing' ? 'Working…' : 'Start review'}
                     </Button>
                   ) : null}
                   <Button variant="primary" size="sm" disabled={busy} onClick={() => void decide('resolved')}>
-                    {busy ? 'Working…' : 'Mark resolved'}
+                    {busy && busyAction === 'resolved' ? 'Working…' : 'Uphold this claim'}
                   </Button>
                   <Button
                     variant="danger"
@@ -469,7 +576,7 @@ export function DisputesQueue({
                     disabled={busy}
                     onClick={() => setConfirmingReject(true)}
                   >
-                    {busy ? 'Working…' : 'Reject'}
+                    {busy && busyAction === 'rejected' ? 'Working…' : 'Reject claim'}
                   </Button>
                 </div>
               </div>
@@ -492,15 +599,12 @@ export function DisputesQueue({
                 {canRefund ? (
                   <Link
                     href={`/admin/meal-payments?orderId=${encodeURIComponent(selected.orderId)}`}
-                    style={{
-                      alignSelf: 'flex-start',
-                      fontSize: 13,
-                      fontWeight: 600,
-                      fontFamily: 'var(--font-heading)',
-                      color: 'var(--gt-accent-strong)',
-                    }}
+                    className="gt-btn"
+                    data-variant="primary"
+                    data-size="sm"
+                    style={{ alignSelf: 'flex-start', textDecoration: 'none' }}
                   >
-                    Refund order {selected.orderNumber} →
+                    Refund {formatMoney(selected.order.totalMinor, selected.order.currency)}
                   </Link>
                 ) : (
                   <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>

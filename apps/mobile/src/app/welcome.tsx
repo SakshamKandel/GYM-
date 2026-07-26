@@ -65,7 +65,7 @@ export default function WelcomeScreen() {
           {/* Top bar: wordmark + Skip. */}
           <Animated.View entering={nativeOnly(FadeInDown.duration(300))} style={styles.topBar}>
             <AppText variant="label" color={colors.onBlock}>
-              GYM TRACKER
+              THE GM METHOD
             </AppText>
             <Pressable
               accessibilityRole="button"

@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button, Card, TextField } from '@/components/console';
+import { Badge, Button, Card, CardHeader, TextField } from '@/components/console';
+import { formatDateTime } from '@/lib/format';
 
 /**
  * Where members send money for manual payments (`payment_settings` singleton).
@@ -73,13 +74,6 @@ function liveRails(form: FormState): string[] {
   return rails;
 }
 
-const sectionTitle = {
-  fontFamily: 'var(--font-heading)',
-  fontWeight: 600,
-  fontSize: 15,
-  marginBottom: 12,
-} as const;
-
 const grid = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
@@ -98,6 +92,18 @@ export function PayeeEditor({
   const [form, setForm] = useState<FormState>(seed);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A save that only calls router.refresh() looks exactly like a save that did
+  // nothing. This is the difference, and it clears the moment the form changes.
+  const [saved, setSaved] = useState(false);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Whether the QR link currently in the field failed to load an image.
+  const [qrBroken, setQrBroken] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+    };
+  }, []);
 
   // Re-seed whenever the saved settings change (after a save we router.refresh,
   // which re-renders with the freshly-saved row) so the form never keeps
@@ -138,6 +144,9 @@ export function PayeeEditor({
         return;
       }
       setSaving(false);
+      setSaved(true);
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaved(false), 6000);
       router.refresh();
     } catch {
       setError('Could not reach us just now. Try again.');
@@ -146,14 +155,17 @@ export function PayeeEditor({
   }
 
   function set(field: Field, value: string) {
+    setSaved(false);
+    setError(null);
+    if (field === 'qrImageUrl') setQrBroken(false);
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <Card>
-        <div style={sectionTitle}>eSewa</div>
-        <div style={grid}>
+      <Card padded={false}>
+        <CardHeader title="eSewa" />
+        <div style={{ ...grid, padding: 18 }}>
           <TextField
             label="eSewa ID"
             value={form.esewaId}
@@ -173,9 +185,9 @@ export function PayeeEditor({
         </div>
       </Card>
 
-      <Card>
-        <div style={sectionTitle}>Khalti</div>
-        <div style={grid}>
+      <Card padded={false}>
+        <CardHeader title="Khalti" />
+        <div style={{ ...grid, padding: 18 }}>
           <TextField
             label="Khalti ID"
             value={form.khaltiId}
@@ -194,9 +206,9 @@ export function PayeeEditor({
         </div>
       </Card>
 
-      <Card>
-        <div style={sectionTitle}>Bank transfer</div>
-        <div style={grid}>
+      <Card padded={false}>
+        <CardHeader title="Bank transfer" />
+        <div style={{ ...grid, padding: 18 }}>
           <TextField
             label="Bank"
             value={form.bankName}
@@ -222,9 +234,9 @@ export function PayeeEditor({
         </div>
       </Card>
 
-      <Card>
-        <div style={sectionTitle}>Extras</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <Card padded={false}>
+        <CardHeader title="Extras" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: 18 }}>
           <TextField
             label="QR image link"
             value={form.qrImageUrl}
@@ -242,44 +254,102 @@ export function PayeeEditor({
             disabled={saving}
             hint="Optional. Keep it to one short sentence."
           />
+          {/* The preview has to show what members will actually get. A link
+              that resolves to nothing used to render as a browser's broken-image
+              glyph and pass for "fine"; now it says so. */}
           {form.qrImageUrl.trim().startsWith('https://') ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={form.qrImageUrl.trim()}
-              alt="Payment QR preview"
-              style={{
-                width: 160,
-                height: 160,
-                objectFit: 'contain',
-                borderRadius: 'var(--gt-radius-sm)',
-                background: 'var(--gt-surface)',
-                border: '1px solid var(--gt-border)',
-              }}
-            />
+            qrBroken ? (
+              <div
+                style={{
+                  width: 160,
+                  minHeight: 160,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  textAlign: 'center',
+                  padding: 12,
+                  borderRadius: 'var(--gt-radius-sm)',
+                  background: 'var(--gt-surface-sunken)',
+                  border: '1px dashed color-mix(in srgb, var(--gt-danger) 40%, transparent)',
+                  color: 'var(--gt-danger)',
+                  fontSize: 12,
+                }}
+              >
+                That link does not load an image. Members would see nothing here.
+              </div>
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={form.qrImageUrl.trim()}
+                alt="Payment QR preview"
+                onError={() => setQrBroken(true)}
+                style={{
+                  width: 160,
+                  height: 160,
+                  objectFit: 'contain',
+                  borderRadius: 'var(--gt-radius-sm)',
+                  background: 'var(--gt-surface)',
+                  border: '1px solid var(--gt-border)',
+                }}
+              />
+            )
           ) : null}
         </div>
       </Card>
 
-      <Card>
-        <div style={sectionTitle}>What members see</div>
-        <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-          {rails.length > 0
-            ? `Members can pay with ${rails.join(', ')} and will see these details before they are asked for a receipt.`
-            : 'Nothing is set, so members are told that paying in the app is not available yet and are not asked to transfer anything.'}
-        </div>
-        {updatedAt ? (
-          <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 8 }}>
-            Last saved {new Date(updatedAt).toLocaleString()}
+      {/* The consequence of the form above, in the words members will read.
+          It updates as you type, so nobody has to save to find out. */}
+      <Card padded={false}>
+        <CardHeader
+          title="What members see"
+          action={
+            rails.length > 0 ? (
+              <Badge tone="positive">{rails.length === 1 ? '1 way to pay' : `${rails.length} ways to pay`}</Badge>
+            ) : (
+              <Badge tone="warning">Nobody can pay</Badge>
+            )
+          }
+        />
+        <div style={{ padding: 18 }}>
+          <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+            {rails.length > 0
+              ? `Members can pay with ${rails.join(', ')} and will see these details before they are asked for a receipt.`
+              : 'Nothing is set, so members are told that paying in the app is not available yet and are not asked to transfer anything.'}
           </div>
-        ) : null}
+          {updatedAt ? (
+            <div style={{ fontSize: 12, color: 'var(--gt-text-faint)', marginTop: 8 }}>
+              Last saved {formatDateTime(updatedAt)}
+            </div>
+          ) : null}
+        </div>
       </Card>
 
-      {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div> : null}
+      {error ? (
+        <div
+          role="alert"
+          style={{
+            padding: '12px 14px',
+            borderRadius: 'var(--gt-radius-sm)',
+            border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+            background: 'var(--gt-danger-weak)',
+            color: 'var(--gt-text)',
+            fontSize: 13,
+          }}
+        >
+          {error}
+        </div>
+      ) : null}
 
-      <div>
-        <Button variant="primary" disabled={!dirty || saving} onClick={() => void save()}>
+      {/* `dark`, not the accent: the one accent on this page belongs to the
+          price list it is named for. This is still the high-emphasis action of
+          its own section, just not the loudest thing on screen. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <Button variant="dark" disabled={!dirty || saving} onClick={() => void save()}>
           {saving ? 'Saving…' : 'Save payment details'}
         </Button>
+        <span role="status" aria-live="polite" style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+          {saving ? '' : dirty ? 'Not saved yet.' : saved ? 'Saved.' : ''}
+        </span>
       </div>
     </div>
   );

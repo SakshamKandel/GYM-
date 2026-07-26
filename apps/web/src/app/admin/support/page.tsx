@@ -59,29 +59,36 @@ export default async function AdminSupportPage() {
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Support"
-        subtitle="Every account with a support ticket. Tickets waiting on a reply come first, Elite before the rest, longest wait first. Open a thread to read, reply, assign, or resolve it."
+        subtitle="The ticket at the top is the one to answer next: waiting longest comes first, and Elite members come before the rest."
       />
 
+      {/* Four numbers, in the order an operator asks for them: what is waiting
+          on us, who is owed an answer first, how much is still open, how much
+          is done. The unread total rides along as a hint rather than taking a
+          fifth tile and squeezing every number narrower. */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
           gap: 14,
           marginBottom: 24,
         }}
       >
-        <StatTile label="Open" value={openThreads.length} />
         <StatTile
-          label="Awaiting reply"
+          label="Waiting on a reply"
           value={awaiting}
-          hint={awaiting === 0 ? 'all clear' : undefined}
+          hint={
+            awaiting === 0
+              ? 'All clear'
+              : `${totalUnread} unread ${totalUnread === 1 ? 'message' : 'messages'}`
+          }
         />
         <StatTile
           label="Elite waiting"
           value={priorityWaiting}
-          hint={priorityWaiting > 0 ? 'answer these first' : 'all clear'}
+          hint={priorityWaiting > 0 ? 'Answer these first' : 'All clear'}
         />
-        <StatTile label="Unread messages" value={totalUnread} />
+        <StatTile label="Open tickets" value={openThreads.length} />
         <StatTile label="Resolved" value={resolvedCount} />
       </div>
 

@@ -158,7 +158,7 @@ export default async function AdminWalletsPage() {
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Wallets"
-        subtitle="What each coach has earned from purchases made with their promo code, and what we still hold for each restaurant. Payouts are still sent by hand, so record every adjustment and payment here."
+        subtitle="What each coach has earned from their promo code, and what we still hold for each restaurant. Payouts are sent by hand, so record every payment and correction here."
         action={
           canManageWallets ? (
             <DownloadCsv
@@ -178,12 +178,21 @@ export default async function AdminWalletsPage() {
             marginBottom: 24,
           }}
         >
-          <StatTile label="Coaches" value={wallets.length} />
           <StatTile
-            label="With balance"
-            value={wallets.filter((w) => w.balances.length > 0).length}
+            label="Coaches owed money"
+            value={wallets.filter((w) => w.balances.length > 0).length.toLocaleString()}
+            hint="have something on their balance"
           />
-          <StatTile label="Restaurants" value={partnerWallets.length} />
+          <StatTile
+            label="Coach wallets"
+            value={wallets.length.toLocaleString()}
+            hint="open"
+          />
+          <StatTile
+            label="Restaurant wallets"
+            value={partnerWallets.length.toLocaleString()}
+            hint="open"
+          />
         </div>
       ) : null}
 

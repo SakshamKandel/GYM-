@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Badge,
   Button,
   type Column,
   ConfirmButton,
@@ -9,12 +10,17 @@ import {
   Drawer,
   EmptyState,
   SearchField,
+  SkeletonRows,
   StatTile,
   StatusChip,
+  Toolbar,
 } from '@/components/console';
 import { formatDate, formatDateLabel, formatMoney } from '@/lib/format';
 import { ConfirmDialog } from '../../_components/ConfirmDialog';
+import { KeyboardRows } from '../../_components/KeyboardRows';
 import { MemberLink } from '../../_components/MemberLink';
+import { QueueTabs } from '../../_components/QueueTabs';
+import { useUrlSearch, useUrlState } from '../../_components/useUrlState';
 
 type SubStatus = 'active' | 'paused' | 'cancelled';
 type CycleStatus = 'open' | 'awaiting_payment' | 'paid' | 'void';
@@ -52,6 +58,13 @@ const TABS: readonly { key: 'all' | SubStatus; label: string }[] = [
   { key: 'all', label: 'All' },
 ];
 
+const TAB_KEYS: readonly (typeof TABS)[number]['key'][] = [
+  'active',
+  'paused',
+  'cancelled',
+  'all',
+];
+
 const STATUS_CHIP: Record<SubStatus, { status: 'active' | 'suspended' | 'ended'; label: string }> = {
   active: { status: 'active', label: 'Active' },
   paused: { status: 'suspended', label: 'Paused' },
@@ -59,10 +72,23 @@ const STATUS_CHIP: Record<SubStatus, { status: 'active' | 'suspended' | 'ended';
 };
 
 const CYCLE_LABEL: Record<CycleStatus, string> = {
-  open: 'Open',
+  open: 'Running',
   awaiting_payment: 'Awaiting payment',
   paid: 'Paid',
-  void: 'Void',
+  void: 'Cancelled',
+};
+
+/**
+ * This week's money state, in the same toned-chip language the rest of the
+ * console uses for a status. It used to be plain 13px text in a column of other
+ * plain 13px text, so the one cell that says whether a member still owes for
+ * this week read exactly like the restaurant's name next to it.
+ */
+const CYCLE_TONE: Record<CycleStatus, 'neutral' | 'warning' | 'positive'> = {
+  open: 'neutral',
+  awaiting_payment: 'warning',
+  paid: 'positive',
+  void: 'neutral',
 };
 
 const PAYMENT_LABEL: Record<SubscriptionRow['paymentMethod'], string> = {
@@ -71,10 +97,14 @@ const PAYMENT_LABEL: Record<SubscriptionRow['paymentMethod'], string> = {
   cod: 'Cash on delivery',
 };
 
-function scheduleLabel(days: number[], window: SubscriptionRow['window']): string {
+/** `Mon Wed Fri`, always in week order, never a bare number. */
+function dayList(days: number[]): string {
   const sorted = [...days].sort((a, b) => a - b);
-  const dayStr = sorted.length ? sorted.map((d) => DAY_LABELS[d] ?? '?').join(' ') : '—';
-  return `${dayStr} · ${window === 'lunch' ? 'Lunch' : 'Dinner'}`;
+  return sorted.length ? sorted.map((d) => DAY_LABELS[d] ?? '?').join(' ') : 'No days set';
+}
+
+function scheduleLabel(days: number[], window: SubscriptionRow['window']): string {
+  return `${dayList(days)} · ${window === 'lunch' ? 'Lunch' : 'Dinner'}`;
 }
 
 function planLabel(row: SubscriptionRow): string {
@@ -102,8 +132,10 @@ export function MealSubscriptionsRoster({
   const [rows, setRows] = useState<SubscriptionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<(typeof TABS)[number]['key']>('active');
-  const [query, setQuery] = useState('');
+  // Kept in the URL so opening a member record and coming back returns to the
+  // same view rather than to Active, unfiltered.
+  const [tab, setTab] = useUrlState<(typeof TABS)[number]['key']>('tab', 'active', TAB_KEYS);
+  const [query, setQuery] = useUrlSearch('q');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -248,18 +280,27 @@ export function MealSubscriptionsRoster({
     },
     {
       key: 'partner',
-      header: 'Partner',
+      header: 'Restaurant',
       render: (r) => <span style={{ fontSize: 13 }}>{r.partner.name}</span>,
     },
     {
       key: 'schedule',
       header: 'Schedule',
-      render: (r) => <span style={{ fontSize: 13 }}>{scheduleLabel(r.daysOfWeek, r.window)}</span>,
+      render: (r) => (
+        <div style={{ minWidth: 0 }}>
+          <div className="gt-numeric" style={{ fontSize: 13, color: 'var(--gt-text)' }}>
+            {dayList(r.daysOfWeek)}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+            {r.window === 'lunch' ? 'Lunch' : 'Dinner'}
+          </div>
+        </div>
+      ),
     },
     {
       key: 'price',
-      header: 'Price/day',
-      width: 110,
+      header: 'Price a day',
+      width: 120,
       align: 'right',
       render: (r) => (
         <span className="gt-numeric" style={{ fontSize: 13 }}>
@@ -270,12 +311,19 @@ export function MealSubscriptionsRoster({
     {
       key: 'cycle',
       header: 'This week',
-      width: 150,
+      width: 170,
       render: (r) =>
         r.currentCycle ? (
-          <span style={{ fontSize: 13 }}>{CYCLE_LABEL[r.currentCycle.status]}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+            <Badge tone={CYCLE_TONE[r.currentCycle.status]}>
+              {CYCLE_LABEL[r.currentCycle.status]}
+            </Badge>
+            <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+              {formatMoney(r.currentCycle.amountMinor, r.currency)}
+            </span>
+          </div>
         ) : (
-          <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>—</span>
+          <span style={{ fontSize: 13, color: 'var(--gt-text-faint)' }}>Nothing billed yet</span>
         ),
     },
     {
@@ -314,67 +362,112 @@ export function MealSubscriptionsRoster({
         <StatTile label="Cancelled" value={counts.cancelled} />
       </div>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {TABS.map((t) => {
-            const active = tab === t.key;
-            return (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTab(t.key)}
-                style={{
-                  padding: '7px 14px',
-                  borderRadius: 10,
-                  cursor: 'pointer',
-                  fontFamily: 'var(--font-heading)',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  background: active ? 'var(--gt-red)' : 'transparent',
-                  color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
-                  border: active ? '1px solid var(--gt-red)' : '1px solid var(--gt-border)',
-                }}
-              >
-                {t.label}
-              </button>
-            );
-          })}
-        </div>
-        <div style={{ flex: '1 1 220px', maxWidth: 320 }}>
-          <SearchField
-            placeholder="Search member or partner…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+      <Toolbar
+        left={
+          <QueueTabs
+            label="Which plans to show"
+            tabs={TABS.map((t) => ({
+              key: t.key,
+              label: t.label,
+              count: t.key === 'all' ? rows.length : counts[t.key],
+            }))}
+            value={tab}
+            onChange={setTab}
           />
-        </div>
-      </div>
+        }
+        right={
+          <div style={{ width: 280, maxWidth: '100%' }}>
+            <SearchField
+              placeholder="Member or restaurant"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search meal plans"
+            />
+          </div>
+        }
+      />
 
+      {/* A failed load is a state of the page, not a stray red sentence above
+          an empty table. It says what went wrong and offers the way out. */}
       {error ? (
-        <div style={{ color: 'var(--gt-danger)', fontSize: 13, marginBottom: 12 }}>{error}</div>
+        <div
+          role="alert"
+          style={{
+            marginBottom: 16,
+            padding: '12px 14px',
+            borderRadius: 'var(--gt-radius-sm)',
+            border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+            background: 'var(--gt-danger-weak)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <span style={{ fontSize: 13, color: 'var(--gt-text)' }}>{error}</span>
+          <Button variant="ghost" size="sm" onClick={() => void load()}>
+            Try again
+          </Button>
+        </div>
       ) : null}
 
       {loading ? (
-        <div style={{ padding: 32, textAlign: 'center', color: 'var(--gt-text-dim)' }}>Loading…</div>
-      ) : rows.length === 0 ? (
+        <SkeletonRows rows={6} cols={columns.length} />
+      ) : rows.length === 0 && !error ? (
         <EmptyState
-          title="No meal subscriptions yet"
+          title="No meal plans yet"
           description="Recurring meal plans members set up in the app appear here."
         />
       ) : (
+        <KeyboardRows>
         <DataTable
           columns={columns}
           rows={filtered}
           rowKey={(r) => r.id}
           onRowClick={openRow}
-          empty="No subscriptions in this view."
+          rowAriaLabel={(r) =>
+            `Open ${r.account.displayName || r.account.email}'s plan with ${r.partner.name}`
+          }
+          empty={
+            query.trim() ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+                <span>No plans match “{query.trim()}”.</span>
+                <Button variant="ghost" size="sm" onClick={() => setQuery('')}>
+                  Clear search
+                </Button>
+              </div>
+            ) : (
+              'No plans in this view.'
+            )
+          }
         />
+        </KeyboardRows>
       )}
 
       <Drawer
         open={selected != null}
         onClose={closeDrawer}
-        title={selected ? selected.account.displayName || selected.account.email : 'Subscription'}
+        title={selected ? selected.account.displayName || selected.account.email : 'Meal plan'}
         width={460}
+        /* Pinned, so the two decisions this panel exists for stay reachable
+           without scrolling past the plan's details to find them. */
+        footer={
+          selected && selected.status !== 'cancelled' ? (
+            <>
+              {selected.status === 'active' ? (
+                <ConfirmButton label="Pause plan" onConfirm={() => void act('pause')} busy={busy} />
+              ) : (
+                <ConfirmButton label="Resume plan" onConfirm={() => void act('resume')} busy={busy} />
+              )}
+              {/* Ending someone's meal plan takes food off their week, so the
+                  confirm names the member and the schedule (FIX 5). */}
+              <Button variant="danger" disabled={busy} onClick={() => setConfirmingCancel(true)}>
+                {busy ? 'Working…' : 'Cancel plan'}
+              </Button>
+            </>
+          ) : undefined
+        }
       >
         {selected ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -388,10 +481,14 @@ export function MealSubscriptionsRoster({
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 14 }}>
-              <Row label="Partner">{selected.partner.name}</Row>
+              <Row label="Restaurant">{selected.partner.name}</Row>
               <Row label="Plan">{planLabel(selected)}</Row>
               <Row label="Schedule">{scheduleLabel(selected.daysOfWeek, selected.window)}</Row>
-              <Row label="Price/day">{formatMoney(selected.pricePerDayMinor, selected.currency)}</Row>
+              <Row label="Price a day">
+                <span className="gt-numeric">
+                  {formatMoney(selected.pricePerDayMinor, selected.currency)}
+                </span>
+              </Row>
               <Row label="Payment method">{PAYMENT_LABEL[selected.paymentMethod]}</Row>
               <Row label="Started">{formatDate(selected.startDate)}</Row>
             </div>
@@ -400,12 +497,13 @@ export function MealSubscriptionsRoster({
               <div
                 style={{
                   border: '1px solid var(--gt-border)',
-                  borderRadius: 10,
+                  borderRadius: 'var(--gt-radius-sm)',
+                  background: 'var(--gt-surface-sunken)',
                   padding: 12,
                   fontSize: 13,
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: 6,
+                  gap: 8,
                 }}
               >
                 <div
@@ -417,15 +515,26 @@ export function MealSubscriptionsRoster({
                     fontFamily: 'var(--font-heading)',
                   }}
                 >
-                  This week&apos;s billing cycle
+                  This week
                 </div>
                 <div>
-                  {formatDateLabel(selected.currentCycle.weekStart)} –{' '}
+                  {formatDateLabel(selected.currentCycle.weekStart)} to{' '}
                   {formatDateLabel(selected.currentCycle.weekEnd)}
                 </div>
-                <div>
-                  {CYCLE_LABEL[selected.currentCycle.status]} ·{' '}
-                  {formatMoney(selected.currentCycle.amountMinor, selected.currency)}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                  }}
+                >
+                  <Badge tone={CYCLE_TONE[selected.currentCycle.status]}>
+                    {CYCLE_LABEL[selected.currentCycle.status]}
+                  </Badge>
+                  <span className="gt-numeric" style={{ fontSize: 15 }}>
+                    {formatMoney(selected.currentCycle.amountMinor, selected.currency)}
+                  </span>
                 </div>
               </div>
             ) : null}
@@ -434,26 +543,9 @@ export function MealSubscriptionsRoster({
               <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{actionError}</div>
             ) : null}
 
-            {selected.status !== 'cancelled' ? (
-              <div
-                style={{
-                  paddingTop: 16,
-                  borderTop: '1px solid var(--gt-border)',
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: 10,
-                }}
-              >
-                {selected.status === 'active' ? (
-                  <ConfirmButton label="Pause plan" onConfirm={() => void act('pause')} busy={busy} />
-                ) : (
-                  <ConfirmButton label="Resume plan" onConfirm={() => void act('resume')} busy={busy} />
-                )}
-                {/* Ending someone's meal plan takes food off their week, so the
-                    confirm names the member and the schedule (FIX 5). */}
-                <Button variant="danger" disabled={busy} onClick={() => setConfirmingCancel(true)}>
-                  {busy ? 'Working…' : 'Cancel plan'}
-                </Button>
+            {selected.status === 'cancelled' ? (
+              <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                This plan has ended. It cannot be switched back on from here.
               </div>
             ) : null}
           </div>

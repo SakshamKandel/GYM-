@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { z } from 'zod';
 import {
+  Badge,
   Button,
   type Column,
   DataTable,
@@ -13,10 +14,21 @@ import {
   SearchField,
   StatusChip,
   TierChip,
+  Toolbar,
 } from '@/components/console';
-import { formatDate, formatDateTime, formatMoney } from '@/lib/format';
+import {
+  formatAge,
+  formatDate,
+  formatDateTime,
+  formatMoney,
+  formatShortDateTime,
+} from '@/lib/format';
+import { ActionFeedback, useActionFeedback } from '../../_components/ActionFeedback';
 import { ConfirmDialog } from '../../_components/ConfirmDialog';
+import { KeyboardRows } from '../../_components/KeyboardRows';
 import { MemberLink } from '../../_components/MemberLink';
+import { QueueTabs } from '../../_components/QueueTabs';
+import { useUrlSearch, useUrlState } from '../../_components/useUrlState';
 import { tierLabel } from '@/app/admin/_lib/tierLabel';
 
 export type PaymentStatus = 'pending' | 'approved' | 'rejected' | 'refunded';
@@ -70,6 +82,14 @@ const TABS: readonly { key: 'all' | PaymentStatus; label: string }[] = [
   { key: 'rejected', label: 'Rejected' },
   { key: 'refunded', label: 'Refunded' },
   { key: 'all', label: 'All' },
+];
+
+const TAB_KEYS: readonly (typeof TABS)[number]['key'][] = [
+  'pending',
+  'approved',
+  'rejected',
+  'refunded',
+  'all',
 ];
 
 const STATUS_CHIP: Record<PaymentStatus, { status: 'pending' | 'live' | 'ended'; label: string }> =
@@ -246,13 +266,24 @@ export function PaymentsQueue({
   canViewMembers: boolean;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<(typeof TABS)[number]['key']>('pending');
-  const [query, setQuery] = useState('');
+  // Tab and search live in the address bar. Clearing this queue is: filter to
+  // Pending, find the member, open the row, decide, come back for the next one
+  // — and "come back" used to mean starting the filtering again every time.
+  const [tab, setTab] = useUrlState<(typeof TABS)[number]['key']>(
+    'tab',
+    'pending',
+    TAB_KEYS,
+  );
+  const [query, setQuery] = useUrlSearch('q');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [note, setNote] = useState('');
   const [refundReason, setRefundReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Outcomes that land AFTER the drawer closes: approvals, refunds, and the
+  // race where another admin decided first. The drawer's own `error` cannot
+  // carry those — it goes away with the drawer.
+  const decided = useActionFeedback();
   // Set when the server asks for explicit confirmation of a shorten/downgrade.
   const [confirmPreview, setConfirmPreview] = useState<WindowPreview | null>(null);
   // Which irreversible action is waiting on a confirm that names it. Refund
@@ -368,9 +399,17 @@ export function PaymentsQueue({
    * over a decision that already went through.
    */
   async function runPendingAction() {
-    if (pendingAction === 'refund') await refund();
-    else if (pendingAction === 'reject') await decide('reject');
-    setPendingAction(null);
+    const closed =
+      pendingAction === 'refund'
+        ? await refund()
+        : pendingAction === 'reject'
+          ? await decide('reject')
+          : true;
+    // Only step away from the confirmation when the thing it confirmed actually
+    // happened. A refusal keeps the dialog, the amount and the name in front of
+    // the operator, with the reason on it — closing was how the same refund got
+    // attempted three times.
+    if (closed) setPendingAction(null);
   }
 
   function tabCount(key: 'all' | PaymentStatus): number {
@@ -387,8 +426,12 @@ export function PaymentsQueue({
     return counts[key];
   }
 
-  async function decide(action: 'approve' | 'reject', opts?: { confirm?: boolean }) {
-    if (!selected) return;
+  /** Resolves true when the dialog that opened it should close. */
+  async function decide(
+    action: 'approve' | 'reject',
+    opts?: { confirm?: boolean },
+  ): Promise<boolean> {
+    if (!selected) return true;
     setBusy(true);
     setError(null);
     try {
@@ -405,42 +448,55 @@ export function PaymentsQueue({
         if (data?.error === 'confirm_required' && data.preview) {
           setConfirmPreview(data.preview);
           setBusy(false);
-          return;
+          return true;
         }
-        // already_decided — another admin got here first (B13).
-        setError('Another admin already decided this. Refreshing…');
+        // already_decided — another admin got here first (B13). Reported on
+        // the PAGE, not in the drawer: the next two lines close the drawer, so
+        // an in-drawer message would be drawn and destroyed in one frame and
+        // the operator would see a row quietly change under them instead.
         setBusy(false);
         setSelectedId(null);
+        decided.fail('Someone else decided this payment first. The queue is up to date.');
         refreshAll();
-        return;
+        return true;
       }
       if (res.status === 404) {
-        setError('This request no longer exists. Refreshing…');
         setBusy(false);
         setSelectedId(null);
+        decided.fail('That payment is no longer here. The queue is up to date.');
         refreshAll();
-        return;
+        return true;
       }
       if (!res.ok) {
         setError(
           res.status === 403
             ? 'You are not allowed to review payments.'
-            : 'Could not save that decision. Try again.',
+            : 'Nothing was saved. Try again.',
         );
         setBusy(false);
-        return;
+        return false;
       }
       setBusy(false);
+      const who = selected.accountDisplayName || selected.accountEmail;
+      const amount = formatMoney(selected.amountMinor, selected.currency);
+      decided.succeed(
+        action === 'approve'
+          ? `${amount} approved for ${who}. Their plan is updated.`
+          : `${amount} from ${who} turned down. Their plan is unchanged.`,
+      );
       setSelectedId(null);
       refreshAll();
+      return true;
     } catch {
-      setError('Could not reach us just now. Try again.');
+      setError('Could not reach us just now, so nothing was saved.');
       setBusy(false);
+      return false;
     }
   }
 
-  async function refund() {
-    if (!selected) return;
+  /** Resolves true when the dialog that opened it should close. */
+  async function refund(): Promise<boolean> {
+    if (!selected) return true;
     setBusy(true);
     setError(null);
     try {
@@ -454,30 +510,47 @@ export function PaymentsQueue({
         },
       );
       if (res.status === 409) {
-        setError('This payment was already refunded or is no longer approved. Refreshing…');
         setBusy(false);
         setSelectedId(null);
+        decided.fail('That payment was already refunded. Nothing was sent twice.');
         refreshAll();
-        return;
+        return true;
       }
       if (!res.ok) {
         setError(
           res.status === 403
             ? 'You are not allowed to refund payments.'
-            : 'Could not refund this payment. Try again.',
+            : 'No money moved. Try again.',
         );
         setBusy(false);
-        return;
+        return false;
       }
       setBusy(false);
+      decided.succeed(
+        `${formatMoney(selected.amountMinor, selected.currency)} refunded to ${
+          selected.accountDisplayName || selected.accountEmail
+        }.`,
+      );
       setSelectedId(null);
       refreshAll();
+      return true;
     } catch {
-      setError('Could not reach us just now. Try again.');
+      setError('Could not reach us just now, so no money moved.');
       setBusy(false);
+      return false;
     }
   }
 
+  /**
+   * Reading order for a money queue: who, what they bought, how much (with its
+   * currency, right-aligned and tabular so a column of amounts lines up on the
+   * decimal), what state it is in, how long it has been sitting there, and the
+   * one action — always in the last cell, so it never moves between rows.
+   *
+   * The payment method rides under the amount rather than taking a column of
+   * its own: "NPR 4,500 by eSewa" is one fact, and the width it frees is what
+   * lets the waiting time and the action fit without a sideways scroll.
+   */
   const columns: Column<PaymentRequestRow>[] = [
     {
       key: 'member',
@@ -506,54 +579,49 @@ export function PaymentsQueue({
     },
     {
       key: 'tier',
-      header: 'Tier',
-      width: 100,
+      header: 'Membership',
+      width: 150,
       render: (r) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
           <TierChip tier={r.tier} />
-          <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>× {r.months}mo</span>
+          <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+            {r.months} month{r.months === 1 ? '' : 's'}
+          </span>
         </div>
       ),
     },
     {
       key: 'amount',
       header: 'Amount',
-      width: 110,
+      width: 160,
       align: 'right',
       render: (r) => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          {r.selfReportedRegion ? (
-            <span
-              title="Paid the Nepal price, but we could not confirm they are in Nepal. Check the currency on the receipt."
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                color: 'var(--gt-warning)',
-                border: '1px solid var(--gt-warning)',
-                borderRadius: 5,
-                padding: '1px 4px',
-                letterSpacing: '0.03em',
-              }}
-            >
-              NP?
-            </span>
-          ) : null}
-          <span className="gt-numeric" style={{ fontSize: 13 }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-end',
+            gap: 3,
+          }}
+        >
+          <span className="gt-numeric" style={{ fontSize: 15, color: 'var(--gt-text)' }}>
             {formatMoney(r.amountMinor, r.currency)}
           </span>
-        </span>
+          <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+            {METHOD_LABEL[r.method]}
+          </span>
+          {r.selfReportedRegion ? (
+            <span title="They paid the Nepal price, but we could not confirm they are in Nepal. Check the currency on the receipt.">
+              <Badge tone="warning">Nepal price?</Badge>
+            </span>
+          ) : null}
+        </div>
       ),
-    },
-    {
-      key: 'method',
-      header: 'Method',
-      width: 110,
-      render: (r) => <span style={{ fontSize: 13 }}>{METHOD_LABEL[r.method]}</span>,
     },
     {
       key: 'status',
       header: 'Status',
-      width: 100,
+      width: 110,
       render: (r) => (
         <StatusChip status={STATUS_CHIP[r.status].status} label={STATUS_CHIP[r.status].label} />
       ),
@@ -561,89 +629,113 @@ export function PaymentsQueue({
     {
       key: 'submitted',
       header: 'Submitted',
-      width: 130,
+      width: 120,
       align: 'right',
       render: (r) => (
-        <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {formatDateTime(r.createdAt)}
-        </span>
+        <div
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}
+          title={formatDateTime(r.createdAt)}
+        >
+          <span
+            className="gt-numeric"
+            style={{
+              fontSize: 13,
+              color: r.status === 'pending' ? 'var(--gt-text)' : 'var(--gt-text-dim)',
+            }}
+          >
+            {formatAge(r.createdAt)}
+          </span>
+          <span
+            className="gt-numeric"
+            style={{ fontSize: 12, color: 'var(--gt-text-faint)' }}
+          >
+            {formatShortDateTime(r.createdAt)}
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: 'open',
+      header: '',
+      width: 104,
+      align: 'right',
+      render: (r) => (
+        <Button variant="ghost" size="sm" onClick={() => openRow(r)}>
+          {r.status === 'pending' ? 'Review' : 'Open'}
+        </Button>
       ),
     },
   ];
 
   return (
     <>
-      <div style={{ marginBottom: 16 }}>
-        <SearchField
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by member name or email"
-          aria-label="Search payments by member"
-          style={{ maxWidth: 320 }}
-        />
-        {searchActive ? (
-          <div
-            aria-live="polite"
-            style={{
-              marginTop: 6,
-              fontSize: 12,
-              color: searchError ? 'var(--gt-danger)' : 'var(--gt-text-dim)',
-            }}
-          >
-            {searchError
-              ? searchError
-              : searching
-                ? 'Searching every payment…'
-                : `Searched every payment · ${activeRows.length} match${activeRows.length === 1 ? '' : 'es'}.`}
+      <Toolbar
+        left={
+          <QueueTabs
+            label="Filter payments by status"
+            tabs={TABS.map((t) => ({ key: t.key, label: t.label, count: tabCount(t.key) }))}
+            value={tab}
+            onChange={setTab}
+          />
+        }
+        right={
+          <div style={{ width: 300, maxWidth: '100%' }}>
+            <SearchField
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by member name or email"
+              aria-label="Search payments by member"
+            />
+            {searchActive ? (
+              <div
+                aria-live="polite"
+                style={{
+                  marginTop: 6,
+                  fontSize: 12,
+                  color: searchError ? 'var(--gt-danger)' : 'var(--gt-text-dim)',
+                }}
+              >
+                {searchError
+                  ? searchError
+                  : searching
+                    ? 'Looking through every payment…'
+                    : `${activeRows.length} match${activeRows.length === 1 ? '' : 'es'} in every payment we hold.`}
+              </div>
+            ) : null}
           </div>
-        ) : null}
-      </div>
+        }
+      />
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        {TABS.map((t) => {
-          const active = tab === t.key;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              style={{
-                padding: '7px 14px',
-                borderRadius: 10,
-                cursor: 'pointer',
-                fontFamily: 'var(--font-heading)',
-                fontSize: 13,
-                fontWeight: 600,
-                background: active ? 'var(--gt-red)' : 'transparent',
-                color: active ? 'var(--gt-accent-ink)' : 'var(--gt-text)',
-                border: active ? '1px solid var(--gt-red)' : '1px solid var(--gt-border)',
-              }}
-            >
-              {t.label} · {tabCount(t.key)}
-            </button>
-          );
-        })}
+      {/* Keeps its line whether or not there is anything to report, so a
+          decision landing here cannot shove the queue down a row. */}
+      <div style={{ marginBottom: 8 }}>
+        <ActionFeedback feedback={decided.feedback} reserveSpace />
       </div>
 
       {requests.length === 0 && !searchActive ? (
         <EmptyState
-          title="No payment requests yet"
-          description="Manual eSewa/Khalti/bank payments submitted from the app appear here for review."
+          title="No payments to review"
+          description="When a member pays by eSewa, Khalti or bank transfer and uploads their receipt, it lands here."
         />
       ) : (
-        <DataTable
-          columns={columns}
-          rows={filtered}
-          rowKey={(r) => r.id}
-          onRowClick={openRow}
-          empty={
-            searching
-              ? 'Searching…'
-              : searchActive
-                ? 'No matching members in this status.'
-                : 'No requests in this status.'
-          }
-        />
+        <KeyboardRows>
+          <DataTable
+            columns={columns}
+            rows={filtered}
+            rowKey={(r) => r.id}
+            onRowClick={openRow}
+            rowAriaLabel={(r) =>
+              `Review ${r.accountDisplayName || r.accountEmail}'s ${formatMoney(r.amountMinor, r.currency)} payment`
+            }
+            empty={
+              searching
+                ? 'Looking…'
+                : searchActive
+                  ? 'Nobody matching that has a payment in this status.'
+                  : 'Nothing in this status.'
+            }
+          />
+        </KeyboardRows>
       )}
 
       <Drawer
@@ -656,25 +748,45 @@ export function PaymentsQueue({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>{selected.accountEmail}</div>
 
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <TierChip tier={selected.tier} />
-              <StatusChip
-                status={STATUS_CHIP[selected.status].status}
-                label={STATUS_CHIP[selected.status].label}
-              />
+            {/* The amount is the whole decision, so it leads the panel instead
+                of sitting as one of four equal-weight facts below the fold. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <span
+                className="gt-numeric"
+                style={{
+                  fontSize: 'var(--gt-fs-display)',
+                  lineHeight: 1,
+                  color: 'var(--gt-text)',
+                }}
+              >
+                {formatMoney(selected.amountMinor, selected.currency)}
+              </span>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <StatusChip
+                  status={STATUS_CHIP[selected.status].status}
+                  label={STATUS_CHIP[selected.status].label}
+                />
+                <TierChip tier={selected.tier} />
+                <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                  {selected.months} month{selected.months === 1 ? '' : 's'} by{' '}
+                  {METHOD_LABEL[selected.method]}
+                </span>
+              </div>
               {selected.selfReportedRegion ? (
-                <span
+                <div
                   style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: 'var(--gt-warning)',
-                    border: '1px solid var(--gt-warning)',
-                    borderRadius: 6,
-                    padding: '2px 6px',
+                    border: '1px solid color-mix(in srgb, var(--gt-warning) 40%, transparent)',
+                    background: 'var(--gt-warning-weak)',
+                    borderRadius: 'var(--gt-radius-sm)',
+                    padding: '10px 12px',
+                    fontSize: 13,
+                    lineHeight: 1.45,
+                    color: 'var(--gt-text)',
                   }}
                 >
-                  Nepal price, country not confirmed
-                </span>
+                  They paid the Nepal price, but we could not confirm they are in Nepal.
+                  Check the currency on the receipt before you approve.
+                </div>
               ) : null}
             </div>
 
@@ -686,12 +798,10 @@ export function PaymentsQueue({
                 fontSize: 14,
               }}
             >
-              <Row label="Duration">
-                {selected.months} month{selected.months === 1 ? '' : 's'}
-              </Row>
-              <Row label="Amount">{formatMoney(selected.amountMinor, selected.currency)}</Row>
-              <Row label="Method">{METHOD_LABEL[selected.method]}</Row>
               <Row label="Submitted">{formatDateTime(selected.createdAt)}</Row>
+              {selected.status === 'pending' ? (
+                <Row label="Waiting">{formatAge(selected.createdAt)}</Row>
+              ) : null}
             </div>
 
             {selected.note ? <Row label="Member note">{selected.note}</Row> : null}
@@ -701,7 +811,8 @@ export function PaymentsQueue({
               <div
                 style={{
                   border: '1px solid var(--gt-border)',
-                  borderRadius: 10,
+                  background: 'var(--gt-surface-sunken)',
+                  borderRadius: 'var(--gt-radius-sm)',
                   padding: 12,
                   fontSize: 13,
                   display: 'flex',
@@ -711,7 +822,7 @@ export function PaymentsQueue({
               >
                 <div
                   style={{
-                    fontSize: 12.5,
+                    fontSize: 12,
                     letterSpacing: '0.01em',
                     color: 'var(--gt-text-dim)',
                     fontFamily: 'var(--font-heading)',
@@ -793,6 +904,7 @@ export function PaymentsQueue({
               >
                 <textarea
                   className="gt-input"
+                  aria-label="Note to the member, optional"
                   placeholder="Note (optional, shown to the member)"
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
@@ -804,10 +916,12 @@ export function PaymentsQueue({
                 {confirmPreview ? (
                   <div
                     style={{
-                      border: '1px solid var(--gt-warning)',
-                      borderRadius: 10,
+                      border: '1px solid color-mix(in srgb, var(--gt-warning) 40%, transparent)',
+                      background: 'var(--gt-warning-weak)',
+                      borderRadius: 'var(--gt-radius-sm)',
                       padding: 12,
                       fontSize: 13,
+                      lineHeight: 1.45,
                       color: 'var(--gt-text)',
                     }}
                   >
@@ -816,9 +930,19 @@ export function PaymentsQueue({
                       : `This member has ${tierLabel(confirmPreview.currentTier)} with no end date. Approving replaces it with ${tierLabel(confirmPreview.resultTier)} until ${expiryLabel(confirmPreview.resultExpiresAt)}.`}
                   </div>
                 ) : null}
-                <div style={{ display: 'flex', gap: 10 }}>
+                {/* Approve is the primary and sits on the right, where the eye
+                    lands last; reject stays outlined until hovered so the
+                    turn-down never reads as the expected answer. */}
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 10,
+                    justifyContent: 'flex-end',
+                    flexWrap: 'wrap',
+                  }}
+                >
                   <Button variant="danger" disabled={busy} onClick={() => setPendingAction('reject')}>
-                    {busy ? 'Saving…' : 'Reject'}
+                    Reject
                   </Button>
                   <Button
                     variant="primary"
@@ -828,7 +952,7 @@ export function PaymentsQueue({
                     {busy
                       ? 'Saving…'
                       : confirmPreview
-                        ? 'Confirm & approve'
+                        ? 'Yes, approve anyway'
                         : 'Approve'}
                   </Button>
                 </div>
@@ -850,6 +974,7 @@ export function PaymentsQueue({
                 </div>
                 <textarea
                   className="gt-input"
+                  aria-label="Reason for the refund, optional"
                   placeholder="Refund reason (optional)"
                   value={refundReason}
                   onChange={(e) => setRefundReason(e.target.value)}
@@ -858,7 +983,7 @@ export function PaymentsQueue({
                   disabled={busy}
                   style={{ resize: 'vertical', fontFamily: 'inherit' }}
                 />
-                <div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   {/* P0-5: a refund claws back coach commission and rolls back
                       the granted tier — irreversible. The confirm now NAMES the
                       member, the amount and the tier being taken back, the same
@@ -874,7 +999,22 @@ export function PaymentsQueue({
               </div>
             ) : null}
 
-            {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div> : null}
+            {error ? (
+              <div
+                role="alert"
+                style={{
+                  border: '1px solid color-mix(in srgb, var(--gt-danger) 38%, transparent)',
+                  background: 'var(--gt-danger-weak)',
+                  borderRadius: 'var(--gt-radius-sm)',
+                  padding: '10px 12px',
+                  color: 'var(--gt-text)',
+                  fontSize: 13,
+                  lineHeight: 1.45,
+                }}
+              >
+                {error}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </Drawer>
@@ -930,7 +1070,11 @@ export function PaymentsQueue({
         busyLabel={pendingAction === 'refund' ? 'Refunding…' : 'Saving…'}
         cancelLabel="Go back"
         busy={busy}
-        onCancel={() => setPendingAction(null)}
+        error={error}
+        onCancel={() => {
+          setPendingAction(null);
+          setError(null);
+        }}
         onConfirm={() => void runPendingAction()}
       />
     </>

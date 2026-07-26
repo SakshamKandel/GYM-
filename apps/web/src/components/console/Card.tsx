@@ -1,10 +1,14 @@
 import type { CSSProperties, ReactNode } from 'react';
 
 /**
- * Base surface: charcoal card one step up from the page, hairline border,
- * 14px radius (design tokens). `padded` (default true) applies interior
- * spacing; set false when the child manages its own padding (e.g. a DataTable
+ * Base surface: one step up from the page, hairline border, soft lift, 16px
+ * radius (design tokens). `padded` (default true) applies the shared interior
+ * gutter; set false when the child manages its own padding (e.g. a DataTable
  * that needs its header flush to the edges).
+ *
+ * The gutter is --gt-gutter, the same value a CardHeader and a table cell use,
+ * so a title, a column header and a cell all sit on ONE left edge instead of
+ * the two-pixel stagger they used to.
  */
 export function Card({
   children,
@@ -20,7 +24,7 @@ export function Card({
   return (
     <div
       className={className ? `gt-card ${className}` : 'gt-card'}
-      style={{ padding: padded ? 18 : 0, ...style }}
+      style={{ padding: padded ? 'var(--gt-gutter)' : 0, ...style }}
     >
       {children}
     </div>
@@ -31,6 +35,9 @@ export function Card({
  * Optional titled header row for a Card — small uppercase label on the left,
  * optional action node on the right, hairline underline. Use inside an
  * unpadded Card or above card content.
+ *
+ * Fixed 48px so a header with an action button is the same height as one
+ * without, and every card in a grid lines up across the row.
  */
 export function CardHeader({
   title,
@@ -48,7 +55,8 @@ export function CardHeader({
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 12,
-        padding: '14px 18px',
+        minHeight: 48,
+        padding: '8px var(--gt-gutter)',
         borderBottom: '1px solid var(--gt-border)',
       }}
     >
@@ -56,17 +64,19 @@ export function CardHeader({
         style={{
           fontFamily: 'var(--font-heading)',
           fontWeight: 600,
-          fontSize: 13,
-          letterSpacing: '0.03em',
+          fontSize: 'var(--gt-fs-micro)',
+          letterSpacing: '0.04em',
           textTransform: 'uppercase',
-          color: 'var(--gt-text-dim)',
+          color: 'var(--gt-text-faint)',
           display: 'inline-flex',
           alignItems: 'center',
+          gap: 8,
+          minWidth: 0,
         }}
       >
         {title}
       </span>
-      {action ? <div>{action}</div> : null}
+      {action ? <div style={{ flexShrink: 0 }}>{action}</div> : null}
     </div>
   );
 }

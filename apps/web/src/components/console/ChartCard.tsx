@@ -83,7 +83,12 @@ export function ChartCard({
   return (
     <div
       className="gt-card"
-      style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}
+      style={{
+        padding: 'var(--gt-gutter)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 'var(--gt-space-3)',
+      }}
     >
       <div
         style={{

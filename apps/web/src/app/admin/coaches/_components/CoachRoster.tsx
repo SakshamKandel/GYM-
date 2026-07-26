@@ -2,7 +2,15 @@
 
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, useTransition } from 'react';
-import { Badge, EmptyState, SearchField, TierChip } from '@/components/console';
+import {
+  Badge,
+  Button,
+  EmptyState,
+  SearchField,
+  SkeletonBar,
+  TierChip,
+} from '@/components/console';
+import { useUrlSearch } from '../../_components/useUrlState';
 import { CoachDetail } from './CoachDetail';
 
 export type CoachTier = 'silver' | 'gold' | 'elite';
@@ -72,7 +80,9 @@ export function CoachRoster({
   canReview: boolean;
 }) {
   const router = useRouter();
-  const [query, setQuery] = useState('');
+  // In the URL, so opening a coach and coming back keeps the search that found
+  // them.
+  const [query, setQuery] = useUrlSearch('q');
   // Which coach the operator just clicked. Only meaningful while the navigation
   // that loads their clients is still in flight; once it lands, the server's
   // `selectedCoachId` matches it and this falls back out of use.
@@ -82,10 +92,15 @@ export function CoachRoster({
   function selectCoach(id: string) {
     if (id === selectedCoachId) return;
     setPendingId(id);
+    // Carry the rest of the query across. Picking a coach used to rebuild the
+    // URL from scratch, which threw away the search that found them — so the
+    // list under the cursor reset to every coach on the platform.
+    const params = new URLSearchParams(window.location.search);
+    params.set('coach', id);
     startNavigation(() => {
       // replace, not push: flipping between coaches shouldn't stack up history
       // entries the operator has to back out of one by one.
-      router.replace(`/admin/coaches?coach=${encodeURIComponent(id)}`, { scroll: false });
+      router.replace(`/admin/coaches?${params.toString()}`, { scroll: false });
     });
   }
 
@@ -116,7 +131,7 @@ export function CoachRoster({
     return (
       <EmptyState
         title="No coaches yet"
-        description="Grant an account the coach role in Roles & staff to see it here, then assign members to it."
+        description="Give an account the coach role in Staff and roles, then come back here to assign members to them."
       />
     );
   }
@@ -135,8 +150,8 @@ export function CoachRoster({
         <SearchField
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Filter coaches…"
-          aria-label="Filter coaches"
+          placeholder="Find a coach"
+          aria-label="Find a coach"
         />
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -144,26 +159,38 @@ export function CoachRoster({
             <div
               className="gt-card"
               style={{
-                padding: 20,
+                padding: '24px 20px',
                 textAlign: 'center',
-                fontSize: 13,
-                color: 'var(--gt-text-dim)',
               }}
             >
-              No coaches match &ldquo;{query.trim()}&rdquo;.
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--gt-text)' }}>
+                No coaches found
+              </div>
+              <div style={{ fontSize: 13, color: 'var(--gt-text-dim)', marginTop: 4 }}>
+                Nothing matches &ldquo;{query.trim()}&rdquo;.
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <Button variant="ghost" size="sm" onClick={() => setQuery('')}>
+                  Clear
+                </Button>
+              </div>
             </div>
           ) : (
             filtered.map((c) => {
               const isSelected = c.id === highlightId;
               const label = c.coachName || c.displayName || c.email;
               const inactive = c.isActive === false;
+              const closed = !inactive && c.acceptingClients === false;
+              const pendingTier = (tierRequestsByCoach[c.id]?.length ?? 0) > 0;
+              const full = c.capacity > 0 && c.activeClients >= c.capacity;
               return (
                 <button
                   key={c.id}
                   type="button"
                   onClick={() => selectCoach(c.id)}
                   aria-pressed={isSelected}
-                  className="gt-card"
+                  // gt-inbox-row carries the hover this list never had.
+                  className="gt-card gt-inbox-row"
                   style={{
                     textAlign: 'left',
                     cursor: 'pointer',
@@ -171,60 +198,33 @@ export function CoachRoster({
                     display: 'flex',
                     alignItems: 'center',
                     gap: 12,
+                    // The selected coach is the one thing the accent marks in
+                    // this column. Both values come from the token layer, not
+                    // from a hand-mixed rgba.
                     borderLeft: isSelected
-                      ? '3px solid var(--gt-red)'
+                      ? '3px solid var(--gt-accent)'
                       : '1px solid var(--gt-border)',
-                    background: isSelected
-                      ? 'rgba(255,59,48,0.05)'
-                      : undefined,
+                    background: isSelected ? 'var(--gt-accent-weak)' : undefined,
                     color: 'inherit',
                   }}
                 >
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        marginBottom: 4,
+                        fontFamily: 'var(--font-heading)',
+                        fontWeight: 600,
+                        fontSize: 15,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
                       }}
                     >
-                      <span
-                        style={{
-                          fontFamily: 'var(--font-heading)',
-                          fontWeight: 600,
-                          fontSize: 14,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {label}
-                      </span>
-                      {inactive ? (
-                        <Badge tone="neutral">inactive</Badge>
-                      ) : c.acceptingClients === true ? (
-                        <Badge tone="positive">open</Badge>
-                      ) : c.acceptingClients === false ? (
-                        <Badge tone="warning">closed</Badge>
-                      ) : null}
+                      {label}
                     </div>
                     <div
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        marginBottom: 2,
-                      }}
-                    >
-                      <TierChip tier={c.coachTier} />
-                      {(tierRequestsByCoach[c.id]?.length ?? 0) > 0 ? (
-                        <Badge tone="warning">tier request</Badge>
-                      ) : null}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 12,
+                        marginTop: 2,
+                        fontSize: 13,
                         color: 'var(--gt-text-dim)',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -233,19 +233,38 @@ export function CoachRoster({
                     >
                       {c.email}
                     </div>
+                    {/* Only the exceptions get a badge. A coach quietly doing
+                        their job wears nothing, so the one who needs attention
+                        is the one you see. */}
+                    <div
+                      style={{
+                        marginTop: 8,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <TierChip tier={c.coachTier} />
+                      {pendingTier ? <Badge tone="warning">Wants a review</Badge> : null}
+                      {inactive ? <Badge tone="neutral">Inactive</Badge> : null}
+                      {closed ? <Badge tone="warning">Not taking clients</Badge> : null}
+                    </div>
                   </div>
                   <span
-                    className="gt-numeric"
-                    title={`${c.activeClients} active client${c.activeClients === 1 ? '' : 's'}`}
+                    title={`${c.activeClients} of ${c.capacity} places filled`}
                     style={{
-                      fontSize: 15,
-                      color: isSelected ? 'var(--gt-text)' : 'var(--gt-text-dim)',
                       flexShrink: 0,
-                      minWidth: 20,
                       textAlign: 'right',
+                      fontSize: 13,
+                      color: full ? 'var(--gt-warning)' : 'var(--gt-text-dim)',
+                      whiteSpace: 'nowrap',
                     }}
                   >
-                    {c.activeClients}
+                    <span className="gt-numeric" style={{ fontSize: 16, color: 'var(--gt-text)' }}>
+                      {c.activeClients}
+                    </span>
+                    <span className="gt-numeric">{` / ${c.capacity}`}</span>
                   </span>
                 </button>
               );
@@ -257,12 +276,16 @@ export function CoachRoster({
       {/* Detail: selected coach's clients + assign control. Loaded on demand
           for this coach alone, so switching coaches is a server round trip. */}
       {detailLoading ? (
-        <div
-          className="gt-card"
-          aria-busy="true"
-          style={{ padding: 32, color: 'var(--gt-text-dim)', fontSize: 14 }}
-        >
-          Loading this coach&rsquo;s clients…
+        // Shaped like the pane it replaces, so nothing jumps when it lands.
+        <div className="gt-card" aria-busy="true" role="status" style={{ padding: 18 }}>
+          <span className="gt-sr-only">Loading this coach</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <SkeletonBar w="42%" h={20} />
+            <SkeletonBar w="58%" />
+            <SkeletonBar w="100%" h={64} />
+            <SkeletonBar w="100%" h={52} />
+            <SkeletonBar w="100%" h={52} />
+          </div>
         </div>
       ) : selected ? (
         <CoachDetail
@@ -275,11 +298,13 @@ export function CoachRoster({
           onChanged={() => router.refresh()}
         />
       ) : (
-        <div
-          className="gt-card"
-          style={{ padding: 32, color: 'var(--gt-text-dim)', fontSize: 14 }}
-        >
-          Select a coach to view their clients.
+        <div className="gt-card" style={{ padding: 40, textAlign: 'center' }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--gt-text)' }}>
+            Pick a coach
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--gt-text-dim)', marginTop: 6 }}>
+            Choose someone on the left to see their clients and manage them.
+          </div>
         </div>
       )}
     </div>

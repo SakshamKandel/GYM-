@@ -7,8 +7,13 @@ import type { ReactNode } from 'react';
  * never encodes a trend.
  *
  * An optional `viz` renders a small inline mini-chart on the right (sparkline,
- * bar cluster, or progress ring) — pure SVG, no deps. Server-component
- * friendly. Backward compatible: without `viz` the tile is unchanged.
+ * bar cluster, or progress ring) — pure SVG, no deps. It draws in neutral ink
+ * by default: a strip of four tiles each with an accent sparkline is four
+ * accents on one screen, which is no accent at all. Set `accent` on the single
+ * tile that answers the page's main question and it takes the colour.
+ *
+ * Server-component friendly. Backward compatible: without `viz` the tile is
+ * unchanged.
  */
 type Viz =
   | { kind: 'spark'; data: number[] }
@@ -22,6 +27,7 @@ export function StatTile({
   delta,
   viz,
   live,
+  accent = false,
 }: {
   label: string;
   value: ReactNode;
@@ -32,6 +38,11 @@ export function StatTile({
    * in near-real-time (today's order counts, active pipelines). Pure CSS,
    * reduced-motion safe. */
   live?: boolean;
+  /**
+   * Marks this as THE number on the page. Colours its mini-chart with the
+   * accent; use it on one tile per view, or none.
+   */
+  accent?: boolean;
 }) {
   const deltaColor =
     delta?.direction === 'up'
@@ -39,14 +50,14 @@ export function StatTile({
       : delta?.direction === 'down'
         ? 'var(--gt-danger)'
         : 'var(--gt-text-dim)';
-  const arrow =
-    delta?.direction === 'up' ? '▲' : delta?.direction === 'down' ? '▼' : '–';
+  const deltaWord =
+    delta?.direction === 'up' ? 'Up' : delta?.direction === 'down' ? 'Down' : 'Flat';
 
   return (
     <div
       className="gt-card"
       style={{
-        padding: 18,
+        padding: 'var(--gt-gutter)',
         display: 'flex',
         alignItems: 'flex-start',
         justifyContent: 'space-between',
@@ -56,11 +67,12 @@ export function StatTile({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
         <span
           style={{
-            fontSize: 12,
+            fontSize: 'var(--gt-fs-micro)',
             letterSpacing: '0.04em',
             textTransform: 'uppercase',
-            color: 'var(--gt-text-dim)',
+            color: 'var(--gt-text-faint)',
             fontFamily: 'var(--font-heading)',
+            fontWeight: 600,
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
@@ -71,7 +83,12 @@ export function StatTile({
         </span>
         <span
           className="gt-numeric"
-          style={{ fontSize: 34, lineHeight: 1, color: 'var(--gt-text)' }}
+          style={{
+            fontSize: 'var(--gt-fs-display)',
+            lineHeight: 1,
+            color: 'var(--gt-text)',
+            overflowWrap: 'anywhere',
+          }}
         >
           {value}
         </span>
@@ -79,40 +96,71 @@ export function StatTile({
           {delta ? (
             <span
               className="gt-numeric"
-              style={{ fontSize: 12, color: deltaColor, display: 'inline-flex', gap: 4 }}
+              style={{
+                fontSize: 'var(--gt-fs-micro)',
+                color: deltaColor,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
             >
-              <span aria-hidden>{arrow}</span>
+              <Arrow direction={delta.direction} />
+              <span className="gt-sr-only">{deltaWord}</span>
               {delta.value}
             </span>
           ) : null}
           {hint ? (
-            <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{hint}</span>
+            <span style={{ fontSize: 'var(--gt-fs-micro)', color: 'var(--gt-text-dim)' }}>
+              {hint}
+            </span>
           ) : null}
         </div>
       </div>
       {viz ? (
         <div style={{ flexShrink: 0 }}>
-          <MiniViz viz={viz} />
+          <MiniViz viz={viz} accent={accent} />
         </div>
       ) : null}
     </div>
   );
 }
 
-function MiniViz({ viz }: { viz: Viz }) {
+/** Small solid triangle in the delta's own colour — lighter than the ▲ glyph,
+ *  which sat above the baseline and was a different size in every font. */
+function Arrow({ direction }: { direction: 'up' | 'down' | 'flat' }) {
+  if (direction === 'flat') {
+    return (
+      <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden focusable="false">
+        <rect x="0" y="3.25" width="8" height="1.5" rx="0.75" fill="currentColor" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="8" height="8" viewBox="0 0 8 8" aria-hidden focusable="false">
+      <path
+        d={direction === 'up' ? 'M4 1l3.2 5.4H0.8z' : 'M4 7L0.8 1.6h6.4z'}
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function MiniViz({ viz, accent }: { viz: Viz; accent: boolean }) {
+  const ink = accent ? 'var(--gt-accent)' : 'var(--gt-text-faint)';
+
   if (viz.kind === 'ring') {
     const v = Math.min(1, Math.max(0, viz.value));
     const r = 20;
     const c = 2 * Math.PI * r;
     return (
-      <svg width="52" height="52" viewBox="0 0 52 52" aria-hidden>
+      <svg width="52" height="52" viewBox="0 0 52 52" aria-hidden focusable="false">
         <circle cx="26" cy="26" r={r} fill="none" stroke="var(--gt-surface-hover)" strokeWidth="6" />
         <circle
           cx="26"
           cy="26"
           r={r}
           fill="none"
-          stroke="var(--gt-accent)"
+          stroke={ink}
           strokeWidth="6"
           strokeLinecap="round"
           strokeDasharray={`${c * v} ${c}`}
@@ -132,7 +180,7 @@ function MiniViz({ viz }: { viz: Viz }) {
     const slot = W / n;
     const bw = slot * 0.62;
     return (
-      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden focusable="false">
         {data.map((d, i) => {
           const h = (Math.max(0, d) / max) * (H - 4);
           return (
@@ -143,7 +191,7 @@ function MiniViz({ viz }: { viz: Viz }) {
               width={bw}
               height={h}
               rx={2}
-              fill="var(--gt-accent)"
+              fill={ink}
               opacity={i === n - 1 ? 1 : 0.4}
             />
           );
@@ -161,11 +209,11 @@ function MiniViz({ viz }: { viz: Viz }) {
     return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
   });
   return (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden>
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} aria-hidden focusable="false">
       <path
         d={pts.join(' ')}
         fill="none"
-        stroke="var(--gt-accent)"
+        stroke={ink}
         strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"

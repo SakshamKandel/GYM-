@@ -104,7 +104,7 @@ export function ProgressPhotosModeration({
           style={{
             width: 60,
             height: 44,
-            borderRadius: 6,
+            borderRadius: 'var(--gt-radius-sm)',
             overflow: 'hidden',
             background: 'var(--gt-bg)',
             border: '1px solid var(--gt-border)',

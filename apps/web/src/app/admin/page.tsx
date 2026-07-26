@@ -17,6 +17,7 @@ import {
 } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
 import { billingMode } from '@/lib/billing';
+import { formatDateTime } from '@/lib/format';
 import { loadPublicCatalog } from '@/lib/publicCatalog';
 import { staffFromCookie } from '@/lib/staffSession';
 import { isImageConfigured, isVideoConfigured } from '@/lib/video';
@@ -31,6 +32,8 @@ import {
   buildSignupTrend,
   OpsTiles,
   relativeTime,
+  RevenueCard,
+  SectionTitle,
   TierBreakdown,
   WEEKDAY_LABELS,
 } from './_overview/ui';
@@ -43,12 +46,54 @@ export const dynamic = 'force-dynamic';
  * Admin overview dashboard. The layout already guards the /admin subtree, but
  * we re-resolve the principal here so hitting this route directly still fails
  * safe. All reads go through getDb (loadOverview) — no API route, no mutations.
+ *
+ * Reading order is the answer order: anything switched off, then the queues
+ * with work in them, then what is moving, then the platform snapshot. An
+ * operator who only reads the first screenful still learns whether something is
+ * wrong right now.
  */
 
-/** Humanizes an audit action key ("subscription.override" → "Subscription override"). */
-function actionLabel(action: string): string {
-  const cleaned = action.replace(/[._]/g, ' ');
+/** Humanizes a stored key ("subscription.override" → "Subscription override"). */
+function humanLabel(key: string): string {
+  const cleaned = key.replace(/[._]/g, ' ').trim();
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/** The thing an audit row acted on, in words ("payment request", not "payment_request"). */
+function targetLabel(targetType: string): string {
+  return targetType.replace(/[._]/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * A quiet "open the full list" link. Reuses the .gt-inbox-row hover so the
+ * control actually reacts to a pointer — an inline link with no hover state was
+ * the one interactive element on this page that looked like static text.
+ */
+function SeeAll({ href, label }: { href: string; label: string }) {
+  return (
+    <Link
+      href={href}
+      className="gt-inbox-row"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        minHeight: 44,
+        // Full 44px target without pushing the card header taller than its
+        // siblings — the same trick the drawer's close button uses.
+        margin: '-11px 0',
+        padding: '0 10px',
+        borderRadius: 'var(--gt-radius-sm)',
+        border: '1px solid transparent',
+        fontFamily: 'var(--font-heading)',
+        fontWeight: 600,
+        fontSize: 'var(--gt-fs-meta)',
+        color: 'var(--gt-text-dim)',
+        textDecoration: 'none',
+      }}
+    >
+      {label}
+    </Link>
+  );
 }
 
 const SIGNUP_COLUMNS: Column<RecentSignup>[] = [
@@ -59,23 +104,24 @@ const SIGNUP_COLUMNS: Column<RecentSignup>[] = [
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         <span
           style={{
-            fontWeight: 500,
+            fontFamily: 'var(--font-heading)',
+            fontWeight: 600,
             whiteSpace: 'nowrap',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
-            maxWidth: 220,
+            maxWidth: 320,
           }}
         >
-          {r.displayName || '—'}
+          {r.displayName || r.email}
         </span>
         <span
           style={{
-            fontSize: 12,
+            fontSize: 'var(--gt-fs-micro)',
             color: 'var(--gt-text-dim)',
             whiteSpace: 'nowrap',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
-            maxWidth: 220,
+            maxWidth: 320,
           }}
         >
           {r.email}
@@ -86,22 +132,25 @@ const SIGNUP_COLUMNS: Column<RecentSignup>[] = [
   {
     key: 'tier',
     header: 'Tier',
+    width: 110,
     render: (r) => <TierChip tier={r.tier} />,
   },
   {
     key: 'status',
     header: 'Status',
+    width: 110,
     render: (r) => <StatusChip status={r.status} />,
   },
   {
     key: 'joined',
     header: 'Joined',
     align: 'right',
+    width: 140,
     render: (r) => (
       <span
         className="gt-numeric"
         style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}
-        title={r.createdAt.toISOString()}
+        title={formatDateTime(r.createdAt)}
       >
         {relativeTime(r.createdAt)}
       </span>
@@ -158,16 +207,22 @@ async function loadConfigIssues(): Promise<string[]> {
   return issues;
 }
 
-/** Compact "what is switched off" card. Renders only when something is missing. */
+/**
+ * Compact "what is switched off" card. Renders only when something is missing,
+ * and sits above everything else: a queue can wait an hour, a platform that
+ * cannot take money cannot.
+ */
 function ConfigurationCard({ issues }: { issues: string[] }) {
   return (
-    <div style={{ marginBottom: 24 }}>
+    <section style={{ marginBottom: 24 }}>
       <Card padded={false} style={{ borderColor: 'var(--gt-warning)' }}>
         <CardHeader
-          title="Configuration"
+          title="Turned off right now"
           action={
-            <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-              {issues.length === 1 ? '1 thing is off' : `${issues.length} things are off`}
+            <span
+              style={{ fontSize: 'var(--gt-fs-micro)', color: 'var(--gt-text-dim)' }}
+            >
+              {issues.length === 1 ? '1 thing' : `${issues.length} things`}
             </span>
           }
         />
@@ -181,7 +236,7 @@ function ConfigurationCard({ issues }: { issues: string[] }) {
                 gap: 10,
                 padding: '12px 18px',
                 borderBottom: i === issues.length - 1 ? 'none' : '1px solid var(--gt-border)',
-                fontSize: 14,
+                fontSize: 'var(--gt-fs-meta)',
                 lineHeight: 1.45,
                 color: 'var(--gt-text)',
               }}
@@ -191,7 +246,7 @@ function ConfigurationCard({ issues }: { issues: string[] }) {
                 style={{
                   width: 8,
                   height: 8,
-                  borderRadius: 999,
+                  borderRadius: 'var(--gt-radius-pill)',
                   background: 'var(--gt-warning)',
                   flexShrink: 0,
                   marginTop: 6,
@@ -202,7 +257,7 @@ function ConfigurationCard({ issues }: { issues: string[] }) {
           ))}
         </ul>
       </Card>
-    </div>
+    </section>
   );
 }
 
@@ -217,14 +272,17 @@ function ActivityRow({ item, last }: { item: RecentActivity; last: boolean }) {
         padding: '12px 18px',
         borderBottom: last ? 'none' : '1px solid var(--gt-border)',
       }}
+      // The exact stamp and the record reference stay one hover away rather
+      // than putting an eight-character id in the reading line.
+      title={`${formatDateTime(item.createdAt)}${item.targetId ? ` · ${item.targetId}` : ''}`}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, color: 'var(--gt-text)' }}>
-          {actionLabel(item.action)}
+        <div style={{ fontSize: 'var(--gt-fs-meta)', color: 'var(--gt-text)' }}>
+          {humanLabel(item.action)}
         </div>
         <div
           style={{
-            fontSize: 12,
+            fontSize: 'var(--gt-fs-micro)',
             color: 'var(--gt-text-dim)',
             marginTop: 2,
             whiteSpace: 'nowrap',
@@ -232,19 +290,17 @@ function ActivityRow({ item, last }: { item: RecentActivity; last: boolean }) {
             textOverflow: 'ellipsis',
           }}
         >
-          {item.actorEmail ?? 'system'} · {item.targetType}
-          {item.targetId ? ` · ${item.targetId.slice(0, 8)}` : ''}
+          {item.actorEmail ?? 'Automatic'} · {targetLabel(item.targetType)}
         </div>
       </div>
       <span
         className="gt-numeric"
         style={{
-          fontSize: 12,
+          fontSize: 'var(--gt-fs-micro)',
           color: 'var(--gt-text-dim)',
           flexShrink: 0,
           whiteSpace: 'nowrap',
         }}
-        title={item.createdAt.toISOString()}
       >
         {relativeTime(item.createdAt)}
       </span>
@@ -304,32 +360,20 @@ function StartHere({ permissions }: { permissions: ReadonlySet<Permission> }) {
 
   return (
     <section style={{ marginBottom: 24 }}>
-      <h2
-        style={{
-          fontFamily: 'var(--font-heading)',
-          fontWeight: 600,
-          fontSize: 15,
-          letterSpacing: '0.02em',
-          color: 'var(--gt-text)',
-          marginBottom: 12,
-        }}
-      >
-        Start here
-      </h2>
+      <SectionTitle title="Start here" hint="Everything else you can work on is in the menu" />
       {items.length > 0 ? (
         <div
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
             gap: 12,
-            marginBottom: 12,
           }}
         >
           {items.map((item) => (
             <Link
               key={item.href}
               href={item.href}
-              className="gt-card"
+              className="gt-card gt-inbox-row"
               style={{
                 padding: 18,
                 display: 'flex',
@@ -343,22 +387,25 @@ function StartHere({ permissions }: { permissions: ReadonlySet<Permission> }) {
                 style={{
                   fontFamily: 'var(--font-heading)',
                   fontWeight: 600,
-                  fontSize: 15,
+                  fontSize: 'var(--gt-fs-h2)',
                   color: 'var(--gt-text)',
                 }}
               >
                 {item.label}
               </span>
-              <span style={{ fontSize: 13, color: 'var(--gt-text-dim)', lineHeight: 1.5 }}>
+              <span
+                style={{
+                  fontSize: 13,
+                  color: 'var(--gt-text-dim)',
+                  lineHeight: 1.5,
+                }}
+              >
                 {item.hint}
               </span>
             </Link>
           ))}
         </div>
       ) : null}
-      <p style={{ margin: 0, fontSize: 13, color: 'var(--gt-text-dim)' }}>
-        Everything else you can work on is in the menu.
-      </p>
     </section>
   );
 }
@@ -381,6 +428,7 @@ export default async function AdminOverviewPage() {
 
   const data = await loadOverview(perms);
   const { membership, recentActivity } = data;
+  const revenue = data.ops.revenueThisMonth;
 
   // Setup gaps are platform-wide, so they follow the same super/main-only gate
   // as the other whole-platform readouts (analytics.read).
@@ -402,7 +450,7 @@ export default async function AdminOverviewPage() {
         title="Overview"
         subtitle={
           hasReadout
-            ? 'A live snapshot of the platform: membership, coaching, and content at a glance.'
+            ? 'Anything waiting on you comes first, then what is moving, then the platform as a whole.'
             : 'The parts of the platform you look after.'
         }
       />
@@ -413,133 +461,141 @@ export default async function AdminOverviewPage() {
 
       <OpsTiles ops={data.ops} />
 
-      {membership ? (
-        <div className="gt-grid-4" style={{ marginBottom: 24 }}>
-          <StatTile
-            label="Total members"
-            value={membership.totalMembers.toLocaleString()}
-            viz={{ kind: 'bars', data: membership.tierBreakdown.map((t) => t.count) }}
-          />
-          {/* No capacity ring or percentage here: the Coach capacity gauge below
-              already reads out the same figure, and two readings of one number
-              on one screen invite the question of which is current. The tile
-              counts coaches; the gauge answers how full they are. */}
-          <StatTile
-            label="Active coaches"
-            value={membership.activeCoaches.toLocaleString()}
-          />
-          {/* No sparkline: the only daily series on this page is signups, and
-              charting it on the assignments tile labelled the signup trend as
-              assignments. Nothing tracks assignments day by day, so the tile
-              shows the count it actually has. */}
-          <StatTile
-            label="Active assignments"
-            value={membership.activeAssignments.toLocaleString()}
-            hint="coach ↔ member"
-          />
-          <StatTile
-            label="Plan videos ready"
-            value={membership.readyVideos.toLocaleString()}
-            hint="published"
-          />
-        </div>
-      ) : null}
-
-      {membership ? (
-        <div className="gt-grid-split" style={{ marginBottom: 24, alignItems: 'stretch' }}>
-          <ChartCard
-            title="Signups"
-            caption="Last 14 days"
-            data={buildSignupTrend(membership.dailySignups28)}
-          />
-          <Card>
-            <CardHeader title="Coach capacity" />
-            <div style={{ padding: '8px 4px 4px', display: 'flex', justifyContent: 'center' }}>
-              <GaugeArc
-                value={membership.coachCapacityPct}
-                caption="assignments vs. total capacity"
+      {membership || revenue ? (
+        <section style={{ marginBottom: 24 }}>
+          <SectionTitle title="Trends" />
+          {membership ? (
+            <div className="gt-grid-split" style={{ alignItems: 'stretch' }}>
+              <ChartCard
+                title="Signups"
+                caption="Last 14 days"
+                data={buildSignupTrend(membership.dailySignups28)}
               />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                {revenue ? <RevenueCard rows={revenue} /> : null}
+                <Card padded={false} style={{ flex: 1 }}>
+                  <CardHeader title="Coach capacity" />
+                  <div
+                    style={{
+                      padding: '14px 18px 18px',
+                      display: 'flex',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <GaugeArc
+                      value={membership.coachCapacityPct}
+                      caption="coach places taken"
+                    />
+                  </div>
+                </Card>
+              </div>
             </div>
-          </Card>
-        </div>
+          ) : revenue ? (
+            <div style={{ maxWidth: 360 }}>
+              <RevenueCard rows={revenue} />
+            </div>
+          ) : null}
+        </section>
       ) : null}
 
       {membership ? (
-        <div className="gt-grid-split" style={{ marginBottom: 24, alignItems: 'start' }}>
+        <section style={{ marginBottom: 24 }}>
+          <SectionTitle title="Membership" />
+
+          <div className="gt-grid-4" style={{ marginBottom: 16 }}>
+            <StatTile
+              label="Total members"
+              value={membership.totalMembers.toLocaleString()}
+              viz={{ kind: 'bars', data: membership.tierBreakdown.map((t) => t.count) }}
+            />
+            {/* No capacity ring or percentage here: the Coach capacity gauge
+                above already reads out the same figure, and two readings of one
+                number on one screen invite the question of which is current.
+                The tile counts coaches; the gauge answers how full they are. */}
+            <StatTile
+              label="Active coaches"
+              value={membership.activeCoaches.toLocaleString()}
+            />
+            {/* No sparkline: the only daily series on this page is signups, and
+                charting it on the assignments tile labelled the signup trend as
+                assignments. Nothing tracks assignments day by day, so the tile
+                shows the count it actually has. */}
+            <StatTile
+              label="Active assignments"
+              value={membership.activeAssignments.toLocaleString()}
+              hint="coach and member"
+            />
+            <StatTile
+              label="Plan videos ready"
+              value={membership.readyVideos.toLocaleString()}
+              hint="published"
+            />
+          </div>
+
+          <div className="gt-grid-split" style={{ alignItems: 'start', marginBottom: 16 }}>
+            <Card padded={false}>
+              <CardHeader title="Signups by weekday" />
+              <div style={{ padding: 18, overflowX: 'auto' }}>
+                <HeatGrid
+                  columns={WEEKDAY_LABELS}
+                  rows={buildSignupHeatmap(membership.dailySignups28)}
+                  metricLabel="signups"
+                />
+              </div>
+            </Card>
+
+            <TierBreakdown rows={membership.tierBreakdown} />
+          </div>
+
+          {/* Full width: four columns squeezed into a third of the row wrapped
+              every name onto two lines. */}
           <Card padded={false}>
-            <CardHeader title="Signups by weekday" />
-            <div style={{ padding: 18, overflowX: 'auto' }}>
-              <HeatGrid
-                columns={WEEKDAY_LABELS}
-                rows={buildSignupHeatmap(membership.dailySignups28)}
-                metricLabel="signups"
-              />
-            </div>
-          </Card>
-
-          <section>
-            <h2
-              style={{
-                fontFamily: 'var(--font-heading)',
-                fontWeight: 600,
-                fontSize: 15,
-                letterSpacing: '0.02em',
-                color: 'var(--gt-text)',
-                marginBottom: 12,
-              }}
-            >
-              Recent signups
-            </h2>
+            <CardHeader
+              title="Recent signups"
+              action={<SeeAll href="/admin/members" label="All members" />}
+            />
             <DataTable
               columns={SIGNUP_COLUMNS}
               rows={membership.recentSignups}
               rowKey={(r) => r.id}
               empty="No members have signed up yet."
             />
-          </section>
-        </div>
+          </Card>
+        </section>
       ) : null}
 
-      {membership || recentActivity ? (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-            gap: 16,
-            alignItems: 'start',
-            marginBottom: 24,
-          }}
-        >
-          {membership ? <TierBreakdown rows={membership.tierBreakdown} /> : null}
-
-          {recentActivity ? (
-            <Card padded={false}>
-              <CardHeader title="Recent activity" />
-              {recentActivity.length === 0 ? (
-                <div
-                  style={{
-                    padding: '28px 18px',
-                    textAlign: 'center',
-                    color: 'var(--gt-text-dim)',
-                    fontSize: 14,
-                  }}
-                >
-                  No staff actions logged yet.
-                </div>
-              ) : (
-                <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-                  {recentActivity.map((item, i) => (
-                    <ActivityRow
-                      key={item.id}
-                      item={item}
-                      last={i === recentActivity.length - 1}
-                    />
-                  ))}
-                </ul>
-              )}
-            </Card>
-          ) : null}
-        </div>
+      {recentActivity ? (
+        <section style={{ marginBottom: 24 }}>
+          <Card padded={false}>
+            <CardHeader
+              title="Recent staff activity"
+              action={<SeeAll href="/admin/audit" label="Full history" />}
+            />
+            {recentActivity.length === 0 ? (
+              <div
+                style={{
+                  padding: '28px 18px',
+                  textAlign: 'center',
+                  color: 'var(--gt-text-dim)',
+                  fontSize: 'var(--gt-fs-meta)',
+                }}
+              >
+                Nothing has been done by staff yet. Approvals, refunds and edits all show
+                up here.
+              </div>
+            ) : (
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                {recentActivity.map((item, i) => (
+                  <ActivityRow
+                    key={item.id}
+                    item={item}
+                    last={i === recentActivity.length - 1}
+                  />
+                ))}
+              </ul>
+            )}
+          </Card>
+        </section>
       ) : null}
     </div>
   );

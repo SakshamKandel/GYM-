@@ -13,7 +13,7 @@ import { NutritionSearch } from '@/components/marketing/nutrition/Search';
 import { NutritionTargets } from '@/components/marketing/nutrition/Targets';
 
 export const metadata: Metadata = {
-  title: 'Food: kcal & macro tracking | The GM Method',
+  title: 'Food: kcal & macro tracking',
   description:
     'Scan barcodes, search Nepali and global foods across Open Food Facts + USDA, read Nutri-Score and NOVA signals, and hit computed kcal, protein and water targets. Offline-first, no ads.',
 };

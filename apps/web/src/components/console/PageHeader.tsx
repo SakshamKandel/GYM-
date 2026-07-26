@@ -7,6 +7,11 @@ import type { ReactNode } from 'react';
  * Export); `filtersAction` renders on a second row under the title for filter
  * chips / segmented controls. All optional — server-component friendly, and
  * backward compatible with the original {title, subtitle, action} shape.
+ *
+ * The subtitle is capped at 60ch and sits directly under the title, so the
+ * answer to "what is this page for" is one short line rather than a paragraph
+ * competing with the data below it. The filter row is separated by whitespace,
+ * not by a rule: the table underneath already draws an edge.
  */
 export function PageHeader({
   title,
@@ -22,13 +27,13 @@ export function PageHeader({
   filtersAction?: ReactNode;
 }) {
   return (
-    <header style={{ marginBottom: 24 }}>
+    <header style={{ marginBottom: 'var(--gt-space-6)' }}>
       <div
         style={{
           display: 'flex',
           alignItems: 'flex-start',
           justifyContent: 'space-between',
-          gap: 16,
+          gap: 'var(--gt-space-4)',
           flexWrap: 'wrap',
         }}
       >
@@ -39,7 +44,7 @@ export function PageHeader({
               fontWeight: 600,
               fontSize: 'var(--gt-fs-h1)',
               lineHeight: 1.2,
-              letterSpacing: '-0.01em',
+              letterSpacing: '-0.015em',
             }}
           >
             {title}
@@ -49,7 +54,8 @@ export function PageHeader({
               style={{
                 margin: '6px 0 0',
                 color: 'var(--gt-text-dim)',
-                fontSize: 14,
+                fontSize: 'var(--gt-fs-meta)',
+                lineHeight: 1.5,
                 maxWidth: '60ch',
               }}
             >
@@ -58,7 +64,15 @@ export function PageHeader({
           ) : null}
         </div>
         {action || secondaryAction ? (
-          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div
+            style={{
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--gt-space-2)',
+              flexWrap: 'wrap',
+            }}
+          >
             {secondaryAction}
             {action}
           </div>
@@ -67,10 +81,10 @@ export function PageHeader({
       {filtersAction ? (
         <div
           style={{
-            marginTop: 16,
+            marginTop: 'var(--gt-space-4)',
             display: 'flex',
             alignItems: 'center',
-            gap: 10,
+            gap: 'var(--gt-space-2)',
             flexWrap: 'wrap',
           }}
         >

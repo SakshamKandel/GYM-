@@ -1,6 +1,12 @@
 'use client';
 
-import { ORDER_STATUSES, canActorAdvance, orderNumber, type OrderStatus } from '@gym/shared';
+import {
+  ORDER_STATUSES,
+  TERMINAL_ORDER_STATUSES,
+  canActorAdvance,
+  orderNumber,
+  type OrderStatus,
+} from '@gym/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
@@ -15,6 +21,7 @@ import {
   Toolbar,
 } from '@/components/console';
 import {
+  formatAge,
   formatDateLabel,
   formatMoney,
   formatShortDateTime,
@@ -27,7 +34,9 @@ import {
 } from '@/lib/format';
 import { ConfirmDialog } from '../../_components/ConfirmDialog';
 import { DownloadCsv } from '../../_components/DownloadCsv';
+import { KeyboardRows } from '../../_components/KeyboardRows';
 import { MemberLink } from '../../_components/MemberLink';
+import { QueueTabs } from '../../_components/QueueTabs';
 import type { AdminOrderRow } from '../_data';
 import { OrderTimeline } from './OrderTimeline';
 
@@ -73,6 +82,28 @@ function todayInput(): string {
   const month = `${d.getMonth() + 1}`.padStart(2, '0');
   const day = `${d.getDate()}`.padStart(2, '0');
   return `${d.getFullYear()}-${month}-${day}`;
+}
+
+const TERMINAL = new Set<OrderStatus>(TERMINAL_ORDER_STATUSES);
+
+/** The one filter that changes what this board is FOR: a live queue, or a
+ * record. Named for the work rather than for the query parameter. */
+type Scope = 'active' | 'history' | 'all';
+const SCOPES: readonly { key: Scope; label: string }[] = [
+  { key: 'active', label: 'Still moving' },
+  { key: 'history', label: 'Finished' },
+  { key: 'all', label: 'Everything' },
+];
+
+/**
+ * The one thing an operator is scanning this board for: an order whose delivery
+ * day has been and gone while the order is still moving. Nobody is coming to
+ * fix that on their own. It reads off the two fields the row already carries —
+ * no extra lookup, no change to what is fetched — and the date strings are
+ * `YYYY-MM-DD`, so a plain comparison is also a chronological one.
+ */
+function isLate(row: AdminOrderRow, today: string): boolean {
+  return !TERMINAL.has(row.status) && row.deliveryDate < today;
 }
 
 async function parseErrorCode(res: Response): Promise<string | null> {
@@ -134,11 +165,14 @@ export function OrdersOversight({
   const [date, setDate] = useState('');
   const [partnerId, setPartnerId] = useState('');
   const [status, setStatus] = useState<OrderStatus | ''>('');
-  const [scope, setScope] = useState<'active' | 'history' | 'all'>('active');
+  const [scope, setScope] = useState<Scope>('active');
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
+  // Which target is actually in flight, so only the button that was pressed
+  // says "Working…" instead of every button in the row claiming to be busy.
+  const [busyTarget, setBusyTarget] = useState<OrderStatus | null>(null);
   const [drawerError, setDrawerError] = useState<string | null>(null);
   // Cancelling or refusing a live food order used to fire on a single click
   // that never said whose order it was. Both now route through a confirm that
@@ -213,6 +247,23 @@ export function OrdersOversight({
   // client-side re-filtering here — `orders` IS the filtered set.
   const filtered = orders;
 
+  // Read on every render, so a board left open across midnight starts calling
+  // yesterday's undelivered orders late without needing a reload.
+  const today = todayInput();
+  const lateCount = useMemo(
+    () => orders.filter((o) => isLate(o, today)).length,
+    [orders, today],
+  );
+
+  const narrowed = Boolean(date || partnerId || status || query.trim());
+
+  function clearFilters() {
+    setDate('');
+    setPartnerId('');
+    setStatus('');
+    setQuery('');
+  }
+
   // A full page means the server hit its ceiling and OLDER matching orders were
   // dropped. Without this the board silently lies: 300 rows and 30,000 rows
   // render identically. Narrowing any server-side filter brings them back into
@@ -261,6 +312,10 @@ export function OrdersOversight({
   const reasonRequired = overrideTargets.some(isDestructive) || canCancelAndRefund;
   const hasReason = reason.trim().length > 0;
 
+  /** The natural next step in the lifecycle — the single action this panel is
+   * really offering, and the only one that earns the accent. */
+  const nextStep = overrideTargets.find((t) => !isDestructive(t)) ?? null;
+
   function openRow(row: AdminOrderRow) {
     setSelectedId(row.id);
     setReason('');
@@ -292,6 +347,7 @@ export function OrdersOversight({
   async function override(toStatus: OrderStatus) {
     if (!selected) return;
     setBusy(true);
+    setBusyTarget(toStatus);
     setDrawerError(null);
     try {
       const res = await fetch(`/api/admin/orders/${encodeURIComponent(selected.id)}/override`, {
@@ -313,6 +369,7 @@ export function OrdersOversight({
         const code = await parseErrorCode(res);
         setDrawerError(friendlyError(res.status, code));
         setBusy(false);
+        setBusyTarget(null);
         setPendingStatus(null);
         if (code === 'conflict' || code === 'not_found') {
           setSelectedId(null);
@@ -321,12 +378,14 @@ export function OrdersOversight({
         return;
       }
       setBusy(false);
+      setBusyTarget(null);
       setPendingStatus(null);
       setSelectedId(null);
       router.refresh();
     } catch {
       setDrawerError('Could not reach us just now. Try again.');
       setBusy(false);
+      setBusyTarget(null);
       setPendingStatus(null);
     }
   }
@@ -382,13 +441,13 @@ export function OrdersOversight({
     {
       key: 'order',
       header: 'Order',
-      width: 170,
+      width: 180,
       render: (r) => (
         <div style={{ minWidth: 0 }}>
           <div
             className="gt-numeric"
             style={{
-              fontSize: 14,
+              fontSize: 15,
               fontWeight: 600,
               letterSpacing: '0.04em',
               color: 'var(--gt-text)',
@@ -411,16 +470,6 @@ export function OrdersOversight({
       ),
     },
     {
-      key: 'placed',
-      header: 'Placed',
-      width: 130,
-      render: (r) => (
-        <span className="gt-numeric" style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-          {formatShortDateTime(r.placedAt)}
-        </span>
-      ),
-    },
-    {
       key: 'member',
       header: 'Member',
       render: (r) => (
@@ -435,13 +484,50 @@ export function OrdersOversight({
         </div>
       ),
     },
+    // Delivery slot, not a date stamp: the day on top, the hours the member is
+    // actually expecting food underneath. When that day has passed and the
+    // order is still moving, the cell says so — that is the whole reason
+    // somebody is scanning this board.
     {
       key: 'delivery',
       header: 'Delivery',
-      width: 150,
+      width: 180,
+      render: (r) => {
+        const late = isLate(r, today);
+        return (
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: late ? 600 : undefined,
+                color: late ? 'var(--gt-danger)' : 'var(--gt-text)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              {formatDateLabel(r.deliveryDate)}
+              {late ? <Badge tone="critical">Overdue</Badge> : null}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{windowLabel(r.window)}</div>
+          </div>
+        );
+      },
+    },
+    // How long this has been sitting there. The exact stamp stays one hover
+    // away; the number an operator triages on is the age.
+    {
+      key: 'age',
+      header: 'Age',
+      width: 80,
+      align: 'right',
       render: (r) => (
-        <span style={{ fontSize: 12 }}>
-          {formatDateLabel(r.deliveryDate)} · {windowShort(r.window)}
+        <span
+          className="gt-numeric"
+          style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}
+          title={`Placed ${formatShortDateTime(r.placedAt)}`}
+        >
+          {formatAge(r.placedAt)}
         </span>
       ),
     },
@@ -456,7 +542,7 @@ export function OrdersOversight({
     {
       key: 'total',
       header: 'Total',
-      width: 100,
+      width: 110,
       align: 'right',
       render: (r) => (
         <span className="gt-numeric" style={{ fontSize: 13 }}>
@@ -468,73 +554,130 @@ export function OrdersOversight({
 
   return (
     <>
+      {/* The one filter that changes what this board is FOR — a live queue or
+          a record — leads, as a segmented control rather than a fourth
+          identical dropdown lost in a row of five. */}
       <Toolbar
         left={
-          <SearchField
-            placeholder="Search partner or member…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+          <QueueTabs label="Which orders to show" tabs={SCOPES} value={scope} onChange={setScope} />
         }
         right={
           <>
-            <input
-              type="date"
-              className="gt-input"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              aria-label="Filter by delivery date"
-            />
-            <select
-              className="gt-input"
-              value={partnerId}
-              onChange={(e) => setPartnerId(e.target.value)}
-              aria-label="Filter by partner"
+            <span
+              role="status"
+              aria-live="polite"
+              style={{
+                fontSize: 13,
+                color: 'var(--gt-text-dim)',
+                minWidth: 68,
+                textAlign: 'right',
+              }}
             >
-              <option value="">All partners</option>
-              {partners.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="gt-input"
-              value={status}
-              onChange={(e) => setStatus(e.target.value as OrderStatus | '')}
-              aria-label="Filter by status"
-            >
-              <option value="">All statuses</option>
-              {ORDER_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {ORDER_STATUS_LABEL[s]}
-                </option>
-              ))}
-            </select>
-            <select
-              className="gt-input"
-              value={scope}
-              onChange={(e) => setScope(e.target.value as 'active' | 'history' | 'all')}
-              aria-label="Filter by scope"
-            >
-              <option value="active">Active</option>
-              <option value="history">History</option>
-              <option value="all">All</option>
-            </select>
+              {loading ? 'Updating…' : ''}
+            </span>
             <DownloadCsv href={exportHref} />
           </>
         }
       />
+
+      {/* Refinements stay quiet: labelled, on one calm surface, with a way out
+          of them that only appears once there is something to clear. */}
+      <div
+        className="gt-card"
+        style={{
+          padding: 12,
+          marginBottom: 16,
+          display: 'flex',
+          gap: 12,
+          flexWrap: 'wrap',
+          alignItems: 'flex-end',
+        }}
+      >
+        <Field label="Search" grow>
+          <SearchField
+            placeholder="Restaurant or member"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </Field>
+        <Field label="Delivery date">
+          <input
+            type="date"
+            className="gt-input"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            aria-label="Filter by delivery date"
+          />
+        </Field>
+        <Field label="Restaurant">
+          <select
+            className="gt-input"
+            value={partnerId}
+            onChange={(e) => setPartnerId(e.target.value)}
+            aria-label="Filter by restaurant"
+          >
+            <option value="">Every restaurant</option>
+            {partners.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Status">
+          <select
+            className="gt-input"
+            value={status}
+            onChange={(e) => setStatus(e.target.value as OrderStatus | '')}
+            aria-label="Filter by status"
+          >
+            <option value="">Every status</option>
+            {ORDER_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {ORDER_STATUS_LABEL[s]}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {narrowed ? (
+          <Button variant="ghost" size="sm" onClick={clearFilters}>
+            Clear
+          </Button>
+        ) : null}
+      </div>
+
+      {/* Overdue orders are the only thing on this page nobody else will pick
+          up, so the board counts them out loud instead of leaving them to be
+          found by reading every row. */}
+      {lateCount > 0 ? (
+        <div
+          role="status"
+          style={{
+            marginBottom: 12,
+            padding: '10px 14px',
+            borderRadius: 'var(--gt-radius-sm)',
+            border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+            background: 'var(--gt-danger-weak)',
+            color: 'var(--gt-text)',
+            fontSize: 13,
+          }}
+        >
+          <strong style={{ fontFamily: 'var(--font-heading)' }}>
+            {lateCount} order{lateCount === 1 ? '' : 's'} past the delivery day
+          </strong>{' '}
+          and still moving. They are marked overdue below.
+        </div>
+      ) : null}
 
       {truncated ? (
         <div
           role="status"
           style={{
             marginBottom: 12,
-            padding: '10px 12px',
-            borderRadius: 10,
+            padding: '10px 14px',
+            borderRadius: 'var(--gt-radius-sm)',
             border: '1px solid color-mix(in srgb, var(--gt-warning) 40%, transparent)',
-            background: 'color-mix(in srgb, var(--gt-warning) 10%, transparent)',
+            background: 'var(--gt-warning-weak)',
             color: 'var(--gt-text)',
             fontSize: 13,
             display: 'flex',
@@ -545,7 +688,7 @@ export function OrdersOversight({
         >
           <span>
             Showing only the {pageSize} most recent orders that match these filters. Older ones
-            are not on this page. Pick a delivery date, partner, status, or search a member to
+            are not on this page. Pick a delivery date, restaurant, status, or search a member to
             bring them into view.
           </span>
           {date ? null : (
@@ -563,13 +706,46 @@ export function OrdersOversight({
       {loading && filtered.length === 0 ? (
         <SkeletonRows rows={6} cols={columns.length} />
       ) : (
+        <KeyboardRows>
         <DataTable
           columns={columns}
           rows={filtered}
           rowKey={(r) => r.id}
           onRowClick={openRow}
-          empty="No orders match these filters."
+          rowAriaLabel={(r) =>
+            `Open order ${orderNumber(r.id)} from ${r.partnerName} for ${
+              r.accountDisplayName || r.accountEmail
+            }`
+          }
+          empty={
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 10,
+                padding: '20px 0',
+              }}
+            >
+              <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 15 }}>
+                {narrowed ? 'Nothing matches these filters' : 'No orders here'}
+              </span>
+              <span style={{ color: 'var(--gt-text-dim)', maxWidth: '44ch' }}>
+                {narrowed
+                  ? 'Widen the date, restaurant or status, or clear them and start again.'
+                  : scope === 'active'
+                    ? 'Every order has been delivered, cancelled or refused. Switch to Finished to see the record.'
+                    : 'Orders appear here as members place them.'}
+              </span>
+              {narrowed ? (
+                <Button variant="ghost" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              ) : null}
+            </div>
+          }
         />
+        </KeyboardRows>
       )}
 
       <Drawer
@@ -601,8 +777,20 @@ export function OrdersOversight({
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 14 }}>
               <Row label="Restaurant">{selected.partnerName}</Row>
-              <Row label="Placed">{formatShortDateTime(selected.placedAt)}</Row>
-              <Row label="Delivery date">{formatDateLabel(selected.deliveryDate)}</Row>
+              <Row label="Placed">
+                {formatShortDateTime(selected.placedAt)}
+                <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                  {formatAge(selected.placedAt)} ago
+                </div>
+              </Row>
+              <Row label="Delivery date">
+                {formatDateLabel(selected.deliveryDate)}
+                {isLate(selected, today) ? (
+                  <div style={{ marginTop: 4 }}>
+                    <Badge tone="critical">Overdue</Badge>
+                  </div>
+                ) : null}
+              </Row>
               <Row label="Delivery window">{windowLabel(selected.window)}</Row>
               <Row label="Payment method">
                 {PAYMENT_LABEL[selected.paymentMethod] ?? selected.paymentMethod}
@@ -610,8 +798,6 @@ export function OrdersOversight({
               <Row label="Payment status">
                 {PAYMENT_STATUS_LABEL[selected.paymentStatus] ?? selected.paymentStatus}
               </Row>
-              <Row label="Subtotal">{formatMoney(selected.subtotalMinor, selected.currency)}</Row>
-              <Row label="Total">{formatMoney(selected.totalMinor, selected.currency)}</Row>
             </div>
 
             <Row label="Delivery address">
@@ -638,11 +824,13 @@ export function OrdersOversight({
                       alignSelf: 'flex-start',
                       fontSize: 13,
                       fontWeight: 600,
-                      color: 'var(--gt-accent-strong)',
-                      textDecoration: 'none',
+                      fontFamily: 'var(--font-heading)',
+                      color: 'var(--gt-text)',
+                      textDecoration: 'underline',
+                      textUnderlineOffset: 3,
                     }}
                   >
-                    Open in Google Maps →
+                    Open in Google Maps
                   </a>
                 </div>
               ) : (
@@ -652,7 +840,18 @@ export function OrdersOversight({
               )}
             </Row>
 
-            <div>
+            {/* One receipt, so the amounts add up on screen. The drawer used to
+                print Subtotal and Total two cells apart in the facts grid, with
+                the fees between them shown nowhere — a gap an operator deciding
+                a refund had to take on trust. */}
+            <div
+              style={{
+                border: '1px solid var(--gt-border)',
+                borderRadius: 'var(--gt-radius-sm)',
+                background: 'var(--gt-surface-sunken)',
+                overflow: 'hidden',
+              }}
+            >
               <div
                 style={{
                   fontSize: 12,
@@ -660,20 +859,56 @@ export function OrdersOversight({
                   textTransform: 'uppercase',
                   color: 'var(--gt-text-dim)',
                   fontFamily: 'var(--font-heading)',
-                  marginBottom: 6,
+                  padding: '10px 12px',
+                  borderBottom: '1px solid var(--gt-border)',
                 }}
               >
                 Items
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {selected.items.map((it, i) => (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
-                    <span>
-                      {it.qty}× {it.name}
-                    </span>
-                    <span className="gt-numeric">{formatMoney(it.priceMinorSnapshot * it.qty, selected.currency)}</span>
-                  </div>
-                ))}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 12 }}>
+                {selected.items.length === 0 ? (
+                  <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                    Nothing was recorded against this order.
+                  </span>
+                ) : (
+                  selected.items.map((it, i) => (
+                    <MoneyLine
+                      key={i}
+                      label={`${it.qty}× ${it.name}`}
+                      value={formatMoney(it.priceMinorSnapshot * it.qty, selected.currency)}
+                    />
+                  ))
+                )}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                  padding: 12,
+                  borderTop: '1px solid var(--gt-border)',
+                }}
+              >
+                <MoneyLine
+                  label="Subtotal"
+                  value={formatMoney(selected.subtotalMinor, selected.currency)}
+                />
+                <MoneyLine
+                  label="Delivery fee"
+                  value={formatMoney(selected.deliveryFeeMinor, selected.currency)}
+                />
+                {selected.smallOrderFeeMinor > 0 ? (
+                  <MoneyLine
+                    label="Small order fee"
+                    value={formatMoney(selected.smallOrderFeeMinor, selected.currency)}
+                  />
+                ) : null}
+                <div style={{ height: 1, background: 'var(--gt-border)', margin: '2px 0' }} />
+                <MoneyLine
+                  label="Total"
+                  value={formatMoney(selected.totalMinor, selected.currency)}
+                  strong
+                />
               </div>
             </div>
 
@@ -718,15 +953,22 @@ export function OrdersOversight({
                   />
                 ) : null}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {/* One accent in this panel. `overrideTargets` keeps lifecycle
+                      order, so the first non-destructive target IS the next
+                      step — that one gets the accent and every other jump stays
+                      quiet, instead of three equally-loud orange buttons asking
+                      the operator to work out which one they meant. */}
                   {overrideTargets.map((to) => (
                     <Button
                       key={to}
-                      variant={isDestructive(to) ? 'danger' : 'primary'}
+                      variant={isDestructive(to) ? 'danger' : to === nextStep ? 'primary' : 'ghost'}
                       size="sm"
                       disabled={busy}
                       onClick={() => requestOverride(to)}
                     >
-                      {busy ? 'Working…' : `Mark ${ORDER_STATUS_LABEL[to].toLowerCase()}`}
+                      {busy && busyTarget === to
+                        ? 'Working…'
+                        : `Mark ${ORDER_STATUS_LABEL[to].toLowerCase()}`}
                     </Button>
                   ))}
                   {canCancelAndRefund ? (
@@ -895,6 +1137,68 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     <div>
       <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginBottom: 2 }}>{label}</div>
       <div style={{ fontSize: 14 }}>{children}</div>
+    </div>
+  );
+}
+
+/** A named filter control. Every control in the bar says what it narrows,
+ * instead of leaving its purpose to a placeholder or an aria-label nobody
+ * sees. */
+function Field({
+  label,
+  grow = false,
+  children,
+}: {
+  label: string;
+  grow?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <label
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        minWidth: grow ? 220 : 160,
+        flex: grow ? '1 1 220px' : '0 0 auto',
+      }}
+    >
+      <span
+        style={{
+          fontFamily: 'var(--font-heading)',
+          fontSize: 12,
+          letterSpacing: '0.03em',
+          textTransform: 'uppercase',
+          color: 'var(--gt-text-dim)',
+        }}
+      >
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+/** One money line in the drawer's receipt: label left, tabular amount right,
+ * currency always attached. */
+function MoneyLine({
+  label,
+  value,
+  strong = false,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+}) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, fontSize: 13 }}>
+      <span style={{ color: strong ? 'var(--gt-text)' : 'var(--gt-text-dim)' }}>{label}</span>
+      <span
+        className="gt-numeric"
+        style={{ fontSize: strong ? 15 : 13, color: 'var(--gt-text)' }}
+      >
+        {value}
+      </span>
     </div>
   );
 }

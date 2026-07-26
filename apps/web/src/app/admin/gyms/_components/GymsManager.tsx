@@ -35,11 +35,14 @@ import {
   DataTable,
   Modal,
   SearchField,
+  TableThumb,
   TextField,
   Toolbar,
   type Column,
 } from '@/components/console';
 import type { LocationValue } from '@/components/console/LocationPicker';
+import { QueueTabs } from '../../_components/QueueTabs';
+import { useUrlSearch, useUrlState } from '../../_components/useUrlState';
 import type { GymPhotoRow, GymRow, GymSocialLinkValue } from './types';
 
 // Client-only: Leaflet touches `window` at import, so never SSR this.
@@ -51,7 +54,7 @@ const LocationPicker = dynamic(
       <div
         style={{
           height: 320,
-          borderRadius: 10,
+          borderRadius: 'var(--gt-radius-sm)',
           border: '1px solid var(--gt-border)',
           background: 'var(--gt-surface-sunken)',
           display: 'flex',
@@ -82,6 +85,42 @@ const STATUS_TONE: Record<GymStatus, 'neutral' | 'positive' | 'warning'> = {
   published: 'positive',
   archived: 'warning',
 };
+
+/**
+ * What each state means to the person editing it, rather than the word stored
+ * in the column. The table used to print `draft` and `published` straight out
+ * of the database, and the category cell swapped the underscore in
+ * `health_club` for a space and called it a label.
+ */
+const STATUS_LABEL: Record<GymStatus, string> = {
+  draft: 'Draft',
+  published: 'Live',
+  archived: 'Archived',
+};
+
+const CATEGORY_LABEL: Record<GymCategory, string> = {
+  gym: 'Gym',
+  health_club: 'Health club',
+  studio: 'Studio',
+  crossfit: 'CrossFit',
+  yoga: 'Yoga',
+  other: 'Other',
+};
+
+const STATUS_TABS: readonly { key: GymStatus | 'all'; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'published', label: 'Live' },
+  { key: 'draft', label: 'Draft' },
+  { key: 'archived', label: 'Archived' },
+];
+
+/** Accepted `?status=` values; anything else falls back to All. */
+const GYM_STATUS_FILTER_KEYS: readonly (GymStatus | 'all')[] = [
+  'all',
+  'published',
+  'draft',
+  'archived',
+];
 
 /** Same wording the member app uses for each equipment group. */
 const EQUIPMENT_CATEGORY_LABEL: Record<GymEquipmentCategory, string> = {
@@ -407,8 +446,14 @@ function buildPasses(drafts: PassDraft[]): BuildResult<GymPassOption[]> {
  */
 export function GymsManager({ gyms }: { gyms: GymRow[] }) {
   const router = useRouter();
-  const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<GymStatus | 'all'>('all');
+  // Both in the URL, so previewing a listing on the public site and coming
+  // back returns to the same shortlist.
+  const [query, setQuery] = useUrlSearch('q');
+  const [statusFilter, setStatusFilter] = useUrlState<GymStatus | 'all'>(
+    'status',
+    'all',
+    GYM_STATUS_FILTER_KEYS,
+  );
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<GymRow | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -556,25 +601,67 @@ export function GymsManager({ gyms }: { gyms: GymRow[] }) {
   }
 
   const columns: Column<GymRow>[] = [
-    { key: 'name', header: 'Name', render: (r) => <span style={{ fontWeight: 600 }}>{r.name}</span> },
-    { key: 'city', header: 'City', render: (r) => r.city || <span style={{ color: 'var(--gt-text-dim)' }}>—</span> },
-    { key: 'category', header: 'Category', render: (r) => r.category.replace('_', ' ') },
+    // A listing is a picture and a place. The list showed neither: a name, a
+    // city and a count of photos an operator had to open the row to see.
+    {
+      key: 'name',
+      header: 'Listing',
+      render: (r) => (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          <TableThumb
+            src={r.photos[0]?.deliveryUrl ?? r.externalImageUrl ?? undefined}
+            alt={r.name}
+            size={44}
+          />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 14 }}>
+              {r.name}
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: 'var(--gt-text-dim)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {[r.city, r.district].filter(Boolean).join(' · ') || 'No city set'}
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'category',
+      header: 'Kind',
+      width: 130,
+      render: (r) => CATEGORY_LABEL[r.category] ?? r.category,
+    },
     {
       key: 'status',
       header: 'Status',
-      render: (r) => <Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge>,
+      width: 190,
+      render: (r) => (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <Badge tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge>
+          {r.verifiedByAdmin ? <Badge tone="info">Checked</Badge> : null}
+        </div>
+      ),
     },
-    {
-      key: 'verified',
-      header: 'Verified',
-      align: 'center',
-      render: (r) => (r.verifiedByAdmin ? '✓' : <span style={{ color: 'var(--gt-text-dim)' }}>—</span>),
-    },
+    // Photos are the whole point of a listing, so a listing without any says so
+    // rather than showing a quiet zero next to the rows that have ten.
     {
       key: 'photos',
       header: 'Photos',
+      width: 100,
       align: 'right',
-      render: (r) => <span className="gt-numeric">{r.photos.length}</span>,
+      render: (r) =>
+        r.photos.length === 0 ? (
+          <span style={{ color: 'var(--gt-warning)', fontSize: 13 }}>None</span>
+        ) : (
+          <span className="gt-numeric">{r.photos.length}</span>
+        ),
     },
     {
       key: 'actions',
@@ -601,24 +688,49 @@ export function GymsManager({ gyms }: { gyms: GymRow[] }) {
         }
         right={
           <>
-            <select
-              className="gt-input"
+            <QueueTabs
+              label="Which listings to show"
+              tabs={STATUS_TABS}
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as GymStatus | 'all')}
-              aria-label="Filter by status"
-            >
-              <option value="all">All statuses</option>
-              <option value="draft">Draft</option>
-              <option value="published">Published</option>
-              <option value="archived">Archived</option>
-            </select>
+              onChange={setStatusFilter}
+              /* Neutral: this page's one accent belongs to New gym. */
+              tone="neutral"
+            />
             <Button variant="primary" onClick={openCreate}>
               New gym
             </Button>
           </>
         }
       />
-      <DataTable columns={columns} rows={filtered} rowKey={(r) => r.id} empty="No gyms yet." />
+      <DataTable
+        columns={columns}
+        rows={filtered}
+        rowKey={(r) => r.id}
+        empty={
+          query.trim() || statusFilter !== 'all' ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+              <span>No listing matches this view.</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setQuery('');
+                  setStatusFilter('all');
+                }}
+              >
+                Show all listings
+              </Button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+              <span>No gym listings yet.</span>
+              <Button variant="ghost" size="sm" onClick={openCreate}>
+                Add the first one
+              </Button>
+            </div>
+          )
+        }
+      />
 
       <Modal
         open={modalOpen}
@@ -664,7 +776,7 @@ export function GymsManager({ gyms }: { gyms: GymRow[] }) {
               >
                 {GYM_CATEGORIES.map((c) => (
                   <option key={c} value={c}>
-                    {c.replace('_', ' ')}
+                    {CATEGORY_LABEL[c] ?? c}
                   </option>
                 ))}
               </select>
@@ -953,7 +1065,7 @@ function HoursEditor({
                 alignItems: 'flex-start',
                 gap: 10,
                 padding: '8px 10px',
-                borderRadius: 8,
+                borderRadius: 'var(--gt-radius-sm)',
                 border: '1px solid var(--gt-border)',
               }}
             >
@@ -1094,7 +1206,7 @@ function EquipmentEditor({
             flexDirection: 'column',
             gap: 6,
             padding: '8px 10px',
-            borderRadius: 8,
+            borderRadius: 'var(--gt-radius-sm)',
             border: '1px solid var(--gt-border)',
           }}
         >
@@ -1232,7 +1344,7 @@ function CrowdEditor({
             flexDirection: 'column',
             gap: 10,
             padding: '10px',
-            borderRadius: 8,
+            borderRadius: 'var(--gt-radius-sm)',
             border: '1px solid var(--gt-border)',
           }}
         >
@@ -1357,7 +1469,7 @@ function PassesEditor({
             flexDirection: 'column',
             gap: 6,
             padding: '8px 10px',
-            borderRadius: 8,
+            borderRadius: 'var(--gt-radius-sm)',
             border: '1px solid var(--gt-border)',
           }}
         >
@@ -1588,42 +1700,108 @@ function PhotosEditor({ gymId, photos }: { gymId: string; photos: GymPhotoRow[] 
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <FieldLabel>Photos ({order.length})</FieldLabel>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {order.map((p, i) => (
-          <div
-            key={p.id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '6px 8px',
-              borderRadius: 8,
-              border: '1px solid var(--gt-border)',
-            }}
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={p.deliveryUrl}
-              alt=""
-              width={56}
-              height={56}
-              style={{ objectFit: 'cover', borderRadius: 6, flexShrink: 0 }}
-            />
-            <span style={{ flex: 1, fontSize: 12, color: 'var(--gt-text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {p.deliveryUrl}
-            </span>
-            <Button variant="ghost" size="sm" disabled={i === 0} onClick={() => move(i, -1)}>
-              ↑
-            </Button>
-            <Button variant="ghost" size="sm" disabled={i === order.length - 1} onClick={() => move(i, 1)}>
-              ↓
-            </Button>
-            <ConfirmButton label="Delete" confirmLabel="Confirm?" size="sm" busy={busyId === p.id} onConfirm={() => void remove(p.id)} />
-          </div>
-        ))}
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <FieldLabel>Photos</FieldLabel>
+
+      {/* The editor is about pictures, so it shows pictures. It used to be a
+          list of 56px thumbnails each labelled with its own delivery URL — the
+          one thing nobody needed — with no way to tell which of them members
+          would actually see first. */}
+      {order.length === 0 ? (
+        <div
+          style={{
+            padding: '24px 16px',
+            textAlign: 'center',
+            borderRadius: 'var(--gt-radius-sm)',
+            border: '1px dashed var(--gt-border-strong)',
+            background: 'var(--gt-surface-sunken)',
+            color: 'var(--gt-text-dim)',
+            fontSize: 13,
+          }}
+        >
+          No photos yet. The first one you add becomes the cover members see.
+        </div>
+      ) : (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+            gap: 10,
+          }}
+        >
+          {order.map((p, i) => (
+            <figure
+              key={p.id}
+              style={{
+                margin: 0,
+                borderRadius: 'var(--gt-radius-sm)',
+                border: '1px solid var(--gt-border)',
+                background: 'var(--gt-surface-sunken)',
+                overflow: 'hidden',
+                opacity: busyId === p.id ? 0.5 : 1,
+              }}
+            >
+              <div style={{ position: 'relative' }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={p.deliveryUrl}
+                  alt={`Photo ${i + 1}`}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    aspectRatio: '4 / 3',
+                    objectFit: 'cover',
+                    background: 'var(--gt-surface-hover)',
+                  }}
+                />
+                {i === 0 ? (
+                  <span style={{ position: 'absolute', top: 8, left: 8 }}>
+                    <Badge tone="info">Cover</Badge>
+                  </span>
+                ) : null}
+              </div>
+              <figcaption
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: 6,
+                  borderTop: '1px solid var(--gt-border)',
+                }}
+              >
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={i === 0}
+                  aria-label={`Move photo ${i + 1} earlier`}
+                  onClick={() => move(i, -1)}
+                >
+                  ←
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={i === order.length - 1}
+                  aria-label={`Move photo ${i + 1} later`}
+                  onClick={() => move(i, 1)}
+                >
+                  →
+                </Button>
+                <span style={{ marginLeft: 'auto' }}>
+                  <ConfirmButton
+                    label="Delete"
+                    confirmLabel="Delete?"
+                    size="sm"
+                    busy={busyId === p.id}
+                    onConfirm={() => void remove(p.id)}
+                  />
+                </span>
+              </figcaption>
+            </figure>
+          ))}
+        </div>
+      )}
+
       <input
         ref={fileInput}
         type="file"
@@ -1635,10 +1813,26 @@ function PhotosEditor({ gymId, photos }: { gymId: string; photos: GymPhotoRow[] 
           if (file) void handleFile(file);
         }}
       />
-      <Button variant="ghost" size="sm" disabled={uploading} onClick={() => fileInput.current?.click()}>
-        {uploading ? 'Uploading…' : '+ Upload photo'}
-      </Button>
-      {localError ? <div style={{ color: 'var(--gt-danger)', fontSize: 12 }}>{localError}</div> : null}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={uploading}
+          onClick={() => fileInput.current?.click()}
+        >
+          {uploading ? 'Uploading…' : 'Add a photo'}
+        </Button>
+        <span style={{ fontSize: 12, color: 'var(--gt-text-faint)' }}>
+          {order.length === 0
+            ? 'Nothing uploaded yet.'
+            : `${order.length} photo${order.length === 1 ? '' : 's'}. The first one is the cover.`}
+        </span>
+      </div>
+      {localError ? (
+        <div role="alert" style={{ color: 'var(--gt-danger)', fontSize: 13 }}>
+          {localError}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -77,16 +77,39 @@ export default async function AdminPricingPage() {
 
       <PricingGrid prices={prices} />
 
-      <div style={{ marginTop: 32 }}>
-        <PageHeader
-          title="Payment details"
-          subtitle="Where members send money for memberships and meal orders. Anything left blank is not offered to members at all."
-        />
+      {/* A section of this page, not a second page: one h1 per screen, so a
+          screen reader's heading list still describes the document. */}
+      <section style={{ marginTop: 40 }} aria-labelledby="payment-details-heading">
+        <header style={{ marginBottom: 24 }}>
+          <h2
+            id="payment-details-heading"
+            style={{
+              fontFamily: 'var(--font-heading)',
+              fontWeight: 600,
+              fontSize: 'var(--gt-fs-h1)',
+              lineHeight: 1.2,
+              letterSpacing: '-0.01em',
+            }}
+          >
+            Payment details
+          </h2>
+          <p
+            style={{
+              margin: '6px 0 0',
+              color: 'var(--gt-text-dim)',
+              fontSize: 14,
+              maxWidth: '60ch',
+            }}
+          >
+            Where members send money for memberships and meal orders. Anything left blank is not
+            offered to members at all.
+          </p>
+        </header>
         <PayeeEditor
           settings={paymentSettingsView(payeeRow)}
           updatedAt={payeeRow?.updatedAt.toISOString() ?? null}
         />
-      </div>
+      </section>
     </div>
   );
 }

@@ -22,7 +22,7 @@ export function AppStartupScreen({ message = 'Getting your training ready' }: Pr
         </View>
         <View style={styles.copy}>
           <AppText variant="label" color={colors.accent} center>
-            GYM TRACKER
+            THE GM METHOD
           </AppText>
           <AppText variant="title" center>
             {message}

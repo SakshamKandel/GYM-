@@ -9,6 +9,8 @@ import {
   type Column,
   ConfirmButton,
   DataTable,
+  FilterPill,
+  FilterPills,
   Modal,
   SearchField,
   TextField,
@@ -27,6 +29,18 @@ import type {
 
 const TIERS: PlanTier[] = ['starter', 'silver', 'gold', 'elite'];
 const GOALS: PlanGoal[] = ['fat_loss', 'muscle', 'strength'];
+
+/**
+ * What a plan is for, in the words a member reads. The console was printing
+ * `fat_loss` with the underscore swapped for a space, in a dropdown an admin
+ * picks from and in a column they scan — the stored key leaking onto the screen
+ * in both directions.
+ */
+const GOAL_LABEL: Record<PlanGoal, string> = {
+  fat_loss: 'Fat loss',
+  muscle: 'Muscle',
+  strength: 'Strength',
+};
 
 /** Textarea (one item per line) <-> string[] helpers for the jsonb array fields. */
 function linesToArray(text: string): string[] {
@@ -87,13 +101,19 @@ export function CatalogManager({
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <TabButton active={tab === 'exercises'} onClick={() => setTab('exercises')}>
-          Exercises ({exercises.length})
-        </TabButton>
-        <TabButton active={tab === 'plans'} onClick={() => setTab('plans')}>
-          Plans ({plans.length})
-        </TabButton>
+      {/* The console's own segmented control: hover, pressed, focus and a 44px
+          target all come from the shared pill rules, and the selected fill is
+          the accent that actually passes contrast against its label — the
+          hand-rolled version used the legacy `--gt-red` alias and a raw white. */}
+      <div style={{ marginBottom: 16 }}>
+        <FilterPills label="Which library to edit">
+          <FilterPill selected={tab === 'exercises'} onClick={() => setTab('exercises')}>
+            Exercises <Count>{exercises.length}</Count>
+          </FilterPill>
+          <FilterPill selected={tab === 'plans'} onClick={() => setTab('plans')}>
+            Plans <Count>{plans.length}</Count>
+          </FilterPill>
+        </FilterPills>
       </div>
 
       {tab === 'exercises' ? <ExercisesTab exercises={exercises} /> : <PlansTab plans={plans} />}
@@ -101,33 +121,13 @@ export function CatalogManager({
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
+/** Tabular count riding inside a pill label, so the two numbers line up
+ * with each other instead of drifting with the proportional face. */
+function Count({ children }: { children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        padding: '8px 14px',
-        borderRadius: 10,
-        cursor: 'pointer',
-        fontFamily: 'var(--font-heading)',
-        fontSize: 13,
-        fontWeight: 600,
-        background: active ? 'var(--gt-red)' : 'transparent',
-        color: active ? '#fff' : 'var(--gt-text)',
-        border: active ? '1px solid var(--gt-red)' : '1px solid var(--gt-border)',
-      }}
-    >
+    <span className="gt-numeric" style={{ fontSize: 12, opacity: 0.75 }}>
       {children}
-    </button>
+    </span>
   );
 }
 
@@ -350,45 +350,67 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
   }
 
   const columns: Column<ExerciseRow>[] = [
-    { key: 'name', header: 'Name', render: (r) => <span style={{ fontWeight: 600 }}>{r.name}</span> },
+    // The exercise name is what this library IS, so it carries the row.
+    {
+      key: 'name',
+      header: 'Exercise',
+      render: (r) => (
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 14 }}>
+            {r.name}
+          </div>
+          {rowError?.id === r.id ? (
+            <div style={{ color: 'var(--gt-danger)', fontSize: 12, marginTop: 4 }}>
+              {rowError.msg}
+            </div>
+          ) : null}
+        </div>
+      ),
+    },
     { key: 'muscle', header: 'Muscle group', render: (r) => r.muscleGroup },
     {
       key: 'equipment',
       header: 'Equipment',
-      render: (r) => r.equipment ?? <span style={{ color: 'var(--gt-text-dim)' }}>—</span>,
+      render: (r) => r.equipment ?? <Unset>No kit listed</Unset>,
     },
     {
       key: 'level',
       header: 'Level',
-      render: (r) => r.level ?? <span style={{ color: 'var(--gt-text-dim)' }}>—</span>,
+      render: (r) => r.level ?? <Unset>Any</Unset>,
     },
     {
       key: 'used',
       header: 'Used by',
-      width: 90,
+      width: 110,
       align: 'right',
-      render: (r) => <span className="gt-numeric">{r.usedByPlanCount} plan{r.usedByPlanCount === 1 ? '' : 's'}</span>,
+      render: (r) =>
+        r.usedByPlanCount === 0 ? (
+          <Unset>No plans</Unset>
+        ) : (
+          <span className="gt-numeric">
+            {r.usedByPlanCount} plan{r.usedByPlanCount === 1 ? '' : 's'}
+          </span>
+        ),
     },
     {
       key: 'actions',
       header: '',
-      width: 160,
+      width: 170,
       align: 'right',
       render: (r) => (
-        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        <div
+          style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}
+        >
           <Button variant="ghost" size="sm" onClick={() => openEdit(r)}>
             Edit
           </Button>
           <ConfirmButton
             label="Delete"
-            confirmLabel="Confirm?"
+            confirmLabel="Delete for good?"
             size="sm"
             busy={rowBusy === r.id}
             onConfirm={() => void remove(r)}
           />
-          {rowError?.id === r.id ? (
-            <div style={{ color: 'var(--gt-danger)', fontSize: 11 }}>{rowError.msg}</div>
-          ) : null}
         </div>
       ),
     },
@@ -402,9 +424,10 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
       <Toolbar
         left={
           <SearchField
-            placeholder="Search by name or muscle group…"
+            placeholder="Name or muscle group"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search exercises"
           />
         }
         right={
@@ -413,7 +436,28 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
           </Button>
         }
       />
-      <DataTable columns={columns} rows={filtered} rowKey={(r) => r.id} />
+      <DataTable
+        columns={columns}
+        rows={filtered}
+        rowKey={(r) => r.id}
+        empty={
+          query.trim() ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+              <span>No exercise matches “{query.trim()}”.</span>
+              <Button variant="ghost" size="sm" onClick={() => setQuery('')}>
+                Clear search
+              </Button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+              <span>The exercise library is empty.</span>
+              <Button variant="ghost" size="sm" onClick={openCreate}>
+                Add the first exercise
+              </Button>
+            </div>
+          )
+        }
+      />
 
       <Modal
         open={modalOpen}
@@ -511,6 +555,16 @@ function ExercisesTab({ exercises }: { exercises: ExerciseRow[] }) {
       </Modal>
     </>
   );
+}
+
+/**
+ * A field the catalog was never told about. An em-dash in a column of real
+ * values reads as a rendering accident; naming the absence says which of the
+ * two it is, and stays quiet enough not to compete with the rows that do carry
+ * a value.
+ */
+function Unset({ children }: { children: React.ReactNode }) {
+  return <span style={{ color: 'var(--gt-text-faint)' }}>{children}</span>;
 }
 
 function LabeledTextarea({
@@ -649,31 +703,64 @@ function PlansTab({ plans }: { plans: PlanRow[] }) {
   }
 
   const columns: Column<PlanRow>[] = [
-    { key: 'name', header: 'Name', render: (r) => <span style={{ fontWeight: 600 }}>{r.name}</span> },
-    { key: 'tier', header: 'Tier', width: 90, render: (r) => <Badge tone="info">{tierLabel(r.tierRequired)}</Badge> },
-    { key: 'goal', header: 'Goal', render: (r) => r.goalType.replace('_', ' ') },
-    { key: 'weeks', header: 'Weeks', width: 70, align: 'right', render: (r) => r.weeks },
-    { key: 'days', header: 'Days/wk', width: 80, align: 'right', render: (r) => r.daysPerWeek },
-    { key: 'workouts', header: 'Workouts', width: 90, align: 'right', render: (r) => r.workoutCount },
     {
-      key: 'branded',
-      header: '',
-      width: 90,
-      render: (r) => (r.isBranded ? <Badge tone="positive">Branded</Badge> : null),
+      key: 'name',
+      header: 'Plan',
+      render: (r) => (
+        <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 14 }}>
+            {r.name}
+          </span>
+          {r.isBranded ? <Badge tone="positive">GM Method</Badge> : null}
+        </div>
+      ),
+    },
+    {
+      key: 'tier',
+      header: 'Tier',
+      width: 100,
+      render: (r) => <Badge tone="info">{tierLabel(r.tierRequired)}</Badge>,
+    },
+    { key: 'goal', header: 'Goal', render: (r) => GOAL_LABEL[r.goalType] ?? r.goalType },
+    {
+      key: 'weeks',
+      header: 'Weeks',
+      width: 80,
+      align: 'right',
+      render: (r) => <span className="gt-numeric">{r.weeks}</span>,
+    },
+    {
+      key: 'days',
+      header: 'Days a week',
+      width: 110,
+      align: 'right',
+      render: (r) => <span className="gt-numeric">{r.daysPerWeek}</span>,
+    },
+    {
+      key: 'workouts',
+      header: 'Workouts',
+      width: 100,
+      align: 'right',
+      render: (r) =>
+        r.workoutCount === 0 ? (
+          <Unset>None yet</Unset>
+        ) : (
+          <span className="gt-numeric">{r.workoutCount}</span>
+        ),
     },
     {
       key: 'actions',
       header: '',
-      width: 190,
+      width: 210,
       align: 'right',
       render: (r) => (
         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
           <Button variant="ghost" size="sm" onClick={() => setStructureFor(r)}>
-            Structure
+            Workouts
           </Button>
           <ConfirmButton
             label="Delete"
-            confirmLabel="Confirm?"
+            confirmLabel="Delete for good?"
             size="sm"
             busy={rowBusy === r.id}
             onConfirm={() => void remove(r)}
@@ -730,7 +817,7 @@ function PlansTab({ plans }: { plans: PlanRow[] }) {
               >
                 {TIERS.map((t) => (
                   <option key={t} value={t}>
-                    {t}
+                    {tierLabel(t)}
                   </option>
                 ))}
               </select>
@@ -747,7 +834,7 @@ function PlansTab({ plans }: { plans: PlanRow[] }) {
               >
                 {GOALS.map((g) => (
                   <option key={g} value={g}>
-                    {g.replace('_', ' ')}
+                    {GOAL_LABEL[g] ?? g}
                   </option>
                 ))}
               </select>

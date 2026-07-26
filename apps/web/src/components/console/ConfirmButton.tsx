@@ -57,9 +57,12 @@ export function ConfirmButton({
     <Button
       variant={armed ? 'danger' : 'ghost'}
       size={size}
-      disabled={busy}
+      loading={busy}
       onClick={handleClick}
       onBlur={disarm}
+      // Armed is a state the operator has to notice before they click again,
+      // so it is announced as well as recoloured.
+      aria-live="polite"
     >
       {busy ? busyLabel : armed ? confirmLabel : label}
     </Button>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { z } from 'zod';
@@ -23,6 +23,8 @@ import {
   type PartnerCurrencyHistory,
   type PartnerLiveOrderImpact,
 } from '@/lib/partnerAdminSafeguards';
+import { KeyboardRows } from '../../_components/KeyboardRows';
+import { QueueTabs } from '../../_components/QueueTabs';
 import { PartnerMenuPanel } from './PartnerMenuPanel';
 import { PartnerRevenuePanel } from './PartnerRevenuePanel';
 import type { PartnerRow } from './types';
@@ -36,7 +38,7 @@ const LocationPicker = dynamic(
       <div
         style={{
           height: 300,
-          borderRadius: 10,
+          borderRadius: 'var(--gt-radius-sm)',
           border: '1px solid var(--gt-border)',
           background: 'var(--gt-surface-sunken)',
           display: 'flex',
@@ -240,6 +242,14 @@ interface EditFormState {
   currency: 'NPR' | 'USD';
 }
 
+type StatusFilter = 'all' | 'active' | 'inactive';
+
+const STATUS_TABS: readonly { key: StatusFilter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'active', label: 'Active' },
+  { key: 'inactive', label: 'Switched off' },
+];
+
 function rowToEditForm(row: PartnerRow): EditFormState {
   return {
     name: row.name,
@@ -258,7 +268,7 @@ function rowToEditForm(row: PartnerRow): EditFormState {
 export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
   const router = useRouter();
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateFormState>(EMPTY_CREATE);
@@ -269,6 +279,51 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
   const [editForm, setEditForm] = useState<EditFormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  // A save that closed the drawer told the operator nothing about whether it
+  // worked. It now stays open and says so, and the button knows whether there
+  // is anything left to save.
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set by a successful save, consumed when the refreshed rows land.
+  const reseedAfterSave = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+    };
+  }, []);
+
+  // Keep an open drawer pointed at the freshest copy of its row. `router
+  // .refresh()` re-runs the server load after every mutation; without this the
+  // panel would keep comparing its fields against the row as it was when it
+  // opened, and a just-saved form would look permanently unsaved.
+  const openId = selected?.id ?? null;
+  useEffect(() => {
+    if (!openId) return;
+    const fresh = partners.find((p) => p.id === openId);
+    if (!fresh) return;
+    setSelected(fresh);
+    if (reseedAfterSave.current) {
+      reseedAfterSave.current = false;
+      setEditForm(rowToEditForm(fresh));
+    }
+  }, [partners, openId]);
+
+  /** Has this drawer's form moved away from the row it was opened on? */
+  const editDirty = useMemo(() => {
+    if (!selected || !editForm) return false;
+    const base = rowToEditForm(selected);
+    return (
+      base.name !== editForm.name ||
+      base.contact !== editForm.contact ||
+      base.phone !== editForm.phone ||
+      base.addressText !== editForm.addressText ||
+      base.serviceAreas !== editForm.serviceAreas ||
+      base.acceptsCod !== editForm.acceptsCod ||
+      base.currency !== editForm.currency ||
+      JSON.stringify(base.serviceArea) !== JSON.stringify(editForm.serviceArea)
+    );
+  }, [selected, editForm]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -290,6 +345,14 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
     setSelected(row);
     setEditForm(rowToEditForm(row));
     setEditError(null);
+    setSavedAt(null);
+  }
+
+  /** Every field change invalidates the last outcome shown next to Save. */
+  function editField(next: (f: EditFormState) => EditFormState) {
+    setSavedAt(null);
+    setEditError(null);
+    setEditForm((f) => (f ? next(f) : f));
   }
 
   function closeDrawer() {
@@ -386,12 +449,17 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
         setSaving(false);
         return;
       }
+      // The drawer stays open on a successful save. Closing it was the only
+      // signal anything had happened, which meant an operator fixing three
+      // fields on one restaurant had to find the row again after each one.
       setSaving(false);
-      setSelected(null);
-      setEditForm(null);
+      setSavedAt(Date.now());
+      reseedAfterSave.current = true;
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSavedAt(null), 6000);
       router.refresh();
     } catch {
-      setEditError('Could not reach us just now. Try again.');
+      setEditError('Could not reach us just now. Nothing was saved, and your edits are still here.');
       setSaving(false);
     }
   }
@@ -436,9 +504,12 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
   }
 
   const columns: Column<PartnerRow>[] = [
+    // The list should preview what matters about a restaurant: who it is, and
+    // where it delivers. The address was in the row data all along and shown
+    // nowhere, so two branches of the same chain looked identical.
     {
       key: 'partner',
-      header: 'Partner',
+      header: 'Restaurant',
       render: (r) => (
         <div style={{ minWidth: 0 }}>
           <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600, fontSize: 14 }}>
@@ -451,7 +522,7 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-              maxWidth: 260,
+              maxWidth: 320,
             }}
           >
             {r.email}
@@ -460,37 +531,76 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
       ),
     },
     {
+      key: 'area',
+      header: 'Delivers to',
+      render: (r) =>
+        r.serviceAreas.length > 0 ? (
+          <span
+            style={{
+              fontSize: 13,
+              display: 'block',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              maxWidth: 260,
+            }}
+            title={r.serviceAreas.join(', ')}
+          >
+            {r.serviceAreas.join(', ')}
+          </span>
+        ) : (
+          <span style={{ fontSize: 13, color: 'var(--gt-text-faint)' }}>No areas set</span>
+        ),
+    },
+    {
       key: 'status',
       header: 'Status',
-      width: 100,
-      render: (r) => <StatusChip status={r.isActive ? 'active' : 'suspended'} label={r.isActive ? 'Active' : 'Deactivated'} />,
+      width: 120,
+      render: (r) => (
+        <StatusChip
+          status={r.isActive ? 'active' : 'suspended'}
+          label={r.isActive ? 'Active' : 'Switched off'}
+        />
+      ),
     },
     {
-      key: 'currency',
-      header: 'Currency',
-      width: 90,
-      render: (r) => r.currency,
-    },
-    {
-      key: 'cod',
-      header: 'COD',
-      width: 70,
-      align: 'center',
-      render: (r) => (r.acceptsCod ? '✓' : <span style={{ color: 'var(--gt-text-dim)' }}>—</span>),
+      key: 'payments',
+      header: 'Payments',
+      width: 150,
+      render: (r) => (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <Badge tone="neutral">{r.currency}</Badge>
+          {r.acceptsCod ? <Badge tone="neutral">Cash</Badge> : null}
+        </div>
+      ),
     },
     {
       key: 'menu',
       header: 'Menu items',
-      width: 100,
+      width: 110,
       align: 'right',
-      render: (r) => <span className="gt-numeric">{r.menuCount}</span>,
+      render: (r) =>
+        r.menuCount === 0 ? (
+          <span style={{ color: 'var(--gt-text-faint)' }}>Empty</span>
+        ) : (
+          <span className="gt-numeric">{r.menuCount}</span>
+        ),
     },
+    // A live order count is the one number here that means someone is waiting,
+    // so zero stays quiet and anything above it does not.
     {
       key: 'orders',
-      header: 'Active orders',
-      width: 120,
+      header: 'Live orders',
+      width: 110,
       align: 'right',
-      render: (r) => <span className="gt-numeric">{r.activeOrders}</span>,
+      render: (r) =>
+        r.activeOrders === 0 ? (
+          <span style={{ color: 'var(--gt-text-faint)' }}>None</span>
+        ) : (
+          <span className="gt-numeric" style={{ fontWeight: 600 }}>
+            {r.activeOrders}
+          </span>
+        ),
     },
   ];
 
@@ -503,24 +613,25 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
     <>
       <Toolbar
         left={
-          <SearchField
-            placeholder="Search by name or email…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+          <QueueTabs
+            label="Which restaurants to show"
+            tabs={STATUS_TABS}
+            value={statusFilter}
+            onChange={setStatusFilter}
+            /* Neutral: this page's one accent belongs to New partner. */
+            tone="neutral"
           />
         }
         right={
           <>
-            <select
-              className="gt-input"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as 'all' | 'active' | 'inactive')}
-              aria-label="Filter by status"
-            >
-              <option value="all">All statuses</option>
-              <option value="active">Active</option>
-              <option value="inactive">Deactivated</option>
-            </select>
+            <div style={{ width: 240, maxWidth: '100%' }}>
+              <SearchField
+                placeholder="Name or email"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                aria-label="Search restaurants"
+              />
+            </div>
             <Button variant="primary" onClick={openCreate}>
               New partner
             </Button>
@@ -528,13 +639,39 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
         }
       />
 
-      <DataTable
-        columns={columns}
-        rows={filtered}
-        rowKey={(r) => r.id}
-        onRowClick={openRow}
-        empty="No meal partners yet."
-      />
+      <KeyboardRows>
+        <DataTable
+          columns={columns}
+          rows={filtered}
+          rowKey={(r) => r.id}
+          onRowClick={openRow}
+          rowAriaLabel={(r) => `Edit ${r.name}`}
+          empty={
+            query.trim() || statusFilter !== 'all' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+                <span>No restaurant matches this view.</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setQuery('');
+                    setStatusFilter('all');
+                  }}
+                >
+                  Show all restaurants
+                </Button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+                <span>No restaurants yet.</span>
+                <Button variant="ghost" size="sm" onClick={openCreate}>
+                  Add the first one
+                </Button>
+              </div>
+            )
+          }
+        />
+      </KeyboardRows>
 
       <Modal
         open={createOpen}
@@ -658,148 +795,253 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
       <Drawer
         open={selected != null}
         onClose={closeDrawer}
-        title={selected ? selected.name : 'Partner'}
+        title={selected ? selected.name : 'Restaurant'}
         width={460}
-      >
-        {selected && editForm ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <StatusChip status={selected.isActive ? 'active' : 'suspended'} label={selected.isActive ? 'Active' : 'Deactivated'} />
-              <Badge tone="info">{selected.email}</Badge>
-            </div>
-
-            <TextField
-              label="Restaurant name"
-              value={editForm.name}
-              onChange={(e) => setEditForm((f) => (f ? { ...f, name: e.target.value } : f))}
-              disabled={saving}
-            />
-            <TextField
-              label="Contact person"
-              value={editForm.contact}
-              onChange={(e) => setEditForm((f) => (f ? { ...f, contact: e.target.value } : f))}
-              disabled={saving}
-            />
-            <TextField
-              label="Phone"
-              value={editForm.phone}
-              onChange={(e) => setEditForm((f) => (f ? { ...f, phone: e.target.value } : f))}
-              disabled={saving}
-            />
-            <TextField
-              label="Address"
-              value={editForm.addressText}
-              onChange={(e) => setEditForm((f) => (f ? { ...f, addressText: e.target.value } : f))}
-              disabled={saving}
-            />
-            <TextField
-              label="Service areas (comma-separated)"
-              value={editForm.serviceAreas}
-              onChange={(e) => setEditForm((f) => (f ? { ...f, serviceAreas: e.target.value } : f))}
-              disabled={saving}
-            />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <FieldLabel>Delivery service area (center + radius)</FieldLabel>
-              <LocationPicker
-                mode="radius"
-                value={editForm.serviceArea}
-                onChange={(v) => setEditForm((f) => (f ? { ...f, serviceArea: v } : f))}
-                disabled={saving}
-                height={280}
-                ariaLabel="Partner service area"
-              />
-            </div>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <FieldLabel>Currency</FieldLabel>
-              <select
-                className="gt-input"
-                value={editForm.currency}
-                onChange={(e) =>
-                  setEditForm((f) => (f ? { ...f, currency: e.target.value as 'NPR' | 'USD' } : f))
-                }
-                disabled={saving || currencyLocked}
+        /* Pinned, so the save never scrolls away behind the map, the revenue
+           panel and the menu panel that sit under it. */
+        footer={
+          selected && editForm ? (
+            <>
+              <span
+                role="status"
+                aria-live="polite"
+                style={{ marginRight: 'auto', fontSize: 13, color: 'var(--gt-text-dim)' }}
               >
-                <option value="NPR">NPR</option>
-                <option value="USD">USD</option>
-              </select>
-              <span style={{ fontSize: 12, color: currencyLocked ? 'var(--gt-warning)' : 'var(--gt-text-faint)' }}>
-                {currencyLocked && selected
-                  ? `Locked after operational history: ${historySummary(selected.safeguards.currencyHistory)}.`
-                  : 'Currency can change only before the first menu or financial record is created.'}
+                {saving
+                  ? ''
+                  : editDirty
+                    ? 'Not saved yet'
+                    : savedAt
+                      ? 'Saved'
+                      : ''}
               </span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--gt-text)' }}>
-              <input
-                type="checkbox"
-                checked={editForm.acceptsCod}
-                onChange={(e) => setEditForm((f) => (f ? { ...f, acceptsCod: e.target.checked } : f))}
-                disabled={saving}
-              />
-              Accepts cash on delivery
-            </label>
-
-            <div style={{ display: 'flex', gap: 10 }}>
-              <Button variant="primary" disabled={saving} onClick={() => void saveEdit()}>
+              <Button
+                variant="primary"
+                disabled={saving || !editDirty}
+                onClick={() => void saveEdit()}
+              >
                 {saving ? 'Saving…' : 'Save changes'}
               </Button>
+            </>
+          ) : undefined
+        }
+      >
+        {selected && editForm ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <StatusChip
+                status={selected.isActive ? 'active' : 'suspended'}
+                label={selected.isActive ? 'Active' : 'Switched off'}
+              />
+              <span style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>{selected.email}</span>
             </div>
+
+            {editError ? (
+              <div
+                role="alert"
+                style={{
+                  padding: '12px 14px',
+                  borderRadius: 'var(--gt-radius-sm)',
+                  border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+                  background: 'var(--gt-danger-weak)',
+                  color: 'var(--gt-text)',
+                  fontSize: 13,
+                }}
+              >
+                {editError}
+              </div>
+            ) : null}
+
+            {/* Three named groups instead of one undifferentiated stack of
+                eight inputs: who the restaurant is, where it delivers, and how
+                it takes money. */}
+            <Group title="The restaurant">
+              <TextField
+                label="Restaurant name"
+                value={editForm.name}
+                onChange={(e) => editField((f) => ({ ...f, name: e.target.value }))}
+                disabled={saving}
+              />
+              <TextField
+                label="Contact person"
+                value={editForm.contact}
+                onChange={(e) => editField((f) => ({ ...f, contact: e.target.value }))}
+                disabled={saving}
+              />
+              <TextField
+                label="Phone"
+                value={editForm.phone}
+                onChange={(e) => editField((f) => ({ ...f, phone: e.target.value }))}
+                disabled={saving}
+              />
+            </Group>
+
+            <Group title="Where it delivers">
+              <TextField
+                label="Address"
+                value={editForm.addressText}
+                onChange={(e) => editField((f) => ({ ...f, addressText: e.target.value }))}
+                disabled={saving}
+              />
+              <TextField
+                label="Area names"
+                hint="Separate with commas. Matched against a member's saved address at checkout."
+                value={editForm.serviceAreas}
+                onChange={(e) => editField((f) => ({ ...f, serviceAreas: e.target.value }))}
+                disabled={saving}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <FieldLabel>Map reach</FieldLabel>
+                <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                  Drop the kitchen pin and drag the radius. Used alongside the area names above.
+                </div>
+                <LocationPicker
+                  mode="radius"
+                  value={editForm.serviceArea}
+                  onChange={(v) => editField((f) => ({ ...f, serviceArea: v }))}
+                  disabled={saving}
+                  height={280}
+                  ariaLabel="Partner service area"
+                />
+              </div>
+            </Group>
+
+            <Group title="How it takes money">
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <FieldLabel>Currency</FieldLabel>
+                <select
+                  className="gt-input"
+                  value={editForm.currency}
+                  onChange={(e) =>
+                    editField((f) => ({ ...f, currency: e.target.value as 'NPR' | 'USD' }))
+                  }
+                  disabled={saving || currencyLocked}
+                >
+                  <option value="NPR">NPR</option>
+                  <option value="USD">USD</option>
+                </select>
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: currencyLocked ? 'var(--gt-warning)' : 'var(--gt-text-faint)',
+                  }}
+                >
+                  {currencyLocked && selected
+                    ? `Locked, because this restaurant already has ${historySummary(selected.safeguards.currencyHistory)}.`
+                    : 'Can change only until the first menu item or payment exists.'}
+                </span>
+              </label>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  fontSize: 14,
+                  color: 'var(--gt-text)',
+                  minHeight: 44,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={editForm.acceptsCod}
+                  onChange={(e) => editField((f) => ({ ...f, acceptsCod: e.target.checked }))}
+                  disabled={saving}
+                  style={{ width: 18, height: 18 }}
+                />
+                Takes cash on delivery
+              </label>
+            </Group>
 
             <PartnerRevenuePanel partnerId={selected.id} />
 
             <PartnerMenuPanel partnerId={selected.id} />
 
-            <div style={{ paddingTop: 16, borderTop: '1px solid var(--gt-border)' }}>
+            {/* Switching a restaurant off is the one irreversible-feeling
+                action here, so it sits last, apart, and stays quiet until it
+                is wanted. */}
+            <Group title="Switch off">
               {selected.isActive ? (
-                <>
-                  {liveOrderImpact && liveOrderImpact.total > 0 ? (
-                    <div
-                      style={{
-                        padding: 12,
-                        borderRadius: 10,
-                        background: 'color-mix(in srgb, var(--gt-danger) 8%, var(--gt-surface))',
-                        border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
-                        color: 'var(--gt-danger)',
-                        fontSize: 13,
-                      }}
-                    >
-                      <strong>Deactivation blocked</strong>
-                      <div style={{ marginTop: 4, marginBottom: 10 }}>
-                        {liveOrderImpact.total} live order{liveOrderImpact.total === 1 ? '' : 's'} remain
-                        ({liveOrderSummary(liveOrderImpact)}). Finish or cancel them before disabling this
-                        restaurant.
-                      </div>
-                      <Button size="sm" onClick={() => router.push('/admin/orders')}>
-                        Open order oversight
-                      </Button>
+                liveOrderImpact && liveOrderImpact.total > 0 ? (
+                  <div
+                    style={{
+                      padding: 12,
+                      borderRadius: 'var(--gt-radius-sm)',
+                      background: 'var(--gt-danger-weak)',
+                      border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
+                      color: 'var(--gt-text)',
+                      fontSize: 13,
+                    }}
+                  >
+                    <strong style={{ fontFamily: 'var(--font-heading)' }}>
+                      Cannot switch off yet
+                    </strong>
+                    <div style={{ marginTop: 4, marginBottom: 10 }}>
+                      {liveOrderImpact.total} order{liveOrderImpact.total === 1 ? ' is' : 's are'}{' '}
+                      still moving ({liveOrderSummary(liveOrderImpact)}). Finish or cancel them
+                      first.
                     </div>
-                  ) : (
-                    <>
-                      <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginBottom: 8 }}>
-                        Deactivating ends every live session for this login immediately. The partner is
-                        logged out everywhere and can no longer sign in.
-                      </div>
-                      <ConfirmButton
-                        label="Deactivate partner"
-                        confirmLabel="Confirm deactivate?"
-                        busyLabel="Deactivating…"
-                        busy={saving}
-                        onConfirm={() => void toggleActive(false)}
-                      />
-                    </>
-                  )}
-                </>
+                    <Button variant="ghost" size="sm" onClick={() => router.push('/admin/orders')}>
+                      Open the order board
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                      This signs the restaurant out everywhere straight away, and it can no longer
+                      sign back in.
+                    </div>
+                    <ConfirmButton
+                      label="Switch this restaurant off"
+                      confirmLabel="Switch it off?"
+                      busyLabel="Switching off…"
+                      busy={saving}
+                      onConfirm={() => void toggleActive(false)}
+                    />
+                  </>
+                )
               ) : (
-                <Button variant="primary" disabled={saving} onClick={() => void toggleActive(true)}>
-                  {saving ? 'Reactivating…' : 'Reactivate partner'}
-                </Button>
+                <>
+                  <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                    This restaurant is switched off. Members cannot order from it and it cannot
+                    sign in.
+                  </div>
+                  <Button variant="dark" disabled={saving} onClick={() => void toggleActive(true)}>
+                    {saving ? 'Switching on…' : 'Switch it back on'}
+                  </Button>
+                </>
               )}
-            </div>
-
-            {editError ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{editError}</div> : null}
+            </Group>
           </div>
         ) : null}
       </Drawer>
     </>
+  );
+}
+
+/**
+ * A named group of fields inside the editor. Grouping is the whole difference
+ * between a form you read and a form you survive: the drawer used to be eight
+ * inputs, a map and two panels in one undifferentiated column.
+ */
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <h3
+        style={{
+          fontFamily: 'var(--font-heading)',
+          fontWeight: 600,
+          fontSize: 12,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: 'var(--gt-text-faint)',
+          paddingBottom: 8,
+          borderBottom: '1px solid var(--gt-border)',
+        }}
+      >
+        {title}
+      </h3>
+      {children}
+    </section>
   );
 }
 

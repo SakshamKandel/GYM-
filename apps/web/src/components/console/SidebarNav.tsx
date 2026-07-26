@@ -82,28 +82,32 @@ export function SidebarNav({
   return (
     <aside
       aria-label="Primary"
+      className="gt-sidebar"
       style={{
         width: collapsed ? 72 : 248,
         flexShrink: 0,
         borderRight: '1px solid var(--gt-border)',
         background: 'var(--gt-surface)',
-        padding: collapsed ? '18px 10px' : '20px 14px',
+        padding: '16px 12px',
         display: 'flex',
         flexDirection: 'column',
         gap: 4,
         position: 'sticky',
         top: 0,
         height: '100vh',
-        transition: 'width 140ms ease',
       }}
     >
-      {/* brand + collapse toggle */}
+      {/* Brand + collapse toggle. 16px of padding above a 48px row puts the
+          bottom of this block at 64px — level with the top bar's underline
+          beside it, so the two halves of the chrome share one baseline. */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 9,
-          padding: collapsed ? '0 2px 16px' : '0 8px 16px',
+          height: 48,
+          marginBottom: 12,
+          padding: collapsed ? 0 : '0 4px',
           justifyContent: collapsed ? 'center' : 'space-between',
         }}
       >
@@ -119,10 +123,10 @@ export function SidebarNav({
             <span
               aria-hidden
               style={{
-                width: 22,
-                height: 22,
+                width: 26,
+                height: 26,
                 // 8px, matching the collapsed mark below. The radius scale
-                // starts at 10px, which on a 22px tile is all corner and no
+                // starts at 10px, which on a 26px tile is all corner and no
                 // edge — this is the one mark that stays off-scale.
                 borderRadius: 8,
                 background: 'var(--gt-accent)',
@@ -133,7 +137,7 @@ export function SidebarNav({
                 color: 'var(--gt-accent-ink)',
                 fontFamily: 'var(--font-heading)',
                 fontWeight: 700,
-                fontSize: 13,
+                fontSize: 14,
               }}
             >
               {brand.charAt(0)}
@@ -178,7 +182,9 @@ export function SidebarNav({
             onClick={onToggle}
             aria-label="Collapse sidebar"
             aria-expanded={!collapsed}
-            style={iconBtn}
+            title="Collapse sidebar"
+            className="gt-icon-btn"
+            data-bare="true"
           >
             <Chevron dir="left" />
           </button>
@@ -191,7 +197,10 @@ export function SidebarNav({
           onClick={onToggle}
           aria-label="Expand sidebar"
           aria-expanded={!collapsed}
-          style={{ ...iconBtn, alignSelf: 'center', marginBottom: 6 }}
+          title="Expand sidebar"
+          className="gt-icon-btn"
+          data-bare="true"
+          style={{ alignSelf: 'center', marginBottom: 6 }}
         >
           <Chevron dir="right" />
         </button>
@@ -210,17 +219,19 @@ export function SidebarNav({
         }}
       >
         {groups.map((group, gi) => (
-          <div key={group.label ?? `group-${gi}`} style={{ marginBottom: 8 }}>
+          <div key={group.label ?? `group-${gi}`} style={{ marginBottom: collapsed ? 4 : 12 }}>
             {group.label && !collapsed ? (
-              <div className="gt-nav-group-label">{group.label}</div>
+              <div className="gt-nav-group-label" style={{ marginTop: gi > 0 ? 12 : 0 }}>
+                {group.label}
+              </div>
             ) : null}
-            {group.label && collapsed && gi > 0 ? (
+            {collapsed && gi > 0 ? (
               <div
                 aria-hidden
                 style={{
                   height: 1,
                   background: 'var(--gt-border)',
-                  margin: '8px 6px',
+                  margin: '8px 8px',
                 }}
               />
             ) : null}
@@ -234,6 +245,15 @@ export function SidebarNav({
                   data-active={active ? 'true' : undefined}
                   aria-current={active ? 'page' : undefined}
                   title={collapsed ? item.label : undefined}
+                  // Collapsed there is no visible label, and the count beside
+                  // it would be lost too, so both go into the accessible name.
+                  aria-label={
+                    collapsed
+                      ? item.badge != null && item.badge > 0
+                        ? `${item.label}, ${item.badge} waiting`
+                        : item.label
+                      : undefined
+                  }
                   style={collapsed ? { justifyContent: 'center', padding: '9px 0' } : undefined}
                 >
                   {item.icon ? (
@@ -283,39 +303,32 @@ export function SidebarNav({
       </nav>
 
       {/* footer: signed-in identity + logout */}
-      <div style={{ marginTop: 'auto', paddingTop: 8 }}>
+      <div style={{ marginTop: 'auto', paddingTop: 12, borderTop: '1px solid var(--gt-border)' }}>
         {!collapsed ? (
-          <div
-            style={{
-              borderTop: '1px solid var(--gt-border)',
-              paddingTop: 12,
-              marginBottom: 10,
-              padding: '12px 8px 0',
-            }}
-          >
+          <div style={{ padding: '0 4px', marginBottom: 8 }}>
             <div
-              style={{
-                fontSize: 11,
-                letterSpacing: '0.04em',
-                textTransform: 'uppercase',
-                color: 'var(--gt-text-dim)',
-                marginBottom: 4,
-              }}
+              className="gt-nav-group-label"
+              style={{ padding: 0, margin: '0 0 2px' }}
             >
               Signed in
             </div>
             <div
-              className="gt-numeric"
-              style={{ fontSize: 12, color: 'var(--gt-text)', wordBreak: 'break-all' }}
+              title={email}
+              style={{
+                fontSize: 13,
+                color: 'var(--gt-text)',
+                fontFamily: 'var(--font-heading)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
             >
               {email}
             </div>
           </div>
         ) : null}
         {!collapsed ? (
-          <div style={{ padding: '0 8px' }}>
-            <LogoutButton loginHref={loginHref} />
-          </div>
+          <LogoutButton loginHref={loginHref} />
         ) : (
           <LogoutButton loginHref={loginHref} compact />
         )}
@@ -324,40 +337,32 @@ export function SidebarNav({
   );
 }
 
+/**
+ * The count beside a nav label. It is the label's companion, so it stays quiet
+ * (a neutral chip) and only takes colour when the row is hovered or active —
+ * the accent belongs to the active destination, not to a number sitting next to
+ * every waiting queue.
+ *
+ * Collapsed, there is no room for digits, so it becomes a dot with the count in
+ * its accessible name.
+ */
 function Badge({ count, collapsed }: { count: number; collapsed: boolean }) {
   const text = count > 99 ? '99+' : String(count);
+  const label = `${count} waiting`;
   if (collapsed) {
+    // The count rides in the link's own accessible name when collapsed, so the
+    // dot is purely a visual marker here.
     return (
       <span
-        aria-label={`${count} unread`}
-        style={{
-          position: 'absolute',
-          top: 6,
-          right: 10,
-          width: 8,
-          height: 8,
-          borderRadius: 'var(--gt-radius-pill)',
-          background: 'var(--gt-accent)',
-        }}
+        className="gt-status-dot"
+        data-tone="accent"
+        aria-hidden
+        style={{ position: 'absolute', top: 8, right: 12 }}
       />
     );
   }
   return (
-    <span
-      aria-label={`${count} unread`}
-      className="gt-numeric"
-      style={{
-        marginLeft: 'auto',
-        minWidth: 20,
-        textAlign: 'center',
-        padding: '1px 6px',
-        borderRadius: 'var(--gt-radius-pill)',
-        background: 'var(--gt-accent-weak)',
-        color: 'var(--gt-accent-strong)',
-        fontSize: 11,
-        fontWeight: 600,
-      }}
-    >
+    <span className="gt-nav-badge" role="img" aria-label={label}>
       {text}
     </span>
   );
@@ -376,17 +381,3 @@ function Chevron({ dir }: { dir: 'left' | 'right' }) {
     </svg>
   );
 }
-
-const iconBtn: React.CSSProperties = {
-  width: 44,
-  height: 44,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: 'var(--gt-radius-sm)',
-  border: '1px solid var(--gt-border)',
-  background: 'var(--gt-surface)',
-  color: 'var(--gt-text-dim)',
-  cursor: 'pointer',
-  flexShrink: 0,
-};

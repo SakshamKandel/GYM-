@@ -109,6 +109,12 @@
   --font-heading: var(--font-poppins), system-ui, sans-serif;
   --font-numeric: var(--font-oswald), system-ui, sans-serif;
   --gt-numeric: var(--font-numeric); /* token-name alias (frozen contract) */
+
+  /* Layout metrics — shared so a sticky table header knows how tall the bar
+   * above it is without every table hardcoding the same number. */
+  --gt-topbar-h: 64px;
+  --gt-row-h: 52px; /* data-table row rhythm */
+  --gt-gutter: 16px; /* ONE interior gutter: card, card header, table cell */
 }
 
 * {
@@ -160,6 +166,13 @@ h4 {
   box-shadow: none;
   border-radius: 0;
   background: transparent;
+}
+
+/* No shadow inside a shadow. A card nested in another card (or in a modal
+ * panel, which is itself a card) keeps its border and drops the lift — two
+ * stacked shadows read as a smudge, not as depth. */
+.gt-card .gt-card {
+  box-shadow: none;
 }
 
 /* Primary action — the one accent button. */
@@ -216,6 +229,42 @@ h4 {
 .gt-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+/* Icon-only actions stay square so a row of them keeps its rhythm, and still
+ * clear the 44px target. */
+.gt-btn[data-icon-only='true'] {
+  padding: 0;
+  width: 48px;
+}
+.gt-btn[data-size='sm'][data-icon-only='true'] {
+  width: 44px;
+}
+/* Working state: the label holds its place (no width jump mid-save) and the
+ * control stops accepting input. */
+.gt-btn[data-busy='true'] {
+  cursor: progress;
+}
+.gt-btn-spinner {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: var(--gt-radius-pill);
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0.9;
+  animation: gt-spin 620ms linear infinite;
+}
+@keyframes gt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gt-btn-spinner {
+    animation: none;
+    border-top-color: currentColor;
+    opacity: 0.45;
+  }
 }
 
 .gt-btn[data-variant='primary'] {
@@ -428,11 +477,17 @@ h4 {
   background: var(--gt-surface-hover);
 }
 
-/* Flat skeleton bar (no shimmer, no pulse). */
+/* Flat skeleton bar (no shimmer, no pulse). Reads from the border token rather
+ * than a copy of its hex, so a theme flip carries the loading state with it. */
 .gt-skeleton {
-  background: #ececE6;
+  background: var(--gt-border);
   border-radius: 6px;
   height: 12px;
+}
+/* Two weights so a skeleton can echo the shape it replaces: the strong bar
+ * stands in for a heading or a primary cell, the plain one for body text. */
+.gt-skeleton[data-weight='strong'] {
+  background: var(--gt-border-strong);
 }
 
 /* Live-indicator dot — a soft sonar ping marking metrics/panels that update
@@ -472,6 +527,16 @@ h4 {
   }
 }
 
+/* One scrim for every overlay. Modal, drawer and the off-canvas sidebar each
+ * dimmed the page by a different amount, so moving between them felt like
+ * moving between three products. Same charcoal the shadows are mixed from. */
+.gt-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(16, 17, 18, 0.46);
+  backdrop-filter: blur(2px);
+}
+
 /* Drawer slide-in (right detail panel). Disabled for reduced-motion. */
 @keyframes gt-drawer-in {
   from {
@@ -489,9 +554,119 @@ h4 {
   }
 }
 
-/* Data-table row hover — subtle recess, no color shift. */
+/* ── Data table ───────────────────────────────────────────────────────────
+ * The console workhorse. Everything here is rhythm and state: the numbers,
+ * alignment and column roles are decided in DataTable.tsx.
+ *
+ * Rows carry a fixed height rather than padding alone, so a row holding a chip
+ * and a row holding plain text are the same height and the eye can track
+ * across a long queue. */
+.gt-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.gt-th {
+  height: 40px;
+  padding: 0 var(--gt-gutter);
+  background: var(--gt-surface-sunken);
+  color: var(--gt-text-faint);
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: var(--gt-fs-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--gt-border);
+  vertical-align: middle;
+}
+/* Sticky header for long queues. The table body is its own scroll region when
+ * this is on (DataTable caps its height), so the band pins to the top of that
+ * region and paints opaque — rows travel behind the column names, not through
+ * them. */
+.gt-table[data-sticky-header='true'] .gt-th {
+  position: sticky;
+  top: var(--gt-sticky-top, 0);
+  z-index: 1;
+}
+
+.gt-td {
+  height: var(--gt-row-h);
+  padding: 10px var(--gt-gutter);
+  color: var(--gt-text);
+  vertical-align: middle;
+  border-bottom: 1px solid var(--gt-border);
+  font-weight: 400;
+}
+.gt-tr:last-child > .gt-td {
+  border-bottom: 0;
+}
+/* The column an operator scans first: full-strength ink, a touch more weight,
+ * and it never wraps to a second line ahead of the columns beside it. */
+.gt-td[data-primary='true'] {
+  font-weight: 600;
+  color: var(--gt-text);
+}
+/* Numbers line up down the column whatever the digits are. */
+.gt-tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+/* Secondary actions stay quiet until the row is under the pointer. Only where
+ * there IS a pointer: on a touch screen nothing ever hovers, so dimming there
+ * would just mean permanently quieter buttons. */
+.gt-td[data-actions='true'] {
+  white-space: nowrap;
+}
+@media (hover: hover) {
+  .gt-td[data-actions='true'] > * {
+    opacity: 0.82;
+    transition: opacity 120ms;
+  }
+  .gt-tr:hover .gt-td[data-actions='true'] > *,
+  .gt-tr:focus-within .gt-td[data-actions='true'] > * {
+    opacity: 1;
+  }
+}
+
+/* Row states — subtle recess on hover, accent wash only for the selected row. */
+.gt-tr {
+  transition: background 90ms;
+}
 .gt-tr:hover {
   background: var(--gt-surface-sunken);
+}
+.gt-tr[data-clickable='true']:active {
+  background: var(--gt-surface-hover);
+}
+.gt-tr[data-selected='true'],
+.gt-tr[data-selected='true']:hover {
+  background: var(--gt-accent-weak);
+}
+.gt-tr[data-selected='true'] > .gt-td:first-child {
+  box-shadow: inset 3px 0 0 var(--gt-accent);
+}
+/* The row is the scroll container's full width, so a ring drawn OUTSIDE it is
+ * clipped away. Inset it and the keyboard position stays visible. */
+.gt-tr:focus-visible {
+  outline: 2px solid var(--gt-accent-strong);
+  outline-offset: -2px;
+  background: var(--gt-surface-sunken);
+}
+
+/* Empty table body — a real answer, not a shrug in a box. */
+.gt-table-empty {
+  padding: 40px var(--gt-gutter);
+  text-align: center;
+  border-bottom: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gt-tr,
+  .gt-td[data-actions='true'] > * {
+    transition: none;
+  }
 }
 
 /* ── Sidebar nav ──────────────────────────────────────────────────────────
@@ -515,10 +690,23 @@ h4 {
   background: var(--gt-surface-hover);
   color: var(--gt-text);
 }
+.gt-nav-item:active {
+  background: color-mix(in srgb, var(--gt-surface-hover) 88%, var(--gt-text));
+}
+/* The rail is a narrow, clipped column, so an outset ring is cut off at both
+ * edges. Inset keeps the whole ring on screen. */
+.gt-nav-item:focus-visible {
+  outline: 2px solid var(--gt-accent-strong);
+  outline-offset: -2px;
+}
 .gt-nav-item[data-active='true'] {
   color: var(--gt-accent-strong);
   background: var(--gt-accent-weak);
   font-weight: 600;
+}
+.gt-nav-item[data-active='true']:hover {
+  background: color-mix(in srgb, var(--gt-accent-weak) 82%, var(--gt-accent));
+  color: var(--gt-accent-strong);
 }
 .gt-nav-item[data-active='true']::before {
   content: '';
@@ -540,6 +728,74 @@ h4 {
   color: var(--gt-text-faint);
   padding: 0 12px;
   margin: 4px 0;
+}
+
+/* Count beside a nav label. Quiet by default; it is the label's companion, not
+ * a second thing competing with it. On the active row it inverts so it stays
+ * legible on the accent wash. */
+.gt-nav-badge {
+  margin-left: auto;
+  min-width: 20px;
+  text-align: center;
+  padding: 1px 6px;
+  border-radius: var(--gt-radius-pill);
+  background: var(--gt-surface-hover);
+  color: var(--gt-text-dim);
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.gt-nav-item:hover .gt-nav-badge {
+  background: var(--gt-border-strong);
+  color: var(--gt-text);
+}
+.gt-nav-item[data-active='true'] .gt-nav-badge {
+  background: var(--gt-accent-strong);
+  color: var(--gt-accent-ink);
+}
+
+/* Square icon control — sidebar collapse caret, top-bar menu and bell. One
+ * rule so all three feel like the same button. */
+.gt-icon-btn {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: var(--gt-radius-sm);
+  border: 1px solid var(--gt-border);
+  background: var(--gt-surface);
+  color: var(--gt-text-dim);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.gt-icon-btn:hover:not(:disabled) {
+  background: var(--gt-surface-hover);
+  border-color: var(--gt-border-strong);
+  color: var(--gt-text);
+}
+.gt-icon-btn:active:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-surface-hover) 88%, var(--gt-text));
+  border-color: var(--gt-border-input);
+}
+.gt-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Borderless variant for a control that sits on its own inside a panel header
+ * (the drawer / modal close), where a box would be one box too many. */
+.gt-icon-btn[data-bare='true'] {
+  border-color: transparent;
+  background: transparent;
+}
+.gt-icon-btn[data-bare='true']:hover:not(:disabled) {
+  background: var(--gt-surface-hover);
+  border-color: transparent;
 }
 
 /* Focus states — visible keyboard ring on every interactive control. The ring
@@ -575,16 +831,206 @@ h4 {
   top: 12px;
 }
 
-/* Honour reduced-motion globally for the shell transitions. */
+/* Honour reduced-motion globally for the shell transitions. Controls declared
+ * further down get the same treatment from the closing block at the end of the
+ * file — a media query adds no specificity, so a `transition` written after
+ * this one would quietly win. */
 @media (prefers-reduced-motion: reduce) {
   .gt-nav-item,
   .gt-inbox-row,
   .gt-skip-link,
   .gt-btn,
   .gt-btn-primary,
-  .gt-pill {
+  .gt-pill,
+  .gt-icon-btn {
     transition: none;
   }
+}
+
+/* ── Small shared primitives ──────────────────────────────────────────────
+ * Patterns the console pages kept hand-rolling, each in three or more places
+ * and each slightly differently. The markup lives in components/console; the
+ * look lives here so it can carry states. */
+
+/* Visually hidden, still read aloud. */
+.gt-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Sub-section heading INSIDE a page or a panel — quieter than the page title,
+ * louder than body text, with an optional trailing action. */
+.gt-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gt-space-3);
+  margin-bottom: var(--gt-space-3);
+}
+.gt-section-header-title {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: var(--gt-fs-micro);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gt-text-faint);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gt-space-2);
+  min-width: 0;
+}
+.gt-section-header-desc {
+  margin: var(--gt-space-1) 0 0;
+  font-size: var(--gt-fs-meta);
+  color: var(--gt-text-dim);
+  max-width: 62ch;
+}
+
+/* Label-over-value detail pairs — the drawer read-out. Whitespace does the
+ * separating; no rules, no boxes. */
+.gt-dl {
+  display: grid;
+  gap: var(--gt-space-4);
+  margin: 0;
+}
+.gt-dl[data-columns='2'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 560px) {
+  .gt-dl[data-columns='2'] {
+    grid-template-columns: 1fr;
+  }
+}
+.gt-dt {
+  font-family: var(--font-heading);
+  font-size: var(--gt-fs-micro);
+  letter-spacing: 0.03em;
+  color: var(--gt-text-faint);
+  margin: 0 0 var(--gt-space-1);
+}
+.gt-dd {
+  margin: 0;
+  font-size: var(--gt-fs-meta);
+  color: var(--gt-text);
+  overflow-wrap: anywhere;
+}
+
+/* Inline status dot — the smallest possible "what state is this in". Pairs
+ * with a text label; never carries the meaning on its own. */
+.gt-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--gt-radius-pill);
+  flex-shrink: 0;
+  background: var(--gt-text-faint);
+}
+.gt-status-dot[data-tone='positive'] {
+  background: var(--gt-success);
+}
+.gt-status-dot[data-tone='warning'] {
+  background: var(--gt-warning);
+}
+.gt-status-dot[data-tone='critical'] {
+  background: var(--gt-danger);
+}
+.gt-status-dot[data-tone='info'] {
+  background: var(--gt-info);
+}
+.gt-status-dot[data-tone='accent'] {
+  background: var(--gt-accent);
+}
+
+/* Inline message strip — an error a save just returned, a caveat above a
+ * form. Tinted wash, no shadow, no icon-in-a-circle. */
+.gt-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gt-space-2);
+  padding: var(--gt-space-3) var(--gt-gutter);
+  border-radius: var(--gt-radius-sm);
+  border: 1px solid transparent;
+  font-size: var(--gt-fs-meta);
+  line-height: 1.45;
+}
+.gt-alert[data-tone='critical'] {
+  background: var(--gt-danger-weak);
+  border-color: color-mix(in srgb, var(--gt-danger) 24%, transparent);
+  color: var(--gt-danger);
+}
+.gt-alert[data-tone='warning'] {
+  background: var(--gt-warning-weak);
+  border-color: color-mix(in srgb, var(--gt-warning) 24%, transparent);
+  color: var(--gt-warning);
+}
+.gt-alert[data-tone='positive'] {
+  background: var(--gt-success-weak);
+  border-color: color-mix(in srgb, var(--gt-success) 24%, transparent);
+  color: var(--gt-success);
+}
+.gt-alert[data-tone='info'] {
+  background: var(--gt-info-weak);
+  border-color: color-mix(in srgb, var(--gt-info) 24%, transparent);
+  color: var(--gt-info);
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────────── */
+.gt-search-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 var(--gt-space-3) 0 34px;
+  border-radius: var(--gt-radius-sm);
+  border: 1px solid var(--gt-border);
+  background: var(--gt-surface-sunken);
+  color: var(--gt-text);
+  font-size: var(--gt-fs-meta);
+  font-family: var(--font-heading);
+  transition: background 120ms, border-color 120ms;
+}
+.gt-search-input::placeholder {
+  color: var(--gt-text-faint);
+}
+.gt-search-input:hover {
+  border-color: var(--gt-border-strong);
+}
+.gt-search-input:focus {
+  background: var(--gt-surface);
+  border-color: var(--gt-accent-strong);
+}
+.gt-search-input:focus:not(:focus-visible) {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--gt-accent-weak);
+}
+
+/* Keyboard hint. Hidden where there is no keyboard to hint at — it used to
+ * carry Tailwind class names that this stylesheet never defined, so it showed
+ * on phones too. */
+.gt-kbd {
+  font-size: 11px;
+  font-family: var(--font-numeric);
+  color: var(--gt-text-faint);
+  border: 1px solid var(--gt-border-strong);
+  border-radius: 6px;
+  padding: 1px 6px;
+  background: var(--gt-surface);
+}
+@media (max-width: 640px), (pointer: coarse) {
+  .gt-kbd {
+    display: none;
+  }
+}
+
+/* The collapse is the one shell animation. Held still under reduced-motion by
+ * the shared rule above. */
+.gt-sidebar {
+  transition: width 140ms ease;
 }
 
 /* ── Responsive Console Shell & Grid System ──────────────────────────── */
@@ -655,5 +1101,16 @@ h4 {
   width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+}
+
+/* ── Reduced motion, last word ────────────────────────────────────────────
+ * Everything declared below the earlier reduced-motion block lands here, at the
+ * end of the file, so nothing can out-order it. Nothing in this console moves
+ * far enough to matter, but a preference is a preference. */
+@media (prefers-reduced-motion: reduce) {
+  .gt-search-input,
+  .gt-sidebar {
+    transition: none;
+  }
 }
 

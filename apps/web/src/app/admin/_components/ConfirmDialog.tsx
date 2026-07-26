@@ -17,6 +17,12 @@ import { Button, Modal } from '@/components/console';
  * `summary` is that sentence; `details` holds the row facts (member, order
  * number, amount) so the operator can check them without going back. The
  * confirm button carries the verb, never "OK".
+ *
+ * A refusal is reported HERE, through `error`, rather than by closing. Sending
+ * the operator back to the queue with no explanation is how the same payout
+ * gets approved three times: the dialog vanished, so it looked like it worked.
+ * With the dialog still open and the reason on it, the facts they were checking
+ * are still in front of them and retrying is one click.
  */
 export function ConfirmDialog({
   open,
@@ -28,6 +34,7 @@ export function ConfirmDialog({
   cancelLabel = 'Keep as is',
   busy = false,
   destructive = true,
+  error,
   onConfirm,
   onCancel,
   children,
@@ -44,6 +51,8 @@ export function ConfirmDialog({
   cancelLabel?: string;
   busy?: boolean;
   destructive?: boolean;
+  /** Why the server refused, in plain words. Keeps the dialog open. */
+  error?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
   /** Extra content (e.g. a warning about what cannot be undone). */
@@ -67,7 +76,7 @@ export function ConfirmDialog({
             disabled={busy}
             onClick={onConfirm}
           >
-            {busy ? busyLabel : confirmLabel}
+            {busy ? busyLabel : error ? `${confirmLabel} again` : confirmLabel}
           </Button>
         </>
       }
@@ -102,6 +111,23 @@ export function ConfirmDialog({
         ) : null}
 
         {children}
+
+        {error ? (
+          <div
+            role="alert"
+            style={{
+              padding: 12,
+              borderRadius: 'var(--gt-radius-sm)',
+              border: '1px solid color-mix(in srgb, var(--gt-danger) 35%, transparent)',
+              background: 'var(--gt-danger-weak)',
+              color: 'var(--gt-danger)',
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
       </div>
     </Modal>
   );

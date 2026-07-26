@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Badge,
@@ -14,6 +14,7 @@ import {
   Toolbar,
 } from '@/components/console';
 import { formatDate } from '@/lib/format';
+import { useUrlSearch } from '../../_components/useUrlState';
 
 export interface PromoCodeRow {
   id: string;
@@ -66,7 +67,9 @@ export function PromoManager({
   coaches: CoachOption[];
 }) {
   const router = useRouter();
-  const [query, setQuery] = useState('');
+  // In the URL, so a trip out to the coach who owns a code and back does not
+  // cost the search that found it.
+  const [query, setQuery] = useUrlSearch('q');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [createOpen, setCreateOpen] = useState(false);
   const [ownerMode, setOwnerMode] = useState<'house' | 'coach'>('house');
@@ -83,6 +86,22 @@ export function PromoManager({
   const [rowError, setRowError] = useState<{ id: string; msg: string } | null>(
     null,
   );
+
+  /**
+   * Turning a code on or off is one boolean, but the row only changed once the
+   * server had answered AND the whole page had re-rendered from it — the best
+   * part of a second of a button reading "Saving…" for something that is
+   * either allowed or not. The chip flips now; if the server refuses, it flips
+   * back and says why, which is the one case where waiting would have helped.
+   *
+   * Cleared whenever a fresh `codes` arrives: the server is the truth, this is
+   * only a stand-in for the gap.
+   */
+  const [pendingActive, setPendingActive] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    setPendingActive({});
+  }, [codes]);
+  const isActive = (row: PromoCodeRow): boolean => pendingActive[row.id] ?? row.active;
 
   // Search matches the code itself or the owning coach's display label
   // ("House" for house codes never matches unless typed literally). Purely
@@ -180,8 +199,19 @@ export function PromoManager({
   }
 
   async function toggleActive(row: PromoCodeRow) {
+    const next = !isActive(row);
     setToggling(row.id);
     setRowError(null);
+    setPendingActive((m) => ({ ...m, [row.id]: next }));
+    /** Put the chip back where it was and say why it went back. */
+    const revert = (msg: string) => {
+      setPendingActive((m) => {
+        const rest = { ...m };
+        delete rest[row.id];
+        return rest;
+      });
+      setRowError({ id: row.id, msg });
+    };
     try {
       const res = await fetch(
         `/api/admin/promo-codes/${encodeURIComponent(row.id)}`,
@@ -189,24 +219,22 @@ export function PromoManager({
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ active: !row.active }),
+          body: JSON.stringify({ active: next }),
         },
       );
       if (!res.ok) {
-        setRowError({
-          id: row.id,
-          msg:
-            res.status === 403
-              ? 'Not allowed.'
-              : 'Could not update this code.',
-        });
+        revert(
+          res.status === 403
+            ? 'You are not allowed to change this code, so it is still as it was.'
+            : 'That did not save, so the code is still as it was.',
+        );
         setToggling(null);
         return;
       }
       setToggling(null);
       router.refresh();
     } catch {
-      setRowError({ id: row.id, msg: 'Could not reach us just now. Try again.' });
+      revert('Could not reach us just now, so the code is still as it was.');
       setToggling(null);
     }
   }
@@ -275,8 +303,8 @@ export function PromoManager({
       header: 'Status',
       width: 100,
       render: (r) => (
-        <Badge tone={r.active ? 'positive' : 'neutral'}>
-          {r.active ? 'Active' : 'Inactive'}
+        <Badge tone={isActive(r) ? 'positive' : 'neutral'}>
+          {isActive(r) ? 'Active' : 'Inactive'}
         </Badge>
       ),
     },
@@ -305,8 +333,9 @@ export function PromoManager({
             size="sm"
             disabled={toggling === r.id}
             onClick={() => void toggleActive(r)}
+            aria-label={`${isActive(r) ? 'Turn off' : 'Turn on'} the code ${r.code}`}
           >
-            {toggling === r.id ? 'Saving…' : r.active ? 'Deactivate' : 'Activate'}
+            {isActive(r) ? 'Turn off' : 'Turn on'}
           </Button>
           {rowError?.id === r.id ? (
             <div style={{ color: 'var(--gt-danger)', fontSize: 11, marginTop: 4 }}>

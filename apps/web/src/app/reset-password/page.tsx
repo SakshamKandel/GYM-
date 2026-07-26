@@ -4,7 +4,7 @@ import styles from '@/components/customer/marketing.module.css';
 import { ResetPasswordForm } from './ResetPasswordForm';
 
 export const metadata: Metadata = {
-  title: 'Reset password | The GM Method',
+  title: 'Reset password',
   description: 'Choose a new password for your GM Method account.',
   robots: { index: false, follow: false },
 };

@@ -3,9 +3,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Badge, Button, Card, CardHeader, type Column, DataTable } from '@/components/console';
 import { formatDateTime } from '@/lib/format';
+import { QueueTabs } from '../../../_components/QueueTabs';
+import { useUrlState } from '../../../_components/useUrlState';
 import type { GymReportRow, GymReviewRow } from './types';
 
-type Tab = 'reports' | 'reviews' | 'enquiries';
+const TABS = ['reports', 'reviews', 'enquiries'] as const;
+type Tab = (typeof TABS)[number];
 
 type EnquiryStatus = 'open' | 'contacted' | 'closed';
 
@@ -42,7 +45,9 @@ interface GymEnquiryRow {
  * every mutating action so state never drifts from the server.
  */
 export function GymModerationConsole() {
-  const [tab, setTab] = useState<Tab>('reports');
+  // In the URL, so returning from a gym listing lands on the queue that sent
+  // you there.
+  const [tab, setTab] = useUrlState<Tab>('tab', 'reports', TABS);
   const [reports, setReports] = useState<GymReportRow[] | null>(null);
   const [reviews, setReviews] = useState<GymReviewRow[] | null>(null);
   const [enquiries, setEnquiries] = useState<GymEnquiryRow[] | null>(null);
@@ -150,17 +155,20 @@ export function GymModerationConsole() {
 
   return (
     <div style={{ display: 'grid', gap: 18 }}>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <Button variant={tab === 'reports' ? 'dark' : 'ghost'} size="sm" onClick={() => setTab('reports')}>
-          Reports {openReportsCount > 0 ? `(${openReportsCount} open)` : ''}
-        </Button>
-        <Button variant={tab === 'reviews' ? 'dark' : 'ghost'} size="sm" onClick={() => setTab('reviews')}>
-          Reviews ({visibleReviewsCount} visible)
-        </Button>
-        <Button variant={tab === 'enquiries' ? 'dark' : 'ghost'} size="sm" onClick={() => setTab('enquiries')}>
-          Enquiries {openEnquiriesCount > 0 ? `(${openEnquiriesCount} waiting)` : ''}
-        </Button>
-      </div>
+      {/* Three buttons that changed variant when chosen read as three separate
+          actions, not one control with one answer. Same segmented control the
+          rest of the console uses, and the count is what an operator is
+          actually picking between. */}
+      <QueueTabs
+        label="Which gym queue to work"
+        tabs={[
+          { key: 'reports', label: 'Reports', count: openReportsCount },
+          { key: 'reviews', label: 'Reviews', count: visibleReviewsCount },
+          { key: 'enquiries', label: 'Enquiries', count: openEnquiriesCount },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
 
       {error ? <div style={{ color: 'var(--gt-danger)', fontSize: 13 }}>{error}</div> : null}
 

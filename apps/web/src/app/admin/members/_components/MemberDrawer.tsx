@@ -23,6 +23,7 @@ import { formatDate, formatDateTime } from '@/lib/format';
 import { staffRoleLabel } from '@/app/admin/_lib/staffRoleLabel';
 import { tierLabel } from '@/app/admin/_lib/tierLabel';
 import type { StaffRole } from '@/lib/auth';
+import { CopyButton } from '../../_components/CopyButton';
 import type {
   CoachOption,
   MemberDetail,
@@ -152,7 +153,6 @@ export function MemberDrawer({
   const [credBusy, setCredBusy] = useState(false);
   const [credError, setCredError] = useState<string | null>(null);
   const [resetLink, setResetLink] = useState<{ url: string; expiresAt: string } | null>(null);
-  const [linkCopied, setLinkCopied] = useState(false);
   const [emailEdit, setEmailEdit] = useState('');
   const [nameEdit, setNameEdit] = useState('');
   const [signOutMsg, setSignOutMsg] = useState<string | null>(null);
@@ -204,7 +204,6 @@ export function MemberDrawer({
     // members.
     setCredError(null);
     setResetLink(null);
-    setLinkCopied(false);
     setSignOutMsg(null);
     setGdprConfirm('');
     setSuspendReason('');
@@ -367,7 +366,6 @@ export function MemberDrawer({
     if (!memberId) return;
     setCredBusy(true);
     setCredError(null);
-    setLinkCopied(false);
     try {
       const res = await fetch(`/api/admin/members/${memberId}/credentials`, {
         method: 'POST',
@@ -389,18 +387,6 @@ export function MemberDrawer({
       setCredError('That action could not be completed.');
     } finally {
       setCredBusy(false);
-    }
-  }
-
-  async function copyResetLink() {
-    if (!resetLink) return;
-    try {
-      await navigator.clipboard.writeText(resetLink.url);
-      setLinkCopied(true);
-    } catch {
-      // Clipboard blocked (insecure context / permissions) — the link is still
-      // visible in the field for manual selection.
-      setLinkCopied(false);
     }
   }
 
@@ -574,9 +560,9 @@ export function MemberDrawer({
         <div
           role="alert"
           style={{
-            marginBottom: 14,
+            marginBottom: 16,
             padding: '10px 12px',
-            borderRadius: 10,
+            borderRadius: 'var(--gt-radius-sm)',
             border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
             background: 'var(--gt-danger-weak)',
             color: 'var(--gt-danger)',
@@ -587,18 +573,18 @@ export function MemberDrawer({
         </div>
       ) : null}
 
-      {/* Summary */}
-      <section style={{ marginBottom: 22 }}>
+      {/* Who this is — identity first, then the facts that describe them. */}
+      <section>
         <div
           style={{
             fontSize: 14,
             color: 'var(--gt-text-dim)',
-            wordBreak: 'break-all',
+            overflowWrap: 'anywhere',
           }}
         >
           {detail?.member.email ?? fallback?.email ?? ''}
         </div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
           <TierChip tier={currentTier} />
           {isLapsed ? <Badge tone="warning">Lapsed</Badge> : null}
           <StatusChip status={currentStatus} />
@@ -607,20 +593,9 @@ export function MemberDrawer({
           ) : null}
         </div>
         {isLapsed && tierExpiresAt ? (
-          <div style={{ marginTop: 8, fontSize: 13, color: 'var(--gt-text-dim)' }}>
+          <div style={{ marginTop: 10, fontSize: 13, color: 'var(--gt-text-dim)' }}>
             {tierLabel(currentTier)} ended {formatDate(tierExpiresAt)}, so this member is on
             Starter now.
-          </div>
-        ) : !isLapsed && tierExpiresAt && currentTier !== 'starter' ? (
-          <div style={{ marginTop: 8, fontSize: 13, color: 'var(--gt-text-dim)' }}>
-            Renews/expires{' '}
-            {formatDate(tierExpiresAt)}
-          </div>
-        ) : null}
-        {detail?.member.createdAt ? (
-          <div style={{ marginTop: 10, fontSize: 13, color: 'var(--gt-text-dim)' }}>
-            Joined{' '}
-            {formatDate(detail.member.createdAt)}
           </div>
         ) : null}
         {memberId ? (
@@ -632,15 +607,18 @@ export function MemberDrawer({
               flexWrap: 'wrap',
             }}
           >
+            {/* Quiet by design: the accent in this panel belongs to the one
+                action that changes something, not to a side trip. */}
             <Link
               href={`/admin/members/${memberId}/view`}
               style={{
                 fontSize: 13,
-                color: 'var(--gt-accent)',
-                textDecoration: 'none',
+                color: 'var(--gt-text-dim)',
+                textDecorationColor: 'var(--gt-border-strong)',
+                textUnderlineOffset: 3,
               }}
             >
-              View read-only snapshot →
+              Full member record
             </Link>
             {/* "Who changed this member, and when" — deep-links the audit log
                 pre-filtered to this account, which is exactly the shape of the
@@ -652,11 +630,12 @@ export function MemberDrawer({
                 href={`/admin/audit?targetType=account&targetId=${encodeURIComponent(memberId)}`}
                 style={{
                   fontSize: 13,
-                  color: 'var(--gt-accent)',
-                  textDecoration: 'none',
+                  color: 'var(--gt-text-dim)',
+                  textDecorationColor: 'var(--gt-border-strong)',
+                  textUnderlineOffset: 3,
                 }}
               >
-                View full history →
+                Change history
               </Link>
             ) : null}
           </div>
@@ -664,29 +643,72 @@ export function MemberDrawer({
       </section>
 
       {loading ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        // Shaped like the definition list it becomes, so the panel settles
+        // instead of jumping when the detail lands.
+        <div
+          role="status"
+          aria-label="Loading this member"
+          style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 22 }}
+        >
+          <SkeletonBar w="40%" h={10} />
+          <SkeletonBar w="85%" />
           <SkeletonBar w="70%" />
           <SkeletonBar w="55%" />
-          <SkeletonBar w="80%" />
         </div>
       ) : null}
 
       {!loading && detail ? (
         <>
+          {/* Membership facts */}
+          <FieldGroup label="Membership">
+            <DefinitionList
+              rows={[
+                { label: 'Plan', value: tierLabel(currentTier) },
+                {
+                  label: 'Access until',
+                  value:
+                    currentTier === 'starter'
+                      ? 'Not applicable'
+                      : tierExpiresAt
+                        ? formatDate(tierExpiresAt)
+                        : 'No end date',
+                  numeric: Boolean(tierExpiresAt) && currentTier !== 'starter',
+                },
+                {
+                  label: 'Coach',
+                  value: detail.coach
+                    ? detail.coach.displayName || detail.coach.email
+                    : 'None assigned',
+                },
+                {
+                  label: 'Joined',
+                  value: formatDate(detail.member.createdAt),
+                  numeric: true,
+                },
+              ]}
+            />
+          </FieldGroup>
+
           {/* Profile summary */}
           <FieldGroup label="Profile">
             {detail.profile && Object.keys(detail.profile).length > 0 ? (
               <ProfileSummary data={detail.profile} />
             ) : (
-              <Muted>No cloud profile on record.</Muted>
+              <Muted>This member has not filled in their profile yet.</Muted>
             )}
           </FieldGroup>
 
+          <SectionTitle hint="Changes save straight away and are recorded against your name.">
+            Manage this member
+          </SectionTitle>
+
           {/* Assigned coach */}
-          <FieldGroup label="Assigned coach">
+          <FieldGroup label="Coach">
             {detail.coach ? (
               <div style={{ fontSize: 14 }}>
-                <div style={{ fontWeight: 500 }}>{detail.coach.displayName}</div>
+                <div style={{ fontFamily: 'var(--font-heading)', fontWeight: 600 }}>
+                  {detail.coach.displayName}
+                </div>
                 <div style={{ color: 'var(--gt-text-dim)', fontSize: 13 }}>
                   {detail.coach.email}
                 </div>
@@ -710,10 +732,11 @@ export function MemberDrawer({
                     }
                   }}
                   disabled={busy}
+                  aria-label={detail.coach ? 'Move to another coach' : 'Choose a coach'}
                   style={{ flex: 1, cursor: 'pointer' }}
                 >
                   <option value="">
-                    {detail.coach ? 'Reassign to…' : 'Select a coach…'}
+                    {detail.coach ? 'Move to another coach' : 'Choose a coach'}
                   </option>
                   {coaches.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -727,7 +750,7 @@ export function MemberDrawer({
                   disabled={busy || !coachChoice}
                   onClick={() => void assignCoach()}
                 >
-                  Assign
+                  {busy ? 'Saving…' : 'Assign'}
                 </Button>
               </div>
             ) : null}
@@ -736,20 +759,20 @@ export function MemberDrawer({
                 style={{
                   marginTop: 10,
                   padding: '10px 12px',
-                  borderRadius: 10,
-                  border: '1px solid var(--gt-border)',
-                  background: 'var(--gt-surface-2, transparent)',
+                  borderRadius: 'var(--gt-radius-sm)',
+                  border: '1px solid color-mix(in srgb, var(--gt-warning) 32%, transparent)',
+                  background: 'var(--gt-warning-weak)',
                 }}
               >
-                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                <div style={{ fontSize: 13, color: 'var(--gt-text)' }}>
                   {assignBlock === 'full'
-                    ? 'This coach is at capacity.'
-                    : 'This coach is not currently accepting clients.'}{' '}
-                  You can assign anyway to override their limit.
+                    ? 'This coach is already at their client limit.'
+                    : 'This coach is not taking new clients right now.'}{' '}
+                  You can go ahead anyway.
                 </div>
-                <div style={{ marginTop: 8 }}>
+                <div style={{ marginTop: 10 }}>
                   <Button
-                    variant="primary"
+                    variant="dark"
                     size="sm"
                     disabled={busy || !coachChoice || coachChoice !== assignBlockCoachId}
                     onClick={() => void assignCoach(true)}
@@ -760,28 +783,28 @@ export function MemberDrawer({
               </div>
             ) : null}
             {canAssign && coaches.length === 0 ? (
-              <Muted>No coaches available to assign.</Muted>
+              <Muted>There are no coaches to assign yet.</Muted>
             ) : null}
           </FieldGroup>
 
           {/* Change tier */}
           {canTier ? (
-            <FieldGroup label="Subscription tier">
+            <FieldGroup label="Change plan">
               <div style={{ display: 'flex', gap: 8 }}>
                 <select
                   className="gt-input"
                   value={tierChoice}
+                  aria-label="Membership plan"
                   onChange={(e) => setTierChoice(e.target.value as Tier)}
                   disabled={busy || statusLocked}
                   style={{
                     flex: 1,
-                    textTransform: 'capitalize',
                     cursor: statusLocked ? 'not-allowed' : 'pointer',
                   }}
                 >
                   {TIERS.map((t) => (
                     <option key={t} value={t}>
-                      {t}
+                      {tierLabel(t)}
                     </option>
                   ))}
                 </select>
@@ -799,13 +822,13 @@ export function MemberDrawer({
                     // interactive control (Clear), which must not double as a
                     // click target for the date input. The input carries its own
                     // aria-label instead.
-                    <div style={{ marginTop: 10 }}>
+                    <div style={{ marginTop: 12 }}>
                       <span
                         style={{
                           display: 'block',
-                          fontSize: 12,
+                          fontSize: 13,
                           color: 'var(--gt-text-dim)',
-                          marginBottom: 4,
+                          marginBottom: 6,
                         }}
                       >
                         Access until
@@ -835,7 +858,7 @@ export function MemberDrawer({
                       <Muted>
                         {tierExpiry
                           ? 'The member drops back to Starter after this date.'
-                          : 'No end date, so this member keeps the tier forever, and app-store renewals can no longer change it.'}
+                          : 'With no end date this member keeps the plan for good, and store renewals can no longer change it.'}
                       </Muted>
                     </div>
                   ) : null}
@@ -843,11 +866,12 @@ export function MemberDrawer({
                     <>
                       <input
                         className="gt-input"
-                        placeholder="Reason (optional, audited)"
+                        placeholder="Why are you making this change? (optional)"
+                        aria-label="Reason for the plan change"
                         value={tierReason}
                         onChange={(e) => setTierReason(e.target.value)}
                         disabled={busy}
-                        style={{ marginTop: 8 }}
+                        style={{ marginTop: 12 }}
                       />
                       <div style={{ marginTop: 10 }}>
                         <Button
@@ -900,11 +924,11 @@ export function MemberDrawer({
                 <>
                   <input
                     className="gt-input"
-                    placeholder="Reason (optional, audited)"
+                    placeholder="Why are you suspending them? (optional)"
                     value={suspendReason}
                     onChange={(e) => setSuspendReason(e.target.value)}
                     disabled={busy}
-                    aria-label="Suspend reason"
+                    aria-label="Reason for suspending this member"
                     style={{ width: '100%', marginBottom: 10 }}
                   />
                   <ConfirmButton
@@ -921,7 +945,7 @@ export function MemberDrawer({
                     }
                   />
                   <Muted>
-                    Suspending immediately signs the member out of every device.
+                    Suspending signs the member out of every device straight away.
                   </Muted>
                 </>
               ) : (
@@ -944,13 +968,17 @@ export function MemberDrawer({
               server-rejected panel. */}
           {canManageCredentials && !statusLocked ? (
             <>
+              <SectionTitle hint="Sign-in help and account removal. Handle with care.">
+                Account tools
+              </SectionTitle>
+
               {credError ? (
                 <div
                   role="alert"
                   style={{
-                    marginTop: 16,
+                    marginTop: 14,
                     padding: '10px 12px',
-                    borderRadius: 10,
+                    borderRadius: 'var(--gt-radius-sm)',
                     border: '1px solid color-mix(in srgb, var(--gt-danger) 32%, transparent)',
                     background: 'var(--gt-danger-weak)',
                     color: 'var(--gt-danger)',
@@ -973,10 +1001,24 @@ export function MemberDrawer({
                       aria-label="One-time password reset link"
                       style={{ width: '100%', fontSize: 13 }}
                     />
-                    <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                      <Button size="sm" variant="ghost" onClick={() => void copyResetLink()}>
-                        {linkCopied ? 'Copied' : 'Copy link'}
-                      </Button>
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        marginTop: 10,
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      {/* A blocked clipboard used to look exactly like a
+                          successful copy, so the link that "worked" was
+                          whatever had been copied an hour earlier. */}
+                      <CopyButton
+                        key={resetLink.url}
+                        value={resetLink.url}
+                        label="Copy link"
+                        copiedLabel="Copied"
+                      />
                       <Button
                         size="sm"
                         variant="ghost"
@@ -987,10 +1029,9 @@ export function MemberDrawer({
                       </Button>
                     </div>
                     <Muted>
-                      No email is sent. Copy this link and give it to the member. It works
-                      once and expires{' '}
-                      {formatDateTime(resetLink.expiresAt)}
-                      . Generating it invalidates any earlier link.
+                      No email is sent, so pass this link to the member yourself. It works
+                      once and expires {formatDateTime(resetLink.expiresAt)}. Making a new
+                      one cancels this link.
                     </Muted>
                   </>
                 ) : (
@@ -1001,25 +1042,25 @@ export function MemberDrawer({
                       disabled={credBusy}
                       onClick={() => void generateResetLink()}
                     >
-                      {credBusy ? 'Working…' : 'Generate reset link'}
+                      {credBusy ? 'Working…' : 'Create a reset link'}
                     </Button>
                     <Muted>
-                      Mints a single-use, 1-hour link the member uses to set a new password.
-                      There is no email delivery, so you hand it over directly.
+                      Creates a one-time link, good for an hour, that lets the member set a
+                      new password. No email is sent, so you hand it over yourself.
                     </Muted>
                   </>
                 )}
               </FieldGroup>
 
               {/* Login identity */}
-              <FieldGroup label="Login identity">
-                <label style={{ display: 'block', marginBottom: 10 }}>
+              <FieldGroup label="Sign-in details">
+                <label style={{ display: 'block', marginBottom: 12 }}>
                   <span
                     style={{
                       display: 'block',
-                      fontSize: 12,
+                      fontSize: 13,
                       color: 'var(--gt-text-dim)',
-                      marginBottom: 4,
+                      marginBottom: 6,
                     }}
                   >
                     Email
@@ -1037,9 +1078,9 @@ export function MemberDrawer({
                   <span
                     style={{
                       display: 'block',
-                      fontSize: 12,
+                      fontSize: 13,
                       color: 'var(--gt-text-dim)',
-                      marginBottom: 4,
+                      marginBottom: 6,
                     }}
                   >
                     Display name
@@ -1061,14 +1102,14 @@ export function MemberDrawer({
                     nameEdit.trim() !== '' && nameEdit.trim() !== detail.member.displayName;
                   const dirty = emailDirty || nameDirty;
                   return dirty ? (
-                    <div style={{ marginTop: 10 }}>
+                    <div style={{ marginTop: 12 }}>
                       <Button
                         size="sm"
-                        variant="primary"
+                        variant="dark"
                         disabled={credBusy}
                         onClick={() => void saveIdentity()}
                       >
-                        {credBusy ? 'Saving…' : 'Save changes'}
+                        {credBusy ? 'Saving…' : 'Save sign-in details'}
                       </Button>
                     </div>
                   ) : null;
@@ -1076,7 +1117,7 @@ export function MemberDrawer({
               </FieldGroup>
 
               {/* Sessions */}
-              <FieldGroup label="Sessions">
+              <FieldGroup label="Devices">
                 <ConfirmButton
                   label="Sign out everywhere"
                   confirmLabel="Confirm sign-out"
@@ -1089,19 +1130,20 @@ export function MemberDrawer({
                   <Muted>{signOutMsg}</Muted>
                 ) : (
                   <Muted>
-                    Revokes every active session without suspending the account. The member
-                    can sign back in with their password.
+                    Signs the member out of every device without suspending them. They can
+                    sign straight back in with their password.
                   </Muted>
                 )}
               </FieldGroup>
 
               {/* GDPR erasure (danger) */}
-              <FieldGroup label="Delete account (GDPR)">
-                <Muted>
-                  Hard-deletes only an eligible account. Active services, staff/coach/partner
-                  access, ambiguous legacy identity, and retained order or payment history
-                  block the action without deleting or claiming to anonymize anything.
-                </Muted>
+              <FieldGroup label="Delete this account" tone="danger">
+                <div style={{ fontSize: 13, color: 'var(--gt-text)' }}>
+                  This cannot be undone. Deletion only goes ahead for an account with
+                  nothing left open: live services, staff, coach or partner access, an
+                  unclear identity, or order and payment history that must be kept will
+                  stop it, and nothing is removed in that case.
+                </div>
                 <input
                   className="gt-input"
                   value={gdprConfirm}
@@ -1109,7 +1151,7 @@ export function MemberDrawer({
                   disabled={credBusy}
                   placeholder="Type the member’s email to confirm"
                   aria-label="Type the member’s email to confirm deletion"
-                  style={{ width: '100%', marginTop: 10 }}
+                  style={{ width: '100%', marginTop: 12 }}
                 />
                 <div style={{ marginTop: 10 }}>
                   <ConfirmButton
@@ -1138,27 +1180,44 @@ export function MemberDrawer({
   );
 }
 
+/**
+ * One labelled block inside the drawer. `tone="danger"` marks the block whose
+ * action cannot be taken back, so the eye finds it before the hand does.
+ */
 function FieldGroup({
   label,
   children,
+  tone = 'plain',
 }: {
   label: string;
   children: React.ReactNode;
+  tone?: 'plain' | 'danger';
 }) {
+  const danger = tone === 'danger';
   return (
     <section
       style={{
         paddingTop: 16,
         marginTop: 16,
         borderTop: '1px solid var(--gt-border)',
+        ...(danger
+          ? {
+              padding: 14,
+              marginTop: 20,
+              border: '1px solid color-mix(in srgb, var(--gt-danger) 28%, transparent)',
+              borderRadius: 'var(--gt-radius-sm)',
+              background: 'var(--gt-danger-weak)',
+            }
+          : null),
       }}
     >
       <div
         style={{
           fontSize: 12,
-          letterSpacing: '0.03em',
+          letterSpacing: '0.04em',
           textTransform: 'uppercase',
-          color: 'var(--gt-text-dim)',
+          fontWeight: 600,
+          color: danger ? 'var(--gt-danger)' : 'var(--gt-text-faint)',
           fontFamily: 'var(--font-heading)',
           marginBottom: 10,
         }}
@@ -1170,6 +1229,30 @@ function FieldGroup({
   );
 }
 
+/** Heading that separates the read-only profile above from the actions below. */
+function SectionTitle({ children, hint }: { children: React.ReactNode; hint?: string }) {
+  return (
+    <div style={{ marginTop: 22 }}>
+      <h3
+        style={{
+          fontFamily: 'var(--font-heading)',
+          fontWeight: 600,
+          fontSize: 15,
+          margin: 0,
+          color: 'var(--gt-text)',
+        }}
+      >
+        {children}
+      </h3>
+      {hint ? (
+        <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--gt-text-dim)' }}>
+          {hint}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function Muted({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ fontSize: 13, color: 'var(--gt-text-dim)', marginTop: 6 }}>
@@ -1178,55 +1261,96 @@ function Muted({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** A fact row for {@link DefinitionList}. `numeric` right-aligns in Oswald. */
+interface Fact {
+  label: string;
+  value: React.ReactNode;
+  numeric?: boolean;
+}
+
 /**
- * Renders a small subset of the cloud profile blob as labeled rows. The blob is
- * free-form (the mobile app's onboarding store), so we surface a curated set of
- * well-known keys when present and skip the rest — never dumping raw JSON.
+ * The drawer's read-only facts, as a real definition list: quiet term on the
+ * left, value hard against the right edge so a column of them lines up and can
+ * be read down rather than hunted for.
  */
-function ProfileSummary({ data }: { data: Record<string, unknown> }) {
-  const known: [string, string][] = [
-    ['displayName', 'Name'],
-    ['sex', 'Sex'],
-    ['goalType', 'Goal'],
-    ['activityLevel', 'Activity'],
-    ['heightCm', 'Height (cm)'],
-    ['unitPref', 'Units'],
-  ];
-  const rows = known
-    .map(([key, label]) => [label, data[key]] as const)
-    .filter(([, v]) => v !== undefined && v !== null && v !== '');
-
-  if (rows.length === 0) {
-    return <Muted>Profile present, but no summary fields set.</Muted>;
-  }
-
+function DefinitionList({ rows }: { rows: Fact[] }) {
   return (
     <dl
       style={{
         display: 'grid',
-        gridTemplateColumns: 'auto 1fr',
-        gap: '6px 16px',
+        gridTemplateColumns: 'auto minmax(0, 1fr)',
+        gap: '8px 16px',
         margin: 0,
         fontSize: 14,
       }}
     >
-      {rows.map(([label, value]) => (
-        <div key={label} style={{ display: 'contents' }}>
-          <dt style={{ color: 'var(--gt-text-dim)' }}>{label}</dt>
+      {rows.map((row) => (
+        <div key={row.label} style={{ display: 'contents' }}>
+          <dt style={{ color: 'var(--gt-text-dim)', whiteSpace: 'nowrap' }}>
+            {row.label}
+          </dt>
           <dd
+            className={row.numeric ? 'gt-numeric' : undefined}
             style={{
               margin: 0,
               textAlign: 'right',
-              textTransform:
-                label === 'Sex' || label === 'Goal' || label === 'Activity'
-                  ? 'capitalize'
-                  : 'none',
+              color: 'var(--gt-text)',
+              overflowWrap: 'anywhere',
             }}
           >
-            {String(value)}
+            {row.value}
           </dd>
         </div>
       ))}
     </dl>
   );
+}
+
+/** `goal_type` / `veryActive` → `Goal type` / `Very active`. */
+function humanValue(raw: unknown): string {
+  const text = String(raw).trim();
+  if (text === '') return '—';
+  const spaced = text
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * Renders a small subset of the cloud profile blob as labeled rows. The blob is
+ * free-form (the mobile app's onboarding store), so we surface a curated set of
+ * well-known keys when present and skip the rest — never dumping raw JSON, and
+ * never printing a stored value like `very_active` at an operator.
+ */
+function ProfileSummary({ data }: { data: Record<string, unknown> }) {
+  const known: { key: string; label: string; numeric?: boolean; verbatim?: boolean }[] = [
+    { key: 'displayName', label: 'Name', verbatim: true },
+    { key: 'sex', label: 'Sex' },
+    { key: 'goalType', label: 'Goal' },
+    { key: 'activityLevel', label: 'Activity' },
+    { key: 'heightCm', label: 'Height', numeric: true },
+    { key: 'unitPref', label: 'Units' },
+  ];
+  const rows: Fact[] = known
+    .filter(({ key }) => {
+      const v = data[key];
+      return v !== undefined && v !== null && v !== '';
+    })
+    .map(({ key, label, numeric, verbatim }) => ({
+      label,
+      numeric,
+      value:
+        key === 'heightCm'
+          ? `${String(data[key])} cm`
+          : verbatim
+            ? String(data[key])
+            : humanValue(data[key]),
+    }));
+
+  if (rows.length === 0) {
+    return <Muted>No profile details filled in yet.</Muted>;
+  }
+
+  return <DefinitionList rows={rows} />;
 }

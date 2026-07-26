@@ -5,7 +5,7 @@ import { Reveal } from '@/components/marketing/motion';
 import { ArrowLink, Container, Display, Lead, Section } from '@/components/marketing/ui';
 
 export const metadata: Metadata = {
-  title: 'Terms of service | The GM Method',
+  title: 'Terms of service',
   description:
     'Terms for training, coaching, memberships, and meal services in the GM Method app.',
 };

@@ -171,7 +171,7 @@ export function PartnerMenuPanel({ partnerId }: { partnerId: string }) {
                 alignItems: 'center',
                 gap: 10,
                 padding: '8px 10px',
-                borderRadius: 8,
+                borderRadius: 'var(--gt-radius-sm)',
                 border: '1px solid var(--gt-border)',
                 opacity: m.isActive ? 1 : 0.6,
               }}

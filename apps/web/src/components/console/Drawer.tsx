@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { PanelHeader } from './PanelHeader';
 
 const FOCUSABLE =
   'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
@@ -83,10 +84,7 @@ export function Drawer({
       aria-label={title ?? 'Detail panel'}
       style={{ position: 'fixed', inset: 0, zIndex: 50 }}
     >
-      <div
-        onClick={onClose}
-        style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }}
-      />
+      <div onClick={onClose} className="gt-scrim" />
       <div
         ref={panelRef}
         tabIndex={-1}
@@ -99,64 +97,25 @@ export function Drawer({
           maxWidth: '92vw',
           background: 'var(--gt-card)',
           borderLeft: '1px solid var(--gt-border)',
+          boxShadow: 'var(--gt-shadow-pop)',
           display: 'flex',
           flexDirection: 'column',
           animation: 'gt-drawer-in 160ms ease-out',
           outline: 'none',
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            // 8px rather than 16px: the close button now carries a 44px hit
-            // area, so the row keeps its old height instead of growing.
-            padding: '8px 18px',
-            borderBottom: '1px solid var(--gt-border)',
-            flexShrink: 0,
-          }}
-        >
-          <span
-            style={{
-              fontFamily: 'var(--font-heading)',
-              fontWeight: 600,
-              fontSize: 16,
-            }}
-          >
-            {title}
-          </span>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            style={{
-              width: 44,
-              height: 44,
-              flexShrink: 0,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: -8,
-              background: 'none',
-              border: 'none',
-              borderRadius: 'var(--gt-radius-sm)',
-              color: 'var(--gt-text-dim)',
-              fontSize: 22,
-              lineHeight: 1,
-              cursor: 'pointer',
-            }}
-          >
-            ×
-          </button>
+        <PanelHeader title={title} onClose={onClose} />
+        <div style={{ padding: 'var(--gt-space-5)', overflowY: 'auto', flex: 1 }}>
+          {children}
         </div>
-        <div style={{ padding: 18, overflowY: 'auto', flex: 1 }}>{children}</div>
         {footer ? (
           <div
             style={{
-              padding: 18,
+              padding: 'var(--gt-space-3) var(--gt-space-5)',
               borderTop: '1px solid var(--gt-border)',
               display: 'flex',
               justifyContent: 'flex-end',
+              alignItems: 'center',
               gap: 10,
               flexShrink: 0,
             }}
