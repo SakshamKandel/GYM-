@@ -14,11 +14,13 @@ export function SkeletonBar({ w = '100%', h = 12 }: { w?: number | string; h?: n
 /**
  * A stack of table-shaped skeleton rows inside a card. `rows` controls the
  * count, `cols` the bars per row. Matches DataTable padding so the swap from
- * skeleton → real table doesn't jump.
+ * skeleton → real table doesn't jump — and carries the same `gt-table-card`
+ * marker, so nesting it in a Card drops the inner frame exactly as the real
+ * table does and the swap doesn't gain or lose a border either.
  */
 export function SkeletonRows({ rows = 6, cols = 4 }: { rows?: number; cols?: number }) {
   return (
-    <div className="gt-card" style={{ padding: 0 }}>
+    <div className="gt-card gt-table-card" style={{ padding: 0 }}>
       {Array.from({ length: rows }).map((_, r) => (
         <div
           key={r}

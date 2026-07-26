@@ -5,7 +5,7 @@ import {
   type CycleStatus,
   type MealWindow,
 } from '@gym/shared';
-import { and, asc, eq, gte, inArray } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
@@ -34,9 +34,25 @@ export const runtime = 'nodejs';
  *           partner's window meals) with the flat delivery fee folded in — the
  *           client never sets price (invariant §8a). Materialization then spawns
  *           the daily orders on read; digital plans are prepaid per weekly cycle.
+ *           A repeat of the same plan within {@link DUPLICATE_WINDOW_MS} collapses
+ *           back onto the first one (200 instead of 201) — see
+ *           {@link collapseDuplicatePlanSql}.
  */
 
 const MAX_START_DAYS = 30;
+
+/**
+ * How long a second identical create is read as the SAME submission rather than
+ * a new plan. A recurring plan is the one thing here a member cannot double up
+ * on harmlessly: two of them bill twice, every week, forever, and each one
+ * spawns its own order for the same slot — so a double tap on "Start plan" used
+ * to buy two dinners a day and two weekly bills.
+ *
+ * Wide enough to swallow a retry after a lost response, short enough that
+ * someone who genuinely wants a second identical plan is never permanently
+ * refused one; they just wait, or change a day.
+ */
+const DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
 /** How far ahead the "deliveries scheduled for …" projection looks (Pack G). */
 const UPCOMING_HORIZON_DAYS = 14;
 const UPCOMING_MAX = 8;
@@ -213,6 +229,42 @@ interface CycleRow {
   status: CycleStatus;
 }
 
+/**
+ * Undo a just-inserted plan when the member already has the identical one.
+ *
+ * This runs as the LAST statement of the create batch, so it is inside the same
+ * transaction as the insert and behind the same partner advisory lock: the row
+ * it removes was never visible to anyone, nothing could have attached a billing
+ * cycle or an order to it, and there is nothing to compensate afterwards. Two
+ * taps racing each other both queue on the lock, so the loser's own statement
+ * sees the winner's committed plan and cancels itself out.
+ *
+ * "Identical" is the whole creation intent — same partner, days, window, plan
+ * type, meal, address and start date — compared against the inserted row itself
+ * rather than re-bound parameters, so the two can never drift apart. Only an
+ * ACTIVE recent twin counts: a plan the member paused or cancelled and then
+ * deliberately started again is a new plan, not a repeat.
+ */
+function collapseDuplicatePlanSql(subscriptionId: string, createdSince: Date): SQL {
+  return sql`
+    delete from meal_subscriptions target
+    using meal_subscriptions dup
+    where target.id = ${subscriptionId}
+      and dup.id <> target.id
+      and dup.account_id = target.account_id
+      and dup.partner_id = target.partner_id
+      and dup.status = 'active'
+      and dup."window" = target."window"
+      and dup.plan_type = target.plan_type
+      and dup.meal_id is not distinct from target.meal_id
+      and dup.address_id = target.address_id
+      and dup.days_of_week = target.days_of_week
+      and dup.start_date = target.start_date
+      and dup.created_at >= ${createdSince}
+    returning dup.id as existing_id
+  `;
+}
+
 function toPendingCycle(c: CycleRow): PendingCycle {
   return {
     id: c.id,
@@ -224,6 +276,59 @@ function toPendingCycle(c: CycleRow): PendingCycle {
     receiptSubmitted: c.status === 'receipt_submitted',
     invoice: buildCycleInvoice(c),
   };
+}
+
+/**
+ * The create response for one plan: the plan itself, its first still-payable
+ * weekly bill and its forward delivery projection. Materializes first, so a
+ * digital plan comes back with the cycle the member has to pay before anything
+ * is cooked (Pack G / B3) instead of needing a second round-trip. Null = the
+ * plan is not there (or not the caller's), which the callers report as a
+ * conflict. Shared by a fresh create and by a collapsed repeat so the two can
+ * never answer differently.
+ */
+async function loadPlanView(
+  db: ReturnType<typeof getDb>,
+  accountId: string,
+  subscriptionId: string,
+  now: Date,
+  today: string,
+): Promise<ReturnType<typeof serialize> | null> {
+  const [sub] = await db
+    .select()
+    .from(mealSubscriptions)
+    .where(and(eq(mealSubscriptions.id, subscriptionId), eq(mealSubscriptions.accountId, accountId)))
+    .limit(1);
+  if (!sub) return null;
+
+  await materializeDueOrders(db, { kind: 'member', accountId }, now);
+
+  const [firstCycle] = await db
+    .select({
+      id: mealBillingCycles.id,
+      weekStart: mealBillingCycles.weekStart,
+      weekEnd: mealBillingCycles.weekEnd,
+      plannedSlots: mealBillingCycles.plannedSlots,
+      pricePerDayMinor: mealBillingCycles.pricePerDayMinor,
+      amountMinor: mealBillingCycles.amountMinor,
+      currency: mealBillingCycles.currency,
+      status: mealBillingCycles.status,
+    })
+    .from(mealBillingCycles)
+    .where(
+      and(
+        eq(mealBillingCycles.subscriptionId, subscriptionId),
+        inArray(mealBillingCycles.status, ['awaiting_payment', 'receipt_submitted']),
+      ),
+    )
+    .orderBy(asc(mealBillingCycles.weekStart))
+    .limit(1);
+
+  return serialize(
+    sub,
+    firstCycle ? toPendingCycle(firstCycle) : null,
+    upcomingFor(sub, new Set<string>(), today),
+  );
 }
 
 export async function POST(req: Request) {
@@ -267,7 +372,7 @@ export async function POST(req: Request) {
   if (!quoted.ok) return json({ error: quoted.error }, 400);
 
   const subscriptionId = crypto.randomUUID();
-  const [, insertResult] = await db.batch([
+  const [, insertResult, collapse] = await db.batch([
     db.execute(partnerOperationLockSql(partnerId)),
     db.execute(
       atomicSubscriptionCreateSql({
@@ -281,7 +386,20 @@ export async function POST(req: Request) {
         startDate,
       }),
     ),
+    db.execute(
+      collapseDuplicatePlanSql(subscriptionId, new Date(now.getTime() - DUPLICATE_WINDOW_MS)),
+    ),
   ]);
+
+  // The same plan already existed, so this request's row undid itself inside the
+  // transaction. Hand back the plan the member actually has — same body, 200
+  // instead of 201, exactly how the one-time order path replays a retry.
+  const collapsedInto = collapse.rows[0]?.existing_id;
+  if (typeof collapsedInto === 'string') {
+    const view = await loadPlanView(db, me.id, collapsedInto, now, today);
+    return view ? json({ subscription: view }, 200) : json({ error: 'conflict' }, 409);
+  }
+
   const insertedId = insertResult.rows[0]?.id;
   if (insertedId !== subscriptionId) {
     // A partner/menu/address write won after the preview. Re-quote so the race
@@ -296,43 +414,8 @@ export async function POST(req: Request) {
     return json({ error: current.ok ? 'conflict' : current.error }, 409);
   }
 
-  const [sub] = await db
-    .select()
-    .from(mealSubscriptions)
-    .where(and(eq(mealSubscriptions.id, subscriptionId), eq(mealSubscriptions.accountId, me.id)))
-    .limit(1);
-  if (!sub) return json({ error: 'conflict' }, 409);
+  const view = await loadPlanView(db, me.id, subscriptionId, now, today);
+  if (!view) return json({ error: 'conflict' }, 409);
 
-  // Bootstrap: bill the first prepaid cycle (digital) / spawn due COD orders now
-  // so the member immediately sees the bill or the upcoming delivery.
-  await materializeDueOrders(db, { kind: 'member', accountId: me.id }, now);
-
-  // Return the just-billed first cycle (Pack G / B3) so the client can jump
-  // straight to Pay without a second round-trip. Digital → awaiting_payment;
-  // COD → none (reconciles on delivery).
-  const [firstCycle] = await db
-    .select({
-      id: mealBillingCycles.id,
-      weekStart: mealBillingCycles.weekStart,
-      weekEnd: mealBillingCycles.weekEnd,
-      plannedSlots: mealBillingCycles.plannedSlots,
-      pricePerDayMinor: mealBillingCycles.pricePerDayMinor,
-      amountMinor: mealBillingCycles.amountMinor,
-      currency: mealBillingCycles.currency,
-      status: mealBillingCycles.status,
-    })
-    .from(mealBillingCycles)
-    .where(
-      and(
-        eq(mealBillingCycles.subscriptionId, subscriptionId),
-        inArray(mealBillingCycles.status, ['awaiting_payment', 'receipt_submitted']),
-      ),
-    )
-    .orderBy(asc(mealBillingCycles.weekStart))
-    .limit(1);
-
-  const pendingCycle = firstCycle ? toPendingCycle(firstCycle) : null;
-  const upcoming = upcomingFor(sub, new Set<string>(), today);
-
-  return json({ subscription: serialize(sub, pendingCycle, upcoming) }, 201);
+  return json({ subscription: view }, 201);
 }

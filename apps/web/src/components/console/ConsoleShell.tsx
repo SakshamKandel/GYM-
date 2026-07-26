@@ -1,13 +1,30 @@
 'use client';
 
 import { type ReactNode, useEffect, useState } from 'react';
-import { type NavGroup, SidebarNav } from './SidebarNav';
+import { isActive, type NavGroup, SidebarNav } from './SidebarNav';
 import { TopBar } from './TopBar';
 
 /** Re-export nav types so consumers can import them from ConsoleShell/index. */
 export type { NavItem, NavGroup } from './SidebarNav';
 
 const COLLAPSE_KEY = 'gt.sidebar.collapsed';
+
+/**
+ * The label of the nav item the current route belongs to — the LONGEST matching
+ * href wins, so /admin/gyms/reports names itself rather than its parent. Feeds
+ * the top bar so it says where the operator is; falls back to the console name
+ * for routes with no nav entry (a detail page, a redirect landing).
+ */
+function sectionTitle(groups: NavGroup[], pathname: string, brand: string): string {
+  let best: { href: string; label: string } | null = null;
+  for (const group of groups) {
+    for (const item of group.items) {
+      if (!isActive(item, pathname)) continue;
+      if (best === null || item.href.length > best.href.length) best = item;
+    }
+  }
+  return best?.label ?? brand;
+}
 
 /**
  * Shared console chrome for the admin / coach / partner shells. Composes the
@@ -136,6 +153,7 @@ export function ConsoleShell({
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <TopBar
           email={email}
+          title={sectionTitle(groups, pathname, brand)}
           notificationsHref={notificationsHref}
           hasNotifications={hasNotifications}
           onToggleSidebar={isNarrow ? () => setMobileOpen((o) => !o) : undefined}

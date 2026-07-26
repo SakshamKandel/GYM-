@@ -149,6 +149,19 @@ h4 {
   box-shadow: var(--gt-shadow-card);
 }
 
+/* A table inside a card is ONE frame, not two.
+ * DataTable (and its loading twin, SkeletonRows) is a card in its own right,
+ * which is correct standing alone. Most queues wrap it —
+ * <Card padded={false}><CardHeader/><DataTable/></Card> — and that stacked two
+ * borders and two shadows a hairline apart around the same rows. Nested, the
+ * wrapper owns the edge; unwrapped, the table is untouched. */
+.gt-card > .gt-table-card {
+  border: 0;
+  box-shadow: none;
+  border-radius: 0;
+  background: transparent;
+}
+
 /* Primary action — the one accent button. */
 .gt-btn-primary {
   min-height: 48px;
@@ -311,6 +324,56 @@ h4 {
 .gt-pill:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* Selected-fill tones for a segmented control whose choices carry meaning.
+ * Grant/Deny in the staff permission editor are green and red because that IS
+ * the information; an accent fill would say only "picked". `neutral` is the
+ * quiet fill for the ordinary, unremarkable choice, so a screenful of them
+ * doesn't shout. Unselected pills look identical whatever the tone. */
+.gt-pill[data-tone='neutral'][aria-pressed='true'] {
+  background: var(--gt-border-strong);
+  border-color: var(--gt-border-strong);
+  color: var(--gt-text);
+}
+.gt-pill[data-tone='neutral'][aria-pressed='true']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-border-strong) 88%, var(--gt-text));
+  border-color: color-mix(in srgb, var(--gt-border-strong) 88%, var(--gt-text));
+}
+.gt-pill[data-tone='positive'][aria-pressed='true'] {
+  background: var(--gt-success);
+  border-color: var(--gt-success);
+  color: var(--gt-accent-ink);
+}
+.gt-pill[data-tone='positive'][aria-pressed='true']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-success) 88%, var(--gt-text));
+  border-color: color-mix(in srgb, var(--gt-success) 88%, var(--gt-text));
+}
+.gt-pill[data-tone='critical'][aria-pressed='true'] {
+  background: var(--gt-danger);
+  border-color: var(--gt-danger);
+  color: var(--gt-accent-ink);
+}
+.gt-pill[data-tone='critical'][aria-pressed='true']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-danger) 88%, var(--gt-text));
+  border-color: color-mix(in srgb, var(--gt-danger) 88%, var(--gt-text));
+}
+/* Pressed: darken the tone's own fill. Without these the shared
+ * [aria-pressed]:active rule would flash the accent under the finger. */
+.gt-pill[data-tone='neutral'][aria-pressed='true']:active:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-border-strong) 76%, var(--gt-text));
+  border-color: color-mix(in srgb, var(--gt-border-strong) 76%, var(--gt-text));
+  color: var(--gt-text);
+}
+.gt-pill[data-tone='positive'][aria-pressed='true']:active:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-success) 76%, var(--gt-text));
+  border-color: color-mix(in srgb, var(--gt-success) 76%, var(--gt-text));
+  color: var(--gt-accent-ink);
+}
+.gt-pill[data-tone='critical'][aria-pressed='true']:active:not(:disabled) {
+  background: color-mix(in srgb, var(--gt-danger) 76%, var(--gt-text));
+  border-color: color-mix(in srgb, var(--gt-danger) 76%, var(--gt-text));
+  color: var(--gt-accent-ink);
 }
 
 .gt-input {

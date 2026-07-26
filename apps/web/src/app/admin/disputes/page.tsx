@@ -89,7 +89,7 @@ export default async function AdminDisputesPage() {
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
         title="Disputes"
-        subtitle="Every member-reported problem with a delivered order. Resolving here never moves money. Open a dispute to refund its order first, if one is owed."
+        subtitle="Every member-reported problem with a delivered order. Deciding a claim here never moves money by itself. Mark it resolved first, then the refund opens on Meal Payments."
       />
 
       <div

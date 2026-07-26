@@ -318,7 +318,17 @@ async function decidePartner(
     const held = await loadPartnerHeld(db, request.partnerId, request.currency);
     if (held.heldMinor < request.amountMinor) {
       return json(
-        { error: 'insufficient_balance', heldMinor: held.heldMinor, currency: request.currency },
+        {
+          error: 'insufficient_balance',
+          // ONE name for one concept: every `insufficient_balance` in this API
+          // (coach payout decisions, wallet ledger entries, coach self-serve
+          // requests) reports the covering figure as `balanceMinor`. This rail
+          // was the odd one out, so a shared handler could not read it.
+          // `heldMinor` is kept alongside for anything already reading it.
+          balanceMinor: held.heldMinor,
+          heldMinor: held.heldMinor,
+          currency: request.currency,
+        },
         409,
       );
     }

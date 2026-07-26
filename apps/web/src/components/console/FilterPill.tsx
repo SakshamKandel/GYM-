@@ -14,16 +14,24 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react';
  * from the `.gt-pill` rules in globals.css.
  *
  * `selected` drives `aria-pressed`, so the state is announced as well as drawn.
+ * `tone` recolours the SELECTED fill for a control whose choices carry meaning
+ * rather than just narrowing a list — the staff permission editor's Grant /
+ * Deny, where green and red are the whole point and an accent fill would say
+ * nothing. 'accent' (the default) stays the filter look; 'neutral' is the quiet
+ * "nothing special here" fill.
+ *
  * Extends native <button> props; `style` is merged last for one-off layout
  * tweaks (e.g. `flex: 1`).
  */
 export function FilterPill({
   selected = false,
+  tone = 'accent',
   children,
   className,
   ...rest
 }: {
   selected?: boolean;
+  tone?: 'accent' | 'neutral' | 'positive' | 'critical';
   children: ReactNode;
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
@@ -31,6 +39,7 @@ export function FilterPill({
       type="button"
       {...rest}
       aria-pressed={selected}
+      data-tone={tone}
       className={className ? `gt-pill ${className}` : 'gt-pill'}
     >
       {children}

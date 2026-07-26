@@ -1,4 +1,6 @@
+import type { Permission } from '@gym/shared';
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import {
   Card,
@@ -250,6 +252,117 @@ function ActivityRow({ item, last }: { item: RecentActivity; last: boolean }) {
   );
 }
 
+/**
+ * Where a viewer can start work, for the roles whose overview is otherwise
+ * blank. Every section above needs one of members.read / audit.read /
+ * coach.application.review / payments.review / support.thread.read, and a
+ * content_admin holds none of them — so the console's front door rendered as a
+ * title and nothing else. Each entry is gated on the permission the destination
+ * itself enforces, so nothing here promises a page that would bounce.
+ */
+const STARTING_POINTS: {
+  href: string;
+  label: string;
+  hint: string;
+  anyPerm: readonly Permission[];
+}[] = [
+  {
+    href: '/admin/content',
+    label: 'Content',
+    hint: 'Plan videos, plus the milestones, photos and member foods waiting to be looked at.',
+    anyPerm: ['content.manage', 'moderation.manage'],
+  },
+  {
+    href: '/admin/oversight',
+    label: 'Coach requests',
+    hint: 'Members who asked a coach to take them on and are still waiting.',
+    anyPerm: ['moderation.manage'],
+  },
+  {
+    href: '/admin/catalog',
+    label: 'Exercises & plans',
+    hint: 'The exercise library and the training plans built from it.',
+    anyPerm: ['catalog.manage'],
+  },
+  {
+    href: '/admin/gyms',
+    label: 'Nearby gyms',
+    hint: 'Gym listings, their photos, and the enquiries members send them.',
+    anyPerm: ['gyms.manage'],
+  },
+  {
+    href: '/admin/gamification',
+    label: 'Points & badges',
+    hint: 'Point corrections, badge checks and challenge moderation.',
+    anyPerm: ['gamification.manage'],
+  },
+];
+
+/** First screen for a viewer whose overview has no numbers to show. */
+function StartHere({ permissions }: { permissions: ReadonlySet<Permission> }) {
+  const items = STARTING_POINTS.filter((s) => s.anyPerm.some((p) => permissions.has(p)));
+
+  return (
+    <section style={{ marginBottom: 24 }}>
+      <h2
+        style={{
+          fontFamily: 'var(--font-heading)',
+          fontWeight: 600,
+          fontSize: 15,
+          letterSpacing: '0.02em',
+          color: 'var(--gt-text)',
+          marginBottom: 12,
+        }}
+      >
+        Start here
+      </h2>
+      {items.length > 0 ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+            gap: 12,
+            marginBottom: 12,
+          }}
+        >
+          {items.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="gt-card"
+              style={{
+                padding: 18,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                textDecoration: 'none',
+                color: 'inherit',
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: 'var(--font-heading)',
+                  fontWeight: 600,
+                  fontSize: 15,
+                  color: 'var(--gt-text)',
+                }}
+              >
+                {item.label}
+              </span>
+              <span style={{ fontSize: 13, color: 'var(--gt-text-dim)', lineHeight: 1.5 }}>
+                {item.hint}
+              </span>
+            </Link>
+          ))}
+        </div>
+      ) : null}
+      <p style={{ margin: 0, fontSize: 13, color: 'var(--gt-text-dim)' }}>
+        Everything else you can work on is in the menu.
+      </p>
+    </section>
+  );
+}
+
 export default async function AdminOverviewPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
@@ -273,12 +386,28 @@ export default async function AdminOverviewPage() {
   // as the other whole-platform readouts (analytics.read).
   const configIssues = permissions.has('analytics.read') ? await loadConfigIssues() : [];
 
+  // Would this page render as a bare title? Every block below is permission-fed,
+  // so a role holding none of those permissions (content_admin) landed on an
+  // empty screen after signing in. When that is the case, point them at the work
+  // they CAN do instead.
+  const hasReadout =
+    configIssues.length > 0 ||
+    membership !== null ||
+    recentActivity !== null ||
+    Object.values(data.ops).some((value) => value !== null);
+
   return (
     <div>
       <PageHeader
         title="Overview"
-        subtitle="A live snapshot of the platform: membership, coaching, and content at a glance."
+        subtitle={
+          hasReadout
+            ? 'A live snapshot of the platform: membership, coaching, and content at a glance.'
+            : 'The parts of the platform you look after.'
+        }
       />
+
+      {hasReadout ? null : <StartHere permissions={permissions} />}
 
       {configIssues.length > 0 ? <ConfigurationCard issues={configIssues} /> : null}
 
@@ -291,17 +420,22 @@ export default async function AdminOverviewPage() {
             value={membership.totalMembers.toLocaleString()}
             viz={{ kind: 'bars', data: membership.tierBreakdown.map((t) => t.count) }}
           />
+          {/* No capacity ring or percentage here: the Coach capacity gauge below
+              already reads out the same figure, and two readings of one number
+              on one screen invite the question of which is current. The tile
+              counts coaches; the gauge answers how full they are. */}
           <StatTile
             label="Active coaches"
             value={membership.activeCoaches.toLocaleString()}
-            viz={{ kind: 'ring', value: membership.coachCapacityPct }}
-            hint={`${Math.round(membership.coachCapacityPct * 100)}% capacity used`}
           />
+          {/* No sparkline: the only daily series on this page is signups, and
+              charting it on the assignments tile labelled the signup trend as
+              assignments. Nothing tracks assignments day by day, so the tile
+              shows the count it actually has. */}
           <StatTile
             label="Active assignments"
             value={membership.activeAssignments.toLocaleString()}
             hint="coach ↔ member"
-            viz={{ kind: 'spark', data: membership.dailySignups28.map((d) => d.count) }}
           />
           <StatTile
             label="Plan videos ready"

@@ -4,21 +4,25 @@ import Link from 'next/link';
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 
 /**
- * Sticky console top bar (64px). Holds a page-scoped search (focus with ⌘K /
- * Ctrl-K, clear with Esc), an optional actions slot on the right, a
- * notifications bell (links to a provided href, with an unread dot), and an
- * avatar cluster showing the signed-in initials.
+ * Sticky console top bar (64px). Names the section the operator is in, then an
+ * optional actions slot on the right, a notifications bell (links to a provided
+ * href, with an unread dot), and an avatar cluster showing the signed-in
+ * initials.
  *
- * The search is deliberately presentational chrome by default: it emits its
- * value through `onSearch` when the console wires a handler, and otherwise just
- * holds local text — it never fabricates results. `actions` is where a page-
- * level primary (e.g. Export) or a "+" quick-add is injected by the shell; when
- * omitted, no dead buttons render.
+ * The search box is rendered ONLY when a console wires `onSearch` (focus with
+ * ⌘K / Ctrl-K, clear with Esc). It used to render unconditionally, so every
+ * page in all three consoles shipped a search field — keyboard hint and all —
+ * that could not search anything: the most prominent control in the chrome did
+ * nothing on every route. A control that looks primary and does nothing is
+ * worse than no control, so it now appears with its handler or not at all.
+ * `actions` is where a page-level primary (e.g. Export) or a "+" quick-add is
+ * injected by the shell; when omitted, no dead buttons render.
  *
  * Client component: keyboard shortcut + controlled input.
  */
 export function TopBar({
   email,
+  title,
   searchPlaceholder = 'Search…',
   onSearch,
   actions,
@@ -27,6 +31,8 @@ export function TopBar({
   onToggleSidebar,
 }: {
   email: string;
+  /** The section the current route belongs to, e.g. "Meal orders". */
+  title?: string;
   searchPlaceholder?: string;
   onSearch?: (q: string) => void;
   actions?: ReactNode;
@@ -38,8 +44,10 @@ export function TopBar({
   const [q, setQ] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const searchId = useId();
+  const searchable = onSearch != null;
 
   useEffect(() => {
+    if (!searchable) return;
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
@@ -48,7 +56,7 @@ export function TopBar({
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [searchable]);
 
   const initials = email.slice(0, 2).toUpperCase();
 
@@ -87,76 +95,93 @@ export function TopBar({
         </button>
       ) : null}
 
-      {/* search */}
-      <div style={{ position: 'relative', flex: '1 1 220px', maxWidth: 440, minWidth: 0 }}>
-        <label htmlFor={searchId} className="gt-sr-only" style={srOnly}>
-          Search
-        </label>
+      {searchable ? (
+        <div style={{ position: 'relative', flex: '1 1 220px', maxWidth: 440, minWidth: 0 }}>
+          <label htmlFor={searchId} className="gt-sr-only" style={srOnly}>
+            Search
+          </label>
+          <span
+            aria-hidden
+            style={{
+              position: 'absolute',
+              left: 12,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: 'var(--gt-text-faint)',
+              display: 'inline-flex',
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.6" />
+              <path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </span>
+          <input
+            id={searchId}
+            ref={inputRef}
+            type="search"
+            value={q}
+            placeholder={searchPlaceholder}
+            onChange={(e) => {
+              setQ(e.target.value);
+              onSearch?.(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setQ('');
+                onSearch?.('');
+                e.currentTarget.blur();
+              }
+            }}
+            style={{
+              width: '100%',
+              height: 44,
+              padding: '0 12px 0 34px',
+              borderRadius: 'var(--gt-radius-sm)',
+              border: '1px solid var(--gt-border)',
+              background: 'var(--gt-surface-sunken)',
+              color: 'var(--gt-text)',
+              fontSize: 14,
+              fontFamily: 'var(--font-heading)',
+            }}
+          />
+          <kbd
+            aria-hidden
+            className="hidden sm:inline-block"
+            style={{
+              position: 'absolute',
+              right: 10,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              fontSize: 11,
+              fontFamily: 'var(--font-numeric)',
+              color: 'var(--gt-text-faint)',
+              border: '1px solid var(--gt-border-strong)',
+              borderRadius: 6,
+              padding: '1px 6px',
+              background: 'var(--gt-surface)',
+            }}
+          >
+            ⌘K
+          </kbd>
+        </div>
+      ) : title ? (
         <span
-          aria-hidden
           style={{
-            position: 'absolute',
-            left: 12,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            color: 'var(--gt-text-faint)',
-            display: 'inline-flex',
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.6" />
-            <path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-          </svg>
-        </span>
-        <input
-          id={searchId}
-          ref={inputRef}
-          type="search"
-          value={q}
-          placeholder={searchPlaceholder}
-          onChange={(e) => {
-            setQ(e.target.value);
-            onSearch?.(e.target.value);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              setQ('');
-              onSearch?.('');
-              e.currentTarget.blur();
-            }
-          }}
-          style={{
-            width: '100%',
-            height: 44,
-            padding: '0 12px 0 34px',
-            borderRadius: 'var(--gt-radius-sm)',
-            border: '1px solid var(--gt-border)',
-            background: 'var(--gt-surface-sunken)',
-            color: 'var(--gt-text)',
-            fontSize: 14,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
             fontFamily: 'var(--font-heading)',
-          }}
-        />
-        <kbd
-          aria-hidden
-          className="hidden sm:inline-block"
-          style={{
-            position: 'absolute',
-            right: 10,
-            top: '50%',
-            transform: 'translateY(-50%)',
-            fontSize: 11,
-            fontFamily: 'var(--font-numeric)',
-            color: 'var(--gt-text-faint)',
-            border: '1px solid var(--gt-border-strong)',
-            borderRadius: 6,
-            padding: '1px 6px',
-            background: 'var(--gt-surface)',
+            fontWeight: 600,
+            fontSize: 15,
+            letterSpacing: '-0.01em',
+            color: 'var(--gt-text)',
           }}
         >
-          ⌘K
-        </kbd>
-      </div>
+          {title}
+        </span>
+      ) : null}
 
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
         {actions}

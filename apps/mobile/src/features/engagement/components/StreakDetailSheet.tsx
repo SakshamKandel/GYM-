@@ -257,9 +257,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Today's ring is a plain light stroke, never red: on this strip red already
+  // means "workout done", and the week strip on Home and the training calendar
+  // both mark today the same neutral way. One colour, one meaning.
   dotRingToday: {
     borderWidth: 1.5,
-    borderColor: colors.accent,
+    borderColor: colors.text,
   },
   dotBase: {
     width: 12,

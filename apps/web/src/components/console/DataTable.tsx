@@ -75,6 +75,12 @@ function fromNestedControl(target: EventTarget | null): boolean {
  * Horizontally scrolls inside its own container so the page never scrolls
  * sideways. Renders <empty> (or a default line) when `rows` is empty.
  *
+ * The root is its own card, which is right standing alone and wrong nested: most
+ * queues sit inside `<Card padded={false}><CardHeader/><DataTable/></Card>`, and
+ * that drew two borders and two shadows a hairline apart around the same rows.
+ * The `gt-table-card` marker lets globals.css drop the inner frame in exactly
+ * that case, so the wrapper owns the edge and an unwrapped table is unchanged.
+ *
  * Server-component friendly: pass plain data + render fns. `rowKey` derives a
  * stable React key per row; `onRowClick` (client pages only) makes rows
  * clickable — omit it in server components. Cells may contain their own links
@@ -105,7 +111,7 @@ export function DataTable<T>({
 }) {
   return (
     <div
-      className="gt-card"
+      className="gt-card gt-table-card"
       style={{ padding: 0, overflowX: 'auto', width: '100%' }}
     >
       <table

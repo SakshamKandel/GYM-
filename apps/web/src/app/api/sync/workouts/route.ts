@@ -22,7 +22,8 @@ import { clientIp, rateLimit } from '@/lib/rateLimit';
 export const runtime = 'nodejs';
 
 /**
- * One-way, append-only workout backup (mobile → server).
+ * Workout backup (mobile → server), append-only apart from the member's own
+ * deletions.
  *
  *  - POST {workouts:[...]} → idempotent batch upsert into synced_workouts +
  *    synced_sets, keyed on the CLIENT-generated UUIDs with ON CONFLICT DO
@@ -53,10 +54,18 @@ export const runtime = 'nodejs';
  *    zero extra work, which is exactly what every already-shipped client does.
  *    Merging is the device's business: the server states what it holds and
  *    never asks a device to drop anything.
+ *
+ *  - The same POST also carries `deletedWorkoutIds`: workouts the member deleted
+ *    on their phone. Those rows are removed here (account-scoped), which is what
+ *    stops a deleted session counting toward the public board and what stops
+ *    restore handing it back on the next device. Absent = nothing to delete, so
+ *    every already-shipped client is unaffected.
  */
 
 const MAX_WORKOUTS = 25;
 const MAX_SETS = 500;
+/** Deletions carried per request — the device drains any backlog over several. */
+const MAX_DELETIONS = 50;
 
 /** ISO-ish timestamp the DB layer can consume; bounded so garbage can't grow rows. */
 const isoTimestamp = z
@@ -110,14 +119,17 @@ const workoutSchema = z.object({
 });
 
 /**
- * Push + pull in one body. `workouts` is now optional so a device that only
+ * Push + pull + delete in one body. `workouts` is optional so a device that only
  * wants its history back can ask for it without inventing an upload; every
  * shipped client still sends it and hits exactly the same validation as before.
  * `cursor` comes from the shared restore contract (absent = push only).
+ * `deletedWorkoutIds` is likewise optional — a client that never sends it
+ * behaves exactly as it always has.
  */
 const bodySchema = workoutRestoreRequestSchema
   .extend({
     workouts: z.array(workoutSchema).min(1).max(MAX_WORKOUTS).optional(),
+    deletedWorkoutIds: z.array(z.string().min(1).max(64)).max(MAX_DELETIONS).optional(),
   })
   .refine(
     (b) => (b.workouts ?? []).reduce((n, w) => n + w.sets.length, 0) <= MAX_SETS,
@@ -237,12 +249,49 @@ export async function POST(req: Request) {
 
   const parsed = bodySchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
-  // A pull-only request carries no workouts; every push path below is a no-op
-  // on an empty array, so the two halves stay completely independent.
-  const workouts = parsed.data.workouts ?? [];
   const { cursor } = parsed.data;
+  const deletedWorkoutIds = [...new Set(parsed.data.deletedWorkoutIds ?? [])];
+  const deletedIdSet = new Set(deletedWorkoutIds);
+  // A pull-only request carries no workouts; every push path below is a no-op
+  // on an empty array, so the halves stay completely independent. A workout named
+  // in BOTH halves can only be a stale queue entry, and the delete is the newer
+  // intent, so it wins — nothing can push back a workout this request removes.
+  const workouts = (parsed.data.workouts ?? []).filter((w) => !deletedIdSet.has(w.id));
 
   const db = getDb();
+
+  // ── Deletions (device → server) ─────────────────────────────────
+  // Removing a workout on the phone used to stop at the phone. The server copy
+  // stayed, kept counting toward session-days on the public board, and came
+  // straight back the next time the member restored onto a new device — the one
+  // thing the member had explicitly said they did not want. Deleting here is
+  // what makes it stick: the row is gone, so the board can't count it and
+  // restore has nothing to hand back.
+  //
+  // accountId is bound on both statements, so an id belonging to someone else
+  // matches nothing. Sets go first and the workout second, in one transaction:
+  // the FK cascades anyway, but a half-applied delete must not be possible.
+  if (deletedWorkoutIds.length > 0) {
+    await db.batch([
+      db
+        .delete(syncedSets)
+        .where(
+          and(
+            eq(syncedSets.accountId, user.id),
+            inArray(syncedSets.workoutId, deletedWorkoutIds),
+          ),
+        ),
+      db
+        .delete(syncedWorkouts)
+        .where(
+          and(
+            eq(syncedWorkouts.accountId, user.id),
+            inArray(syncedWorkouts.id, deletedWorkoutIds),
+          ),
+        ),
+    ]);
+  }
+
   const batchIds = workouts.map((w) => w.id);
 
   // Which of the batch's ids already exist (any owner), resolved BEFORE the
@@ -423,7 +472,16 @@ export async function POST(req: Request) {
   // Only when the client asked. No cursor key = a pre-restore client, which
   // gets byte-for-byte the response it has always parsed and costs the DB
   // nothing extra.
-  if (cursor === undefined) return json({ ok: true, syncedWorkoutIds, flaggedWorkoutIds }, 200);
+  // `deletedWorkoutIds` echoes what the caller asked us to remove, not what was
+  // found: after this response the server definitely does not hold any of them,
+  // including ones it never had, so the device can retire the whole tombstone
+  // batch rather than resending ids forever.
+  if (cursor === undefined) {
+    return json({ ok: true, syncedWorkoutIds, flaggedWorkoutIds, deletedWorkoutIds }, 200);
+  }
   const restore = await loadRestorePage(user.id, cursor);
-  return json({ ok: true, syncedWorkoutIds, flaggedWorkoutIds, ...restore }, 200);
+  return json(
+    { ok: true, syncedWorkoutIds, flaggedWorkoutIds, deletedWorkoutIds, ...restore },
+    200,
+  );
 }

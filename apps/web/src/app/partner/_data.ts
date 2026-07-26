@@ -863,6 +863,24 @@ export function partnerLedgerEnabled(): boolean {
   return process.env.PARTNER_LEDGER_ENABLED === 'true';
 }
 
+/**
+ * One delivered order's PARTNER EARNINGS, in SQL: the order gross minus the two
+ * fees the platform charges for running the delivery.
+ *
+ * `totalMinor` is what the MEMBER paid: food + delivery fee + small-order fee +
+ * tip. The delivery fee and the small-order fee are the platform's own charge,
+ * not the restaurant's money — but the payout base was the raw gross, so every
+ * payout handed the restaurant the platform's fees back on top of its food
+ * revenue. The tip deliberately stays on the partner's side of the line.
+ *
+ * Subscription-materialized orders carry 0 for both fees, so this is identical
+ * to the gross for them and only changes one-time orders.
+ *
+ * Used by BOTH payout-base reads below so the single-partner floor and the
+ * whole-queue preview can never drift apart.
+ */
+const PARTNER_EARNING_MINOR = sql`(${mealOrders.totalMinor} - ${mealOrders.deliveryFeeMinor} - ${mealOrders.smallOrderFeeMinor})`;
+
 /** All-time delivered-order money split (no window) — mirrors loadPartnerEarnings filters. */
 export interface PartnerAllTime {
   /** Cash the restaurant collected at the door (delivered COD, non-refunded). */
@@ -938,10 +956,31 @@ export async function loadPartnerLedger(
   }));
 }
 
+/**
+ * Lifetime PARTNER EARNINGS on digital orders the platform holds money for —
+ * the payout base. Same filters as `loadPartnerAllTime`'s `digitalMinor`
+ * (delivered, `paid`, eSewa/Khalti) but net of the platform's delivery and
+ * small-order fees, per {@link PARTNER_EARNING_MINOR}. Kept separate from
+ * `loadPartnerAllTime` on purpose: that one reports GROSS revenue for the
+ * earnings page, this one is what the restaurant may actually withdraw.
+ */
+async function loadPartnerEarnedBaseMinor(db: Db, partnerId: string): Promise<number> {
+  const [row] = await db
+    .select({
+      earned: sql<string>`coalesce(sum(${PARTNER_EARNING_MINOR}) filter (where ${mealOrders.paymentMethod} in ('esewa','khalti') and ${mealOrders.paymentStatus} = 'paid'), 0)::text`,
+    })
+    .from(mealOrders)
+    .where(and(eq(mealOrders.partnerId, partnerId), eq(mealOrders.status, 'delivered')));
+  return Number(row?.earned ?? '0');
+}
+
 /** The withdrawable held balance for one partner — the payout floor + display figure. */
 export interface PartnerHeld {
   currency: string;
-  /** Lifetime earned base — the live delivered-digital-paid sum (always current). */
+  /**
+   * Lifetime earned base — the live delivered-digital-paid sum, NET of the
+   * platform's delivery and small-order fees (always current).
+   */
   earnedMinor: number;
   adjustmentMinor: number;
   /** Σ of disbursed payout rows (always ledger-derived). */
@@ -977,9 +1016,9 @@ export async function loadPartnerHeld(
   // so a ledger-derived base would freeze at the one-time backfill snapshot and
   // never accrue post-cutover revenue. The live sum is authoritative and current;
   // payouts/adjustments still come from the ledger so `heldMinor` decrements on
-  // disbursement (B27), and refunded orders drop out of the live sum automatically.
-  const all = await loadPartnerAllTime(db, partnerId);
-  const earnedMinor = all.digitalMinor;
+  // disbursement (B27), and refunded orders drop out of the live sum automatically
+  // (which is also what makes a dispute refund reduce what the partner is owed).
+  const earnedMinor = await loadPartnerEarnedBaseMinor(db, partnerId);
   return {
     currency,
     earnedMinor,
@@ -1015,13 +1054,15 @@ export async function loadPartnerHeldMinorMany(
   const partnerIds = [...new Set(pairs.map((p) => p.partnerId))];
 
   const [earnedRows, ledgerRows] = await Promise.all([
-    // Earned base — same filters as loadPartnerAllTime's `digitalMinor`
-    // (delivered, paid, esewa/khalti), grouped by partner. Currency-agnostic,
-    // exactly as the per-partner path.
+    // Earned base — the SAME expression the per-partner floor uses
+    // (delivered, paid, esewa/khalti, net of the platform's fees), grouped by
+    // partner. Currency-agnostic, exactly as the per-partner path. These two
+    // must agree: this one previews coverage in the admin queue, that one is the
+    // floor the approval actually enforces.
     db
       .select({
         partnerId: mealOrders.partnerId,
-        digital: sql<string>`coalesce(sum(${mealOrders.totalMinor}) filter (where ${mealOrders.paymentMethod} in ('esewa','khalti') and ${mealOrders.paymentStatus} = 'paid'), 0)::text`,
+        digital: sql<string>`coalesce(sum(${PARTNER_EARNING_MINOR}) filter (where ${mealOrders.paymentMethod} in ('esewa','khalti') and ${mealOrders.paymentStatus} = 'paid'), 0)::text`,
       })
       .from(mealOrders)
       .where(and(inArray(mealOrders.partnerId, partnerIds), eq(mealOrders.status, 'delivered')))

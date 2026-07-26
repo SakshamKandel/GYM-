@@ -7,6 +7,7 @@ import {
   GRANTABLE_ROLES,
   type Permission,
 } from '@gym/shared';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -15,9 +16,11 @@ import {
   type Column,
   ConfirmButton,
   DataTable,
+  FilterPill,
   Modal,
   PageHeader,
   SearchField,
+  SkeletonBar,
   StatusChip,
   TextField,
 } from '@/components/console';
@@ -54,6 +57,31 @@ interface MemberHit {
   displayName: string;
   tier: string;
   staffRole?: StaffRole | null;
+}
+
+/**
+ * Restaurant partner accounts are never managed from this page. The roster query
+ * already leaves them out, and the grant/revoke routes now refuse them outright,
+ * but the account search can still surface one — so every partner row here is
+ * read-only and points at the console that actually owns it.
+ */
+const PARTNERS_HREF = '/admin/partners';
+
+/** Small "Manage in Meal partners" link used wherever a partner row appears. */
+function PartnersLink({ align = 'left' }: { align?: 'left' | 'right' }) {
+  return (
+    <Link
+      href={PARTNERS_HREF}
+      style={{
+        fontSize: 12,
+        color: 'var(--gt-text-dim)',
+        textDecoration: 'underline',
+        textAlign: align,
+      }}
+    >
+      Manage in Meal partners
+    </Link>
+  );
 }
 
 const selectStyle: React.CSSProperties = {
@@ -100,6 +128,8 @@ function friendlyStaffError(status: number, code: string | null): string {
       return 'A super admin’s permissions cannot be overridden.';
     case 'partner_override_forbidden':
       return 'A partner account may only ever hold its two delivery permissions.';
+    case 'partner_managed_elsewhere':
+      return 'Restaurant accounts are managed in Meal partners, not here.';
     default:
       break;
   }
@@ -402,7 +432,11 @@ export function StaffManager({
       width: 200,
       render: (row) => {
         const isSelf = row.accountId === currentAccountId;
-        const manageable = !isSelf && canManageRole(callerRole, row.role);
+        // A partner is rank-0, so the rank rule alone would call it manageable.
+        // It is not: its role can only be given and taken away in the partners
+        // console, and the server refuses either change from here.
+        const manageable =
+          !isSelf && row.role !== 'partner' && canManageRole(callerRole, row.role);
         const busy = busyId === row.accountId;
 
         // Locked rows (own row, or equal/higher rank) show the role as plain
@@ -466,7 +500,8 @@ export function StaffManager({
       align: 'right',
       render: (row) => {
         const isSelf = row.accountId === currentAccountId;
-        const manageable = !isSelf && canManageRole(callerRole, row.role);
+        const isPartner = row.role === 'partner';
+        const manageable = !isSelf && !isPartner && canManageRole(callerRole, row.role);
         const busy = busyId === row.accountId;
         const err = rowError?.id === row.accountId ? rowError.msg : null;
         return (
@@ -490,6 +525,8 @@ export function StaffManager({
             ) : null}
             {isSelf ? (
               <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>You</span>
+            ) : isPartner ? (
+              <PartnersLink align="right" />
             ) : !manageable ? (
               <span style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
                 Managed by super admin
@@ -710,8 +747,32 @@ function PermissionsModal({
         </div>
 
         {loading ? (
-          <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-            Loading permissions…
+          // Shaped like the list it is about to become, so the panel doesn't
+          // jump from one grey word to thirty rows.
+          <div
+            aria-label="Loading permissions"
+            role="status"
+            style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+          >
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div
+                key={i}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '14px 10px',
+                  borderRadius: 8,
+                  border: '1px solid var(--gt-border)',
+                }}
+              >
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <SkeletonBar w="45%" />
+                  <SkeletonBar w="75%" h={10} />
+                </div>
+                <SkeletonBar w={168} h={20} />
+              </div>
+            ))}
           </div>
         ) : payload ? (
           <div
@@ -747,10 +808,19 @@ function PermissionsModal({
 }
 
 /**
- * One permission line: label + description, an effective-state badge, and a
- * three-way Default / Grant / Deny selector. "Default" clears the override
- * (revert to preset); Grant/Deny write an explicit allow/deny. The currently
- * selected mode is derived from `row.override` (null → Default).
+ * One permission line: label + description, the effective state, and a three-way
+ * Default / Grant / Deny selector. "Default" clears the override (revert to
+ * preset); Grant/Deny write an explicit allow/deny. The currently selected mode
+ * is derived from `row.override` (null → Default).
+ *
+ * A badge here marks the ONE thing worth finding in a list of thirty: a row
+ * whose access was set by hand instead of by the role. Every row used to wear an
+ * On/Off badge, which is the state the selector beside it already spells out —
+ * thirty badges shouting equally, so the two that had actually been changed
+ * disappeared into them. On/Off is now quiet text, and "Overridden" is the badge.
+ *
+ * The selector is the shared FilterPill, so its look, its 44px target and its
+ * pressed state come from the same place as every other segmented control.
  */
 function PermissionControl({
   row,
@@ -799,85 +869,55 @@ function PermissionControl({
           >
             {meta?.label ?? row.key}
           </span>
-          {row.effective ? (
-            <Badge tone="positive">On</Badge>
-          ) : (
-            <Badge tone="neutral">Off</Badge>
-          )}
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 500,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              flexShrink: 0,
+              color: row.effective ? 'var(--gt-success)' : 'var(--gt-text-dim)',
+            }}
+          >
+            {row.effective ? 'On' : 'Off'}
+          </span>
+          {row.override != null ? <Badge tone="warning">Overridden</Badge> : null}
         </div>
         <div style={{ fontSize: 11, color: 'var(--gt-text-dim)', marginTop: 2 }}>
           {meta?.desc ?? row.key} · preset {row.preset ? 'grants' : 'denies'} this
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 0, flexShrink: 0 }} role="group" aria-label={`${meta?.label ?? row.key} override`}>
-        <SegBtn
-          label="Default"
-          active={mode === 'default'}
-          activeText="var(--gt-text)"
-          busy={busy}
-          disabled={disabled}
+      <div
+        style={{ display: 'flex', gap: 4, flexShrink: 0 }}
+        role="group"
+        aria-label={`${meta?.label ?? row.key} override`}
+      >
+        <FilterPill
+          tone="neutral"
+          selected={mode === 'default'}
+          disabled={disabled || busy}
           onClick={() => onChange(null)}
-        />
-        <SegBtn
-          label="Grant"
-          active={mode === 'allow'}
-          activeTone="var(--gt-success)"
-          busy={busy}
-          disabled={disabled}
+        >
+          Default
+        </FilterPill>
+        <FilterPill
+          tone="positive"
+          selected={mode === 'allow'}
+          disabled={disabled || busy}
           onClick={() => onChange(true)}
-        />
-        <SegBtn
-          label="Deny"
-          active={mode === 'deny'}
-          activeTone="var(--gt-danger)"
-          busy={busy}
-          disabled={disabled}
+        >
+          Grant
+        </FilterPill>
+        <FilterPill
+          tone="critical"
+          selected={mode === 'deny'}
+          disabled={disabled || busy}
           onClick={() => onChange(false)}
-        />
+        >
+          Deny
+        </FilterPill>
       </div>
     </div>
-  );
-}
-
-/** One segment of the Default/Grant/Deny control. */
-function SegBtn({
-  label,
-  active,
-  activeTone = 'var(--gt-border-strong)',
-  activeText = 'var(--gt-accent-ink)',
-  busy,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  activeTone?: string;
-  /** Text color while active — pass 'var(--gt-text)' when activeTone is a light wash. */
-  activeText?: string;
-  busy: boolean;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      disabled={disabled || busy}
-      onClick={onClick}
-      style={{
-        fontSize: 12,
-        fontFamily: 'var(--font-heading)',
-        padding: '5px 10px',
-        border: '1px solid var(--gt-border)',
-        marginLeft: -1,
-        background: active ? activeTone : 'transparent',
-        color: active ? activeText : 'var(--gt-text-dim)',
-        cursor: disabled || busy ? 'default' : 'pointer',
-        opacity: disabled || busy ? 0.55 : 1,
-      }}
-    >
-      {label}
-    </button>
   );
 }
 
@@ -1164,6 +1204,11 @@ function GrantRoleModal({
 
   const pickedRole = picked?.staffRole ?? null;
   const pickedIsSelf = picked != null && picked.id === currentAccountId;
+  // A restaurant account outranks nobody, so the rank rule would wave it
+  // through. Its role belongs to the partners console and the server refuses the
+  // change, so it can never be picked here (the search hits render read-only);
+  // this is the belt-and-braces stop for a pick made before that.
+  const pickedIsPartner = pickedRole === 'partner';
   // Already staff at a rank the caller cannot manage → the server would reject
   // the grant with insufficient_rank, so say why up front and disable Grant.
   const pickedLocked =
@@ -1219,7 +1264,7 @@ function GrantRoleModal({
   }, [q]);
 
   async function submit() {
-    if (!picked || pickedIsSelf || pickedLocked) return;
+    if (!picked || pickedIsSelf || pickedLocked || pickedIsPartner) return;
     // Re-roling an existing coach to a non-coach role strips the coach role and
     // triggers the offboarding cascade server-side — route through the shared
     // typed-confirm gate first (P0-7) rather than POSTing silently, exactly as
@@ -1290,7 +1335,9 @@ function GrantRoleModal({
           <Button
             variant="primary"
             onClick={submit}
-            disabled={!picked || pickedIsSelf || pickedLocked || submitting}
+            disabled={
+              !picked || pickedIsSelf || pickedLocked || pickedIsPartner || submitting
+            }
           >
             {submitting ? 'Granting…' : 'Grant role'}
           </Button>
@@ -1320,6 +1367,9 @@ function GrantRoleModal({
         </div>
 
         {picked ? (
+          // Picked, not primary: the accent in this dialog belongs to Grant
+          // role, the button that does the thing. A ring in the same colour
+          // around the account above it made two things claim to be the action.
           <div
             style={{
               display: 'flex',
@@ -1327,7 +1377,8 @@ function GrantRoleModal({
               gap: 6,
               padding: '10px 12px',
               borderRadius: 10,
-              border: '1px solid var(--gt-accent)',
+              border: '1px solid var(--gt-border-strong)',
+              background: 'var(--gt-surface-sunken)',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1378,6 +1429,22 @@ function GrantRoleModal({
               <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
                 This is your own account, so you cannot change your own role.
               </div>
+            ) : pickedIsPartner ? (
+              <div
+                style={{
+                  fontSize: 12,
+                  color: 'var(--gt-text-dim)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 2,
+                }}
+              >
+                <span>
+                  This is a restaurant account. Its access is set up and closed in
+                  Meal partners, so it cannot be given a staff role here.
+                </span>
+                <PartnersLink />
+              </div>
             ) : pickedLocked ? (
               <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
                 Managed by super admin, so you cannot change this account’s role.
@@ -1407,52 +1474,72 @@ function GrantRoleModal({
                 No accounts match “{q.trim()}”.
               </div>
             ) : (
-              hits.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => setPicked(m)}
-                  className="gt-card"
-                  style={{
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    padding: '9px 12px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    color: 'inherit',
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: 14,
-                        fontWeight: 600,
-                        fontFamily: 'var(--font-heading)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {m.displayName || m.email}
+              hits.map((m) => {
+                // A restaurant account is listed so the operator can see it
+                // exists, but it is not pickable: its access is granted and
+                // closed in the partners console, and the server refuses any
+                // role change on it.
+                const isPartner = m.staffRole === 'partner';
+                const body = (
+                  <>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontSize: 14,
+                          fontWeight: 600,
+                          fontFamily: 'var(--font-heading)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {m.displayName || m.email}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: 'var(--gt-text-dim)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {m.email}
+                      </div>
+                      {isPartner ? <PartnersLink /> : null}
                     </div>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: 'var(--gt-text-dim)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {m.email}
+                    {m.staffRole != null ? (
+                      <Badge tone="info">{staffRoleLabel(m.staffRole)}</Badge>
+                    ) : null}
+                  </>
+                );
+                const rowStyle: React.CSSProperties = {
+                  textAlign: 'left',
+                  padding: '9px 12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  color: 'inherit',
+                };
+                if (isPartner) {
+                  return (
+                    <div key={m.id} className="gt-card" style={{ ...rowStyle, opacity: 0.7 }}>
+                      {body}
                     </div>
-                  </div>
-                  {m.staffRole != null ? (
-                    <Badge tone="info">{staffRoleLabel(m.staffRole)}</Badge>
-                  ) : null}
-                </button>
-              ))
+                  );
+                }
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setPicked(m)}
+                    className="gt-card"
+                    style={{ ...rowStyle, cursor: 'pointer' }}
+                  >
+                    {body}
+                  </button>
+                );
+              })
             )}
           </div>
         )}

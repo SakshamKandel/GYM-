@@ -2,6 +2,7 @@
 
 import type { OrderStatus } from '@gym/shared';
 import { useEffect, useState } from 'react';
+import { SkeletonBar } from '@/components/console';
 import { formatShortDateTime, ORDER_STATUS_LABEL } from '@/lib/format';
 
 /**
@@ -68,7 +69,34 @@ export function OrderTimeline({ orderId }: { orderId: string }) {
     return <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>Couldn't load history.</div>;
   }
   if (!events) {
-    return <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>Loading history…</div>;
+    // Shaped like the entries it becomes, so the drawer doesn't reflow around
+    // one grey line and then again around the real list.
+    return (
+      <div
+        role="status"
+        aria-label="Loading history"
+        style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+      >
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <div
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: 'var(--gt-border-strong)',
+                marginTop: 4,
+                flexShrink: 0,
+              }}
+            />
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <SkeletonBar w="60%" h={10} />
+              <SkeletonBar w="35%" h={9} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
   }
   if (events.length === 0) {
     return <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>No transitions recorded yet.</div>;
@@ -78,12 +106,15 @@ export function OrderTimeline({ orderId }: { orderId: string }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {events.map((e) => (
         <div key={e.id} style={{ display: 'flex', gap: 10, fontSize: 12 }}>
+          {/* A bullet, not a signal: one accent dot per history entry put the
+              accent on eight rows of a drawer whose actual primary action is
+              the button underneath them. */}
           <div
             style={{
               width: 8,
               height: 8,
               borderRadius: '50%',
-              background: 'var(--gt-accent-strong)',
+              background: 'var(--gt-text-faint)',
               marginTop: 4,
               flexShrink: 0,
             }}

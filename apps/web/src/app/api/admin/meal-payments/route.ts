@@ -13,7 +13,9 @@ export const runtime = 'nodejs';
  * `payments.review` permission (no new key per the plan).
  *
  *  GET `?status=pending|approved|rejected|refunded` → every meal payment request
- *  (optionally filtered), newest first, joined to the submitting account
+ *  (omit `status` for all of them; an unrecognised one is refused with
+ *  `400 {error:'invalid'}` rather than quietly returning everything), newest
+ *  first, joined to the submitting account
  *  (id/email/displayName — staff-only view) and its target context (order total/
  *  status/date/window, or cycle week/amount/status). `receiptUrl` is re-minted as
  *  a fresh SIGNED Cloudinary url from the stored uid on every read (never
@@ -35,10 +37,16 @@ export async function GET(req: Request) {
   const principal = await requirePermission(req, 'payments.review');
   if (principal instanceof Response) return principal;
 
-  const statusParam = new URL(req.url).searchParams.get('status');
-  const status = (STATUSES as readonly string[]).includes(statusParam ?? '')
-    ? (statusParam as (typeof STATUSES)[number])
-    : undefined;
+  // No `status` (or an empty one) still means "every status" — unchanged. But a
+  // status we don't recognise is now refused rather than silently dropped, which
+  // used to answer a filtered request with the WHOLE queue. Same answer the
+  // coach-application / tier-request / order queues already give.
+  const statusParam = (new URL(req.url).searchParams.get('status') ?? '').trim();
+  if (statusParam !== '' && !(STATUSES as readonly string[]).includes(statusParam)) {
+    return json({ error: 'invalid' }, 400);
+  }
+  const status =
+    statusParam === '' ? undefined : (statusParam as (typeof STATUSES)[number]);
 
   const db = getDb();
   const rows = await db

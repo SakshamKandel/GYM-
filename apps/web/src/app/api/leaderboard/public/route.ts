@@ -1,5 +1,5 @@
 import { accounts, syncedWorkouts, type Db } from '@gym/db';
-import { effectiveTier } from '@gym/shared';
+import { effectiveTier, ktmDateString } from '@gym/shared';
 import { and, asc, countDistinct, desc, eq, gte, lt, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { bearerToken, userForToken } from '@/lib/auth';
@@ -139,7 +139,14 @@ export async function GET(req: Request) {
   });
   if (limited) return limited;
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Today on the SAME day boundary the rest of the product uses (Nepal
+  // wall-clock, UTC+05:45), because that is the boundary the workout dates this
+  // board counts were recorded on. Reading it off UTC instead put the server
+  // 5h45m behind the members for that slice of every day: between midnight and
+  // 05:45 KTM on the 1st, a session logged and dated "the 1st" was ranked into
+  // a window the server still believed was the previous month, so it counted
+  // for neither board.
+  const todayIso = ktmDateString(new Date());
   const currentMonthKey = todayIso.slice(0, 7);
   const prevMonthKey = previousMonthKey(currentMonthKey);
 

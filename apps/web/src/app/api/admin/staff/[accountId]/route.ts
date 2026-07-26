@@ -24,6 +24,11 @@ export const runtime = 'nodejs';
  *             pending requests, deactivate the coach profile, archive assigned
  *             plans — money/ledger is preserved. 404 if the account was not staff.
  *
+ * Restaurant partners are carved out: a target holding role='partner' is refused
+ * 409 `partner_managed_elsewhere` (both the dry-run and the real delete). Closing
+ * a restaurant is the partners console's job, where the live-order refusal and
+ * the session kill are applied together.
+ *
  * Guarded by requirePermission('roles.grant') — super_admin + main_admin —
  * plus a RANK check (requireOutranks): the actor must outrank the target's
  * CURRENT role, so a main_admin can revoke sub-roles only; main_admin and
@@ -62,6 +67,15 @@ export async function DELETE(
   }
   const rankBlock = requireOutranks(principal, targetRole);
   if (rankBlock) return rankBlock;
+
+  // Restaurant partners are NOT generic staff. Revoking here would delete the
+  // login while leaving the restaurant row active — skipping the deactivation
+  // safeguards that refuse to close a partner with live orders — and nothing in
+  // this console could grant the role back. Deactivating a partner is the
+  // partners console's job; refuse and say so.
+  if (targetRole === 'partner') {
+    return json({ error: 'partner_managed_elsewhere' }, 409);
+  }
 
   // Dry-run: surface the offboarding blast radius without touching anything.
   if (dryRun) {

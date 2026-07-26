@@ -1,3 +1,4 @@
+import { ADMIN_CONSOLE_ROLES, COACH_CONSOLE_ROLES, type StaffRole } from '@gym/shared';
 import { cookies } from 'next/headers';
 import { cache } from 'react';
 import { staffForToken, type StaffPrincipal } from './auth';
@@ -78,4 +79,78 @@ export async function staffFromCookie(): Promise<Principal | null> {
  */
 export async function staffPrincipalForToken(token: string): Promise<StaffPrincipal | null> {
   return staffForTokenCached(token);
+}
+
+// ── Which workspace an account belongs to ────────────────────────────────
+
+/** The three staff workspaces, each with its own sign-in page. */
+export type StaffConsole = 'admin' | 'coach' | 'partner';
+
+/** Home route + the name we put in front of a human, per workspace. */
+const CONSOLES: Record<StaffConsole, { href: string; name: string }> = {
+  admin: { href: '/admin', name: 'admin console' },
+  coach: { href: '/coach', name: 'coach console' },
+  partner: { href: '/partner', name: 'partner portal' },
+};
+
+/** Offer order when an account can open more than one (top admins). */
+const CONSOLE_ORDER: readonly StaffConsole[] = ['admin', 'coach', 'partner'];
+
+/**
+ * May `role` open `workspace`? Mirrors the three layout guards exactly:
+ * /partner is partner-only, /admin takes ADMIN_CONSOLE_ROLES, /coach takes
+ * COACH_CONSOLE_ROLES (coach plus the two top-admin roles).
+ */
+function canOpenConsole(role: StaffRole, workspace: StaffConsole): boolean {
+  if (workspace === 'partner') return role === 'partner';
+  const allowed = workspace === 'admin' ? ADMIN_CONSOLE_ROLES : COACH_CONSOLE_ROLES;
+  return allowed.includes(role);
+}
+
+/** What a sign-in page shows instead of the form when the account is elsewhere. */
+export interface ConsoleMismatch {
+  title: string;
+  body: string;
+  action: { href: string; label: string };
+}
+
+/**
+ * The wrong-workspace notice for a sign-in page, or null when there is nothing
+ * to say.
+ *
+ * Signing in at the wrong console used to be a silent bounce: the POST
+ * succeeds, the browser lands on the console, the layout guard rejects the role
+ * and sends it straight back to the same empty form. Nothing on screen ever
+ * said why. This resolves the session the login page can already see and, when
+ * that account cannot open THIS workspace, hands back plain copy plus the place
+ * it should go.
+ *
+ * Deliberately reads the SESSION, not the submitted email: an unauthenticated
+ * visitor gets null every time, so none of this can be used to probe whether an
+ * address is staff. It only ever appears after a sign-in that worked.
+ */
+export async function consoleMismatchFromCookie(
+  workspace: StaffConsole,
+): Promise<ConsoleMismatch | null> {
+  const principal = await staffFromCookie();
+  if (!principal) return null;
+  if (canOpenConsole(principal.role, workspace)) return null;
+
+  const here = CONSOLES[workspace].name;
+  const home = CONSOLE_ORDER.find((c) => canOpenConsole(principal.role, c));
+
+  if (!home) {
+    return {
+      title: `This account does not open the ${here}`,
+      body: 'You are signed in, but this account has no staff workspace yet. Ask whoever set it up to give you access.',
+      action: { href: '/contact', label: 'Ask for help' },
+    };
+  }
+
+  const there = CONSOLES[home].name;
+  return {
+    title: `This account does not open the ${here}`,
+    body: `You are signed in. Your work lives in the ${there}, so open that instead.`,
+    action: { href: CONSOLES[home].href, label: `Go to the ${there}` },
+  };
 }

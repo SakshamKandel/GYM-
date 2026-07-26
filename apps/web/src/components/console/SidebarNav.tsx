@@ -9,7 +9,10 @@ import { LogoutButton } from './LogoutButton';
  *  - 'exact' → active only when pathname === href (use for index routes).
  *  - 'prefix' (default) → active when pathname starts with href.
  * `badge` renders a small count pill (e.g. Support unread); `icon` is an
- * optional leading glyph node shown in both expanded and collapsed states.
+ * optional leading glyph node (see NavIcons) shown in both expanded and
+ * collapsed states. Without one, the collapsed rail falls back to the label's
+ * initials, so a console that names no glyphs still collapses to something
+ * readable rather than a blank strip.
  */
 export interface NavItem {
   href: string;
@@ -25,9 +28,23 @@ export interface NavGroup {
   items: NavItem[];
 }
 
-function isActive(item: NavItem, pathname: string): boolean {
+export function isActive(item: NavItem, pathname: string): boolean {
   if (item.match === 'exact') return pathname === item.href;
   return pathname === item.href || pathname.startsWith(`${item.href}/`);
+}
+
+/**
+ * Collapsed-rail stand-in for an item that ships no `icon`. The rail is 72px of
+ * labelless rows, so without SOMETHING per row it is a blank strip — this keeps
+ * every console usable collapsed, whether or not its layout names glyphs.
+ * Initials come from the label's words ("Coach applications" → "CA"), which is
+ * enough to tell neighbouring rows apart alongside the hover title.
+ */
+function initialsOf(label: string): string {
+  const words = label.split(/[\s&/]+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
 }
 
 /**
@@ -222,6 +239,24 @@ export function SidebarNav({
                   {item.icon ? (
                     <span aria-hidden style={{ display: 'inline-flex', flexShrink: 0 }}>
                       {item.icon}
+                    </span>
+                  ) : collapsed ? (
+                    <span
+                      aria-hidden
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        width: 22,
+                        height: 22,
+                        fontFamily: 'var(--font-heading)',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        letterSpacing: '0.02em',
+                      }}
+                    >
+                      {initialsOf(item.label)}
                     </span>
                   ) : null}
                   {!collapsed ? (

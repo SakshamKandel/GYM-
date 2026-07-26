@@ -161,7 +161,10 @@ export function Stepper({ value, onChange, step, min = 0, max, format, label, bi
             <AppText variant={big ? 'stat' : 'display'} tabular>
               {display}
             </AppText>
-            {big ? <AppText style={styles.dragHint}>← drag →</AppText> : null}
+            {/* Say that the value can be dragged everywhere it can be, not
+                just on the oversized ones. The compact stepper is the one in
+                the set logger, where sliding to the weight beats forty taps. */}
+            <AppText style={styles.dragHint}>← drag →</AppText>
           </View>
         </GestureDetector>
         <Pressable

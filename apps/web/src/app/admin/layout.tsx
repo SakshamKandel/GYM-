@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
-import { ConsoleShell, type NavGroup } from '@/components/console';
+import { ConsoleShell, NavIcon, type NavGroup, type NavIconName } from '@/components/console';
 import { effectivePermissionSet } from '@/lib/authz';
 import { staffFromCookie } from '@/lib/staffSession';
 import { countUnreadSupportThreadsCached } from '@/lib/supportThreads';
@@ -46,56 +46,102 @@ type NavSpec = {
   anyPerm?: readonly Permission[];
   match?: 'exact' | 'prefix';
   badge?: number;
+  /**
+   * Rail glyph. The sidebar collapses to a 72px icon rail, and with 27 items
+   * carrying none it collapsed to a blank strip — a control that hid the whole
+   * nav and gave nothing back. One per item, from the shared NavIcons set.
+   */
+  icon: NavIconName;
 };
 
 const NAV_GROUPS: { label?: string; items: NavSpec[] }[] = [
   {
     // Unlabelled: the console's front door sits above the group structure.
-    items: [{ href: '/admin', label: 'Overview', match: 'exact' }],
+    items: [{ href: '/admin', label: 'Overview', match: 'exact', icon: 'overview' }],
   },
   {
     // The queues staff clear every day. These used to sit halfway down a flat
     // 27-item list, below the fold on a laptop.
     label: 'Today',
     items: [
-      { href: '/admin/support', label: 'Support', perm: 'support.thread.read' },
-      { href: '/admin/applications', label: 'Coach applications', perm: 'coach.application.review' },
-      { href: '/admin/payments', label: 'Membership payments', perm: 'payments.review' },
-      { href: '/admin/meal-payments', label: 'Meal payments', perm: 'payments.review' },
-      { href: '/admin/disputes', label: 'Disputes', perm: 'orders.review' },
+      { href: '/admin/support', label: 'Support', perm: 'support.thread.read', icon: 'support' },
+      {
+        href: '/admin/applications',
+        label: 'Coach applications',
+        perm: 'coach.application.review',
+        icon: 'applications',
+      },
+      {
+        href: '/admin/payments',
+        label: 'Membership payments',
+        perm: 'payments.review',
+        icon: 'payments',
+      },
+      {
+        href: '/admin/meal-payments',
+        label: 'Meal payments',
+        perm: 'payments.review',
+        icon: 'receipt',
+      },
+      { href: '/admin/disputes', label: 'Disputes', perm: 'orders.review', icon: 'alert' },
     ],
   },
   {
     label: 'People',
     items: [
-      { href: '/admin/members', label: 'Members', perm: 'members.read' },
-      { href: '/admin/coaches', label: 'Coaches', perm: 'coach.assign' },
-      { href: '/admin/staff', label: 'Staff & roles', perm: 'roles.grant' },
-      { href: '/admin/abuse', label: 'Referral & trial abuse', perm: 'subscription.override' },
-      { href: '/admin/broadcast', label: 'Broadcast', perm: 'broadcast.send' },
+      { href: '/admin/members', label: 'Members', perm: 'members.read', icon: 'members' },
+      { href: '/admin/coaches', label: 'Coaches', perm: 'coach.assign', icon: 'coaches' },
+      { href: '/admin/staff', label: 'Staff & roles', perm: 'roles.grant', icon: 'staff' },
+      {
+        href: '/admin/abuse',
+        label: 'Referral & trial abuse',
+        perm: 'subscription.override',
+        icon: 'flag',
+      },
+      { href: '/admin/broadcast', label: 'Broadcast', perm: 'broadcast.send', icon: 'broadcast' },
     ],
   },
   {
     label: 'Money',
     items: [
-      { href: '/admin/subscriptions', label: 'Subscriptions', perm: 'subscription.override' },
-      { href: '/admin/pricing', label: 'Pricing', perm: 'pricing.manage' },
-      { href: '/admin/promos', label: 'Promo codes', perm: 'promo.manage' },
+      {
+        href: '/admin/subscriptions',
+        label: 'Subscriptions',
+        perm: 'subscription.override',
+        icon: 'subscriptions',
+      },
+      { href: '/admin/pricing', label: 'Pricing', perm: 'pricing.manage', icon: 'pricing' },
+      { href: '/admin/promos', label: 'Promo codes', perm: 'promo.manage', icon: 'promos' },
       // Coach wallets holds both the wallet ledger (wallet.manage) and the payout
       // queue (payouts.review); either scoped grant must reveal the link (C-C).
-      { href: '/admin/wallets', label: 'Coach wallets', anyPerm: ['wallet.manage', 'payouts.review'] },
+      {
+        href: '/admin/wallets',
+        label: 'Coach wallets',
+        anyPerm: ['wallet.manage', 'payouts.review'],
+        icon: 'wallet',
+      },
       // One delivery day's takings per partner kitchen — same gate as the route
       // it reads (GET /api/admin/reconciliation → 'partners.manage').
-      { href: '/admin/reconciliation', label: 'Daily partner totals', perm: 'partners.manage' },
-      { href: '/admin/analytics', label: 'Analytics', perm: 'analytics.read' },
+      {
+        href: '/admin/reconciliation',
+        label: 'Daily partner totals',
+        perm: 'partners.manage',
+        icon: 'calculator',
+      },
+      { href: '/admin/analytics', label: 'Analytics', perm: 'analytics.read', icon: 'analytics' },
     ],
   },
   {
     label: 'Orders',
     items: [
-      { href: '/admin/orders', label: 'Meal orders', perm: 'orders.review' },
-      { href: '/admin/meal-subscriptions', label: 'Meal subscriptions', perm: 'payments.review' },
-      { href: '/admin/partners', label: 'Meal partners', perm: 'partners.manage' },
+      { href: '/admin/orders', label: 'Meal orders', perm: 'orders.review', icon: 'orders' },
+      {
+        href: '/admin/meal-subscriptions',
+        label: 'Meal subscriptions',
+        perm: 'payments.review',
+        icon: 'calendar',
+      },
+      { href: '/admin/partners', label: 'Meal partners', perm: 'partners.manage', icon: 'store' },
     ],
   },
   {
@@ -108,18 +154,38 @@ const NAV_GROUPS: { label?: string; items: NavSpec[] }[] = [
       // account holding only that key (e.g. a stripped-down content_admin, or a
       // per-account override grant) was bounced straight back to /admin/login
       // in a loop despite the page itself accepting it.
-      { href: '/admin/content', label: 'Content', anyPerm: ['content.manage', 'moderation.manage'] },
-      { href: '/admin/catalog', label: 'Exercises & plans', perm: 'catalog.manage' },
-      { href: '/admin/gyms', label: 'Nearby gyms', perm: 'gyms.manage' },
-      { href: '/admin/gyms/reports', label: 'Gym reports & reviews', perm: 'gyms.manage' },
-      { href: '/admin/gamification', label: 'Points & badges', perm: 'gamification.manage' },
+      {
+        href: '/admin/content',
+        label: 'Content',
+        anyPerm: ['content.manage', 'moderation.manage'],
+        icon: 'content',
+      },
+      {
+        href: '/admin/catalog',
+        label: 'Exercises & plans',
+        perm: 'catalog.manage',
+        icon: 'catalog',
+      },
+      { href: '/admin/gyms', label: 'Nearby gyms', perm: 'gyms.manage', icon: 'gyms' },
+      {
+        href: '/admin/gyms/reports',
+        label: 'Gym reports & reviews',
+        perm: 'gyms.manage',
+        icon: 'star',
+      },
+      {
+        href: '/admin/gamification',
+        label: 'Points & badges',
+        perm: 'gamification.manage',
+        icon: 'trophy',
+      },
     ],
   },
   {
     label: 'System',
     items: [
-      { href: '/admin/system', label: 'System health', perm: 'analytics.read' },
-      { href: '/admin/audit', label: 'Audit log', perm: 'audit.read' },
+      { href: '/admin/system', label: 'System health', perm: 'analytics.read', icon: 'system' },
+      { href: '/admin/audit', label: 'Audit log', perm: 'audit.read', icon: 'audit' },
     ],
   },
 ];
@@ -182,12 +248,13 @@ function navFor(
 
   return visible.map((group) => ({
     ...(group.label ? { label: group.label } : {}),
-    items: group.items.map(({ href, label, match, badge }) => {
+    items: group.items.map(({ href, label, match, badge, icon }) => {
       const count = badges[href] ?? badge;
       const resolved = active === null ? match : href === active ? 'prefix' : 'exact';
       return {
         href,
         label,
+        icon: <NavIcon name={icon} />,
         ...(resolved ? { match: resolved } : {}),
         ...(count ? { badge: count } : {}),
       };

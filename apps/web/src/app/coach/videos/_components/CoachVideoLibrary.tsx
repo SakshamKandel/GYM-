@@ -21,8 +21,14 @@ import { type CoachVideoRow, type Tier, TIERS } from './types';
  * Client owner of the coach video library. Seeded with the server-read rows so
  * the table paints immediately, then kept live locally. Upload, per-row tier
  * change, and remove each mutate through the guarded /api/admin/videos routes
- * (the coach holds content.video.publish; the httpOnly gt_staff cookie rides
- * along on the same-origin fetch) and patch this list — no full refetch needed.
+ * (the httpOnly gt_staff cookie rides along on the same-origin fetch) and patch
+ * this list — no full refetch needed.
+ *
+ * The list is org-wide, the write scope is not: a coach may only change rows
+ * they added, so re-tier and Remove are offered on those rows alone and every
+ * other row reads as plain text. `canManageAll` (the content.manage holders and
+ * the top-admin roles) unlocks the whole table. This used to offer both actions
+ * on every row and the server rejected the click.
  *
  * It reuses the admin content section's <UploadModal> (which POSTs to
  * /api/admin/videos and hands back the admin VideoDetail shape) so the upload
@@ -48,9 +54,12 @@ const STATUS_CHIP: Record<
 export function CoachVideoLibrary({
   initialVideos,
   videoConfigured,
+  canManageAll,
 }: {
   initialVideos: CoachVideoRow[];
   videoConfigured: boolean;
+  /** Viewer holds `content.manage`, so every row is theirs to edit. */
+  canManageAll: boolean;
 }) {
   const [videos, setVideos] = useState<CoachVideoRow[]>(initialVideos);
   const [configured, setConfigured] = useState(videoConfigured);
@@ -61,6 +70,9 @@ export function CoachVideoLibrary({
   const [rowError, setRowError] = useState<{ id: string; msg: string } | null>(
     null,
   );
+
+  /** Rows the /api/admin/videos mutations will accept from this viewer. */
+  const canEdit = (row: CoachVideoRow) => canManageAll || row.mine;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -82,6 +94,8 @@ export function CoachVideoLibrary({
       thumbnailUrl: v.thumbnailUrl,
       views: 0,
       exercise: v.exerciseId ? { id: v.exerciseId, name: null } : null,
+      // The upload was just made by this viewer, so it is theirs to manage.
+      mine: true,
       createdAt: v.createdAt,
     };
     setVideos((prev) => [item, ...prev.filter((x) => x.id !== item.id)]);
@@ -215,6 +229,11 @@ export function CoachVideoLibrary({
           >
             {v.title}
           </div>
+          {!canEdit(v) ? (
+            <div style={{ fontSize: 12, color: 'var(--gt-text-dim)', marginTop: 2 }}>
+              Added by someone else
+            </div>
+          ) : null}
           {rowError?.id === v.id ? (
             <div style={{ color: '#ff8178', fontSize: 12, marginTop: 4 }}>
               {rowError.msg}
@@ -249,7 +268,7 @@ export function CoachVideoLibrary({
       header: 'Required tier',
       width: 150,
       render: (v) =>
-        v.status === 'removed' ? (
+        v.status === 'removed' || !canEdit(v) ? (
           <span
             className="gt-numeric"
             style={{
@@ -308,7 +327,7 @@ export function CoachVideoLibrary({
       width: 120,
       align: 'right',
       render: (v) =>
-        v.status === 'removed' ? null : (
+        v.status === 'removed' || !canEdit(v) ? null : (
           <ConfirmButton
             label="Remove"
             confirmLabel="Confirm"

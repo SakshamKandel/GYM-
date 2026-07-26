@@ -1,9 +1,11 @@
-import { savedAddresses } from '@gym/db';
+import { mealSubscriptions, savedAddresses } from '@gym/db';
 import { and, asc, desc, eq, exists, ne, sql } from 'drizzle-orm';
+import { after } from 'next/server';
 import { z } from 'zod';
 import { authedUser } from '@/lib/buddy';
 import { getDb } from '@/lib/db';
 import { json, preflight, readJson } from '@/lib/http';
+import { notify } from '@/lib/notify';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
@@ -206,7 +208,8 @@ export async function DELETE(req: Request) {
   const parsed = deleteSchema.safeParse(await readJson(req));
   if (!parsed.success) return json({ error: 'invalid' }, 400);
 
-  const updated = await getDb()
+  const db = getDb();
+  const updated = await db
     .update(savedAddresses)
     .set({ isDeleted: true, isDefault: false })
     .where(
@@ -219,5 +222,46 @@ export async function DELETE(req: Request) {
     .returning({ id: savedAddresses.id });
   if (updated.length === 0) return json({ error: 'not_found' }, 404);
 
-  return json({ ok: true }, 200);
+  // A removed address stops being pickable everywhere the member chooses one —
+  // but a recurring meal plan chose it once and then kept it. The materializer
+  // reads the row by id with no liveness check, so food carried on being cooked
+  // and driven to a doorstep the member had explicitly taken off their list, and
+  // nothing anywhere said so.
+  //
+  // Park those plans instead. Pause is forward-only: no cycle is voided, no
+  // order is cancelled, nothing already paid for is touched — it just stops the
+  // next spawn and the next bill. Resuming is guarded on the address being live
+  // again (see /api/meals/subscriptions/[id]), so the member picks a new one via
+  // Edit and starts the plan back up.
+  const parked = await db
+    .update(mealSubscriptions)
+    .set({ status: 'paused', updatedAt: new Date() })
+    .where(
+      and(
+        eq(mealSubscriptions.accountId, me.id),
+        eq(mealSubscriptions.addressId, parsed.data.id),
+        eq(mealSubscriptions.status, 'active'),
+      ),
+    )
+    .returning({ id: mealSubscriptions.id });
+
+  if (parked.length > 0) {
+    const one = parked.length === 1;
+    after(() =>
+      notify(
+        'subscription_status',
+        { accountId: me.id },
+        {
+          title: one ? 'Meal plan paused' : 'Meal plans paused',
+          body: one
+            ? 'You removed the address it delivers to. Pick a new address, then start the plan again.'
+            : 'You removed the address they deliver to. Pick a new address, then start them again.',
+          data: { type: 'meal_subscription_updated' },
+        },
+      ),
+    );
+  }
+
+  // `pausedSubscriptions` is additive — older clients ignore it.
+  return json({ ok: true, pausedSubscriptions: parked.length }, 200);
 }

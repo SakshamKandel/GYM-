@@ -19,6 +19,13 @@ import { MemberLink } from '../../_components/MemberLink';
  *
  * Rendered as one tab of the content section; only mounted when the caller
  * holds 'moderation.manage' (checked by the parent page/tab shell).
+ *
+ * Email addresses are NOT shown. Moderating a milestone needs the name, not the
+ * member's address, and this queue belongs to a role (content_admin) that does
+ * not hold `members.read` — it was printing an address per row to exactly the
+ * people who are not allowed the member directory. Same call already made in
+ * the coach console. A viewer who does hold `members.read` still reaches the
+ * full record through the member's name.
  */
 
 interface Milestone {
@@ -27,6 +34,7 @@ interface Milestone {
   note: string;
   achievedAt: string;
   createdAt: string;
+  /** `email` is present in the response but deliberately never rendered here. */
   member: { id: string; email: string; displayName: string };
   coach: { id: string; email: string; displayName: string };
 }
@@ -92,10 +100,8 @@ export function MilestonesModeration({
           <MemberLink
             id={m.member.id}
             name={m.member.displayName}
-            email={m.member.email}
             canView={canViewMembers}
           />
-          <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{m.member.email}</div>
         </div>
       ),
     },
@@ -103,7 +109,9 @@ export function MilestonesModeration({
       key: 'coach',
       header: 'Coach',
       render: (m) => (
-        <span style={{ fontSize: 13 }}>{m.coach.displayName || m.coach.email}</span>
+        <span style={{ fontSize: 13 }}>
+          {m.coach.displayName.trim() || 'Unknown coach'}
+        </span>
       ),
     },
     {

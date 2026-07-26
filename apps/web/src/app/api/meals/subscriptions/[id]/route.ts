@@ -1,4 +1,10 @@
-import { mealBillingCycles, mealOrders, mealSubSkips, mealSubscriptions } from '@gym/db';
+import {
+  mealBillingCycles,
+  mealOrders,
+  mealSubSkips,
+  mealSubscriptions,
+  savedAddresses,
+} from '@gym/db';
 import {
   canAdvanceSubscription,
   ktmDateString,
@@ -27,7 +33,9 @@ export const runtime = 'nodejs';
  * Subscription lifecycle (§3): pause ↔ resume, and cancel (terminal). The
  * status change is a CAS on the current status scoped to the caller's account.
  * Pausing simply removes the plan from the ACTIVE materialization filter (no
- * future spawns). Cancelling additionally CAS-cancels any already-materialized
+ * future spawns). Resuming re-checks that the plan's delivery address is still
+ * one the member keeps, the same requirement create and edit already enforce.
+ * Cancelling additionally CAS-cancels any already-materialized
  * future orders whose cutoff hasn't passed, so a cancelled plan never delivers.
  */
 
@@ -114,6 +122,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     .select({
       id: mealSubscriptions.id,
       partnerId: mealSubscriptions.partnerId,
+      addressId: mealSubscriptions.addressId,
       paymentMethod: mealSubscriptions.paymentMethod,
       startDate: mealSubscriptions.startDate,
       status: mealSubscriptions.status,
@@ -252,6 +261,27 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const target = subscriptionActionTarget(action);
   if (!canAdvanceSubscription(sub.status, target)) {
     return json({ error: 'invalid_transition' }, 409);
+  }
+
+  // Starting a plan again means it delivers again, so its address has to still
+  // be one the member keeps. Creating and editing a plan both require a live
+  // address; resume did not, which was the way back in for a plan parked because
+  // its address was removed — one tap and the food resumed going to the doorstep
+  // they had deleted. `address_not_found` is the same code the create and edit
+  // paths return, so shipped clients already say the right thing: pick another.
+  if (target === 'active') {
+    const [address] = await db
+      .select({ id: savedAddresses.id })
+      .from(savedAddresses)
+      .where(
+        and(
+          eq(savedAddresses.id, sub.addressId),
+          eq(savedAddresses.accountId, me.id),
+          eq(savedAddresses.isDeleted, false),
+        ),
+      )
+      .limit(1);
+    if (!address) return json({ error: 'address_not_found' }, 400);
   }
 
   // Pausing or cancelling can suppress prepaid slots that have not yet entered

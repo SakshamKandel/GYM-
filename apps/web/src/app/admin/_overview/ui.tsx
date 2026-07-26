@@ -78,9 +78,13 @@ function formatRevenue(rows: { currency: string; amountMinor: number }[]): strin
 /**
  * Pending-work tiles (P0-6). Each tile links to the queue that resolves it and
  * only renders when the caller holds the permission (its value is non-null —
- * the loader never even queries a section the caller can't see, A3). A tile with
- * outstanding work gets a subtle accent so the operator sees the queue at a
- * glance. Returns null when the caller has no ops permissions at all.
+ * the loader never even queries a section the caller can't see, A3). Returns
+ * null when the caller has no ops permissions at all.
+ *
+ * A tile with outstanding work stands out by ink, not by accent: full-strength
+ * number against a dimmed one, over a firmer border. It used to ring every such
+ * tile in the accent, so five queues with work meant five accent frames on a
+ * page that also spends the accent on its charts — and nothing read as primary.
  */
 export function OpsTiles({ ops }: { ops: OpsQueue }) {
   const tiles: { href: string; label: string; value: number; hint?: string }[] = [];
@@ -163,7 +167,7 @@ export function OpsTiles({ ops }: { ops: OpsQueue }) {
                 gap: 8,
                 textDecoration: 'none',
                 color: 'inherit',
-                border: active ? '1px solid var(--gt-red)' : undefined,
+                border: active ? '1px solid var(--gt-border-strong)' : undefined,
               }}
             >
               <span
@@ -227,14 +231,19 @@ export function OpsTiles({ ops }: { ops: OpsQueue }) {
 
 /**
  * Horizontal tier distribution: a chip per tier with its count and a thin
- * proportional bar. The bar uses the same subtle per-tier tint as the chip
- * (no accent red — that stays reserved for primary actions).
+ * proportional bar. The bar carries the same per-tier colour as the chip's ink
+ * (no accent — that stays reserved for the primary action and the charts).
+ *
+ * These were translucent pale fills tuned for the old charcoal console. On the
+ * light repaint they landed a shade or two off the #ececE6 track they sit in,
+ * so the bars were there and could not be seen: an 80% starter share and a 4%
+ * elite share looked the same. Solid, and matched to the tier chip beside them.
  */
 const TIER_BAR: Record<Tier, string> = {
-  starter: 'rgba(154,157,163,0.45)',
-  silver: 'rgba(199,203,209,0.55)',
-  gold: 'rgba(217,178,90,0.65)',
-  elite: 'rgba(201,160,232,0.65)',
+  starter: '#83888f',
+  silver: '#5a6270',
+  gold: '#a87d1c',
+  elite: '#8257bd',
 };
 
 export function TierBreakdown({

@@ -19,7 +19,12 @@ export const dynamic = 'force-dynamic';
  * layout hides the nav link for anyone else; re-checked here to fail safe.
  */
 
-/** Load only persisted prices; missing cells stay blank for an admin to fill. */
+/**
+ * Load only persisted prices; missing cells stay blank for an admin to fill.
+ * `active` comes with them: it is what every catalog read filters on, so a row
+ * that is switched off has to look switched off here rather than showing a
+ * normal price nobody can buy.
+ */
 async function loadPrices(): Promise<PriceCell[]> {
   const db = getDb();
   const rows = await db
@@ -28,6 +33,7 @@ async function loadPrices(): Promise<PriceCell[]> {
       tier: tierPrices.tier,
       amountMinor: tierPrices.amountMinor,
       currency: tierPrices.currency,
+      active: tierPrices.active,
     })
     .from(tierPrices);
 
@@ -36,6 +42,7 @@ async function loadPrices(): Promise<PriceCell[]> {
     tier: r.tier as PriceCell['tier'],
     amountMinor: r.amountMinor,
     currency: r.currency,
+    active: r.active,
   }));
 }
 

@@ -3,6 +3,7 @@ import {
   accounts,
   coachAssignments,
   coachProfiles,
+  mealSubscriptions,
 } from '@gym/db';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -294,6 +295,39 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       { reason },
       ip,
     );
+  }
+
+  // A suspended account cannot open the app, but its recurring meal plans went
+  // right on running: the materializer billed a new week every week and spawned
+  // orders a kitchen then cooked for someone who could not receive, track or
+  // cancel them. Suspension now parks the plans as well.
+  //
+  // Pause, never cancel — pausing is purely forward-looking. It stops the next
+  // bill and the next spawn; it voids no cycle, refunds nothing and cancels no
+  // order, so a week the member has already paid for keeps whatever it already
+  // put on the road, and support still has every money row to work from. The
+  // member restarts the plan themselves once the account is back.
+  //
+  // Reactivation deliberately does NOT auto-resume: nothing records which plans
+  // were paused by this sweep and which the member had paused themselves, and
+  // silently restarting a plan (and its billing) for someone who had stopped it
+  // on purpose is the worse mistake of the two.
+  if (status === 'suspended') {
+    const parked = await db
+      .update(mealSubscriptions)
+      .set({ status: 'paused', updatedAt: new Date() })
+      .where(and(eq(mealSubscriptions.accountId, id), eq(mealSubscriptions.status, 'active')))
+      .returning({ id: mealSubscriptions.id });
+    for (const plan of parked) {
+      await logAudit(
+        base,
+        'meal_subscription.pause',
+        'meal_subscription',
+        plan.id,
+        { accountId: id, reason: 'Account suspended' },
+        ip,
+      );
+    }
   }
 
   // Return the fresh row so the UI can update without a second round trip.

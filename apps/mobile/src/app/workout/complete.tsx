@@ -502,18 +502,9 @@ export default function WorkoutCompleteScreen() {
         </>
       ) : null}
 
-      {topPrSet ? (
-        <PrUpgradeCard
-          topPr={{
-            exerciseName: topPrSet.exerciseName,
-            weightKg: topPrSet.weightKg,
-            reps: topPrSet.reps,
-            e1rm: epley1Rm(topPrSet.weightKg, topPrSet.reps),
-          }}
-          unit={unitPref}
-        />
-      ) : null}
-
+      {/* The way out comes first and stays the primary button, PR day or not.
+          On a PR day the upgrade card used to sit above this and push the only
+          exit below the fold in a demoted grey. */}
       <Animated.View entering={enterUp(8)} style={styles.footer}>
         {sets.length > 0 ? (
           templateSaved ? (
@@ -529,12 +520,20 @@ export default function WorkoutCompleteScreen() {
             />
           )
         ) : null}
-        <Button
-          label="Done"
-          variant={showUpgrade ? 'secondary' : 'primary'}
-          onPress={() => replacePath('/(tabs)')}
-        />
+        <Button label="Done" onPress={() => replacePath('/(tabs)')} />
       </Animated.View>
+
+      {topPrSet ? (
+        <PrUpgradeCard
+          topPr={{
+            exerciseName: topPrSet.exerciseName,
+            weightKg: topPrSet.weightKg,
+            reps: topPrSet.reps,
+            e1rm: epley1Rm(topPrSet.weightKg, topPrSet.reps),
+          }}
+          unit={unitPref}
+        />
+      ) : null}
 
       {/* Name-and-save sheet — prefilled with the workout name, one tap to keep it. */}
       <Sheet visible={saveOpen} onClose={() => setSaveOpen(false)} title="Save as template">

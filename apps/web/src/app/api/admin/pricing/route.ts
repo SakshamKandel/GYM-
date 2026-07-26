@@ -11,13 +11,21 @@ export const runtime = 'nodejs';
  * Admin console — the regional pricing editor (SCALE-UP-PLAN §1.1 / §4.1).
  * Backs the same `tier_prices` table GET /api/subscription/catalog reads.
  *
- *  - GET → persisted regional prices only. Missing cells remain blank in the
- *    editor until an authorized admin supplies them.
- *  - PUT {prices:[{region, tier, amountMinor}]} → upserts each (region, tier)
- *    row. `currency` is DERIVED server-side from `region` (NP → NPR,
- *    INTL → USD) — never client-supplied, so a request can't mismatch a
- *    price and currency. `amountMinor` bounded 0..10_000_000. Audited once
+ *  - GET → persisted regional prices only, `active` included. Missing cells
+ *    remain blank in the editor until an authorized admin supplies them.
+ *  - PUT {prices:[{region, tier, amountMinor, active?}]} → upserts each
+ *    (region, tier) row. `currency` is DERIVED server-side from `region`
+ *    (NP → NPR, INTL → USD) — never client-supplied, so a request can't mismatch
+ *    a price and currency. `amountMinor` bounded 0..10_000_000. Audited once
  *    for the whole batch.
+ *
+ * `active` decides whether members can buy that tier at all: every catalog read
+ * (the in-app paywall, the manual-payment amount, the public price list) filters
+ * on it. It is OPTIONAL and additive — a request that omits it leaves the flag
+ * exactly as it was, which is what every existing caller relies on. Before this
+ * it could not be written here at all, so a row switched off outside the console
+ * showed a normal price, accepted a save, and stayed unbuyable with nothing on
+ * screen to say why.
  *
  * Guarded by requirePermission('pricing.manage'); super_admin/main_admin pass
  * (per SCALE-UP-PLAN §4: pricing is super/main only).
@@ -30,6 +38,8 @@ const priceInputSchema = z
     region: z.enum(['NP', 'INTL']),
     tier: z.enum(['starter', 'silver', 'gold', 'elite']),
     amountMinor: z.number().int().min(0).max(MAX_AMOUNT_MINOR),
+    // Omitted = leave the flag alone (a new row starts on sale).
+    active: z.boolean().optional(),
   })
   // A paid tier priced at 0 makes it free for the whole region (E2). starter is
   // the only tier allowed to be free — a blanked cell (client toMinor('') → 0)
@@ -91,7 +101,8 @@ export async function PUT(req: Request) {
         tier: p.tier,
         amountMinor: p.amountMinor,
         currency,
-        active: true,
+        // A brand-new price is on sale unless the caller says otherwise.
+        active: p.active ?? true,
         updatedBy: principal.id,
         updatedAt: now,
       })
@@ -100,6 +111,9 @@ export async function PUT(req: Request) {
         set: {
           amountMinor: p.amountMinor,
           currency,
+          // Only written when the caller sent it: a price edit must never flip a
+          // tier back on sale behind the operator's back.
+          ...(p.active !== undefined ? { active: p.active } : {}),
           updatedBy: principal.id,
           updatedAt: now,
         },

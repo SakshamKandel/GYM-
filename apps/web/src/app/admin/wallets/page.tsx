@@ -1,16 +1,21 @@
-import { accounts, admins, coachProfiles, walletLedger } from '@gym/db';
+import { accounts, admins, coachProfiles, mealPartners, walletLedger } from '@gym/db';
 import { asc, eq, inArray, or, sql } from 'drizzle-orm';
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { PageHeader, StatTile } from '@/components/console';
+import { loadPartnerHeldMinorMany, partnerHeldKey } from '@/app/partner/_data';
 import { effectivePermissionSet } from '@/lib/authz';
 import { getDb } from '@/lib/db';
 import { staffFromCookie } from '@/lib/staffSession';
 import { DownloadCsv } from '../_components/DownloadCsv';
-import { type WalletRow, WalletsManager } from './_components/WalletsManager';
+import {
+  type PartnerWalletRow,
+  type WalletRow,
+  WalletsManager,
+} from './_components/WalletsManager';
 
 export const runtime = 'nodejs';
-export const metadata: Metadata = { title: 'Coach wallets' };
+export const metadata: Metadata = { title: 'Wallets' };
 export const dynamic = 'force-dynamic';
 
 /**
@@ -81,6 +86,41 @@ async function loadCoaches(
   }));
 }
 
+/**
+ * Every restaurant plus what we still hold for it. `heldMinor` comes from the
+ * SAME fold the payout floor and the partner's own earnings page use
+ * (loadPartnerHeldMinorMany = live delivered-digital-paid earned + adjustments −
+ * payouts), so the balance an operator corrects against is the balance a payout
+ * can actually draw. Held is per partner AND currency, which is why each row
+ * carries its restaurant's own currency.
+ */
+async function loadPartnerWallets(): Promise<PartnerWalletRow[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      id: mealPartners.id,
+      name: mealPartners.name,
+      currency: mealPartners.currency,
+      isActive: mealPartners.isActive,
+    })
+    .from(mealPartners)
+    .orderBy(asc(mealPartners.name));
+  if (rows.length === 0) return [];
+
+  const held = await loadPartnerHeldMinorMany(
+    db,
+    rows.map((r) => ({ partnerId: r.id, currency: r.currency })),
+  );
+
+  return rows.map((r) => ({
+    partnerId: r.id,
+    name: r.name,
+    currency: r.currency,
+    isActive: r.isActive,
+    heldMinor: held.get(partnerHeldKey(r.id, r.currency)) ?? 0,
+  }));
+}
+
 export default async function AdminWalletsPage() {
   const principal = await staffFromCookie();
   if (!principal) redirect('/admin/login');
@@ -110,11 +150,15 @@ export default async function AdminWalletsPage() {
       })()
     : [];
 
+  const partnerWallets: PartnerWalletRow[] = canManageWallets
+    ? await loadPartnerWallets()
+    : [];
+
   return (
     <div style={{ maxWidth: 1080 }}>
       <PageHeader
-        title="Coach wallets"
-        subtitle="What each coach has earned from purchases made with their promo code. Payouts are still sent by hand, so record every adjustment and payment here."
+        title="Wallets"
+        subtitle="What each coach has earned from purchases made with their promo code, and what we still hold for each restaurant. Payouts are still sent by hand, so record every adjustment and payment here."
         action={
           canManageWallets ? (
             <DownloadCsv
@@ -139,11 +183,13 @@ export default async function AdminWalletsPage() {
             label="With balance"
             value={wallets.filter((w) => w.balances.length > 0).length}
           />
+          <StatTile label="Restaurants" value={partnerWallets.length} />
         </div>
       ) : null}
 
       <WalletsManager
         wallets={wallets}
+        partnerWallets={partnerWallets}
         canViewMembers={permissions.has('members.read')}
         canManageWallets={canManageWallets}
         canReviewPayouts={canReviewPayouts}

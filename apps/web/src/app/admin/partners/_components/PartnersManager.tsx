@@ -23,6 +23,7 @@ import {
   type PartnerCurrencyHistory,
   type PartnerLiveOrderImpact,
 } from '@/lib/partnerAdminSafeguards';
+import { PartnerMenuPanel } from './PartnerMenuPanel';
 import { PartnerRevenuePanel } from './PartnerRevenuePanel';
 import type { PartnerRow } from './types';
 
@@ -744,6 +745,8 @@ export function PartnersManager({ partners }: { partners: PartnerRow[] }) {
             </div>
 
             <PartnerRevenuePanel partnerId={selected.id} />
+
+            <PartnerMenuPanel partnerId={selected.id} />
 
             <div style={{ paddingTop: 16, borderTop: '1px solid var(--gt-border)' }}>
               {selected.isActive ? (

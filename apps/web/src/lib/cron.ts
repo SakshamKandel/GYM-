@@ -78,6 +78,21 @@ const PENDING_EXPIRY_GRACE_MS = 2 * HOUR_MS;
 const PENDING_ESCALATION_MS = 2 * HOUR_MS;
 
 /**
+ * Grace past the END of an order's delivery day before a still-`confirmed`
+ * order counts as abandoned.
+ *
+ * Confirming is the restaurant saying yes; nothing then forced it to cook. Such
+ * an order used to sit `confirmed` forever — no sweep watched it, and the member
+ * was left with an order that was never going to arrive and never going to
+ * close. The anchor is deliberately the DELIVERY DAY, not the cutoff: the lunch
+ * cutoff is the evening before, so a cutoff-relative grace short enough to be
+ * useful for dinner would cancel lunch orders the kitchen was about to cook. A
+ * delivery day that is fully over, plus a few hours into the next morning, is
+ * unambiguous — nothing is going to be delivered for yesterday.
+ */
+const CONFIRMED_ABANDON_GRACE_MS = 6 * HOUR_MS;
+
+/**
  * The dedupe key the staff escalation notice is stored under, minus the
  * recipient suffix `notify()` appends to every fan-out key.
  *
@@ -90,6 +105,9 @@ const ESCALATION_KEY_PREFIX = 'order_placed_partner:staff:order_waiting:';
 
 /** Persisted on the order (and shown in both consoles) when the sweep cancels it. */
 const PENDING_EXPIRY_REASON = 'The restaurant did not confirm this order in time.';
+
+/** Persisted when the sweep closes an order the restaurant confirmed but never made. */
+const CONFIRMED_ABANDON_REASON = 'The restaurant did not prepare this order.';
 
 export interface CronResult {
   /** Rows the scan examined this run (≤ BATCH). */
@@ -457,6 +475,13 @@ export async function runDay2Reengage(now: Date = new Date()): Promise<CronResul
  *     They go to pass 2 instead, so a human sees them and can run the refund +
  *     cancel together.
  *
+ *  1b. ABANDON — the same cancel, one status further along: an order the
+ *     restaurant CONFIRMED and then never prepared. Accepting an order is not
+ *     making it, and nothing in the machine forces the next step, so these sat
+ *     `confirmed` forever with nobody watching. Cancelled once the whole
+ *     delivery day has passed (+ `CONFIRMED_ABANDON_GRACE_MS`), through the
+ *     same helper, with the same money exclusion and the same CAS idempotency.
+ *
  *  2. ESCALATE — a `pending` order older than `PENDING_ESCALATION_MS` that
  *     pass 1 did not (or could not) cancel nudges the restaurant again and tells
  *     staff, so someone can phone the kitchen while the order can still be
@@ -464,9 +489,12 @@ export async function runDay2Reengage(now: Date = new Date()): Promise<CronResul
  *     and the anti-join against it (an equality lookup on the same unique index
  *     that enforces it, same shape as cycle-dunning).
  *
- * Both passes read `meal_orders` through the `meal_orders_pending_*` partial
- * indexes — pending orders are a sliver of the table, and each pass's sort key
- * is that index's key, so neither pass ever scans or sorts order history.
+ * The two pending passes read `meal_orders` through the `meal_orders_pending_*`
+ * partial indexes — pending orders are a sliver of the table, and each pass's
+ * sort key is that index's key, so neither pass ever scans or sorts order
+ * history. Pass 1b sorts on `deliveryDate` (the `meal_orders_delivery_date`
+ * index) and is capped at BATCH; it wants a `where status = 'confirmed'` partial
+ * index of its own to stop walking dead history once the backlog is drained.
  */
 export async function runStaleOrders(now: Date = new Date()): Promise<CronResult> {
   const startedAt = Date.now();
@@ -499,66 +527,119 @@ export async function runStaleOrders(now: Date = new Date()): Promise<CronResult
     .orderBy(asc(mealOrders.cutoffAt))
     .limit(BATCH);
 
-  let cancelled = 0;
-  for (const row of expired) {
+  // --- Pass 1b: cancel orders the restaurant confirmed and then abandoned ----
+  // Same shape as pass 1, one status further along the machine. `deliveryDate`
+  // is a KTM calendar date, so the candidate test is a date compare against the
+  // KTM day of (now − grace): every order whose delivery day is fully behind us.
+  const abandonedBefore = ktmDateString(new Date(now.getTime() - CONFIRMED_ABANDON_GRACE_MS));
+  const abandoned = await db
+    .select({
+      id: mealOrders.id,
+      accountId: mealOrders.accountId,
+      partnerId: mealOrders.partnerId,
+    })
+    .from(mealOrders)
+    .where(
+      and(
+        eq(mealOrders.status, 'confirmed'),
+        lt(mealOrders.deliveryDate, abandonedBefore),
+        // Captured money is support's call here exactly as in pass 1 — the
+        // destructive-transition guard would refuse these anyway.
+        inArray(mealOrders.paymentStatus, ['unpaid', 'refunded']),
+      ),
+    )
+    .orderBy(asc(mealOrders.deliveryDate))
+    .limit(BATCH);
+
+  /**
+   * Cancel one abandoned order and say so. Shared by both passes so an
+   * auto-cancel is byte-for-byte a human cancel downstream: the CAS, the
+   * append-only `meal_order_events` row, the timestamps and the member push all
+   * come from {@link advanceOrderStatus}. Idempotent — the CAS on
+   * `expectedStatus` writes nothing on a second run, and every notification is
+   * keyed per order, so running this twice notifies nobody twice.
+   */
+  async function cancelAbandoned(
+    row: { id: string; accountId: string; partnerId: string },
+    expectedStatus: 'pending' | 'confirmed',
+    cancelReason: string,
+    keySuffix: string,
+    copy: { member: string; partner: string; staffTitle: string; staff: string },
+  ): Promise<boolean> {
     const advanced = await advanceOrderStatus({
       db,
       orderId: row.id,
-      expectedStatus: 'pending',
+      expectedStatus,
       toStatus: 'cancelled',
       actor: 'admin',
       // No human decided this, so `decided_by` stays null rather than borrowing
       // a staff identity the audit trail would then misattribute.
       actorId: null,
-      cancelReason: PENDING_EXPIRY_REASON,
+      cancelReason,
       now,
     });
-    // Lost the CAS: the restaurant confirmed it in the meantime (or a previous
+    // Lost the CAS: the restaurant moved it on in the meantime (or a previous
     // run already cancelled it). Either way there is nothing left to say.
-    if (!advanced.ok) continue;
-    cancelled += 1;
+    if (!advanced.ok) return false;
 
-    const code = orderNumber(row.id);
     // advanceOrderStatus already sent the member the plain "Order cancelled"
     // status push; this is the WHY, mirroring the partner-refuse route.
     await notify(
       'order_status',
       { accountId: row.accountId },
-      {
-        title: 'Order cancelled',
-        body: `Order ${code} was cancelled because the restaurant did not confirm it in time. Sorry about that.`,
-        data: { type: 'order', id: row.id },
-      },
-      { dedupeKey: cronDedupeKey('order_status', row.accountId, `order_expired:${row.id}`) },
+      { title: 'Order cancelled', body: copy.member, data: { type: 'order', id: row.id } },
+      { dedupeKey: cronDedupeKey('order_status', row.accountId, `${keySuffix}:${row.id}`) },
     );
     await notify(
       'order_cancelled_partner',
       { partnerId: row.partnerId },
+      { title: 'Order cancelled', body: copy.partner, data: { type: 'order', id: row.id } },
       {
-        title: 'Order cancelled',
-        body: `Order ${code} was cancelled because it was not confirmed in time.`,
-        data: { type: 'order', id: row.id },
-      },
-      {
-        dedupeKey: cronDedupeKey('order_cancelled_partner', row.partnerId, `order_expired:${row.id}`),
+        dedupeKey: cronDedupeKey('order_cancelled_partner', row.partnerId, `${keySuffix}:${row.id}`),
       },
     );
     await notify(
       'order_cancelled_partner',
       { role: 'staff', permission: 'orders.review' },
-      {
-        title: 'An order expired unconfirmed',
-        body: `Order ${code} was cancelled for the member because the restaurant never confirmed it.`,
-        data: { type: 'order', id: row.id },
-      },
+      { title: copy.staffTitle, body: copy.staff, data: { type: 'order', id: row.id } },
       // A fan-out key is namespaced per recipient by notify(), so the literal
       // 'staff' segment is only there to keep this key distinct from the
       // partner's above.
       {
-        dedupeKey: cronDedupeKey('order_cancelled_partner', 'staff', `order_expired:${row.id}`),
+        dedupeKey: cronDedupeKey('order_cancelled_partner', 'staff', `${keySuffix}:${row.id}`),
         recipients,
       },
     );
+    return true;
+  }
+
+  let cancelled = 0;
+  for (const row of expired) {
+    const code = orderNumber(row.id);
+    const done = await cancelAbandoned(row, 'pending', PENDING_EXPIRY_REASON, 'order_expired', {
+      member: `Order ${code} was cancelled because the restaurant did not confirm it in time. Sorry about that.`,
+      partner: `Order ${code} was cancelled because it was not confirmed in time.`,
+      staffTitle: 'An order expired unconfirmed',
+      staff: `Order ${code} was cancelled for the member because the restaurant never confirmed it.`,
+    });
+    if (done) cancelled += 1;
+  }
+
+  for (const row of abandoned) {
+    const code = orderNumber(row.id);
+    const done = await cancelAbandoned(
+      row,
+      'confirmed',
+      CONFIRMED_ABANDON_REASON,
+      'order_abandoned',
+      {
+        member: `Order ${code} was cancelled because the restaurant never prepared it. Sorry about that.`,
+        partner: `Order ${code} was cancelled because it was accepted but never prepared.`,
+        staffTitle: 'An order was accepted but never made',
+        staff: `Order ${code} was cancelled for the member because the restaurant accepted it and never prepared it.`,
+      },
+    );
+    if (done) cancelled += 1;
   }
 
   // --- Pass 2: escalate orders that are still waiting on the restaurant -----
@@ -648,7 +729,7 @@ export async function runStaleOrders(now: Date = new Date()): Promise<CronResult
   }
 
   const result = {
-    scanned: expired.length + waiting.length,
+    scanned: expired.length + abandoned.length + waiting.length,
     dispatched: cancelled + waiting.length,
     durationMs: Date.now() - startedAt,
   };

@@ -19,6 +19,12 @@ import { MemberLink } from '../../_components/MemberLink';
  *
  * Rendered as one tab of the content section; only mounted when the caller
  * holds 'moderation.manage'.
+ *
+ * Email addresses are NOT shown. Reviewing a photo needs the name, not the
+ * member's address, and this queue belongs to a role (content_admin) that does
+ * not hold `members.read` — it was printing an address per row to exactly the
+ * people who are not allowed the member directory. Same call already made in
+ * the coach console.
  */
 
 interface Photo {
@@ -27,6 +33,7 @@ interface Photo {
   note: string;
   createdAt: string;
   url: string | null;
+  /** `email` is present in the response but deliberately never rendered here. */
   account: { id: string; email: string; displayName: string };
 }
 
@@ -127,10 +134,8 @@ export function ProgressPhotosModeration({
           <MemberLink
             id={p.account.id}
             name={p.account.displayName}
-            email={p.account.email}
             canView={canViewMembers}
           />
-          <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{p.account.email}</div>
         </div>
       ),
     },

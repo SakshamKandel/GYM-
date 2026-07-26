@@ -34,7 +34,11 @@ import { staffFromCookie } from './staffSession';
  * Pipeline per recipient (§8.2):
  *   1. resolve recipients: {accountId} | {role,permission}→fan-out | {partnerId}→owner
  *   2. load notification_prefs (a missing row / key = enabled — default all-on)
- *   3. category disabled? → drop entirely (no inbox, no push)
+ *   3. category disabled? → inbox only, push suppressed (same shape as quiet
+ *      hours). A muted category is a MESSAGING preference, not a request to be
+ *      kept in the dark: dropping the row too meant a member who had turned off,
+ *      say, payments could never find out how their dispute was decided — the
+ *      outcome existed nowhere they could reach it.
  *   4. dedupeKey set + already used? → no-op (partial-unique idempotency)
  *   5. INSERT the notifications row FIRST (durable outbox), already stamped
  *      `sentAt = now` — the row records the ATTEMPT, not the outcome
@@ -281,11 +285,16 @@ async function deliverToAccount(
     ? notificationDelivery(await loadPrefs(accountId), event, ktmMinuteOfDay(new Date()))
     : { writeInbox: true, sendPush: true };
 
-  if (!delivery.writeInbox) {
-    // Category disabled → drop entirely (no inbox row, no push).
-    console.log(`[notify] suppressed(prefs) event=${event} account=${accountId}`);
-    return;
-  }
+  // A preference toggle governs the INTERRUPTION, not the record. Whichever way
+  // the decision came back — category muted (writeInbox false) or quiet hours
+  // (sendPush false) — the durable inbox row is always written and only the push
+  // is withheld. Muting used to drop the row as well, so an outcome the member
+  // genuinely needed (a dispute decision, a refund verdict) simply never existed
+  // anywhere they could go and read it. Quiet hours already had this right; both
+  // paths now behave identically, and `redispatch` reaches the same conclusion at
+  // retry time (push suppressed → the row is resolved, never re-attempted).
+  const sendPush = delivery.writeInbox && delivery.sendPush;
+  const suppression = !delivery.writeInbox ? 'prefs' : !delivery.sendPush ? 'quiet' : null;
 
   // Step 5: durable outbox row FIRST, written ALREADY RESOLVED (sentAt=now) —
   // the row records the ATTEMPT, not the outcome.
@@ -336,9 +345,10 @@ async function deliverToAccount(
     insertedId = inserted[0]?.id ?? null;
   }
 
-  if (!delivery.sendPush) {
-    // Quiet hours — inbox row is written, push suppressed, already resolved.
-    console.log(`[notify] suppressed(quiet) event=${event} account=${accountId}`);
+  if (!sendPush) {
+    // Muted category or quiet hours — inbox row is written, push suppressed,
+    // and the row is already resolved (no late-push storm, no retry).
+    console.log(`[notify] suppressed(${suppression ?? 'prefs'}) event=${event} account=${accountId}`);
     return;
   }
 

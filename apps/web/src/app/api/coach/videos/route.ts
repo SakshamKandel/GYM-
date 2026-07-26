@@ -21,6 +21,12 @@ export const runtime = 'nodejs';
  * `content.video.own` (coach). Mutations live on the /api/admin/videos routes,
  * which scope coach writes to their own rows (createdBy) and 404 on non-owned
  * ids — no existence oracle. The retired `content.video.publish` key is gone.
+ *
+ * Because the list is wider than the write scope, every row carries `mine` and
+ * the response carries `canManageAll`, so a console can offer Remove / re-tier
+ * on exactly the rows those routes will accept rather than on rows they will
+ * 404. `mine` is a BOOLEAN deliberately: which coach authored someone else's
+ * row is nobody's business on this screen.
  */
 
 export function OPTIONS() {
@@ -30,6 +36,10 @@ export function OPTIONS() {
 export async function GET(req: Request) {
   const access = await requireAnyPermission(req, ['content.manage', 'content.video.own']);
   if (access instanceof Response) return access;
+  const { principal, permissions } = access;
+  // Same rule the mutation routes apply: content.manage may touch any row,
+  // everyone else only the rows they authored.
+  const canManageAll = permissions.has('content.manage');
 
   const rows = await getDb()
     .select({
@@ -44,6 +54,7 @@ export async function GET(req: Request) {
       views: planVideos.views,
       exerciseId: planVideos.exerciseId,
       exerciseName: exercises.name,
+      createdBy: planVideos.createdBy,
       createdAt: planVideos.createdAt,
     })
     .from(planVideos)
@@ -68,10 +79,11 @@ export async function GET(req: Request) {
         exercise: r.exerciseId
           ? { id: r.exerciseId, name: r.exerciseName ?? null }
           : null,
+        mine: r.createdBy === principal.id,
         createdAt: r.createdAt,
       };
     }),
   );
 
-  return json({ videos }, 200);
+  return json({ videos, canManageAll }, 200);
 }

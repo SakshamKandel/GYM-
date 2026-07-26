@@ -11,13 +11,13 @@ import {
   DataTable,
   Drawer,
   SearchField,
+  SkeletonRows,
   Toolbar,
 } from '@/components/console';
 import {
   formatDateLabel,
   formatMoney,
   formatShortDateTime,
-  ORDER_STATUS_COLOR,
   ORDER_STATUS_LABEL,
   ORDER_STATUS_TONE,
   PAYMENT_LABEL,
@@ -55,10 +55,16 @@ const LocationPicker = dynamic(
  */
 
 /**
- * Status words, tones and dot colours come from the SHARED meal display layer
+ * Status words and tones come from the SHARED meal display layer
  * (`@/lib/format`, re-exporting the partner portal's maps) — the restaurant and
  * the admin reviewing that restaurant now read the same label for the same row,
  * and a status renamed once is renamed everywhere.
+ *
+ * ONE status treatment per row: the toned Badge. The cell used to pair it with a
+ * coloured dot drawn from a second palette (ORDER_STATUS_COLOR), so every row
+ * stated its status twice in two colour systems that answer to nobody — a
+ * palette drifting apart from the tones is a status that looks like two
+ * different things at once.
  */
 
 /** Today as the local `YYYY-MM-DD` the delivery-date filter expects. */
@@ -368,17 +374,40 @@ export function OrdersOversight({
   }
 
   const columns: Column<AdminOrderRow>[] = [
+    // Primary column. Every cell on this board used to be 12-13px dim text, so
+    // there was nothing to scan down and nothing to say what a row IS — the
+    // order number, the one thing an operator quotes back to a member or a
+    // restaurant, was the quietest thing in the row. It carries the row now:
+    // full ink, larger, with the restaurant beneath it as the supporting line.
     {
       key: 'order',
       header: 'Order',
-      width: 110,
+      width: 170,
       render: (r) => (
-        <span
-          className="gt-numeric"
-          style={{ fontSize: 12, letterSpacing: '0.04em', color: 'var(--gt-text)' }}
-        >
-          {orderNumber(r.id)}
-        </span>
+        <div style={{ minWidth: 0 }}>
+          <div
+            className="gt-numeric"
+            style={{
+              fontSize: 14,
+              fontWeight: 600,
+              letterSpacing: '0.04em',
+              color: 'var(--gt-text)',
+            }}
+          >
+            {orderNumber(r.id)}
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: 'var(--gt-text-dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {r.partnerName}
+          </div>
+        </div>
       ),
     },
     {
@@ -390,11 +419,6 @@ export function OrdersOversight({
           {formatShortDateTime(r.placedAt)}
         </span>
       ),
-    },
-    {
-      key: 'partner',
-      header: 'Partner',
-      render: (r) => <span style={{ fontSize: 13 }}>{r.partnerName}</span>,
     },
     {
       key: 'member',
@@ -426,19 +450,7 @@ export function OrdersOversight({
       header: 'Status',
       width: 150,
       render: (r) => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-          <span
-            aria-hidden
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: ORDER_STATUS_COLOR[r.status],
-              flexShrink: 0,
-            }}
-          />
-          <Badge tone={ORDER_STATUS_TONE[r.status]}>{ORDER_STATUS_LABEL[r.status]}</Badge>
-        </span>
+        <Badge tone={ORDER_STATUS_TONE[r.status]}>{ORDER_STATUS_LABEL[r.status]}</Badge>
       ),
     },
     {
@@ -544,13 +556,21 @@ export function OrdersOversight({
         </div>
       ) : null}
 
-      <DataTable
-        columns={columns}
-        rows={filtered}
-        rowKey={(r) => r.id}
-        onRowClick={openRow}
-        empty={loading ? 'Loading…' : 'No orders match these filters.'}
-      />
+      {/* Waiting on the first rows for these filters: a table-shaped skeleton,
+          not one grey word where a board should be. Once there ARE rows the
+          table stays put through a re-fetch — swapping a full board for
+          placeholders on every keystroke would be its own kind of flicker. */}
+      {loading && filtered.length === 0 ? (
+        <SkeletonRows rows={6} cols={columns.length} />
+      ) : (
+        <DataTable
+          columns={columns}
+          rows={filtered}
+          rowKey={(r) => r.id}
+          onRowClick={openRow}
+          empty="No orders match these filters."
+        />
+      )}
 
       <Drawer
         open={selected != null}

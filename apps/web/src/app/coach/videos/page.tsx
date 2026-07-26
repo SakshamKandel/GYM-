@@ -18,18 +18,24 @@ export const dynamic = 'force-dynamic';
  * re-resolve the principal here to fail safe if the URL is hit directly,
  * matching the other coach pages.
  *
- * A coach holds `content.video.publish` — the SAME permission the content admin
- * uses — so the coach manages the one shared library. This page does the
- * initial READ server-side (mirroring GET /api/coach/videos: every row incl.
- * removed, newest first, with views + the attached exercise), then hands the
- * rows to the client <CoachVideoLibrary>. Every mutation — uploading, changing
- * a tier, removing — goes through the guarded /api/admin/videos routes (the
- * httpOnly gt_staff cookie rides along; coach holds the permission) and patches
- * the local list, so the table stays live without a full refetch.
+ * The LIST is org-wide on purpose (GET /api/coach/videos says so): a coach can
+ * see what the whole team has published. The WRITES are not — /api/admin/videos
+ * scopes a `content.video.own` holder to rows they authored and 404s the rest.
+ * So each row is marked `mine` and the table only offers re-tier / Remove where
+ * the server will actually accept them; a `content.manage` holder manages
+ * everything and gets `canManageAll`. Before this, every row offered both and
+ * another coach's row failed with a permission error after the click.
+ *
+ * This page does the initial READ server-side (mirroring GET /api/coach/videos:
+ * every row incl. removed, newest first, with views + the attached exercise),
+ * then hands the rows to the client <CoachVideoLibrary>. Every mutation —
+ * uploading, changing a tier, removing — goes through the guarded
+ * /api/admin/videos routes (the httpOnly gt_staff cookie rides along) and
+ * patches the local list, so the table stays live without a full refetch.
  */
 
 /** Reads the full library (incl. removed rows), newest first, with exercise + views. */
-async function loadVideos(): Promise<CoachVideoRow[]> {
+async function loadVideos(viewerId: string): Promise<CoachVideoRow[]> {
   const rows = await getDb()
     .select({
       id: planVideos.id,
@@ -41,6 +47,7 @@ async function loadVideos(): Promise<CoachVideoRow[]> {
       views: planVideos.views,
       exerciseId: planVideos.exerciseId,
       exerciseName: exercises.name,
+      createdBy: planVideos.createdBy,
       createdAt: planVideos.createdAt,
     })
     .from(planVideos)
@@ -58,16 +65,23 @@ async function loadVideos(): Promise<CoachVideoRow[]> {
     exercise: r.exerciseId
       ? { id: r.exerciseId, name: r.exerciseName ?? null }
       : null,
+    mine: r.createdBy === viewerId,
     createdAt:
       r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt),
   }));
 }
 
 export default async function CoachVideosPage() {
-  await requireCoachPage(['content.manage', 'content.video.own']);
+  const { principal, permissions } = await requireCoachPage([
+    'content.manage',
+    'content.video.own',
+  ]);
 
-  const videos = await loadVideos();
+  const videos = await loadVideos(principal.id);
   const configured = isVideoConfigured();
+  // Same rule /api/admin/videos applies: org-wide content managers (and the two
+  // top-admin roles, which hold every key) may edit any row.
+  const canManageAll = permissions.has('content.manage');
 
   const live = videos.filter((v) => v.status !== 'removed');
   const ready = live.filter((v) => v.status === 'ready').length;
@@ -97,7 +111,11 @@ export default async function CoachVideosPage() {
         <StatTile label="Total views" value={totalViews} />
       </div>
 
-      <CoachVideoLibrary initialVideos={videos} videoConfigured={configured} />
+      <CoachVideoLibrary
+        initialVideos={videos}
+        videoConfigured={configured}
+        canManageAll={canManageAll}
+      />
     </div>
   );
 }

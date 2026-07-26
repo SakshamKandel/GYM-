@@ -38,17 +38,10 @@ import { posterDate } from '../../lib/dates';
 import { useAiTip } from '../../lib/ai/useAiTip';
 import { useAuth } from '../../state/auth';
 import { useProfile } from '../../state/profile';
-import { ProgressReportCard } from '../../components/home/ProgressReportCard';
 import { WeightHomeCard } from '../../components/home/WeightHomeCard';
 import { ActivitySection } from '../../features/activity/components/ActivitySection';
 import { useWeights } from '../../features/body/hooks';
-import {
-  directionIcon,
-  rateLabel,
-  signedDelta,
-  weightChartData,
-  weightHeadline,
-} from '../../features/body/logic';
+import { directionIcon, rateLabel, weightHeadline } from '../../features/body/logic';
 import { CheckInCard } from '../../features/checkin/components/CheckInCard';
 import { isSessionStale, sessionAgeLabel } from '../../features/training/logic';
 import { FirstWorkoutsQuest } from '../../features/engagement/components/FirstWorkoutsQuest';
@@ -59,7 +52,6 @@ import {
   VolumeDetail,
 } from '../../features/engagement/components/StatDetailSheets';
 import { StreakChip } from '../../features/engagement/components/StreakChip';
-import { WeeklyCheckIn } from '../../features/engagement/components/WeeklyCheckIn';
 import { openLastSession, pushHistory } from '../../features/history/nav';
 import { pushPath as pushGymsPath } from '../../features/gyms/nav';
 import { useMyCoach } from '../../features/mentorship/hooks';
@@ -68,9 +60,7 @@ import { avatarLetter, formatCompact, greetingForHour, toHref } from '../../feat
 import { useWeeklyStreak } from '../../features/streak/hooks';
 import { questStateFor, useQuest } from '../../state/quest';
 import { WeeklyActivityStrip } from '../../components/home/WeeklyActivityStrip';
-import { QuickActionsRow } from '../../components/home/QuickActionsRow';
 import { NutritionHomeCard } from '../../components/home/NutritionHomeCard';
-import { DailyHabitsCard } from '../../components/home/DailyHabitsCard';
 import { useNutritionDay } from '../../features/nutrition/useNutritionDay';
 import { sumDayTotals } from '../../features/nutrition/logic';
 import { todayIso } from '../../lib/dates';
@@ -478,6 +468,9 @@ export default function HomeScreen() {
   const goalType = useProfile((s) => s.goalType);
   const startWeightKg = useProfile((s) => s.startWeightKg);
   const targetWeightKg = useProfile((s) => s.targetWeightKg);
+  // Training days the member picked in setup — the week strip is judged
+  // against this, never a house number.
+  const daysPerWeek = useProfile((s) => s.daysPerWeek);
   // Height rides along with the coach tip so the server can sanity-check the
   // goal weight before it coaches anyone towards it.
   const heightCm = useProfile((s) => s.heightCm);
@@ -516,32 +509,18 @@ export default function HomeScreen() {
   // a skeleton until `weights` resolves. Headline = SMOOTHED trend (EWMA),
   // never the latest raw weigh-in.
   const weights = useWeights();
-  // Trend smoothing (EWMA) + chart projection are pure but non-trivial over
-  // ~90 rows; recompute only when the weight list or unit actually changes,
-  // not on every one of Home's ~5 focus-driven re-renders.
-  const { headline, weightDelta30, lastWeighIn } = useMemo(() => {
+  // Trend smoothing (EWMA) is pure but non-trivial over ~90 rows; recompute
+  // only when the weight list or unit actually changes, not on every one of
+  // Home's ~5 focus-driven re-renders.
+  const { headline, lastWeighIn } = useMemo(() => {
     const weightList = weights ?? [];
-    const hl = weightHeadline(weightList, unitPref);
-    const trendPoints = weightChartData(weightList, unitPref).trend;
-    const firstTrend = trendPoints[0];
-    const lastTrend = trendPoints[trendPoints.length - 1];
-    const delta30 =
-      firstTrend !== undefined && lastTrend !== undefined && trendPoints.length >= 2
-        ? lastTrend.value - firstTrend.value
-        : null;
     return {
-      headline: hl,
-      weightDelta30: delta30,
+      headline: weightHeadline(weightList, unitPref),
       lastWeighIn: weightList[weightList.length - 1],
     };
   }, [weights, unitPref]);
 
   const unit = unitLabel(unitPref);
-  const latestPr = data?.recentPrs[0] ?? null;
-  const latestPrText =
-    latestPr !== null
-      ? `${latestPr.exerciseName} · ${displayWeight(latestPr.weightKg, unitPref)} ${unit} × ${latestPr.reps}`
-      : null;
   const last = data?.lastSession ?? null;
   // The hero's exact photo, mirroring the same state/muscle/name logic <Hero>
   // uses below — so the "last session" thumbnail can avoid repeating it.
@@ -577,10 +556,13 @@ export default function HomeScreen() {
         : signedOut
           ? 'Food, water and weight are ready to log right now. Your programs arrive with your free account.'
           : 'Set your training program, then let this screen keep your next move obvious.';
-  const sessionsThisWeek = data?.weekSessions ?? 0;
+  // The week strip measures the member against the days-a-week they chose in
+  // setup. `useWeeklyStreak` clamps that the same way before the streak uses
+  // it, so prefer its value and fall back to the same clamp while it loads.
+  const weeklyTarget = weeklyStreak?.weeklyTarget ?? Math.max(2, Math.min(7, daysPerWeek || 3));
 
-  // Stable nav handlers so the memoized report/weight cards don't re-render
-  // just because Home re-rendered with fresh inline closures.
+  // Stable nav handlers so the memoized weight card doesn't re-render just
+  // because Home re-rendered with fresh inline closures.
   const openProgress = useCallback(() => router.push('/(tabs)/progress'), []);
   const logWeight = useCallback(() => router.push(toHref('/body/log-weight')), []);
 
@@ -669,20 +651,14 @@ export default function HomeScreen() {
         </PressableScale>
       </Animated.View>
 
-      {/* Header pattern (brief §5): eyebrow → huge Oswald TODAY → meta chips.
-          The old CommandHeader content survives: badge → eyebrow, poster date
-          + sessions status → chips, description → the dim line below. */}
+      {/* Header pattern (brief §5): eyebrow → huge Oswald TODAY → meta chip.
+          The week's session count used to ride here too; the week strip below
+          says the same thing against the member's own target, so the header
+          keeps just the date. */}
       <ScreenHeader
         eyebrow={data?.activeWorkout ? 'In progress' : data?.doneToday ? 'Done' : 'Focus'}
         title="Today"
-        meta={
-          <>
-            <MetaChip label={posterDate()} />
-            <MetaChip
-              label={`${sessionsThisWeek} ${sessionsThisWeek === 1 ? 'session' : 'sessions'} this week`}
-            />
-          </>
-        }
+        meta={<MetaChip label={posterDate()} />}
       />
       <Animated.View entering={enterDown(1)}>
         <AppText variant="body" color={colors.textDim} style={styles.headingCopy}>
@@ -690,21 +666,11 @@ export default function HomeScreen() {
         </AppText>
       </Animated.View>
 
-      <Animated.View entering={enterDown(2)}>
-        <QuickActionsRow
-          onAddWater={() => void nutrition.addWater(250)}
-          nextWorkoutId={data?.nextWorkout?.id}
-        />
-      </Animated.View>
-
       {data === null ? (
         <HomeSkeleton />
       ) : (
         <>
-          <Animated.View entering={enterUp(0)}>
-            <WeeklyActivityStrip activeDates={activeDates} />
-          </Animated.View>
-
+          {/* The screen's one primary action, first thing under the header. */}
           <Animated.View entering={enterUp(0)} style={styles.heroWrap}>
             <Hero
               planName={data.planName}
@@ -719,25 +685,11 @@ export default function HomeScreen() {
           </Animated.View>
 
           <Animated.View entering={enterUp(1)}>
-            <DailyHabitsCard
-              workoutDone={data.doneToday !== null}
-              workoutName={data.doneToday?.name ?? data.nextWorkout?.name}
-              nextWorkoutId={data.nextWorkout?.id}
-              eatenKcal={Math.round(totals.kcal)}
-              targetKcal={targets.kcal}
-              waterMl={nutrition.waterMl}
-              targetWaterMl={targets.waterMl}
-              weighedInToday={lastWeighIn?.date === todayIso()}
-              lastWeightText={
-                lastWeighIn
-                  ? `${displayWeight(lastWeighIn.kg, unitPref)} ${unit}`
-                  : null
-              }
-              onAddWater={() => void nutrition.addWater(250)}
-            />
+            <WeeklyActivityStrip activeDates={activeDates} targetSessions={weeklyTarget} />
           </Animated.View>
 
-          <Animated.View entering={enterUp(1)}>
+          {/* Food and water, once. */}
+          <Animated.View entering={enterUp(2)}>
             <NutritionHomeCard
               eatenKcal={Math.round(totals.kcal)}
               targetKcal={targets.kcal}
@@ -753,10 +705,44 @@ export default function HomeScreen() {
             />
           </Animated.View>
 
-          {/* Bento zone: cream steps block + charcoal calories block. */}
-          <ActivitySection stagger={1} />
+          {/* Weight, once — the card carries both the trend and the log action. */}
+          <Animated.View entering={enterUp(3)}>
+            <SectionLabel>Body</SectionLabel>
+            <WeightHomeCard
+              loading={weights === null}
+              trendValue={headline.trendValue}
+              unit={unit}
+              direction={directionIcon(headline.summary.direction)}
+              rateText={rateLabel(headline.summary, unitPref)}
+              lastLoggedText={
+                lastWeighIn !== undefined ? `Last logged ${posterDate(lastWeighIn.date)}` : null
+              }
+              onOpen={openProgress}
+              onLog={logWeight}
+            />
+          </Animated.View>
 
-          <Animated.View entering={enterUp(2)}>
+          {/* Bento zone: cream steps block + charcoal calories block. */}
+          <ActivitySection stagger={4} />
+
+          {showQuest ? (
+            <Animated.View entering={enterFade(0)} style={styles.questWrap}>
+              <FirstWorkoutsQuest progress={quest} />
+            </Animated.View>
+          ) : null}
+
+          <Animated.View entering={enterUp(5)}>
+            <SectionLabel>Coach</SectionLabel>
+            <CoachEntry tier={serverTier} />
+          </Animated.View>
+
+          {/* One weekly check-in. The GM targets check-in that used to sit
+              beside this one asked the same energy/soreness questions; it now
+              lives on the Food tab, where the targets it adjusts are shown. */}
+          <CheckInCard stagger={5} />
+
+          {/* Everything below is a look back, not a thing to do today. */}
+          <Animated.View entering={enterUp(6)}>
             <SectionLabel>This week</SectionLabel>
             <View style={styles.tileRow}>
               <View style={styles.tileCell}>
@@ -793,7 +779,7 @@ export default function HomeScreen() {
               </View>
             </View>
           </Animated.View>
-          <Animated.View entering={enterUp(3)} style={styles.tileWide}>
+          <Animated.View entering={enterUp(7)} style={styles.tileWide}>
             <StatTile
               title="PRs"
               value={data.prCount}
@@ -806,64 +792,6 @@ export default function HomeScreen() {
               <PrDetail prs={data.recentPrs} unitPref={unitPref} />
             </StatTile>
           </Animated.View>
-
-          <Animated.View entering={enterUp(4)}>
-            <SectionLabel>Progress report</SectionLabel>
-            <ProgressReportCard
-              sessions={data.weekSessions}
-              prCount={data.prCount}
-              weightDeltaText={weightDelta30 !== null ? signedDelta(weightDelta30) : null}
-              unit={unit}
-              latestPrText={latestPrText}
-              onOpen={openProgress}
-            />
-          </Animated.View>
-
-          <Animated.View entering={enterUp(5)}>
-            <SectionLabel>Body</SectionLabel>
-            <WeightHomeCard
-              loading={weights === null}
-              trendValue={headline.trendValue}
-              unit={unit}
-              direction={directionIcon(headline.summary.direction)}
-              rateText={rateLabel(headline.summary, unitPref)}
-              lastLoggedText={
-                lastWeighIn !== undefined ? `Last logged ${posterDate(lastWeighIn.date)}` : null
-              }
-              onOpen={openProgress}
-              onLog={logWeight}
-            />
-          </Animated.View>
-
-          {showQuest ? (
-            <Animated.View entering={enterFade(0)} style={styles.questWrap}>
-              <FirstWorkoutsQuest progress={quest} />
-            </Animated.View>
-          ) : null}
-
-          <Animated.View entering={enterUp(6)}>
-            <SectionLabel>Coach</SectionLabel>
-            <CoachEntry tier={serverTier} />
-          </Animated.View>
-
-          {/* Nearby gyms teaser (plan §6 P12, optional) — a single compact
-              link row into the /gyms discovery hub; no thematic tie to any
-              other Home section, so it gets its own quiet row rather than a
-              full card. */}
-          <Animated.View entering={enterUp(6)} style={styles.teaserWrap}>
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="Find a gym near you"
-              onPress={() => pushGymsPath('/gyms')}
-              style={styles.historyRow}
-            >
-              <AppText variant="bodyBold">Nearby gyms</AppText>
-              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-            </PressableScale>
-          </Animated.View>
-
-          <CheckInCard stagger={7} />
-          <WeeklyCheckIn stagger={7} />
 
           <Animated.View entering={enterUp(8)} style={styles.tipCard}>
             <AITipCard
@@ -923,6 +851,21 @@ export default function HomeScreen() {
               </View>
             </Animated.View>
           ) : null}
+
+          {/* Nearby gyms teaser (plan §6 P12, optional) — a single compact
+              link row into the /gyms discovery hub; nothing to do with today,
+              so it sits last as a quiet row rather than a full card. */}
+          <Animated.View entering={enterUp(9)} style={styles.teaserWrap}>
+            <PressableScale
+              accessibilityRole="button"
+              accessibilityLabel="Find a gym near you"
+              onPress={() => pushGymsPath('/gyms')}
+              style={styles.historyRow}
+            >
+              <AppText variant="bodyBold">Nearby gyms</AppText>
+              <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+            </PressableScale>
+          </Animated.View>
         </>
       )}
     </Screen>

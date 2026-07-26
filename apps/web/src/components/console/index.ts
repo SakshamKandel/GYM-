@@ -4,7 +4,7 @@
  *
  * Server-component friendly: PageHeader, Card, CardHeader, StatTile, Badge,
  * TierChip, StatusChip, TierBadge, DataTable, TableThumb, SkeletonBar,
- * SkeletonRows, EmptyState, Toolbar, ChartCard, GaugeArc, HeatGrid.
+ * SkeletonRows, EmptyState, Toolbar, ChartCard, GaugeArc, HeatGrid, NavIcon.
  * Client ('use client'): Button, FilterPill, FilterPills, TextField,
  * SearchField, Drawer, Modal, ConfirmButton, ConsoleShell, SidebarNav, TopBar.
  */
@@ -29,6 +29,8 @@ export { SidebarNav } from './SidebarNav';
 export type { NavItem, NavGroup } from './SidebarNav';
 export { TopBar } from './TopBar';
 export { LogoutButton } from './LogoutButton';
+export { NavIcon } from './NavIcons';
+export type { NavIconName } from './NavIcons';
 // Dataviz (pure SVG/CSS, no chart library).
 export { ChartCard } from './ChartCard';
 export type { ChartPoint } from './ChartCard';

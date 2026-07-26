@@ -14,7 +14,10 @@ import {
 } from '@/components/console';
 import { formatDate, formatMoney } from '@/lib/format';
 import { MemberLink } from '../../_components/MemberLink';
+import { PartnerWallets, type PartnerWalletRow } from './PartnerWallets';
 import { PayoutsQueue } from './PayoutsQueue';
+
+export type { PartnerWalletRow };
 
 export type CoachTier = 'silver' | 'gold' | 'elite';
 
@@ -55,6 +58,15 @@ const TYPE_LABEL: Record<LedgerEntry['type'], string> = {
   payout: 'Payout',
 };
 
+/** The top-level views on this page, and what each is called on screen. */
+const TAB_LABEL = {
+  balances: 'Coaches',
+  partners: 'Restaurants',
+  payouts: 'Payout requests',
+} as const;
+
+type WalletsTab = keyof typeof TAB_LABEL;
+
 /**
  * Per-coach wallet balances + ledger (SCALE-UP-PLAN §1.3 / §4.1). The drawer
  * loads the coach's ledger from GET /api/admin/wallets/[coachId] when it opens
@@ -62,14 +74,22 @@ const TYPE_LABEL: Record<LedgerEntry['type'], string> = {
  * rows fell off the tail showed a nonzero balance next to "No entries yet".
  * Recording an adjustment/payout hits POST /api/admin/wallets/[coachId]/entries;
  * on success we reload the drawer detail and router.refresh() the roster.
+ *
+ * Restaurant balances sit on their own tab (PartnerWallets) rather than in this
+ * table: they are a different rail with a different fold (earned + corrections −
+ * payouts, one currency per restaurant), so mixing them into the coach rows
+ * would put two different meanings of "balance" in one column.
  */
 export function WalletsManager({
   wallets,
+  partnerWallets,
   canViewMembers,
   canManageWallets,
   canReviewPayouts,
 }: {
   wallets: WalletRow[];
+  /** Restaurant balances, shown on their own tab beside the coach ones. */
+  partnerWallets: PartnerWalletRow[];
   /** Viewer holds `members.read`, so coach names can link to their record. */
   canViewMembers: boolean;
   /** `wallet.manage` — balances table + record-entry drawer. */
@@ -79,17 +99,15 @@ export function WalletsManager({
 }) {
   const router = useRouter();
   // Which top-level views this operator may see. A payouts.review-only reviewer
-  // gets the queue and never the balances table (P1-5 / C-C).
-  const availableTabs = [
-    ...(canManageWallets ? (['balances'] as const) : []),
+  // gets the queue and never the balances tables (P1-5 / C-C).
+  const availableTabs: readonly WalletsTab[] = [
+    ...(canManageWallets ? (['balances', 'partners'] as const) : []),
     ...(canReviewPayouts ? (['payouts'] as const) : []),
   ];
-  // Top-level view: coach balances (with the record-entry drawer) or the
-  // coach-initiated payout request queue (plan §3 P1-12). Default to the first
-  // tab this operator is actually allowed to open.
-  const [tab, setTab] = useState<'balances' | 'payouts'>(
-    canManageWallets ? 'balances' : 'payouts',
-  );
+  // Top-level view: coach balances, restaurant balances (both with a
+  // record-entry drawer), or the payout request queue (plan §3 P1-12). Default
+  // to the first tab this operator is actually allowed to open.
+  const [tab, setTab] = useState<WalletsTab>(canManageWallets ? 'balances' : 'payouts');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<WalletDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -327,7 +345,7 @@ export function WalletsManager({
                     : '1px solid var(--gt-border)',
                 }}
               >
-                {t === 'balances' ? 'Balances' : 'Payout requests'}
+                {TAB_LABEL[t]}
               </button>
             );
           })}
@@ -336,6 +354,8 @@ export function WalletsManager({
 
       {tab === 'payouts' ? (
         <PayoutsQueue />
+      ) : tab === 'partners' ? (
+        <PartnerWallets wallets={partnerWallets} />
       ) : wallets.length === 0 ? (
         <EmptyState
           title="No coach wallets yet"

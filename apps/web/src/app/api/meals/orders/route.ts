@@ -58,6 +58,16 @@ export const runtime = 'nodejs';
  *    orderable (now < cutoff) and COD only when the partner accepts it. The
  *    account-scoped requestId makes retries replay-safe; order, lines, and the
  *    initial pending event are one atomic Neon transaction.
+ *
+ *    A meal that cannot be ordered — off this partner's menu, deactivated,
+ *    deleted, or simply not served on the requested day/window — is ONE
+ *    condition with ONE answer, the same one /api/meals/quote gives:
+ *    `422 {error:'meal_unavailable', mealId, mealName}`. It used to split into
+ *    a bare `meal_unavailable` and a `meal_unavailable_for_slot`, neither
+ *    naming the offending line, so the checkout that had just shown a green
+ *    total could only fall back to generic copy. Shipped clients keep accepting
+ *    the older `meal_unavailable_for_slot` spelling (it maps to the same copy),
+ *    so nothing regresses on a build that predates this.
  *  - GET ?scope=upcoming|history — materializes due subscription orders first,
  *    then returns the caller's own orders with line items. `history` is the only
  *    scope that grows without bound, so it is PAGINATED (`?limit&offset`,
@@ -262,8 +272,23 @@ export async function POST(req: Request) {
         eq(meals.isDeleted, false),
       ),
     );
-  if (mealRows.length !== mealIds.length) return json({ error: 'meal_unavailable' }, 400);
   const mealById = new Map(mealRows.map((m) => [m.id, m]));
+  // ONE code and ONE body for "this meal can't be ordered", identical to the
+  // quote route's — see the note above POST. Look the missing meal up by id in
+  // any state to recover a display name for the interstitial; null when the id
+  // is entirely unknown.
+  const missingId = mealIds.find((id) => !mealById.has(id));
+  if (missingId) {
+    const [named] = await db
+      .select({ name: meals.name })
+      .from(meals)
+      .where(eq(meals.id, missingId))
+      .limit(1);
+    return json(
+      { error: 'meal_unavailable', mealId: missingId, mealName: named?.name ?? null },
+      422,
+    );
+  }
 
   // All lines must share one currency (a partner's menu is single-currency).
   const currencies = new Set(mealRows.map((m) => m.currency));
@@ -281,10 +306,18 @@ export async function POST(req: Request) {
     list.push({ dayOfWeek: a.dayOfWeek, window: a.window });
     availByMeal.set(a.mealId, list);
   }
-  for (const mealId of mealIds) {
-    if (!isMealAvailableForDate(availByMeal.get(mealId) ?? [], deliveryDate, window)) {
-      return json({ error: 'meal_unavailable_for_slot' }, 400);
-    }
+  const unavailableId = mealIds.find(
+    (id) => !isMealAvailableForDate(availByMeal.get(id) ?? [], deliveryDate, window),
+  );
+  if (unavailableId) {
+    return json(
+      {
+        error: 'meal_unavailable',
+        mealId: unavailableId,
+        mealName: mealById.get(unavailableId)?.name ?? null,
+      },
+      422,
+    );
   }
 
   const lines: PricedLine[] = items.map((i) => ({ priceMinor: mealById.get(i.mealId)!.priceMinor, qty: i.qty }));

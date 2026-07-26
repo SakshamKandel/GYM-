@@ -107,6 +107,7 @@ interface CustomFood {
   carbsPer100: number;
   fatPer100: number;
   createdAt: string;
+  /** `email` is present in the response but deliberately never rendered here. */
   account: { id: string; email: string; displayName: string };
 }
 
@@ -114,6 +115,10 @@ interface CustomFood {
  * Member-authored custom foods (the third moderation queue). Removal is a
  * soft delete server-side so the member's phone actually learns about it on
  * its next sync — see the API route for the tombstone contract.
+ *
+ * Email addresses are NOT shown, same as the sibling queues: deciding whether a
+ * food entry is junk needs the name at most, and this tab belongs to a role
+ * (content_admin) that does not hold `members.read`.
  *
  * Colocated here rather than in its own file only because this wave's file
  * ownership was split that way; it is a straight sibling of
@@ -186,9 +191,8 @@ function CustomFoodsModeration() {
       render: (f) => (
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 600, fontSize: 13 }}>
-            {f.account.displayName || f.account.email}
+            {f.account.displayName.trim() || 'Unknown member'}
           </div>
-          <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>{f.account.email}</div>
         </div>
       ),
     },

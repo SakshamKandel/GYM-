@@ -41,8 +41,10 @@ import {
   Screen,
   ScreenHeader,
   Sheet,
+  Skeleton,
 } from '../../components/ui';
 import { EmptyArt } from '../../components/visual';
+import { WeeklyCheckIn } from '../../features/engagement/components/WeeklyCheckIn';
 import { logHaptic, tapHaptic } from '../../lib/haptics';
 import { posterDate, todayIso } from '../../lib/dates';
 import { uid } from '../../lib/id';
@@ -211,7 +213,22 @@ const styles = StyleSheet.create({
   waterCaption: { marginTop: spacing.sm },
   waterPressed: { opacity: 0.9, transform: [{ scale: 0.98 }] },
   waterTileInner: { pointerEvents: 'none' },
+  // The GM weekly check-in brings its own bottom rhythm; it only needs air
+  // above it to clear the water block.
+  checkInWrap: { marginTop: spacing.xl },
+  // Loading stand-ins, sized to the blocks they replace so nothing jumps when
+  // the day lands.
+  heroSkeleton: { marginTop: spacing.xl + spacing.xs },
+  macroSkeleton: { marginTop: spacing.md },
+  waterSkeleton: { marginTop: spacing.xl },
 });
+
+/** Cream calorie hero: ring + big number inside the gutter padding. */
+const HERO_SKELETON_H = 152;
+/** "Consumed" label + three macro bars on their charcoal block. */
+const MACRO_SKELETON_H = 180;
+/** Water block: icon anchor + litres + fill bar. */
+const WATER_SKELETON_H = 112;
 
 // Ease for the water tile's add-confirmation pop (a user-driven settle).
 const EASE_OUT = Easing.bezier(0.25, 0.8, 0.4, 1);
@@ -461,71 +478,84 @@ export default function FoodScreen() {
 
       {/* Cream hero block — today's calories in black ink: big Oswald eaten
           number beside the adherence-neutral kcal ring (onBlock arc over the
-          sanctioned rgba track on colored blocks). */}
-      <Animated.View entering={enterUp(0)} style={styles.hero}>
-        <Card variant="cream">
-          <View style={styles.heroRow}>
-            <View style={styles.heroLeft}>
-              <AppText variant="label" color={colors.creamDim}>
-                Calories
-              </AppText>
-              <AnimatedNumber value={eaten} variant="stat" color={colors.onBlock} />
-              <AppText variant="caption" color={colors.creamDim} tabular>
-                of {targets.kcal} kcal
-              </AppText>
-            </View>
-            <Ring
-              size={96}
-              strokeWidth={10}
-              progress={targets.kcal > 0 ? eaten / targets.kcal : 0}
-              color={colors.onBlock}
-              trackColor="rgba(0,0,0,0.15)"
-            >
-              <View style={styles.ringCenter}>
-                <AppText
-                  variant="display"
-                  style={styles.ringValue}
-                  color={ring.over ? colors.creamDim : colors.onBlock}
-                >
-                  {ring.value}
-                </AppText>
-                <AppText variant="caption" color={colors.creamDim}>
-                  {ring.caption}
-                </AppText>
-              </View>
-            </Ring>
-          </View>
-        </Card>
-      </Animated.View>
+          sanctioned rgba track on colored blocks).
 
-      {/* Consumed macros: thick rounded bars on a charcoal block (fixed
-          app-wide macro colors over the raised track). */}
-      <Animated.View entering={enterUp(1)}>
-        <Card style={styles.macroCard}>
-          <AppText variant="label">Consumed</AppText>
-          <MacroBar
-            label="Protein"
-            current={totals.protein}
-            target={targets.protein}
-            color={colors.protein}
-            delay={120}
-          />
-          <MacroBar
-            label="Carbs"
-            current={totals.carbs}
-            target={targets.carbs}
-            color={colors.carbs}
-            delay={200}
-          />
-          <MacroBar
-            label="Fat"
-            current={totals.fat}
-            target={targets.fat}
-            color={colors.fat}
-            delay={280}
-          />
-        </Card>
-      </Animated.View>
+          Until the day has actually loaded there is no number to show: an
+          eaten total of 0 reads as a real, wrong figure. Hold the same
+          skeleton every other tab uses instead. */}
+      {!loaded ? (
+        <>
+          <Skeleton height={HERO_SKELETON_H} radius={radius.block} style={styles.heroSkeleton} />
+          <Skeleton height={MACRO_SKELETON_H} radius={radius.block} style={styles.macroSkeleton} />
+        </>
+      ) : (
+        <>
+          <Animated.View entering={enterUp(0)} style={styles.hero}>
+            <Card variant="cream">
+              <View style={styles.heroRow}>
+                <View style={styles.heroLeft}>
+                  <AppText variant="label" color={colors.creamDim}>
+                    Calories
+                  </AppText>
+                  <AnimatedNumber value={eaten} variant="stat" color={colors.onBlock} />
+                  <AppText variant="caption" color={colors.creamDim} tabular>
+                    of {targets.kcal} kcal
+                  </AppText>
+                </View>
+                <Ring
+                  size={96}
+                  strokeWidth={10}
+                  progress={targets.kcal > 0 ? eaten / targets.kcal : 0}
+                  color={colors.onBlock}
+                  trackColor="rgba(0,0,0,0.15)"
+                >
+                  <View style={styles.ringCenter}>
+                    <AppText
+                      variant="display"
+                      style={styles.ringValue}
+                      color={ring.over ? colors.creamDim : colors.onBlock}
+                    >
+                      {ring.value}
+                    </AppText>
+                    <AppText variant="caption" color={colors.creamDim}>
+                      {ring.caption}
+                    </AppText>
+                  </View>
+                </Ring>
+              </View>
+            </Card>
+          </Animated.View>
+
+          {/* Consumed macros: thick rounded bars on a charcoal block (fixed
+              app-wide macro colors over the raised track). */}
+          <Animated.View entering={enterUp(1)}>
+            <Card style={styles.macroCard}>
+              <AppText variant="label">Consumed</AppText>
+              <MacroBar
+                label="Protein"
+                current={totals.protein}
+                target={targets.protein}
+                color={colors.protein}
+                delay={120}
+              />
+              <MacroBar
+                label="Carbs"
+                current={totals.carbs}
+                target={targets.carbs}
+                color={colors.carbs}
+                delay={200}
+              />
+              <MacroBar
+                label="Fat"
+                current={totals.fat}
+                target={targets.fat}
+                color={colors.fat}
+                delay={280}
+              />
+            </Card>
+          </Animated.View>
+        </>
+      )}
 
       {/* The one thing this screen exists for. It used to be a full screen
           down, below three cards selling other things — now it sits directly
@@ -700,50 +730,64 @@ export default function FoodScreen() {
       )}
 
       {/* Water — compact charcoal block: litres up top, red fill bar below.
-          Same one-tap +250 / long-press −250 target as before. */}
-      <Animated.View entering={enterUp(8)} style={styles.waterWrap}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Water: ${litres(waterMl)} litres. Tap to add 250 millilitres, long press to remove 250.`}
-          onPress={addWaterTap}
-          onLongPress={() => {
-            if (waterMl <= 0) return;
-            tapHaptic();
-            void addWater(-250);
-          }}
-          style={({ pressed }) => (pressed ? styles.waterPressed : null)}
-        >
-          <Animated.View
-            style={[styles.waterTileInner, waterPopStyle]}
-            accessibilityElementsHidden
-            importantForAccessibility="no-hide-descendants"
+          Same one-tap +250 / long-press −250 target as before. Skeleton until
+          the day lands, for the same reason the calorie hero holds one. */}
+      {!loaded ? (
+        <Skeleton height={WATER_SKELETON_H} radius={radius.block} style={styles.waterSkeleton} />
+      ) : (
+        <Animated.View entering={enterUp(8)} style={styles.waterWrap}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Water: ${litres(waterMl)} litres. Tap to add 250 millilitres, long press to remove 250.`}
+            onPress={addWaterTap}
+            onLongPress={() => {
+              if (waterMl <= 0) return;
+              tapHaptic();
+              void addWater(-250);
+            }}
+            style={({ pressed }) => (pressed ? styles.waterPressed : null)}
           >
-            <Card style={styles.waterCard}>
-              <View style={styles.waterTop}>
-                <IconChip icon="water" />
-                <View style={styles.waterInfo}>
-                  <AppText variant="label">Water</AppText>
-                  <View style={styles.waterValueRow}>
-                    <AppText style={styles.waterValue} tabular>
-                      {litres(waterMl)}
-                    </AppText>
-                    <AppText variant="caption" color={colors.textDim}>
-                      L
-                    </AppText>
+            <Animated.View
+              style={[styles.waterTileInner, waterPopStyle]}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            >
+              <Card style={styles.waterCard}>
+                <View style={styles.waterTop}>
+                  <IconChip icon="water" />
+                  <View style={styles.waterInfo}>
+                    <AppText variant="label">Water</AppText>
+                    <View style={styles.waterValueRow}>
+                      <AppText style={styles.waterValue} tabular>
+                        {litres(waterMl)}
+                      </AppText>
+                      <AppText variant="caption" color={colors.textDim}>
+                        L
+                      </AppText>
+                    </View>
                   </View>
                 </View>
-              </View>
-              <ProgressBar
-                value={targets.waterMl > 0 ? waterMl / targets.waterMl : 0}
-                height={10}
-              />
-            </Card>
-          </Animated.View>
-        </Pressable>
-        <AppText variant="caption" color={colors.textDim} style={styles.waterCaption} tabular>
-          target {litres(targets.waterMl)}L · tap +250ml · hold −250ml
-        </AppText>
-      </Animated.View>
+                <ProgressBar
+                  value={targets.waterMl > 0 ? waterMl / targets.waterMl : 0}
+                  height={10}
+                />
+              </Card>
+            </Animated.View>
+          </Pressable>
+          <AppText variant="caption" color={colors.textDim} style={styles.waterCaption} tabular>
+            target {litres(targets.waterMl)}L · tap +250ml · hold −250ml
+          </AppText>
+        </Animated.View>
+      )}
+
+      {/* The GM weekly check-in — three taps that move the calorie and macro
+          targets at the top of this screen, so it lives here now rather than
+          beside the coach check-in on Home. Only on today. */}
+      {loaded && selected === todayIso() ? (
+        <View style={styles.checkInWrap}>
+          <WeeklyCheckIn stagger={9} />
+        </View>
+      ) : null}
 
       {/* Everything below is somewhere else to go, so it sits below everything
           the member came here to do. */}

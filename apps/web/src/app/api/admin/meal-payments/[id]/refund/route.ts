@@ -1,4 +1,10 @@
-import { mealBillingCycles, mealOrderEvents, mealOrders, mealPaymentRequests } from '@gym/db';
+import {
+  mealBillingCycles,
+  mealDisputes,
+  mealOrderEvents,
+  mealOrders,
+  mealPaymentRequests,
+} from '@gym/db';
 import { formatMoney, ktmDateString, TERMINAL_ORDER_STATUSES } from '@gym/shared';
 import { and, eq, gt, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { after } from 'next/server';
@@ -28,6 +34,16 @@ export const runtime = 'nodejs';
  *  before its billed week begins (KTM). The reversals are idempotent CAS writes
  *  and the request flip is LAST, so a retry after a partial crash safely
  *  finishes; the loser of a refund race gets 409 already_refunded.
+ *
+ *  The ONE way past the production guard is a RESOLVED dispute on that order.
+ *  Disputes are openable only on a delivered or already-paid order, which is the
+ *  exact set the guard refuses, so before this every resolved dispute was a dead
+ *  end for both the member and the operator. A dispute-backed refund reverses the
+ *  PAYMENT ONLY — the order keeps its delivered/production status, since the food
+ *  really did go out — and the partner's earned balance drops by that order on
+ *  its own, because every partner money read counts `paid` and excludes
+ *  `refunded`. Every other protection is unchanged: same permission, same
+ *  audit, same LAST status flip, same 409 on a second refund.
  *
  * Guarded by requirePermission('payments.review'); super_admin/main_admin pass.
  */
@@ -72,6 +88,28 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const now = new Date();
 
+  // A dispute the team RESOLVED is the operator's recorded decision that this
+  // member should get their money back, so it is the one thing allowed past the
+  // production guard below. Without it the dispute rail dead-ends: a dispute can
+  // only be opened on a delivered or already-paid order, and those are precisely
+  // the orders the guard refuses, so every resolved dispute was unrefundable.
+  // Only `resolved` counts — open/reviewing are undecided, and rejected is a
+  // decision that the money stays put.
+  let resolvedDisputeId: string | null = null;
+  if (row.orderId) {
+    const [dispute] = await db
+      .select({ id: mealDisputes.id })
+      .from(mealDisputes)
+      .where(and(eq(mealDisputes.orderId, row.orderId), eq(mealDisputes.status, 'resolved')))
+      .limit(1);
+    resolvedDisputeId = dispute?.id ?? null;
+  }
+
+  // Set when the order is already in production, so there is nothing left to
+  // cancel: that branch reverses the PAYMENT ONLY and leaves the fulfilment
+  // record standing, because a delivered order really was delivered.
+  let paymentOnly = false;
+
   // Production guard (§3): refuse once the food is committed.
   if (row.orderId) {
     const [order] = await db
@@ -90,7 +128,16 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       order.status === 'delivered' ||
       order.status === 'refused';
     const postCutoff = order.status !== 'cancelled' && now >= order.cutoffAt;
-    if (inProduction || postCutoff) return json({ error: 'non_refundable' }, 409);
+    if (inProduction || postCutoff) {
+      if (!resolvedDisputeId) return json({ error: 'non_refundable' }, 409);
+      // Two shapes of upheld claim, two outcomes. Food already committed
+      // (preparing → refused): nothing is left to cancel, so reverse the money
+      // and leave fulfilment standing. Still pending/confirmed but past cutoff
+      // ("I paid and it never came"): cancel it exactly as any other refund
+      // does, so the kitchen also stops, and only the cutoff predicate is
+      // stood down below.
+      paymentOnly = inProduction;
+    }
     if (
       order.paymentStatus !== 'paid' &&
       order.paymentStatus !== 'receipt_submitted' &&
@@ -119,7 +166,37 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   }
 
   // 1. Reverse the target's paid mark (idempotent CAS — a retry matches 0 rows).
-  if (row.orderId) {
+  if (row.orderId && paymentOnly) {
+    // Dispute-backed reversal of a committed order. Money only: `status`,
+    // `cancelledAt`, `cancelReason`, `decidedBy` and `statusVersion` are all left
+    // exactly as fulfilment left them, so the delivery history stays true and no
+    // status event is invented for a status that never changed.
+    //
+    // Same double-refund protection as the branch below: the CAS only matches
+    // captured money, so a retry (or the loser of a race) matches 0 rows and
+    // falls through to the already-refunded re-read.
+    const reversed = await db
+      .update(mealOrders)
+      .set({ paymentStatus: 'refunded', updatedAt: now })
+      .where(
+        and(
+          eq(mealOrders.id, row.orderId),
+          inArray(mealOrders.paymentStatus, ['paid', 'receipt_submitted']),
+        ),
+      )
+      .returning({ id: mealOrders.id });
+
+    if (!reversed[0]) {
+      const [current] = await db
+        .select({ paymentStatus: mealOrders.paymentStatus })
+        .from(mealOrders)
+        .where(eq(mealOrders.id, row.orderId))
+        .limit(1);
+      if (current?.paymentStatus !== 'refunded') {
+        return json({ error: 'non_refundable' }, 409);
+      }
+    }
+  } else if (row.orderId) {
     const [before] = await db
       .select({ status: mealOrders.status })
       .from(mealOrders)
@@ -143,7 +220,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           eq(mealOrders.status, before.status),
           inArray(mealOrders.paymentStatus, ['paid', 'receipt_submitted']),
           inArray(mealOrders.status, ['pending', 'confirmed', 'cancelled']),
-          or(eq(mealOrders.status, 'cancelled'), gt(mealOrders.cutoffAt, now)),
+          // Past-cutoff orders are normally refused here. A RESOLVED dispute
+          // stands this one predicate down (and only this one): an upheld claim
+          // on a paid order that never arrived has to be able to stop the
+          // kitchen AND return the money, and every such order is past cutoff by
+          // the time the member can tell it never came. Both CAS guards above
+          // still hold, so this can never strand or double-reverse money.
+          resolvedDisputeId
+            ? undefined
+            : or(eq(mealOrders.status, 'cancelled'), gt(mealOrders.cutoffAt, now)),
         ),
       )
       .returning({ id: mealOrders.id });
@@ -225,6 +310,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     cycleId: row.cycleId,
     amountMinor: row.amountMinor,
     reason,
+    // Which dispute authorized a refund past the production guard, and whether
+    // fulfilment was left standing. Null/false on an ordinary pre-production
+    // refund, so the existing meta reads exactly as before.
+    disputeId: resolvedDisputeId,
+    paymentOnly,
   }, ip);
 
   // WP-8: surface the amount (and reason, when given) in the refund push —

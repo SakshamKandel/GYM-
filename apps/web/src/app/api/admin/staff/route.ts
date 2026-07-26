@@ -1,5 +1,5 @@
 import { accounts, admins, coachProfiles } from '@gym/db';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { adminRoleOf, logAudit, requirePermission, requireOutranks } from '@/lib/authz';
 import { offboardCoach } from '@/lib/coachOffboard';
@@ -28,11 +28,17 @@ const bodySchema = z.object({
  *
  *  - GET  → every account with an `admins` row (email, displayName, role) joined
  *           to coach_profiles for the coach display name where present.
+ *           Restaurant partners are excluded (see the query comment).
  *  - POST → grant or change a role for an existing account:
  *           { accountId, role }. Upserts the `admins` row (accountId is its PK,
  *           so a change is an ON CONFLICT DO UPDATE). When role='coach' it also
  *           upserts a coach_profiles row so the account immediately shows up in
  *           the coach roster / coach console.
+ *
+ * Restaurant partners are carved out: a target already holding role='partner'
+ * is refused 409 `partner_managed_elsewhere`. That account's role is minted and
+ * closed by the partners console alone, and this route could never hand it back
+ * (the schema below has no 'partner' member).
  *
  * Both guarded by requirePermission('roles.grant') — super_admin + main_admin.
  * POST additionally enforces RANK (requireOutranks): the actor must be allowed
@@ -69,6 +75,12 @@ export async function GET(req: Request) {
     .from(admins)
     .innerJoin(accounts, eq(accounts.id, admins.accountId))
     .leftJoin(coachProfiles, eq(coachProfiles.accountId, accounts.id))
+    // Restaurant partners are left out, exactly as the web roster page already
+    // leaves them out: they are not staff, nothing here can change or restore
+    // their role, and listing them among ordinary staff rows only invites an
+    // accidental re-role that the mutation routes then have to refuse. The
+    // partners console lists them, and owns them.
+    .where(ne(admins.role, 'partner'))
     .orderBy(asc(accounts.email));
 
   return json({ staff: rows }, 200);
@@ -78,8 +90,10 @@ export async function POST(req: Request) {
   const principal = await requirePermission(req, 'roles.grant');
   if (principal instanceof Response) return principal;
 
+  // 'invalid' is what every other route in this API answers a bad body with,
+  // and what the console + mobile clients already map to copy.
   const parsed = bodySchema.safeParse(await readJson(req));
-  if (!parsed.success) return json({ error: 'invalid_body' }, 400);
+  if (!parsed.success) return json({ error: 'invalid' }, 400);
   const { accountId, role } = parsed.data;
 
   // Nobody may change their OWN admin row — no self-escalation, no
@@ -113,6 +127,17 @@ export async function POST(req: Request) {
   const previousRole = await adminRoleOf(accountId);
   const changeBlock = requireOutranks(principal, previousRole);
   if (changeBlock) return changeBlock;
+
+  // Restaurant partners are NOT generic staff. Their login, their restaurant row
+  // and every partner safeguard (live-order refusal, session kill, currency lock)
+  // live in the partners console, and this route can never put the role back:
+  // 'partner' is absent from the schema above, and re-creating the restaurant
+  // fails on the taken email. Re-roling one here would therefore lock the
+  // restaurant out for good while its orders stayed live. Refuse and point the
+  // operator at the surface that owns them.
+  if (previousRole === 'partner') {
+    return json({ error: 'partner_managed_elsewhere' }, 409);
+  }
 
   const ip = req.headers.get('x-forwarded-for');
 

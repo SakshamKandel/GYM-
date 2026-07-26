@@ -31,6 +31,13 @@ import { MemberLink } from '../../_components/MemberLink';
  * auto-refunds — a dispute that should get money back is refunded separately
  * on the Meal Payments queue; this drawer only records the outcome and tells
  * the member.
+ *
+ * ORDER OF OPERATIONS: mark resolved FIRST, then refund. The refund rail
+ * refuses an order that is already delivered or past its cutoff unless that
+ * order carries a resolved dispute, and every disputable order is one of those.
+ * So the refund link belongs on a resolved dispute, not a live one — sending an
+ * operator to the payments queue before they have decided the claim just earns
+ * them a "not refundable" and no way forward.
  */
 
 export interface DisputeRow {
@@ -274,7 +281,9 @@ export function DisputesQueue({
     },
     // The row's own way into the refund, for the common case where the claim is
     // obviously good: it lands on this order's receipt in Meal Payments, which
-    // is the only place money actually moves.
+    // is the only place money actually moves. Only on a RESOLVED row — the
+    // refund rail needs the resolution before it will let the money go, so
+    // offering this on a live claim would be a link straight to a refusal.
     ...(canRefund
       ? [
           {
@@ -282,21 +291,22 @@ export function DisputesQueue({
             header: '',
             width: 90,
             align: 'right' as const,
-            render: (r: DisputeRow) => (
-              <Link
-                href={`/admin/meal-payments?orderId=${encodeURIComponent(r.orderId)}`}
-                title={`Refund order ${r.orderNumber}`}
-                style={{
-                  fontSize: 13,
-                  fontWeight: 600,
-                  fontFamily: 'var(--font-heading)',
-                  color: 'var(--gt-accent-strong)',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                Refund →
-              </Link>
-            ),
+            render: (r: DisputeRow) =>
+              r.status === 'resolved' ? (
+                <Link
+                  href={`/admin/meal-payments?orderId=${encodeURIComponent(r.orderId)}`}
+                  title={`Refund order ${r.orderNumber}`}
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    fontFamily: 'var(--font-heading)',
+                    color: 'var(--gt-accent-strong)',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Refund →
+                </Link>
+              ) : null,
           },
         ]
       : []),
@@ -426,43 +436,23 @@ export function DisputesQueue({
                   disabled={busy}
                   style={{ resize: 'vertical', fontFamily: 'inherit' }}
                 />
-                {/* The handoff this queue tells operators to make, as an actual
-                    link: same order, same order number, straight to the refund
-                    control. It used to be a sentence pointing at another page
-                    that named the order differently. */}
+                {/* Marking resolved does not move money, but it is what lets
+                    the money move: the refund rail only releases a delivered or
+                    past-cutoff order once its claim has been upheld. So this
+                    tells the operator the sequence instead of handing them a
+                    link that would be refused. */}
                 <div
                   style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8,
                     padding: 12,
                     borderRadius: 10,
                     border: '1px solid var(--gt-border)',
                     background: 'var(--gt-surface-sunken)',
+                    fontSize: 12,
+                    color: 'var(--gt-text-dim)',
                   }}
                 >
-                  <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                    Resolving does not move money. If this member is owed a refund, do that first.
-                  </div>
-                  {canRefund ? (
-                    <Link
-                      href={`/admin/meal-payments?orderId=${encodeURIComponent(selected.orderId)}`}
-                      style={{
-                        alignSelf: 'flex-start',
-                        fontSize: 13,
-                        fontWeight: 600,
-                        fontFamily: 'var(--font-heading)',
-                        color: 'var(--gt-accent-strong)',
-                      }}
-                    >
-                      Refund order {selected.orderNumber} →
-                    </Link>
-                  ) : (
-                    <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
-                      You cannot issue refunds. Ask someone on the payments queue to refund order{' '}
-                      {selected.orderNumber}.
-                    </div>
-                  )}
+                  Marking this resolved does not move money on its own. Resolve it first, then the
+                  refund for order {selected.orderNumber} opens on the Meal Payments queue.
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {selected.status === 'open' ? (
@@ -483,9 +473,45 @@ export function DisputesQueue({
                   </Button>
                 </div>
               </div>
+            ) : selected.status === 'resolved' ? (
+              // An upheld claim is exactly when money can move, so this is where
+              // the refund link belongs. It was the one place the drawer used to
+              // say "no further action".
+              <div
+                style={{
+                  paddingTop: 16,
+                  borderTop: '1px solid var(--gt-border)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
+                  This claim was upheld. If the member is owed their money back, refund it here.
+                </div>
+                {canRefund ? (
+                  <Link
+                    href={`/admin/meal-payments?orderId=${encodeURIComponent(selected.orderId)}`}
+                    style={{
+                      alignSelf: 'flex-start',
+                      fontSize: 13,
+                      fontWeight: 600,
+                      fontFamily: 'var(--font-heading)',
+                      color: 'var(--gt-accent-strong)',
+                    }}
+                  >
+                    Refund order {selected.orderNumber} →
+                  </Link>
+                ) : (
+                  <div style={{ fontSize: 12, color: 'var(--gt-text-dim)' }}>
+                    You cannot issue refunds. Ask someone on the payments queue to refund order{' '}
+                    {selected.orderNumber}.
+                  </div>
+                )}
+              </div>
             ) : (
               <div style={{ fontSize: 13, color: 'var(--gt-text-dim)' }}>
-                This dispute is closed. No further action.
+                This claim was not upheld. No further action.
               </div>
             )}
 

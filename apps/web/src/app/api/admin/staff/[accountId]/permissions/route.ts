@@ -143,8 +143,10 @@ export async function PUT(
 
   const { accountId } = await params;
 
+  // 'invalid' is what every other route in this API answers a bad body with,
+  // and what the console + mobile clients already map to copy.
   const parsed = bodySchema.safeParse(await readJson(req));
-  if (!parsed.success) return json({ error: 'invalid_body' }, 400);
+  if (!parsed.success) return json({ error: 'invalid' }, 400);
   const { perm, allow } = parsed.data;
   // Reject unknown keys so a typo can never write a dangling override row that
   // no guard would ever consult (and that would clutter the provenance view).

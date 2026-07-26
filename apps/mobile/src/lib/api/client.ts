@@ -84,6 +84,20 @@ export type ApiErrorCode =
   | 'auth_unavailable'
   /** Live billing: paid tiers require a store purchase, not a self-serve pick. */
   | 'billing_required'
+  /**
+   * Live billing is switched on but the deployment has no store rail wired up
+   * yet, so POST /api/subscription/tier answers 503. The paywall already has
+   * the right explanation for it; without this mapping the answer collapsed to
+   * 'network' and a member on a misconfigured deployment was told to check a
+   * connection that was working perfectly.
+   */
+  | 'billing_unavailable'
+  /**
+   * 429 — the server is asking this account (or this phone) to slow down. The
+   * request arrived and was understood, so "check your connection" is not just
+   * wrong, it invites an immediate retry that pushes the wait out further.
+   */
+  | 'rate_limited'
   /** 403 — signed in, but not allowed (e.g. a non-coach reserving a coach-only upload kind). */
   | 'forbidden'
   /** POST /api/promo/redeem: the code doesn't exist, is inactive, or is the caller's own coach code. */
@@ -289,6 +303,8 @@ function serverErrorCode(raw: string): ApiErrorCode | null {
     raw === 'not_configured' ||
     raw === 'auth_unavailable' ||
     raw === 'billing_required' ||
+    raw === 'billing_unavailable' ||
+    raw === 'rate_limited' ||
     raw === 'forbidden' ||
     raw === 'invalid_code' ||
     raw === 'already_used' ||
@@ -318,6 +334,14 @@ const REQUEST_TIMEOUT_MS = 10_000;
  */
 const APP_NOT_CONFIGURED_MESSAGE =
   "This version of the app can't reach your account. Please update the app";
+
+/**
+ * What a member is told when the server asks us to slow down (429). It must
+ * never read like a connection fault and must never say "try again" on its
+ * own — another immediate attempt only extends the wait. Exported so every
+ * screen shows the SAME line instead of inventing its own.
+ */
+export const RATE_LIMITED_MESSAGE = 'Too many attempts. Wait a moment and try again';
 
 /**
  * fetch with a timeout; the abort surfaces as a rejection the callers already
@@ -374,8 +398,12 @@ async function request(opts: RequestOptions): Promise<unknown> {
     }
   }
 
-  // Non-2xx: prefer the contract's {error} code, fall back on the status.
-  let code: ApiErrorCode = res.status === 401 ? 'unauthorized' : 'network';
+  // Non-2xx: prefer the contract's {error} code, fall back on the status. A 429
+  // is recognised from the status alone as well as from the body, because every
+  // limiter answers `{error:'rate_limited', retryAfterSec}` but a proxy in front
+  // of us may not.
+  let code: ApiErrorCode =
+    res.status === 401 ? 'unauthorized' : res.status === 429 ? 'rate_limited' : 'network';
   let deletionImpact: AccountDeletionImpact | null = null;
   try {
     const parsed = errorBodySchema.safeParse(await res.json());
@@ -386,7 +414,11 @@ async function request(opts: RequestOptions): Promise<unknown> {
   } catch {
     // Body wasn't JSON — keep the status-derived code.
   }
-  throw new ApiError(code, undefined, deletionImpact);
+  throw new ApiError(
+    code,
+    code === 'rate_limited' ? RATE_LIMITED_MESSAGE : undefined,
+    deletionImpact,
+  );
 }
 
 /** Validate a payload; a malformed body is indistinguishable from a bad server. */

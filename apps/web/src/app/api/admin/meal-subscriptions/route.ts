@@ -23,7 +23,9 @@ export const runtime = 'nodejs';
  *
  *  GET  `?status=active|paused|cancelled&q=<search>` → roster rows, newest
  *  subscription first, joined to the member/partner/meal + the most recent
- *  billing cycle (if any).
+ *  billing cycle (if any). Omit `status` for every status; an unrecognised one
+ *  is refused with `400 {error:'invalid'}` rather than quietly returning the
+ *  whole roster.
  *
  *  POST `{id, action:'pause'|'resume'|'cancel', reason?}` → admin-driven
  *  lifecycle transition. Mirrors the member route's CAS + cancel-cascade
@@ -50,10 +52,16 @@ export async function GET(req: Request) {
   if (principal instanceof Response) return principal;
 
   const url = new URL(req.url);
-  const statusParam = url.searchParams.get('status');
-  const status = (STATUSES as readonly string[]).includes(statusParam ?? '')
-    ? (statusParam as (typeof STATUSES)[number])
-    : undefined;
+  // No `status` (or an empty one) still means "every status" — unchanged. But a
+  // status we don't recognise is now refused rather than silently dropped, which
+  // used to answer a filtered request with the WHOLE roster. Same answer the
+  // coach-application / tier-request / order queues already give.
+  const statusParam = (url.searchParams.get('status') ?? '').trim();
+  if (statusParam !== '' && !(STATUSES as readonly string[]).includes(statusParam)) {
+    return json({ error: 'invalid' }, 400);
+  }
+  const status =
+    statusParam === '' ? undefined : (statusParam as (typeof STATUSES)[number]);
   const q = (url.searchParams.get('q') ?? '').trim().toLowerCase();
 
   const db = getDb();

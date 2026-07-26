@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { SetLog, WorkoutLog } from '@gym/shared';
+import { z } from 'zod';
+import { BASE_URL } from '../../lib/api/client';
 import { nowIso } from '../../lib/dates';
 import { getRepoForAccount } from '../../lib/repo';
 import { useAuth } from '../../state/auth';
@@ -15,10 +17,11 @@ import {
 import { decideInvalidWorkoutBatch } from './queuePolicy';
 
 /**
- * Append-only workout backup: finished workouts flow from the local repo to
- * the server, and the server can hand back workouts this device is missing
- * (new phone, reinstall) — but only ever as an ADDITION. Nothing local is
- * rewritten or removed by a restore, so this is still not a merge engine.
+ * Workout backup: finished workouts flow from the local repo to the server, the
+ * server can hand back workouts this device is missing (new phone, reinstall),
+ * and a workout the member deletes here is deleted there too. A restore only
+ * ever ADDS: nothing local is rewritten or removed by one, so this is still not
+ * a merge engine.
  *
  * Retry safety, in order:
  *  1. Local workouts are marked synced ONLY after the server confirms the
@@ -30,6 +33,8 @@ import { decideInvalidWorkoutBatch } from './queuePolicy';
  *  4. A workout the server's validator will never accept (400) is quarantined
  *     after being isolated. It stays local and is explicitly marked failed,
  *     never falsely marked as backed up, so it cannot wedge later rows.
+ *  5. A deletion is retried until the server confirms it, and until then the
+ *     restore half refuses to bring that workout back (see the ledger below).
  */
 
 // Server-side per-field caps (see /api/sync/workouts zod schema). Payloads are
@@ -152,6 +157,233 @@ async function notifyProgression(accountId: string, syncedIds: string[]): Promis
   await saveSuggestionRetry(accountId, posted ? [] : ids);
 }
 
+// ── Deletions (device → server) ───────────────────────────────
+// Deleting a workout used to be a local-only act: the server kept its copy, so
+// the session went on counting toward the public board and walked straight back
+// onto the next phone the member restored to.
+//
+// There is no delete hook to listen to — the repo simply drops the row — so the
+// signal is absence. This ledger is the memory that makes absence readable: the
+// ids the SERVER is known to hold, plus the ones that have since vanished from
+// the local store and are waiting to be deleted upstream. A vanished id is a
+// deletion, because the only other way a synced row leaves the local store is
+// the store itself being cleared, which is what EMPTY_STORE_GUARD is for.
+
+const SERVER_LEDGER_KEY_PREFIX = 'gym-tracker-workout-server-ledger-v1';
+
+/** Bounds for the local scan — dates no real workout can fall outside. */
+const EARLIEST_DATE = '0000-01-01';
+const FAR_FUTURE_DATE = '9999-12-31';
+
+/** Ids tracked per account. Older ids fall off; deletions of ancient workouts
+ * are the rarest case and this keeps the stored blob small. */
+const LEDGER_MAX_KNOWN = 1_000;
+
+/** Tombstones held while the server is unreachable (or too old to delete). */
+const LEDGER_MAX_PENDING = 200;
+
+/** Server-side per-request cap (see /api/sync/workouts MAX_DELETIONS). */
+const MAX_DELETIONS_PER_REQUEST = 50;
+
+/**
+ * When the local store comes back completely empty while the ledger believes
+ * this device holds more than a handful of workouts, that reads as the store
+ * having been cleared rather than the member having curated it, and propagating
+ * it would erase their whole backed-up history for good. Skip the run instead:
+ * the tombstones simply wait, and the moment there is any local workout again
+ * the real deletions go through. A member who genuinely deletes their last
+ * couple of sessions stays under the bar and propagates normally.
+ */
+const EMPTY_STORE_GUARD = 3;
+
+interface ServerLedger {
+  /** Workout ids the server holds, as far as this device knows. */
+  known: string[];
+  /** Earliest date among `known` — the lower bound of the local scan. */
+  from: string;
+  /** Deleted locally, not yet confirmed gone on the server. */
+  pending: string[];
+}
+
+const EMPTY_LEDGER: ServerLedger = { known: [], from: FAR_FUTURE_DATE, pending: [] };
+
+const ledgerSchema = z.object({
+  known: z.array(z.string()),
+  from: z.string(),
+  pending: z.array(z.string()),
+});
+
+function ledgerKey(accountId: string): string {
+  return `${SERVER_LEDGER_KEY_PREFIX}:${encodeURIComponent(accountId)}`;
+}
+
+/** The stored ledger, or null when this account has never had one written. */
+async function loadLedger(accountId: string): Promise<ServerLedger | null> {
+  try {
+    const raw = await AsyncStorage.getItem(ledgerKey(accountId));
+    if (!raw) return null;
+    const parsed = ledgerSchema.safeParse(JSON.parse(raw) as unknown);
+    return parsed.success ? parsed.data : EMPTY_LEDGER;
+  } catch {
+    // Unreadable ledger degrades to "we know nothing", which only ever means
+    // deletions from here on are tracked and older ones are not propagated.
+    return EMPTY_LEDGER;
+  }
+}
+
+/**
+ * First run on this account: adopt everything the phone already holds as
+ * "the server has it too".
+ *
+ * Without this, deletion only ever worked for workouts logged after the feature
+ * shipped — every install already out there would keep silently orphaning its
+ * server copies. Over-claiming is the safe direction: a tombstone for an id the
+ * server never had (a workout still queued, or one permanently quarantined) is
+ * matched by nothing and deletes nothing. Under-claiming is what loses the
+ * member's intent.
+ *
+ * It also re-seeds after the ledger alone is lost, which is exactly right: the
+ * phone's own history becomes the truth again, and nothing reads as deleted.
+ */
+async function ensureLedgerSeeded(accountId: string): Promise<void> {
+  if ((await loadLedger(accountId)) !== null) return;
+  const repo = await getRepoForAccount(accountId);
+  const local = await repo.getWorkoutsBetween(EARLIEST_DATE, FAR_FUTURE_DATE);
+  let from = FAR_FUTURE_DATE;
+  for (const workout of local) if (workout.date < from) from = workout.date;
+  await saveLedger(accountId, { known: local.map((w) => w.id), from, pending: [] });
+}
+
+async function saveLedger(accountId: string, ledger: ServerLedger): Promise<void> {
+  try {
+    await AsyncStorage.setItem(
+      ledgerKey(accountId),
+      JSON.stringify({
+        known: ledger.known.slice(-LEDGER_MAX_KNOWN),
+        from: ledger.from,
+        pending: ledger.pending.slice(-LEDGER_MAX_PENDING),
+      } satisfies ServerLedger),
+    );
+  } catch {
+    // Best-effort: a failed write costs deletion tracking, never data.
+  }
+}
+
+/** Record workouts the server now holds (confirmed upload, or restored page). */
+async function rememberServerWorkouts(
+  accountId: string,
+  entries: readonly { id: string; date: string }[],
+): Promise<void> {
+  if (entries.length === 0) return;
+  const ledger = (await loadLedger(accountId)) ?? EMPTY_LEDGER;
+  const known = new Set(ledger.known);
+  // A tombstone still in flight must not be re-adopted as "the server holds it";
+  // the deletion is the newer intent and stays queued until it is confirmed.
+  const tombstoned = new Set(ledger.pending);
+  let from = ledger.from;
+  let added = false;
+  for (const entry of entries) {
+    if (tombstoned.has(entry.id) || known.has(entry.id)) continue;
+    known.add(entry.id);
+    added = true;
+    if (entry.date < from) from = entry.date;
+  }
+  if (!added && from === ledger.from) return;
+  await saveLedger(accountId, { known: [...known], from, pending: ledger.pending });
+}
+
+const deletionResponseSchema = z.object({
+  ok: z.literal(true),
+  // Required on purpose: a server that predates deletion support answers without
+  // it, and the tombstones must stay queued rather than be dropped unsent.
+  deletedWorkoutIds: z.array(z.string()),
+});
+
+/** Every call gives up after this long — deletions retry on the next trigger. */
+const DELETE_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * POST the tombstone batch. Returns the ids the server confirmed it no longer
+ * holds, or null when this server cannot delete (or could not be reached), in
+ * which case the caller keeps them queued.
+ */
+async function postWorkoutDeletions(token: string, ids: string[]): Promise<string[] | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DELETE_REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}/api/sync/workouts`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ deletedWorkoutIds: ids }),
+      signal: controller.signal,
+    });
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) return null;
+  try {
+    const parsed = deletionResponseSchema.safeParse((await res.json()) as unknown);
+    return parsed.success ? parsed.data.deletedWorkoutIds : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Turn "the ledger says the server holds it, the phone no longer does" into
+ * tombstones, then send one batch of them. Silent on every failure, like the
+ * rest of sync: whatever is left over goes out on the next trigger.
+ */
+async function pushDeletions(accountId: string): Promise<void> {
+  const auth = useAuth.getState();
+  if (auth.status !== 'signedIn' || !auth.token || auth.user?.id !== accountId) return;
+
+  const repo = await getRepoForAccount(accountId);
+  const ledger = await loadLedger(accountId);
+  // Never seeded (a failed seed write) — absence means nothing yet, so infer
+  // nothing. The next run seeds and normal service resumes.
+  if (!ledger) return;
+
+  let known = ledger.known;
+  let pending = ledger.pending;
+
+  if (known.length > 0) {
+    const local = await repo.getWorkoutsBetween(ledger.from, FAR_FUTURE_DATE);
+    // The store looks cleared, not curated — leave everything alone (see
+    // EMPTY_STORE_GUARD). The tombstones are not lost, only deferred.
+    if (local.length === 0 && known.length > EMPTY_STORE_GUARD) return;
+
+    const localIds = new Set(local.map((w) => w.id));
+    const gone = known.filter((id) => !localIds.has(id));
+    if (gone.length > 0) {
+      known = known.filter((id) => localIds.has(id));
+      pending = [...new Set([...pending, ...gone])];
+      await saveLedger(accountId, { known, from: ledger.from, pending });
+    }
+  }
+
+  if (pending.length === 0) return;
+  const batch = pending.slice(0, MAX_DELETIONS_PER_REQUEST);
+  const confirmed = await postWorkoutDeletions(auth.token, batch);
+  if (confirmed === null || confirmed.length === 0) return;
+
+  // Re-read: the drain/restore running alongside may have touched the ledger.
+  const latest = (await loadLedger(accountId)) ?? { known, from: ledger.from, pending };
+  const done = new Set(confirmed);
+  await saveLedger(accountId, {
+    known: latest.known.filter((id) => !done.has(id)),
+    from: latest.from,
+    pending: latest.pending.filter((id) => !done.has(id)),
+  });
+}
+
 // Local ownership is enforced by the repository. Sync asks for an immutable
 // account-scoped view, so a later auth transition cannot retarget or discard
 // this member's pending rows.
@@ -177,7 +409,25 @@ export async function syncWorkouts(): Promise<void> {
   // rows under the new member's token.
   const accountId = initialAuth.user.id;
   try {
+    // First, make sure this account's deletion ledger exists — everything below
+    // reads "the phone no longer has it" as intent, which is only true once the
+    // ledger knows what the phone had. Ledger work is fenced off on its own: the
+    // backup is the job, and losing deletion tracking for one run must never
+    // cost the member an upload or a restore.
+    try {
+      await ensureLedgerSeeded(accountId);
+    } catch {
+      // Seeds again on the next trigger.
+    }
     await drainWorkouts(accountId);
+    // Deletions go before the pull for the same reason the upload does: they
+    // only exist on this phone, and sending them first means the restore below
+    // is already reading a server that agrees with what the member deleted.
+    try {
+      await pushDeletions(accountId);
+    } catch {
+      // Tombstones stay queued for the next trigger.
+    }
     // Upload first, restore second: the backlog is the part that only exists
     // on this phone, so it can never be delayed behind a long download.
     await restoreWorkouts(accountId);
@@ -242,6 +492,15 @@ async function drainWorkouts(accountId: string): Promise<void> {
     const confirmed = syncedIds.filter((id) => sent.has(id));
     if (confirmed.length === 0) return; // nothing landed — retry next trigger
     await repo.markWorkoutsSynced(confirmed, nowIso());
+    // The server now holds these, so their later disappearance from the local
+    // store is a deletion this device has to pass on.
+    const confirmedSet = new Set(confirmed);
+    await rememberServerWorkouts(
+      accountId,
+      pending
+        .filter((row) => confirmedSet.has(row.workout.id))
+        .map((row) => ({ id: row.workout.id, date: row.workout.date })),
+    );
     await notifyProgression(accountId, confirmed);
 
     // Keep draining only after a fully-confirmed batch AND when more may
@@ -287,7 +546,27 @@ async function restoreWorkouts(accountId: string): Promise<void> {
 
     const current = useAuth.getState();
     if (current.status !== 'signedIn' || current.user?.id !== accountId) return;
-    await repo.applyWorkoutRestorePage(restored);
+
+    // A workout the member deleted must not walk back in while its deletion is
+    // still queued (offline, or a server that can't delete yet). Dropping it
+    // from the page only — the cursor still advances, so the rest of the page
+    // lands and the stream keeps moving.
+    const ledger = await loadLedger(accountId);
+    const tombstoned = new Set(ledger?.pending ?? []);
+    const page =
+      tombstoned.size === 0
+        ? restored
+        : {
+            ...restored,
+            restoredWorkouts: restored.restoredWorkouts.filter((w) => !tombstoned.has(w.id)),
+          };
+    await repo.applyWorkoutRestorePage(page);
+    // Everything in this page exists on the server, deleted-and-queued rows
+    // aside — remember it so a later local delete propagates.
+    await rememberServerWorkouts(
+      accountId,
+      page.restoredWorkouts.map((w) => ({ id: w.id, date: w.date })),
+    );
 
     if (!restored.hasMore) {
       restoredAccounts.add(accountId);

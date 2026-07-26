@@ -30,5 +30,12 @@ export interface CoachVideoRow {
   thumbnailUrl: string | null;
   views: number;
   exercise: VideoExercise | null;
+  /**
+   * This coach added the video. The list is org-wide on purpose, but the
+   * mutation routes only accept a coach's OWN rows, so re-tier and Remove are
+   * offered on these rows only (a `content.manage` holder manages every row and
+   * gets `canManageAll` instead).
+   */
+  mine: boolean;
   createdAt: string;
 }

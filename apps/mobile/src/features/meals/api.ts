@@ -577,7 +577,13 @@ export interface CreateMealOrderInput {
 }
 
 /** POST /api/meals/orders → place a one-time order. The server freezes price,
- * fees and cutoff. `requestId` must be reused for retries of the same intent. */
+ * fees and cutoff. `requestId` must be reused for retries of the same intent.
+ *
+ * A meal that can no longer be ordered comes back as the SAME `meal_unavailable`
+ * (422) the quote route uses, with `details` carrying `{mealId, mealName}` — so
+ * one condition is handled in one place across quote and create. A server that
+ * predates that alignment still answers `meal_unavailable_for_slot`, which
+ * `mealErrorMessage` in logic.ts continues to accept. */
 export async function createMealOrder(token: string, input: CreateMealOrderInput): Promise<MealOrder> {
   const data = await mealsRequest({ method: 'POST', path: '/api/meals/orders', token, body: { ...input } });
   return parse(orderEnvelope, data).order;
